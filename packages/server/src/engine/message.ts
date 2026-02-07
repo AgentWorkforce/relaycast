@@ -1,7 +1,26 @@
 import { eq, and, sql, isNull, lt, gt } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
-import { messages, channels, agents, reactions, readReceipts } from '../db/schema.js';
+import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+
+async function fetchAttachments(db: ReturnType<typeof getDb>, msgId: string) {
+  const rows = await db
+    .select({
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(eq(messageAttachments.messageId, msgId));
+  return rows.map((a) => ({
+    file_id: a.fileId,
+    filename: a.filename,
+    content_type: a.contentType,
+    size_bytes: a.sizeBytes,
+  }));
+}
 
 export async function postMessage(
   workspaceId: string,
@@ -30,6 +49,19 @@ export async function postMessage(
     })
     .returning();
 
+  // Insert attachment records into junction table
+  if (data.attachments && data.attachments.length > 0) {
+    const attachmentValues = data.attachments.map((fileId, idx) => ({
+      messageId,
+      fileId,
+      position: idx,
+    }));
+    await db.insert(messageAttachments).values(attachmentValues);
+  }
+
+  // Fetch attachment details if any
+  const attachments = hasAttachments ? await fetchAttachments(db, messageId) : [];
+
   return {
     id: message.id,
     channel_id: message.channelId,
@@ -39,6 +71,7 @@ export async function postMessage(
     thread_id: message.threadId,
     created_at: message.createdAt.toISOString(),
     mentions: mentionMatches.map((m: string) => m.slice(1)),
+    attachments,
   };
 }
 
@@ -95,6 +128,9 @@ export async function getMessages(
       .from(readReceipts)
       .where(eq(readReceipts.messageId, row.id));
 
+    // attachments
+    const attachments = row.hasAttachments ? await fetchAttachments(db, row.id) : [];
+
     enriched.push({
       id: row.id,
       channel_id: row.channelId,
@@ -106,6 +142,7 @@ export async function getMessages(
       reply_count: replyCount?.count ?? 0,
       reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
       read_by_count: readCount?.count ?? 0,
+      attachments,
     });
   }
 
@@ -143,6 +180,9 @@ export async function getMessage(workspaceId: string, messageId: string) {
     .from(readReceipts)
     .where(eq(readReceipts.messageId, row.id));
 
+  // attachments
+  const attachments = row.hasAttachments ? await fetchAttachments(db, row.id) : [];
+
   return {
     id: row.id,
     channel_id: row.channelId,
@@ -154,6 +194,6 @@ export async function getMessage(workspaceId: string, messageId: string) {
     reply_count: replyCount?.count ?? 0,
     reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
     read_by_count: readCount?.count ?? 0,
+    attachments,
   };
 }
-
