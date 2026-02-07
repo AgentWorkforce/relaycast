@@ -1,0 +1,240 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WsClient } from '../ws.js';
+
+class MockWebSocket {
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+
+  url: string;
+  readyState = MockWebSocket.OPEN;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  send = vi.fn();
+  close = vi.fn(() => {
+    this.readyState = MockWebSocket.CLOSED;
+  });
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  simulateOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.();
+  }
+
+  simulateMessage(data: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(data) });
+  }
+
+  simulateClose(): void {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
+  }
+}
+
+vi.stubGlobal('WebSocket', MockWebSocket);
+
+describe('WsClient', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockWebSocket.instances = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('connects to correct URL with token', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0]!.url).toBe(
+      'wss://api.agentrelay.dev/v1/stream?token=at_live_test',
+    );
+  });
+
+  it('converts http baseUrl to ws', () => {
+    const client = new WsClient({
+      token: 'at_live_test',
+      baseUrl: 'http://localhost:8080',
+    });
+    client.connect();
+
+    expect(MockWebSocket.instances[0]!.url).toBe(
+      'ws://localhost:8080/v1/stream?token=at_live_test',
+    );
+  });
+
+  it('emits events from server messages', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('message.created', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi' },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'message.created', channel: 'general' }),
+    );
+  });
+
+  it('subscribe sends subscribe message', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    client.subscribe(['general', 'dev']);
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribe', channels: ['general', 'dev'] }),
+    );
+  });
+
+  it('unsubscribe sends unsubscribe message', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    client.unsubscribe(['dev']);
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'unsubscribe', channels: ['dev'] }),
+    );
+  });
+
+  it('sends ping every 30s', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    vi.advanceTimersByTime(30_000);
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ping' }));
+
+    vi.advanceTimersByTime(30_000);
+    expect(ws.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('auto-reconnects on close with exponential backoff', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    ws1.simulateClose();
+
+    // First reconnect after 1s
+    expect(MockWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    // Second close -> reconnect after 2s
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateClose();
+    vi.advanceTimersByTime(1999);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(MockWebSocket.instances).toHaveLength(3);
+  });
+
+  it('disconnect() stops reconnection', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    client.disconnect();
+    expect(ws.close).toHaveBeenCalled();
+
+    // No reconnect after disconnect
+    vi.advanceTimersByTime(60_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('on() returns unsubscribe function', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    const unsub = client.on('message.created', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    unsub();
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('off() removes handler', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('pong', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ type: 'pong' });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    client.off('pong', handler);
+    ws.simulateMessage({ type: 'pong' });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('wildcard listener receives all events', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('*', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    // 'open' synthetic event is also emitted to wildcard
+
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'pong' });
+
+    // open + message.created + pong = 3
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignores malformed messages', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    client.on('*', handler);
+
+    // Send invalid JSON — should not emit anything
+    ws.onmessage?.({ data: 'not json' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not send if WebSocket is not open', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    // Don't connect, just try to subscribe
+    client.subscribe(['general']);
+    // No crash, no send
+  });
+});
