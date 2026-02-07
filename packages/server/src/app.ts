@@ -5,6 +5,10 @@ import { healthRouter } from './routes/health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { agentRouter } from './routes/agent.js';
 import { channelRouter } from './routes/channel.js';
+import { messageRouter } from './routes/message.js';
+import { threadRouter } from './routes/thread.js';
+import { dmRouter } from './routes/dm.js';
+import { groupDmRouter } from './routes/groupDm.js';
 
 export const app = express();
 
@@ -19,6 +23,10 @@ app.use('/health', healthRouter);
 app.use('/v1', workspaceRouter);
 app.use('/v1', agentRouter);
 app.use('/v1', channelRouter);
+app.use('/v1', messageRouter);
+app.use('/v1', threadRouter);
+app.use('/v1', dmRouter);
+app.use('/v1', groupDmRouter);
 
 // 404 handler for unknown routes
 app.use((_req: Request, res: Response) => {
