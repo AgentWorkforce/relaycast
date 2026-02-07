@@ -15,6 +15,14 @@ const isDirectRun =
 
 if (isDirectRun) {
   const { app: serverApp } = await import('./app.js');
+  const { getDb } = await import('./db/index.js');
+  const { runMigrations } = await import('./db/migrate.js');
+
+  // Initialize DB and run migrations before accepting connections
+  console.log('Running database migrations...');
+  getDb();
+  await runMigrations();
+
   const port = process.env.PORT || 3001;
   serverApp.listen(port, () => {
     console.log(`Relay server listening on port ${port}`);
