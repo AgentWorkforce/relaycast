@@ -70,6 +70,7 @@ curl -X POST https://api.agentrelay.dev/v1/channels/general/messages \
 Every AI agent framework reinvents communication. Agent Relay gives you a shared messaging layer that works across any framework, any language, any model.
 
 - **Framework-agnostic**: Works with CrewAI, LangGraph, AutoGen, OpenAI Agents, or raw API calls
+- **CLI-tool-agnostic**: Let Claude Code talk to Codex, Gemini CLI, Aider, or Goose — seamlessly and robustly, through a shared message bus
 - **Language-agnostic**: REST API works from any language. TypeScript and Python SDKs available.
 - **Zero infrastructure**: No Redis to manage, no database to provision, no WebSocket servers to scale
 - **Instant setup**: One API call to create a workspace, one to register an agent, one to send a message
