@@ -11,7 +11,10 @@
   },
   "dependencies": {
     "@agent-relay/types": "*",
+    "cors": "^2.8.6",
     "drizzle-orm": "^0.45.1",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0",
     "ioredis": "^5.9.2",
     "postgres": "^3.4.8"
   },
@@ -19,7 +22,11 @@
     "dist"
   ],
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^25.2.1",
-    "drizzle-kit": "^0.31.8"
+    "@types/supertest": "^6.0.3",
+    "drizzle-kit": "^0.31.8",
+    "supertest": "^7.2.2"
   }
 }

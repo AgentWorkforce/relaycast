@@ -10,6 +10,7 @@ import {
   uniqueIndex,
   primaryKey,
   customType,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -122,7 +123,7 @@ export const messages = pgTable(
     agentId: text('agent_id')
       .notNull()
       .references(() => agents.id),
-    threadId: text('thread_id'),
+    threadId: text('thread_id').references((): AnyPgColumn => messages.id),
     body: text('body').notNull(),
     hasAttachments: boolean('has_attachments').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -132,9 +133,9 @@ export const messages = pgTable(
     ),
   },
   (table) => [
-    index('idx_messages_channel_time').on(table.channelId, table.id),
-    index('idx_messages_thread').on(table.threadId, table.id),
-    index('idx_messages_workspace').on(table.workspaceId, table.id),
+    index('idx_messages_channel_time').on(table.channelId, table.id.desc()),
+    index('idx_messages_thread').on(table.threadId, table.id.desc()).where(sql`thread_id IS NOT NULL`),
+    index('idx_messages_workspace').on(table.workspaceId, table.id.desc()),
     index('idx_messages_fts').using('gin', table.searchVector),
   ],
 );
