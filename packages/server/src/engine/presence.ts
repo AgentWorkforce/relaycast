@@ -3,6 +3,23 @@ import { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
 import { getRedis } from '../redis/index.js';
 
+const PRESENCE_TTL = 60; // seconds
+
+export async function setPresence(workspaceId: string, agentId: string): Promise<boolean> {
+  const redis = getRedis();
+  const key = `presence:${workspaceId}:${agentId}`;
+  const existed = await redis.exists(key);
+  await redis.set(key, '1', 'EX', PRESENCE_TTL);
+  return existed === 0; // true if newly online
+}
+
+export async function removePresence(workspaceId: string, agentId: string): Promise<boolean> {
+  const redis = getRedis();
+  const key = `presence:${workspaceId}:${agentId}`;
+  const removed = await redis.del(key);
+  return removed > 0;
+}
+
 export async function getPresence(
   workspaceId: string,
 ): Promise<Array<{ agent_id: string; agent_name: string; status: 'online' | 'offline' }>> {
