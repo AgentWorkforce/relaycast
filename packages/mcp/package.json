@@ -1,0 +1,18 @@
+{
+  "name": "@agent-relay/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agent-relay/sdk": "workspace:*",
+    "@agent-relay/types": "workspace:*"
+  },
+  "files": [
+    "dist"
+  ]
+}

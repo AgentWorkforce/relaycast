@@ -1,0 +1,17 @@
+{
+  "name": "relay-cloud-sdk-transport",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "turbo": "^2.4.0"
+  }
+}
