@@ -17,5 +17,9 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "drizzle-kit": "^0.31.8"
+  }
 }

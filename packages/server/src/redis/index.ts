@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 
 let redisClient: Redis | null = null;
 let redisSub: Redis | null = null;
@@ -18,8 +18,8 @@ export function getRedis(config?: RedisConfig): Redis {
       retryStrategy:
         config?.retryStrategy ??
         ((times: number) => {
-          if (times > 10) return null; // stop retrying after 10 attempts
-          return Math.min(times * 200, 5000); // exponential backoff, max 5s
+          if (times > 10) return null;
+          return Math.min(times * 200, 5000);
         }),
       lazyConnect: true,
     });
@@ -27,7 +27,6 @@ export function getRedis(config?: RedisConfig): Redis {
   return redisClient;
 }
 
-// Separate client for pub/sub (Redis requires dedicated connection for subscribe).
 export function getRedisSub(config?: RedisConfig): Redis {
   if (!redisSub) {
     const url = config?.url || process.env.REDIS_URL || 'redis://localhost:6379';
@@ -83,4 +82,3 @@ export async function redisHealthCheck(): Promise<boolean> {
     return false;
   }
 }
-

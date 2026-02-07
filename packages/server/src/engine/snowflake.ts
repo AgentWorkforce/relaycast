@@ -1,4 +1,4 @@
-const EPOCH_MS = Date.UTC(2020, 0, 1); // 2020-01-01T00:00:00.000Z
+const EPOCH_MS = Date.UTC(2025, 0, 1); // 2025-01-01T00:00:00Z
 
 const WORKER_ID_BITS = 10n;
 const SEQUENCE_BITS = 12n;
@@ -87,8 +87,14 @@ export class SnowflakeGenerator {
 
 let defaultGenerator: SnowflakeGenerator | null = null;
 
+export function getSnowflakeGenerator(): SnowflakeGenerator {
+  if (!defaultGenerator) {
+    defaultGenerator = new SnowflakeGenerator();
+  }
+  return defaultGenerator;
+}
+
 export function generateId(): string {
-  if (!defaultGenerator) defaultGenerator = new SnowflakeGenerator();
-  return defaultGenerator.generate();
+  return getSnowflakeGenerator().generate();
 }
 
