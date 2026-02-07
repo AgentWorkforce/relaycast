@@ -13,6 +13,10 @@ vi.mock('../../engine/reaction.js', () => ({}));
 vi.mock('../../engine/search.js', () => ({}));
 vi.mock('../../engine/inbox.js', () => ({}));
 vi.mock('../../engine/workspace.js', () => ({}));
+vi.mock('../../engine/receipt.js', () => ({}));
+vi.mock('../../engine/file.js', () => ({}));
+vi.mock('../../engine/presence.js', () => ({ getPresence: vi.fn() }));
+vi.mock('../../engine/systemPrompt.js', () => ({ getSystemPrompt: vi.fn(), setSystemPrompt: vi.fn() }));
 vi.mock('../../db/index.js', () => ({ getDb: vi.fn() }));
 vi.mock('../../redis/index.js', () => ({ getRedis: vi.fn(() => ({ incr: vi.fn().mockResolvedValue(1), expire: vi.fn().mockResolvedValue(1) })) }));
 

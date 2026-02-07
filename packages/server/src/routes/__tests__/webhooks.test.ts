@@ -93,6 +93,15 @@ vi.mock('../../engine/file.js', () => ({
   listFiles: vi.fn(),
 }));
 
+vi.mock('../../engine/presence.js', () => ({
+  getPresence: vi.fn(),
+}));
+
+vi.mock('../../engine/systemPrompt.js', () => ({
+  getSystemPrompt: vi.fn(),
+  setSystemPrompt: vi.fn(),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));

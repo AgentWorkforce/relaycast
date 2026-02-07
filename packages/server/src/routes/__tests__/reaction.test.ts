@@ -73,6 +73,34 @@ vi.mock('../../engine/file.js', () => ({
   listFiles: vi.fn(),
 }));
 
+vi.mock('../../engine/workspace.js', () => ({
+  createWorkspace: vi.fn(),
+  getWorkspace: vi.fn(),
+  updateWorkspace: vi.fn(),
+  deleteWorkspace: vi.fn(),
+}));
+
+vi.mock('../../engine/presence.js', () => ({
+  getPresence: vi.fn(),
+}));
+
+vi.mock('../../engine/systemPrompt.js', () => ({
+  getSystemPrompt: vi.fn(),
+  setSystemPrompt: vi.fn(),
+}));
+
+vi.mock('../../engine/billing.js', () => ({
+  subscribe: vi.fn(),
+  getSubscription: vi.fn(),
+  getUsage: vi.fn(),
+  getInvoices: vi.fn(),
+  createPortalSession: vi.fn(),
+}));
+
+vi.mock('../../engine/webhooks.js', () => ({
+  processWebhook: vi.fn(),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
