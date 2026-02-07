@@ -12,6 +12,8 @@ import { groupDmRouter } from './routes/groupDm.js';
 import { reactionRouter } from './routes/reaction.js';
 import { searchRouter } from './routes/search.js';
 import { inboxRouter } from './routes/inbox.js';
+import { billingRouter } from './routes/billing.js';
+import { webhookRouter } from './routes/webhooks.js';
 
 export const app = express();
 
@@ -33,6 +35,8 @@ app.use('/v1', groupDmRouter);
 app.use('/v1', reactionRouter);
 app.use('/v1', searchRouter);
 app.use('/v1', inboxRouter);
+app.use('/v1', billingRouter);
+app.use('/v1', webhookRouter);
 
 // 404 handler for unknown routes
 app.use((_req: Request, res: Response) => {
