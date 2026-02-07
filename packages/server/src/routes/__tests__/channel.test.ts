@@ -66,6 +66,20 @@ vi.mock('../../engine/workspace.js', () => ({
   deleteWorkspace: vi.fn(),
 }));
 
+vi.mock('../../engine/receipt.js', () => ({
+  markRead: vi.fn(),
+  getReaders: vi.fn(),
+  getReadStatus: vi.fn(),
+}));
+
+vi.mock('../../engine/file.js', () => ({
+  createUpload: vi.fn(),
+  completeUpload: vi.fn(),
+  getFile: vi.fn(),
+  deleteFile: vi.fn(),
+  listFiles: vi.fn(),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
