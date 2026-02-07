@@ -9,8 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-relay/sdk": "workspace:*",
-    "@agent-relay/types": "workspace:*"
+    "@agent-relay/sdk": "*",
+    "@agent-relay/types": "*"
   },
   "files": [
     "dist"

@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-relay/types": "workspace:*"
+    "@agent-relay/types": "*"
   },
   "files": [
     "dist"

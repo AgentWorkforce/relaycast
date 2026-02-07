@@ -1,5 +1,6 @@
 {
   "name": "relay-cloud-sdk-transport",
+  "packageManager": "npm@10.9.4",
   "private": true,
   "workspaces": [
     "packages/*"
