@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "lastUpdated": "2026-02-07T20:15:29.320Z",
+  "trajectories": {
+    "traj_o8g8ahqth5fx": {
+      "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
+      "status": "completed",
+      "startedAt": "2026-02-07T20:14:32.373Z",
+      "completedAt": "2026-02-07T20:15:29.246Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_o8g8ahqth5fx.json"
+    }
+  }
+}
