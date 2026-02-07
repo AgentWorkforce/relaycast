@@ -17,12 +17,13 @@ export function registerRegistrationTools(
         'Register this agent in the workspace and obtain an agent token for subsequent operations.',
       inputSchema: {
         name: z.string().describe('Unique agent name'),
-        model: z.string().optional().describe('Model identifier (e.g. gpt-4, claude-3)'),
+        type: z.enum(['agent', 'human']).optional().describe('Agent type'),
+        persona: z.string().optional().describe('Agent persona description'),
       },
     },
-    async ({ name, model }) => {
+    async ({ name, type, persona }) => {
       const relay = getRelay();
-      const result = await relay.agents.register({ name, model });
+      const result = await relay.agents.register({ name, type, persona });
       // Store the agent token in session state
       setSession({ agentToken: result.token, agentName: name });
       return {

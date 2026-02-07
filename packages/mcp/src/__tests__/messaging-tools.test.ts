@@ -79,12 +79,12 @@ describe('messaging tools', () => {
     mockAgentClient.dms.createGroup.mockResolvedValue({});
     await client.callTool({
       name: 'send_group_dm',
-      arguments: { participants: ['a', 'b'], name: 'grp' },
+      arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group' },
     });
     expect(mockAgentClient.dms.createGroup).toHaveBeenCalledWith({
       participants: ['a', 'b'],
       name: 'grp',
-      initial_message: undefined,
+      text: 'hello group',
     });
   });
 });

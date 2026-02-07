@@ -55,7 +55,8 @@ describe('registration tools', () => {
 
     expect(mockRelay.agents.register).toHaveBeenCalledWith({
       name: 'bot1',
-      model: undefined,
+      type: undefined,
+      persona: undefined,
     });
     expect(session.agentToken).toBe('tok_abc');
     expect(session.agentName).toBe('bot1');
