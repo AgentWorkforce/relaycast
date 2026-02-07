@@ -1,5 +1,82 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+
+vi.mock('../../engine/message.js', () => ({
+  postMessage: vi.fn(),
+  getMessages: vi.fn(),
+  getMessage: vi.fn(),
+}));
+
+vi.mock('../../engine/channel.js', () => ({
+  createChannel: vi.fn(),
+  listChannels: vi.fn(),
+  getChannel: vi.fn(),
+  updateChannel: vi.fn(),
+  archiveChannel: vi.fn(),
+  joinChannel: vi.fn(),
+  leaveChannel: vi.fn(),
+  getMembers: vi.fn(),
+  inviteAgent: vi.fn(),
+}));
+
+vi.mock('../../engine/agent.js', () => ({
+  registerAgent: vi.fn(),
+  listAgents: vi.fn(),
+  getAgentByName: vi.fn(),
+  updateAgent: vi.fn(),
+  deleteAgent: vi.fn(),
+}));
+
+vi.mock('../../engine/workspace.js', () => ({
+  createWorkspace: vi.fn(),
+  getWorkspace: vi.fn(),
+  updateWorkspace: vi.fn(),
+  deleteWorkspace: vi.fn(),
+}));
+
+vi.mock('../../engine/thread.js', () => ({
+  postReply: vi.fn(),
+  getReplies: vi.fn(),
+}));
+
+vi.mock('../../engine/dm.js', () => ({
+  sendDm: vi.fn(),
+  listConversations: vi.fn(),
+  getConversationMessages: vi.fn(),
+}));
+
+vi.mock('../../engine/groupDm.js', () => ({
+  createGroupDm: vi.fn(),
+  postToGroupDm: vi.fn(),
+  addParticipant: vi.fn(),
+  removeParticipant: vi.fn(),
+}));
+
+vi.mock('../../engine/reaction.js', () => ({
+  addReaction: vi.fn(),
+  removeReaction: vi.fn(),
+  getReactions: vi.fn(),
+}));
+
+vi.mock('../../engine/search.js', () => ({
+  searchMessages: vi.fn(),
+}));
+
+vi.mock('../../engine/inbox.js', () => ({
+  getInbox: vi.fn(),
+}));
+
+vi.mock('../../db/index.js', () => ({
+  getDb: vi.fn(),
+}));
+
+vi.mock('../../redis/index.js', () => ({
+  getRedis: vi.fn(() => ({
+    incr: vi.fn().mockResolvedValue(1),
+    expire: vi.fn().mockResolvedValue(1),
+  })),
+}));
+
 import { app } from '../../app.js';
 
 describe('GET /health', () => {

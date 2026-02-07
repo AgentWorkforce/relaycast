@@ -45,6 +45,27 @@ vi.mock('../../engine/agent.js', () => ({
   deleteAgent: vi.fn(),
 }));
 
+vi.mock('../../engine/reaction.js', () => ({
+  addReaction: vi.fn(),
+  removeReaction: vi.fn(),
+  getReactions: vi.fn(),
+}));
+
+vi.mock('../../engine/search.js', () => ({
+  searchMessages: vi.fn(),
+}));
+
+vi.mock('../../engine/inbox.js', () => ({
+  getInbox: vi.fn(),
+}));
+
+vi.mock('../../engine/workspace.js', () => ({
+  createWorkspace: vi.fn(),
+  getWorkspace: vi.fn(),
+  updateWorkspace: vi.fn(),
+  deleteWorkspace: vi.fn(),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));

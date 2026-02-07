@@ -9,6 +9,9 @@ import { messageRouter } from './routes/message.js';
 import { threadRouter } from './routes/thread.js';
 import { dmRouter } from './routes/dm.js';
 import { groupDmRouter } from './routes/groupDm.js';
+import { reactionRouter } from './routes/reaction.js';
+import { searchRouter } from './routes/search.js';
+import { inboxRouter } from './routes/inbox.js';
 
 export const app = express();
 
@@ -27,6 +30,9 @@ app.use('/v1', messageRouter);
 app.use('/v1', threadRouter);
 app.use('/v1', dmRouter);
 app.use('/v1', groupDmRouter);
+app.use('/v1', reactionRouter);
+app.use('/v1', searchRouter);
+app.use('/v1', inboxRouter);
 
 // 404 handler for unknown routes
 app.use((_req: Request, res: Response) => {
