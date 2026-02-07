@@ -1,0 +1,112 @@
+{
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "packages": {
+    "@agent-relay/agent-relay-snippet#claude:CLAUDE.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "claude",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "CLAUDE.md",
+      "snippetMetadata": {
+        "targetPath": "CLAUDE.md",
+        "config": {
+          "target": "CLAUDE.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#claude.md:GEMINI.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "claude.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "GEMINI.md",
+      "snippetMetadata": {
+        "targetPath": "GEMINI.md",
+        "config": {
+          "target": "GEMINI.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#gemini.md:AGENTS.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "gemini.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-workforce/trail-snippet#agents.md:AGENTS.md": {
+      "version": "1.0.1",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-workforce%2Ftrail-snippet/1.0.1.tar.gz",
+      "integrity": "sha256-a7b8d388e19158b1dd4644f2786291e7c90e4b56411c41d4ede1a7d45e7568c9",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#agents.md:AGENTS.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/using-agent-relay#claude": {
+      "version": "1.1.2",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fusing-agent-relay/1.1.2.tar.gz",
+      "integrity": "sha256-88702f8d0d7a7af33f94afc5bcd3777d223509765aa0e1222943703e95e99a9e",
+      "format": "claude",
+      "subtype": "skill",
+      "sourceFormat": "claude",
+      "sourceSubtype": "skill",
+      "installedPath": ".claude/skills/using-agent-relay/SKILL.md"
+    },
+    "@agent-relay/lead-agent#claude": {
+      "version": "1.0.0",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Flead-agent/1.0.0.tar.gz",
+      "integrity": "sha256-20522cef887c0bf7ef5f9bc4caec4bea016e2efb8d6d17c69cef6a18fde098f5",
+      "format": "claude",
+      "subtype": "agent",
+      "sourceFormat": "claude",
+      "sourceSubtype": "agent",
+      "installedPath": ".claude/agents/lead-agent.md"
+    }
+  },
+  "generated": "2026-02-07T20:10:56.934Z"
+}

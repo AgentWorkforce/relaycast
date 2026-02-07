@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:getstream.io)",
+      "WebFetch(domain:ably.com)",
+      "WebFetch(domain:pusher.com)",
+      "WebFetch(domain:getstream.github.io)",
+      "WebFetch(domain:www.producthunt.com)",
+      "WebFetch(domain:www.capterra.com)",
+      "WebFetch(domain:agentrelay.tech)",
+      "WebFetch(domain:agentcommunicationprotocol.dev)",
+      "WebFetch(domain:a2a-protocol.org)",
+      "WebFetch(domain:support.getstream.io)",
+      "WebFetch(domain:www.cometchat.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}
