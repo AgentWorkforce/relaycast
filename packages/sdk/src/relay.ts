@@ -7,6 +7,7 @@ import type {
   Workspace,
 } from '@agent-relay/types';
 import { AgentClient } from './agent.js';
+import { BillingClient } from './billing.js';
 import { HttpClient } from './client.js';
 
 export interface RelayOptions {
@@ -16,9 +17,11 @@ export interface RelayOptions {
 
 export class Relay {
   private client: HttpClient;
+  billing: BillingClient;
 
   constructor(options: RelayOptions) {
     this.client = new HttpClient(options);
+    this.billing = new BillingClient(this.client);
   }
 
   workspace = {
@@ -46,8 +49,4 @@ export class Relay {
     });
     return new AgentClient(agentHttpClient);
   }
-
-  // Filled in by integration step (Worker-9E).
-  billing?: unknown;
 }
-
