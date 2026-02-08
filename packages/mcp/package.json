@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/mcp",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,8 +10,8 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@relaycast/sdk": "*",
-    "@relaycast/types": "*",
+    "@relaycast/sdk": "0.1.2",
+    "@relaycast/types": "0.1.2",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "express": "^5.2.1",
     "zod": "^4.3.6"
