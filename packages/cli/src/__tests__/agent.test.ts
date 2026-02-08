@@ -100,6 +100,26 @@ describe('agent commands', () => {
     expect(output).toContain('alice');
   });
 
+  it('relay agent rotate-token <name> calls agents.rotateToken and prints token', async () => {
+    const relayInstance = {
+      agents: {
+        rotateToken: vi.fn(async () => ({
+          token: 'at_live_rotated_456',
+        })),
+      },
+    };
+    RelayMock.mockImplementation(() => relayInstance);
+
+    const { registerAgentCommands } = await import('../commands/agent.js');
+    const program = new Command().exitOverride();
+    registerAgentCommands(program);
+
+    await program.parseAsync(['agent', 'rotate-token', 'bob'], { from: 'user' });
+
+    expect(relayInstance.agents.rotateToken).toHaveBeenCalledWith('bob');
+    expect(consoleLogSpy).toHaveBeenCalledWith('at_live_rotated_456');
+  });
+
   it('relay agent status <name> <status> shows current status', async () => {
     const relayInstance = {
       agents: {

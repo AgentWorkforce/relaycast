@@ -16,6 +16,10 @@ import type {
   CreateCommandRequest,
   CreateCommandResponse,
   AgentCommand,
+  WorkspaceStats,
+  ActivityItem,
+  WorkspaceDmConversation,
+  TokenRotateResponse,
 } from '@relaycast/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
@@ -51,6 +55,8 @@ export class Relay {
     },
     get: (name: string): Promise<Agent> =>
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
+    rotateToken: (name: string): Promise<TokenRotateResponse> =>
+      this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
   };
 
   webhooks = {
@@ -91,6 +97,18 @@ export class Relay {
     delete: (command: string): Promise<void> =>
       this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
   };
+
+  stats = (): Promise<WorkspaceStats> =>
+    this.client.get('/v1/workspace/stats');
+
+  activity = (limit?: number): Promise<ActivityItem[]> => {
+    const params: Record<string, string> = {};
+    if (limit !== undefined) params.limit = String(limit);
+    return this.client.get('/v1/activity', params);
+  };
+
+  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
+    this.client.get('/v1/dm/conversations/all');
 
   as(agentToken: string): AgentClient {
     const agentHttpClient = new HttpClient({

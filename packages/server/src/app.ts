@@ -21,6 +21,7 @@ import { systemPromptRouter } from './routes/systemPrompt.js';
 import { inboundWebhookRouter } from './routes/inboundWebhook.js';
 import { eventSubscriptionRouter } from './routes/eventSubscription.js';
 import { commandRouter } from './routes/command.js';
+import { dashboardRouter } from './routes/dashboard.js';
 
 export const app = express();
 
@@ -37,6 +38,7 @@ app.use(express.json({
 app.use('/health', healthRouter);
 
 // API v1 routes — specific routes before parameterized routes
+app.use('/v1', dashboardRouter);
 app.use('/v1', presenceRouter);
 app.use('/v1', systemPromptRouter);
 app.use('/v1', workspaceRouter);

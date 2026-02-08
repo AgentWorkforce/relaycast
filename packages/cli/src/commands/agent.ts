@@ -47,5 +47,14 @@ export function registerAgentCommands(program: Command): void {
       const a = await relay.agents.get(name);
       console.log(`${a.name}: ${a.status}`);
     });
+
+  agent
+    .command('rotate-token <name>')
+    .description('Rotate an agent token (invalidates the old token)')
+    .action(async (name: string) => {
+      const relay = createRelay();
+      const res = await relay.agents.rotateToken(name);
+      console.log(res.token);
+    });
 }
 
