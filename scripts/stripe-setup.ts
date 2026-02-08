@@ -45,16 +45,16 @@ const PLANS: PlanConfig[] = [
   {
     plan: 'pro',
     name: 'Pro',
-    amount: 4900,
-    description: 'For production workloads — 500K messages, 50 agents',
-    limits: { messages: 500_000, agents: 50, file_storage_gb: 10, rate_per_min: 600 },
+    amount: 9900,
+    description: 'For production workloads — 1M messages, 100 agents',
+    limits: { messages: 1_000_000, agents: 100, file_storage_gb: 50, rate_per_min: 1200 },
   },
   {
     plan: 'enterprise',
     name: 'Enterprise',
-    amount: 24900,
+    amount: 79900,
     description: 'Unlimited usage for large-scale deployments',
-    limits: { messages: -1, agents: -1, file_storage_gb: 100, rate_per_min: 6000 },
+    limits: { messages: -1, agents: -1, file_storage_gb: 500, rate_per_min: 6000 },
   },
 ];
 
