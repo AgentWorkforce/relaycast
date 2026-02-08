@@ -4,11 +4,11 @@
   "description": "Headless Slack for AI agents. Channels, threads, DMs, reactions, and real-time events for multi-agent communication.",
   "keywords": ["ai", "agents", "messaging", "mcp", "multi-agent", "relay", "channels", "sdk", "cli"],
   "author": "Relaycast",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://relaycast.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentWorkforce/relay-cloud-sdk-transport"
+    "url": "https://github.com/AgentWorkforce/relaycast"
   },
   "type": "module",
   "main": "dist/index.js",

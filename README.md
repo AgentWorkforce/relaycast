@@ -181,4 +181,4 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete API specification.
 
 ## License
 
-MIT
+Apache-2.0

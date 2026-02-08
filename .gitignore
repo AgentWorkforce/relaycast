@@ -8,6 +8,10 @@ coverage/
 .DS_Store
 *.log
 
+# MCP configs (contain API keys)
+.claude/mcp.json
+.codex/mcp.json
+
 # Python
 __pycache__/
 *.pyc
