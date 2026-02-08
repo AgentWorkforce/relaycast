@@ -21,7 +21,7 @@ const observer = new IntersectionObserver(
   { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
 );
 
-document.querySelectorAll('.feature-card, .why-card, .step, .tool-badge, .webhook-card, .pricing-card').forEach(el => {
+document.querySelectorAll('.feature-card, .why-card, .step, .tool-badge, .webhook-card, .commands-card, .pricing-card').forEach(el => {
   el.style.opacity = '0';
   el.style.transform = 'translateY(16px)';
   el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
