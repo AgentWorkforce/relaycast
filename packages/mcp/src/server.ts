@@ -6,6 +6,7 @@ import { registerMessagingTools } from './tools/messaging.js';
 import { registerFeatureTools } from './tools/features.js';
 import { registerSystemPrompt } from './prompts.js';
 import { createInitialSession, type SessionState } from './types.js';
+import { enablePiggyback } from './piggyback.js';
 
 export interface McpServerOptions {
   apiKey: string;
@@ -38,6 +39,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }
     return relay.as(session.agentToken);
   };
+
+  // Enable piggybacking of unread messages on all tool responses
+  enablePiggyback(mcpServer, getSession, getAgentClient);
 
   // Register all tools
   registerRegistrationTools(mcpServer, getRelay, getSession, setSession);
