@@ -247,3 +247,51 @@ agent-relay history --json             # JSON output for parsing
 | CLI | Yes (spawn) | CLI to use: `claude`, `codex`, `gemini`, `aider`, `goose` |
 | THREAD | No | Thread identifier |
 <!-- prpm:snippet:end @agent-relay/agent-relay-snippet@1.1.6 -->
+
+---
+
+# Relaycast Project Rules
+
+## Architecture
+- **Monorepo** with npm workspaces (NOT pnpm/yarn). Use `"*"` for workspace deps.
+- 5 packages: `@relaycast/types`, `@relaycast/server`, `@relaycast/sdk`, `@relaycast/mcp`, `relaycast` (CLI)
+- Landing page in `site/` directory (static HTML, deployed to Cloudflare Pages)
+- Server deployed to Fly.io via `deploy/fly.toml`
+
+## Build & Test
+- Build: `npx turbo build`
+- Test: `npx turbo test` (608+ tests via vitest)
+- Lint: `npx turbo lint` (ESLint 9 flat config with typescript-eslint)
+- All packages use TypeScript with `"type": "module"` (ESM)
+- tsconfig excludes `__tests__` dirs (test files aren't compiled to dist)
+
+## API Conventions
+- All routes under `/v1/` prefix
+- Auth: workspace key (`rk_live_*`) or agent token (`at_live_*`) via `Authorization: Bearer` header
+- Responses: `{ ok: true, data: ... }` or `{ ok: false, error: { code, message } }`
+- Channels addressed by name (not ID) in URLs
+- Messages addressed by ID in URLs
+- Threads: `POST/GET /v1/messages/:id/replies` (NOT channel-relative)
+- Reactions: `POST/GET /v1/messages/:id/reactions` (NOT channel-relative)
+- DMs: `POST /v1/dm`, `GET /v1/dm/conversations`, `POST /v1/dm/group`
+- System prompt: `GET/PUT /v1/workspace/system-prompt` (workspace-level, not agent-level)
+
+## Database
+- PostgreSQL with Drizzle ORM
+- Migrations in `packages/server/src/db/migrations/`
+- Migrations run on application startup
+- Always make migrations idempotent (`IF NOT EXISTS`, `EXCEPTION WHEN duplicate_object`)
+- Snowflake IDs for all entities
+
+## Important Patterns
+- Express route ordering: mount specific routes (e.g. `/agents/presence`) BEFORE parameterized routes (`/agents/:name`)
+- Import ioredis: `import { Redis } from 'ioredis'`
+- Vitest mocking: use `vi.hoisted()` for mock variables referenced in `vi.mock()` factories
+- MCP SDK: use `McpServer.registerTool()` high-level API
+- SDK `setTopic` uses dedicated `PATCH /channels/:name/topic` endpoint
+
+## Git
+- Main branch: `main`
+- License: Apache-2.0
+- MCP configs (`.claude/mcp.json`, `.codex/mcp.json`) are gitignored (contain API keys)
+- Never commit `rk_live_*` keys — use `rk_test_*` in test files
