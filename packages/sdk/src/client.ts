@@ -76,6 +76,11 @@ export class HttpClient {
         continue;
       }
 
+      // 204 No Content — return undefined (used by DELETE endpoints)
+      if (res.status === 204) {
+        return undefined as T;
+      }
+
       const parsed = (await res.json()) as ApiOk<T> | ApiErr;
       if (!parsed || typeof parsed !== 'object' || typeof (parsed as any).ok !== 'boolean') {
         throw new RelayError('invalid_response', 'Invalid API response', res.status);

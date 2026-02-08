@@ -16,6 +16,14 @@ function mockResponse(data: unknown, apiOk = true, status = 200) {
   });
 }
 
+function mock204() {
+  return Promise.resolve({
+    ok: true,
+    status: 204,
+    json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+  });
+}
+
 describe('Programmability SDK', () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -51,11 +59,11 @@ describe('Programmability SDK', () => {
       expect(init.method).toBe('GET');
     });
 
-    it('delete() deletes /v1/webhooks/:id', async () => {
+    it('delete() deletes /v1/webhooks/:id (handles 204)', async () => {
       const { Relay } = await import('../relay.js');
       const relay = new Relay({ apiKey: 'rk_live_test123' });
 
-      mockFetch.mockImplementation(() => mockResponse({}));
+      mockFetch.mockImplementation(() => mock204());
       await relay.webhooks.delete('wh_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
@@ -129,11 +137,11 @@ describe('Programmability SDK', () => {
       expect(init.method).toBe('GET');
     });
 
-    it('delete() deletes /v1/subscriptions/:id', async () => {
+    it('delete() deletes /v1/subscriptions/:id (handles 204)', async () => {
       const { Relay } = await import('../relay.js');
       const relay = new Relay({ apiKey: 'rk_live_test123' });
 
-      mockFetch.mockImplementation(() => mockResponse({}));
+      mockFetch.mockImplementation(() => mock204());
       await relay.subscriptions.delete('sub_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
@@ -180,11 +188,11 @@ describe('Programmability SDK', () => {
       expect(init.method).toBe('GET');
     });
 
-    it('delete() deletes /v1/commands/:command', async () => {
+    it('delete() deletes /v1/commands/:command (handles 204)', async () => {
       const { Relay } = await import('../relay.js');
       const relay = new Relay({ apiKey: 'rk_live_test123' });
 
-      mockFetch.mockImplementation(() => mockResponse({}));
+      mockFetch.mockImplementation(() => mock204());
       await relay.commands.delete('deploy');
 
       const [url, init] = mockFetch.mock.calls[0]!;
