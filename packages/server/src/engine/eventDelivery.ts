@@ -19,7 +19,7 @@ function matchesFilter(
 
   if (filter.channel) {
     const channelName = (payload.channel_name as string) || (payload.channel as string) || '';
-    if (channelName && channelName !== filter.channel) return false;
+    if (!channelName || channelName !== filter.channel) return false;
   }
 
   if (filter.mentions) {
@@ -44,7 +44,7 @@ async function attemptDelivery(
         body,
         signal: AbortSignal.timeout(10_000),
       });
-      if (response.ok || (response.status >= 200 && response.status < 300)) {
+      if (response.ok) {
         return true;
       }
       // 4xx errors are not retried (client error, won't succeed on retry)
@@ -108,6 +108,6 @@ export async function deliverEvent(
       return attemptDelivery(sub.url, body, headers).catch(() => {});
     });
 
-  // Fire-and-forget — don't await (but return the promise for testing)
-  Promise.allSettled(deliveries).catch(() => {});
+  // Fire-and-forget — callers don't await but deliveries proceed in background
+  void Promise.allSettled(deliveries);
 }

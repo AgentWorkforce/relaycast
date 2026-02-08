@@ -130,6 +130,18 @@ describe('deliverEvent', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects events with no channel info when channel filter is set', async () => {
+    mockGetActiveSubscriptions.mockResolvedValue([
+      { url: 'https://a.com/hook', secret: null, filter: { channel: 'alerts' } },
+    ]);
+
+    // DM event has no channel_name — should NOT pass the channel filter
+    await deliverEvent('ws_1', 'dm.received', { text: 'hello', to: 'bob' });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('filters by mentions', async () => {
     mockGetActiveSubscriptions.mockResolvedValue([
       { url: 'https://a.com/hook', secret: null, filter: { mentions: 'alice' } },
