@@ -11,6 +11,7 @@ import { registerSearchCommands } from './commands/search.js';
 import { registerReactionCommands } from './commands/reactions.js';
 import { registerFileCommands } from './commands/files.js';
 import { registerBillingCommands } from './commands/billing.js';
+import { registerOpenClawCommands } from './commands/openclaw.js';
 
 export const CLI_VERSION = '0.1.0' as const;
 
@@ -31,5 +32,6 @@ registerSearchCommands(program);
 registerReactionCommands(program);
 registerFileCommands(program);
 registerBillingCommands(program);
+registerOpenClawCommands(program);
 
 program.parse();
