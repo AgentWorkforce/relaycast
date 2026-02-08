@@ -16,7 +16,7 @@ messageRouter.post(
   rateLimit,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { text, attachments, data, content_type } = req.body;
+      const { text, blocks, attachments, data, content_type } = req.body;
       if (!text || typeof text !== 'string') {
         res.status(400).json({
           ok: false,
@@ -54,7 +54,7 @@ messageRouter.post(
         req.workspace!.id,
         channel.id,
         agentId,
-        { text, attachments, data, content_type },
+        { text, blocks, attachments, data, content_type },
       );
       res.status(201).json({ ok: true, data: result });
     } catch (err: unknown) {
@@ -136,4 +136,3 @@ messageRouter.get(
     }
   },
 );
-

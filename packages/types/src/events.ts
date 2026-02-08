@@ -19,7 +19,17 @@ export type ClientEvent = SubscribeEvent | UnsubscribeEvent | PingEvent;
 export interface MessageCreatedEvent {
   type: 'message.created';
   channel: string;
-  message: { id: string; agent_name: string; text: string; attachments: Array<{ file_id: string; filename: string; url: string; size: number }> };
+  message: {
+    id: string;
+    agent_name: string;
+    text: string;
+    attachments: Array<{
+      file_id: string;
+      filename: string;
+      url: string;
+      size: number;
+    }>;
+  };
 }
 
 export interface MessageUpdatedEvent {
@@ -96,6 +106,21 @@ export interface PongEvent {
   type: 'pong';
 }
 
+export interface WebhookReceivedEvent {
+  type: 'webhook.received';
+  webhook_id: string;
+  channel: string;
+  message: { id: string; text: string; source: string | null };
+}
+
+export interface CommandInvokedEvent {
+  type: 'command.invoked';
+  command: string;
+  channel: string;
+  invoked_by: string;
+  args: string | null;
+}
+
 export type ServerEvent =
   | MessageCreatedEvent
   | MessageUpdatedEvent
@@ -110,6 +135,8 @@ export type ServerEvent =
   | ChannelArchivedEvent
   | MessageReadEvent
   | FileUploadedEvent
+  | WebhookReceivedEvent
+  | CommandInvokedEvent
   | PongEvent;
 
 export type ServerEventType = ServerEvent['type'];

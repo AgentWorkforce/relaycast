@@ -26,7 +26,7 @@ export async function postMessage(
   workspaceId: string,
   channelId: string,
   agentId: string,
-  data: { text: string; attachments?: string[]; data?: Record<string, unknown> | null; content_type?: string },
+  data: { text: string; blocks?: unknown[] | null; attachments?: string[]; data?: Record<string, unknown> | null; content_type?: string },
 ) {
   const db = getDb();
   const messageId = generateId();
@@ -45,6 +45,7 @@ export async function postMessage(
       channelId,
       agentId,
       body: data.text,
+      blocks: data.blocks || null,
       hasAttachments,
     })
     .returning();
@@ -67,6 +68,7 @@ export async function postMessage(
     channel_id: message.channelId,
     agent_id: message.agentId,
     text: message.body,
+    blocks: (message.blocks as unknown[] | null) || null,
     has_attachments: message.hasAttachments,
     thread_id: message.threadId,
     created_at: message.createdAt.toISOString(),
@@ -136,6 +138,7 @@ export async function getMessages(
       channel_id: row.channelId,
       agent_id: row.agentId,
       text: row.body,
+      blocks: (row.blocks as unknown[] | null) || null,
       has_attachments: row.hasAttachments,
       thread_id: row.threadId,
       created_at: row.createdAt.toISOString(),
@@ -188,6 +191,7 @@ export async function getMessage(workspaceId: string, messageId: string) {
     channel_id: row.channelId,
     agent_id: row.agentId,
     text: row.body,
+    blocks: (row.blocks as unknown[] | null) || null,
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
