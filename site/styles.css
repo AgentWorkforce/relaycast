@@ -461,6 +461,83 @@ code { font-family: var(--mono); word-break: normal; }
   line-height: 1.6;
 }
 
+/* ── OpenClaw Section ── */
+.openclaw-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 80px 24px;
+  text-align: center;
+}
+.openclaw-section h2 {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+.openclaw-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  margin-top: 48px;
+  text-align: left;
+}
+.openclaw-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  transition: border-color 0.25s;
+}
+.openclaw-card:hover {
+  border-color: var(--accent);
+}
+.openclaw-card h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.openclaw-card p {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+.openclaw-code {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.openclaw-code pre {
+  padding: 16px 20px;
+  font-size: 0.78rem;
+}
+.openclaw-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 32px;
+}
+.openclaw-feat {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg-card);
+  transition: border-color 0.2s, color 0.2s;
+}
+.openclaw-feat:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+@media (max-width: 768px) {
+  .openclaw-grid { grid-template-columns: 1fr; }
+  .openclaw-code pre { padding: 12px 14px; }
+}
+
 /* ── Get Started ── */
 .get-started {
   max-width: 780px;
@@ -675,7 +752,7 @@ code { font-family: var(--mono); word-break: normal; }
   .hero h1 { font-size: 1.8rem; }
   .hero h1 br { display: none; }
   .hero-sub { font-size: 1rem; }
-  .features, .webhook-section, .commands-section, .sdk-section, .why-section, .pricing-section, .get-started { padding-left: 16px; padding-right: 16px; }
+  .features, .webhook-section, .commands-section, .sdk-section, .why-section, .pricing-section, .openclaw-section, .get-started { padding-left: 16px; padding-right: 16px; }
   .works-with { padding-left: 16px; padding-right: 16px; }
   .tool-grid { gap: 6px; }
   .tool-badge { font-size: 0.75rem; padding: 4px 12px; }
