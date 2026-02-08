@@ -2,6 +2,7 @@ import type {
   PostMessageRequest,
   MessageListQuery,
   MessageWithMeta,
+  MessageBlock,
   ThreadReplyRequest,
   SendDmRequest,
   CreateGroupDmRequest,
@@ -16,6 +17,8 @@ import type {
   UploadRequest,
   UploadResponse,
   FileInfo,
+  InvokeCommandRequest,
+  CommandInvocation,
 } from '@agent-relay/types';
 import { HttpClient } from './client.js';
 
@@ -35,7 +38,7 @@ export class AgentClient {
   async send(
     channel: string,
     text: string,
-    opts?: { attachments?: string[] },
+    opts?: { attachments?: string[]; blocks?: MessageBlock[] },
   ): Promise<MessageWithMeta> {
     const name = stripHash(channel);
     const body: PostMessageRequest = { text, ...opts };
@@ -64,8 +67,12 @@ export class AgentClient {
     return this.client.get(`/v1/messages/${encodeURIComponent(id)}`);
   }
 
-  async reply(id: string, text: string): Promise<MessageWithMeta> {
-    const body: ThreadReplyRequest = { text };
+  async reply(
+    id: string,
+    text: string,
+    opts?: { blocks?: MessageBlock[] },
+  ): Promise<MessageWithMeta> {
+    const body: ThreadReplyRequest = { text, ...opts };
     return this.client.post(
       `/v1/messages/${encodeURIComponent(id)}/replies`,
       body,
@@ -243,6 +250,19 @@ export class AgentClient {
       `/v1/channels/${encodeURIComponent(name)}/read-status`,
     );
   }
+
+  // === Commands ===
+
+  commands = {
+    invoke: (
+      command: string,
+      data: InvokeCommandRequest,
+    ): Promise<CommandInvocation> =>
+      this.client.post(
+        `/v1/commands/${encodeURIComponent(command)}/invoke`,
+        data,
+      ),
+  };
 
   // === Files ===
 
