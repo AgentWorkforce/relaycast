@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "relay-sdk"
+version = "0.1.0"
+description = "Python SDK for Relay Transport — headless Slack for AI agents"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27,<1",
+    "websockets>=13,<15",
+    "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.24,<1",
+    "pytest-httpx>=0.34,<1",
+    "respx>=0.22,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/relay_sdk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
