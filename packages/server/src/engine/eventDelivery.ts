@@ -24,7 +24,9 @@ function matchesFilter(
 
   if (filter.mentions) {
     const text = (payload.text as string) || '';
-    if (!text.includes(`@${filter.mentions}`)) return false;
+    // Use word boundary to avoid matching @bob inside @bobby
+    const mentionPattern = new RegExp(`@${filter.mentions.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\b|$)`);
+    if (!mentionPattern.test(text)) return false;
   }
 
   return true;
@@ -55,7 +57,7 @@ async function attemptDelivery(
       // Network error or timeout — retry
     }
 
-    // Exponential backoff: 1s, 2s, 4s
+    // Exponential backoff: 1s, 2s
     if (attempt < retries - 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
     }
@@ -108,6 +110,6 @@ export async function deliverEvent(
       return attemptDelivery(sub.url, body, headers).catch(() => {});
     });
 
-  // Fire-and-forget — callers don't await but deliveries proceed in background
-  void Promise.allSettled(deliveries);
+  // Fire-and-forget — deliveries proceed in background
+  Promise.allSettled(deliveries).catch(() => {});
 }

@@ -213,16 +213,16 @@ describe('POST /v1/billing/webhooks', () => {
     expect(res.body.error.message).toContain('type');
   });
 
-  it('returns 200 even on processing failure', async () => {
+  it('returns 500 on processing failure so Stripe retries', async () => {
     vi.mocked(webhooksEngine.processWebhook).mockRejectedValue(new Error('DB error'));
 
     const res = await request(app)
       .post('/v1/billing/webhooks')
       .send({ type: 'subscription.updated', data: {} });
 
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.received).toBe(true);
+    expect(res.status).toBe(500);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error.code).toBe('webhook_processing_error');
   });
 
   it('does not require auth', async () => {
@@ -287,5 +287,24 @@ describe('POST /v1/billing/webhooks', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+  });
+
+  it('rejects stale signatures older than 5 minutes', async () => {
+    const secret = 'whsec_test_secret';
+    process.env.STRIPE_WEBHOOK_SECRET = secret;
+
+    const body = JSON.stringify({ type: 'subscription.updated', data: {} });
+    // Timestamp 10 minutes in the past
+    const staleTimestamp = (Math.floor(Date.now() / 1000) - 600).toString();
+    const sig = createHmac('sha256', secret).update(`${staleTimestamp}.${body}`).digest('hex');
+
+    const res = await request(app)
+      .post('/v1/billing/webhooks')
+      .set('Content-Type', 'application/json')
+      .set('stripe-signature', `t=${staleTimestamp},v1=${sig}`)
+      .send(body);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('invalid_signature');
   });
 });

@@ -45,9 +45,10 @@ export async function handlePaymentFailed(data: Record<string, unknown>): Promis
   const db = getDb();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.stripeCustomerId, customerId));
   if (!ws) return;
-  // Downgrade workspace to free plan on payment failure
+  // Downgrade workspace to free plan and clear stale subscription ID
   await db.update(workspaces).set({
     plan: 'free',
+    stripeSubscriptionId: null,
   }).where(eq(workspaces.id, ws.id));
 }
 

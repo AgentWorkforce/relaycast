@@ -41,10 +41,11 @@ reactionRouter.post(
         return;
       }
 
-      res.status(201).json({ ok: true, data: result });
+      // Strip internal channel_id before sending to client
+      const { channel_id, ...reactionData } = result;
+      res.status(201).json({ ok: true, data: reactionData });
 
       // Fire-and-forget event publishing — scope to the message's channel
-      const { channel_id, ...reactionData } = result;
       publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: reactionData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'reaction.added', reactionData).catch(() => {});
     } catch (err: unknown) {

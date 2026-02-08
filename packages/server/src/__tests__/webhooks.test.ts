@@ -101,7 +101,7 @@ describe('processWebhook', () => {
     });
     expect(result).toEqual({ received: true });
     expect(mockUpdate).toHaveBeenCalled();
-    expect(mockSet).toHaveBeenCalledWith({ plan: 'free' });
+    expect(mockSet).toHaveBeenCalledWith({ plan: 'free', stripeSubscriptionId: null });
   });
 
   it('acknowledges unknown event types', async () => {
@@ -129,10 +129,10 @@ describe('handleInvoicePaid', () => {
 });
 
 describe('handlePaymentFailed', () => {
-  it('downgrades workspace to free plan', async () => {
+  it('downgrades workspace to free plan and clears subscription ID', async () => {
     await handlePaymentFailed({ customer: 'cus_123' });
     expect(mockUpdate).toHaveBeenCalled();
-    expect(mockSet).toHaveBeenCalledWith({ plan: 'free' });
+    expect(mockSet).toHaveBeenCalledWith({ plan: 'free', stripeSubscriptionId: null });
   });
 
   it('does nothing if customer is missing', async () => {
@@ -143,7 +143,7 @@ describe('handlePaymentFailed', () => {
     mockFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([{ id: 'ws_1', plan: 'pro', stripeCustomerId: 'cus_123' }]);
     await handlePaymentFailed({});
-    expect(mockSet).not.toHaveBeenCalledWith({ plan: 'free' });
+    expect(mockSet).not.toHaveBeenCalledWith({ plan: 'free', stripeSubscriptionId: null });
   });
 
   it('does nothing if workspace not found', async () => {
@@ -155,7 +155,7 @@ describe('handlePaymentFailed', () => {
     mockFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([]);
     await handlePaymentFailed({ customer: 'cus_nonexistent' });
-    expect(mockSet).not.toHaveBeenCalledWith({ plan: 'free' });
+    expect(mockSet).not.toHaveBeenCalledWith({ plan: 'free', stripeSubscriptionId: null });
   });
 });
 
