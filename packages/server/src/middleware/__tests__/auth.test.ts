@@ -113,7 +113,7 @@ describe('requireWorkspaceKey', () => {
     const app = makeApp(requireWorkspaceKey as unknown as express.RequestHandler);
     const res = await request(app)
       .get('/test')
-      .set('Authorization', 'Bearer rk_live_invalidkey1234567890abcdef');
+      .set('Authorization', 'Bearer rk_test_invalidkey1234567890abcde');
     expect(res.status).toBe(401);
   });
 });
