@@ -8,7 +8,8 @@
   "homepage": "https://relaycast.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentWorkforce/relaycast"
+    "url": "https://github.com/AgentWorkforce/relaycast",
+    "directory": "packages/cli"
   },
   "type": "module",
   "main": "dist/index.js",
