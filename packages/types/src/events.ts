@@ -85,9 +85,26 @@ export interface ChannelCreatedEvent {
   channel: { name: string; topic: string | null };
 }
 
+export interface ChannelUpdatedEvent {
+  type: 'channel.updated';
+  channel: { name: string; topic: string | null };
+}
+
 export interface ChannelArchivedEvent {
   type: 'channel.archived';
   channel: { name: string };
+}
+
+export interface MemberJoinedEvent {
+  type: 'member.joined';
+  channel: string;
+  agent_name: string;
+}
+
+export interface MemberLeftEvent {
+  type: 'member.left';
+  channel: string;
+  agent_name: string;
 }
 
 export interface MessageReadEvent {
@@ -132,7 +149,10 @@ export type ServerEvent =
   | AgentOnlineEvent
   | AgentOfflineEvent
   | ChannelCreatedEvent
+  | ChannelUpdatedEvent
   | ChannelArchivedEvent
+  | MemberJoinedEvent
+  | MemberLeftEvent
   | MessageReadEvent
   | FileUploadedEvent
   | WebhookReceivedEvent

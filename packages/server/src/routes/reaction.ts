@@ -43,10 +43,10 @@ reactionRouter.post(
 
       res.status(201).json({ ok: true, data: result });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result };
-      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'reaction.added', eventData).catch(() => {});
+      // Fire-and-forget event publishing — scope to the message's channel
+      const { channel_id, ...reactionData } = result;
+      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: reactionData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.added', reactionData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

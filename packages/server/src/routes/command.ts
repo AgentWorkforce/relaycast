@@ -5,6 +5,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as commandEngine from '../engine/command.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const commandRouter = Router();
 
@@ -140,6 +142,11 @@ commandRouter.post(
         { channel, invoked_by: agentId, args, parameters },
       );
       res.status(201).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { command: result.command, channel, invoked_by: agentId, args: result.args };
+      publishEvent({ type: 'command.invoked', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'command.invoked', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

@@ -153,8 +153,12 @@ export async function triggerWebhook(
 
   return {
     message_id: message.id,
+    webhook_id: webhook.id,
+    workspace_id: webhook.workspaceId,
+    channel_id: webhook.channelId,
     channel: channel?.name || '',
     text: message.body,
+    source: data.source || null,
     created_at: message.createdAt.toISOString(),
   };
 }

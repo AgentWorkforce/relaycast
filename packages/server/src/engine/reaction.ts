@@ -31,6 +31,7 @@ export async function addReaction(
     return {
       id: reaction.id,
       message_id: reaction.messageId,
+      channel_id: msg.channelId,
       agent_name: agent?.name ?? 'unknown',
       emoji: reaction.emoji,
       created_at: reaction.createdAt.toISOString(),
@@ -52,6 +53,7 @@ export async function addReaction(
       return {
         id: existing.id,
         message_id: existing.messageId,
+        channel_id: msg.channelId,
         agent_name: agent?.name ?? 'unknown',
         emoji: existing.emoji,
         created_at: existing.createdAt.toISOString(),

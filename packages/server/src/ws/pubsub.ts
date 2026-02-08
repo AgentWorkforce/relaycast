@@ -12,9 +12,14 @@ export const EVENT_TYPES = [
   'agent.online',
   'agent.offline',
   'channel.created',
+  'channel.updated',
   'channel.archived',
+  'member.joined',
+  'member.left',
   'message.read',
   'file.uploaded',
+  'webhook.received',
+  'command.invoked',
 ] as const;
 
 export type EventType = typeof EVENT_TYPES[number];

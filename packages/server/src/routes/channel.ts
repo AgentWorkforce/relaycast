@@ -131,6 +131,11 @@ channelRouter.patch(
         return;
       }
       res.json({ ok: true, data: updated });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...updated, channel_name: updated.name };
+      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({
@@ -174,6 +179,11 @@ channelRouter.patch(
         return;
       }
       res.json({ ok: true, data: updated });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...updated, channel_name: updated.name };
+      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({
@@ -234,6 +244,11 @@ channelRouter.post(
         req.agent!.id,
       );
       res.json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
+      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({
@@ -257,6 +272,11 @@ channelRouter.post(
         req.agent!.id,
       );
       res.status(204).send();
+
+      // Fire-and-forget event publishing
+      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
+      publishEvent({ type: 'member.left', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.left', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

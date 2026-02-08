@@ -17,6 +17,10 @@ vi.mock('../../ws/pubsub.js', () => ({
   publishEvent: (...args: unknown[]) => mockPublish(...args),
 }));
 
+vi.mock('../../engine/eventDelivery.js', () => ({
+  deliverEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { presenceRefresh } from '../presenceRefresh.js';
 
 describe('presenceRefresh middleware', () => {
