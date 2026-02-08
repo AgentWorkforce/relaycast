@@ -16,8 +16,10 @@
     "db:studio": "drizzle-kit studio"
   },
   "devDependencies": {
+    "eslint": "^9.39.2",
+    "turbo": "^2.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "turbo": "^2.4.0"
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^3.0.0"
   }
 }
