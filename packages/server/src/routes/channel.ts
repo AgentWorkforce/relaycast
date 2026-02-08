@@ -346,6 +346,11 @@ channelRouter.post(
         agent,
       );
       res.json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing — invited agent joins the channel
+      const eventData = { channel_name: paramName(req), agent_name: agent };
+      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

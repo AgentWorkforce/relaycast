@@ -20,6 +20,14 @@ vi.mock('../../engine/systemPrompt.js', () => ({ getSystemPrompt: vi.fn(), setSy
 vi.mock('../../db/index.js', () => ({ getDb: vi.fn() }));
 vi.mock('../../redis/index.js', () => ({ getRedis: vi.fn(() => ({ incr: vi.fn().mockResolvedValue(1), expire: vi.fn().mockResolvedValue(1) })) }));
 
+vi.mock('../../ws/pubsub.js', () => ({
+  publishEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../engine/eventDelivery.js', () => ({
+  deliverEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { app } from '../../app.js';
 
 describe('debug', () => {

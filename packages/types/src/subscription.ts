@@ -7,9 +7,16 @@ export type SubscribableEventType =
   | 'agent.online'
   | 'agent.offline'
   | 'channel.created'
+  | 'channel.updated'
   | 'channel.archived'
+  | 'member.joined'
+  | 'member.left'
   | 'dm.received'
-  | 'file.uploaded';
+  | 'group_dm.received'
+  | 'message.read'
+  | 'file.uploaded'
+  | 'webhook.received'
+  | 'command.invoked';
 
 export interface SubscriptionFilter {
   channel?: string;
