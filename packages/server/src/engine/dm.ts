@@ -89,11 +89,9 @@ export async function sendDm(
       dmType: '1:1',
     });
 
-    // Add both participants
-    await db.insert(dmParticipants).values([
-      { conversationId, agentId: fromAgentId },
-      { conversationId, agentId: toAgent.id },
-    ]);
+    // Add both participants (insert individually to avoid multi-row DEFAULT issues)
+    await db.insert(dmParticipants).values({ conversationId, agentId: fromAgentId });
+    await db.insert(dmParticipants).values({ conversationId, agentId: toAgent.id });
   }
 
   // Get the channel for this conversation

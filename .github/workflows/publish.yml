@@ -1,0 +1,340 @@
+name: Publish Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish"
+        required: true
+        type: choice
+        options:
+          - all
+          - types
+          - server
+          - sdk
+          - mcp
+          - cli
+        default: "all"
+      version:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+      custom_version:
+        description: "Custom version (optional, overrides version type)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (do not actually publish)"
+        required: false
+        type: boolean
+        default: false
+      tag:
+        description: "NPM dist-tag"
+        required: false
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
+          - alpha
+        default: "latest"
+
+# Prevent concurrent publishes
+concurrency:
+  group: publish-package
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  NPM_CONFIG_FUND: false
+
+jobs:
+  # Build all packages, version them, run tests
+  build:
+    name: Build & Version
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Version all packages
+        id: bump
+        run: |
+          CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
+          VERSION_TYPE="${{ github.event.inputs.version }}"
+
+          # Read current version from types (canonical source)
+          CURRENT_VERSION=$(node -p "require('./packages/types/package.json').version")
+          echo "Current version: $CURRENT_VERSION"
+
+          if [ -n "$CUSTOM_VERSION" ]; then
+            NEW_VERSION="$CUSTOM_VERSION"
+            echo "Setting version to custom value: $NEW_VERSION"
+          else
+            # Use npm version on types to compute the new version
+            cd packages/types
+            npm version "$VERSION_TYPE" --no-git-tag-version --preid=beta
+            NEW_VERSION=$(node -p "require('./package.json').version")
+            cd ../..
+            echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
+          fi
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+          # Sync all package versions and internal dependencies
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const version = '$NEW_VERSION';
+
+            const packagesDir = 'packages';
+            for (const dir of fs.readdirSync(packagesDir)) {
+              const pkgPath = path.join(packagesDir, dir, 'package.json');
+              if (fs.existsSync(pkgPath)) {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                pkg.version = version;
+
+                // Update @relaycast/* dependencies to exact version
+                for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
+                  for (const dep of Object.keys(pkg[depType] || {})) {
+                    if (dep.startsWith('@relaycast/')) {
+                      pkg[depType][dep] = version;
+                    }
+                  }
+                }
+
+                fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+                console.log(pkg.name + '@' + version);
+              }
+            }
+          "
+
+      - name: Clean reinstall after version bump
+        run: |
+          rm -rf node_modules packages/*/node_modules package-lock.json
+          npm install
+
+      - name: Build all packages
+        run: npx turbo build
+
+      - name: Run tests
+        run: npx turbo test
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            package.json
+            package-lock.json
+            packages/*/package.json
+            packages/*/dist/
+          retention-days: 1
+
+  # Publish all packages in parallel
+  publish-packages:
+    name: Publish ${{ matrix.package }}
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event.inputs.package == 'all'
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        package:
+          - types
+          - server
+          - sdk
+          - mcp
+          - cli
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - name: Update npm for OIDC support
+        run: npm install -g npm@latest
+
+      - name: Dry run check
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          echo "Dry run - would publish ${PACKAGE_NAME}@${{ needs.build.outputs.new_version }}"
+          npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
+
+      - name: Publish to NPM
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: packages/${{ matrix.package }}
+        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+
+  # Publish a single package (when not "all")
+  publish-single:
+    name: Publish Single Package
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event.inputs.package != 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - name: Update npm for OIDC support
+        run: npm install -g npm@latest
+
+      - name: Dry run check
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/${{ github.event.inputs.package }}
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          echo "Dry run - would publish ${PACKAGE_NAME}@${{ needs.build.outputs.new_version }}"
+          npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
+
+      - name: Publish to NPM
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: packages/${{ github.event.inputs.package }}
+        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+
+  # Create git tag and release
+  create-release:
+    name: Create Release
+    needs: [build, publish-packages, publish-single]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      github.event.inputs.dry_run != 'true' &&
+      needs.build.result == 'success' &&
+      (needs.publish-packages.result == 'success' || needs.publish-single.result == 'success')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - name: Commit and tag
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          NEW_VERSION="${{ needs.build.outputs.new_version }}"
+
+          git add package.json package-lock.json packages/*/package.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): v${NEW_VERSION}"
+            git push origin HEAD:main
+          fi
+
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.build.outputs.new_version }}
+          name: v${{ needs.build.outputs.new_version }}
+          body: |
+            ## Relaycast v${{ needs.build.outputs.new_version }}
+
+            ### Install
+            ```bash
+            npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
+            npm install -g relaycast@${{ needs.build.outputs.new_version }}
+            ```
+
+            ### Packages
+            | Package | Version |
+            |---------|---------|
+            | @relaycast/types | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/server | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
+            | relaycast (CLI) | ${{ needs.build.outputs.new_version }} |
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Summary
+  summary:
+    name: Summary
+    needs: [build, publish-packages, publish-single, create-release]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## Publish Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${{ needs.build.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Package**: \`${{ github.event.inputs.package }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish Single | ${{ needs.publish-single.result == 'success' && '✅' || (needs.publish-single.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-single.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY

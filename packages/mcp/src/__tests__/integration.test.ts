@@ -100,6 +100,11 @@ describe('MCP → SDK → HTTP integration', () => {
         data = [{ command: 'test' }];
       }
 
+      // DELETE endpoints return 204 No Content (matches real server)
+      if (req.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+
       return new Response(JSON.stringify({ ok: true, data }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
