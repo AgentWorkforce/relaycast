@@ -11,18 +11,19 @@ import { enablePiggyback } from './piggyback.js';
 import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
-import { createMcpTelemetry } from './telemetry.js';
+import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 
 export interface McpServerOptions {
   apiKey: string;
   baseUrl?: string;
   telemetryTransport?: 'stdio' | 'http';
+  telemetry?: McpTelemetry;
 }
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const relay = new Relay({ apiKey: options.apiKey, baseUrl: options.baseUrl });
   const session: SessionState = createInitialSession();
-  const telemetry = createMcpTelemetry('0.1.0');
+  const telemetry = options.telemetry ?? createMcpTelemetry('0.1.0');
 
   const mcpServer = new McpServer(
     { name: 'agent-relay', version: '0.1.0' },

@@ -76,9 +76,14 @@ function loadState(): TelemetryState {
 }
 
 function saveState(state: TelemetryState): void {
-  const dir = path.dirname(TELEMETRY_PATH);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  try {
+    const dir = path.dirname(TELEMETRY_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  } catch {
+    // Best-effort persistence: if filesystem is read-only or unavailable,
+    // telemetry will still work with in-memory state
+  }
 }
 
 function getStatus(state: TelemetryState): TelemetryStatus {

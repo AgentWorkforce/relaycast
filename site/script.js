@@ -20,6 +20,19 @@ function getOrCreateDistinctId() {
 }
 
 const telemetry = (() => {
+  // Check for Do Not Track
+  const dnt = navigator.doNotTrack === '1' || 
+              navigator.doNotTrack === 'yes' ||
+              window.doNotTrack === '1' ||
+              navigator.msDoNotTrack === '1';
+
+  if (dnt) {
+    return {
+      enabled: false,
+      capture: () => {}, // no-op when DNT is enabled
+    };
+  }
+
   const posthogKey =
     window.POSTHOG_API_KEY ||
     window.RELAYCAST_POSTHOG_KEY ||
@@ -67,10 +80,39 @@ const telemetry = (() => {
   };
 })();
 
+function sanitizeUrl(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    // Only keep UTM parameters and other safe tracking params
+    const safeParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'ref'];
+    const filteredParams = new URLSearchParams();
+    safeParams.forEach(param => {
+      const value = parsed.searchParams.get(param);
+      if (value) filteredParams.set(param, value);
+    });
+    const queryString = filteredParams.toString();
+    return queryString ? `?${queryString}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeReferrer(referrer) {
+  if (!referrer) return null;
+  try {
+    const parsed = new URL(referrer);
+    // Only send the origin (protocol + hostname), not the full URL
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
 function trackSiteView() {
   telemetry.capture('relaycast_site_viewed', {
-    referrer: document.referrer || null,
-    query: window.location.search || null,
+    referrer: sanitizeReferrer(document.referrer),
+    query: sanitizeUrl(window.location.href),
   });
 }
 
