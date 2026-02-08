@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@agent-relay/sdk": "*",
-    "@agent-relay/types": "*"
+    "@agent-relay/types": "*",
+    "commander": "^14.0.3"
   },
   "files": [
     "dist"

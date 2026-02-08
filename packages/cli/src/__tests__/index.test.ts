@@ -1,9 +1,47 @@
-import { describe, it, expect } from 'vitest';
-import { CLI_VERSION } from '../index.js';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('commander', () => {
+  class MockCommand {
+    name() {
+      return this;
+    }
+    description() {
+      return this;
+    }
+    version() {
+      return this;
+    }
+    command() {
+      return this;
+    }
+    option() {
+      return this;
+    }
+    action() {
+      return this;
+    }
+    parse() {
+      return this;
+    }
+  }
+  return { Command: MockCommand };
+});
+
+vi.mock('../commands/workspace.js', () => ({ registerWorkspaceCommands: () => {} }));
+vi.mock('../commands/agent.js', () => ({ registerAgentCommands: () => {} }));
+vi.mock('../commands/config.js', () => ({ registerConfigCommands: () => {} }));
+vi.mock('../commands/channel.js', () => ({ registerChannelCommands: () => {} }));
+vi.mock('../commands/messaging.js', () => ({ registerMessagingCommands: () => {} }));
+vi.mock('../commands/read.js', () => ({ registerReadCommands: () => {} }));
+vi.mock('../commands/search.js', () => ({ registerSearchCommands: () => {} }));
+vi.mock('../commands/reactions.js', () => ({ registerReactionCommands: () => {} }));
+vi.mock('../commands/files.js', () => ({ registerFileCommands: () => {} }));
+vi.mock('../commands/billing.js', () => ({ registerBillingCommands: () => {} }));
 
 describe('@agent-relay/cli', () => {
-  it('exports CLI_VERSION', () => {
+  it('exports CLI_VERSION', async () => {
+    // Import after mocks are set so the CLI entrypoint does not call process.exit().
+    const { CLI_VERSION } = await import('../index.js');
     expect(CLI_VERSION).toBe('0.1.0');
   });
 });
-
