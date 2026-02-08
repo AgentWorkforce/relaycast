@@ -30,7 +30,8 @@ webhookRouter.post('/billing/webhooks', async (req: Request, res: Response) => {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (webhookSecret) {
       const signature = req.headers['stripe-signature'] as string | undefined;
-      if (!signature || !verifyWebhookSignature(JSON.stringify(req.body), signature, webhookSecret)) {
+      const rawBody = (req as Request & { rawBody?: Buffer }).rawBody?.toString() ?? JSON.stringify(req.body);
+      if (!signature || !verifyWebhookSignature(rawBody, signature, webhookSecret)) {
         res.status(401).json({ ok: false, error: { code: 'invalid_signature', message: 'Invalid webhook signature' } });
         return;
       }

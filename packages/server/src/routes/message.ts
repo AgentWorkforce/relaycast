@@ -65,11 +65,13 @@ messageRouter.post(
       publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );

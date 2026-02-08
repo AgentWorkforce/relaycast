@@ -26,7 +26,12 @@ export const app = express();
 
 app.use(cors());
 app.use(helmet());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    // Preserve raw body for Stripe webhook signature verification
+    (req as Request & { rawBody?: Buffer }).rawBody = buf;
+  },
+}));
 
 // Health check (outside /v1 prefix)
 app.use('/health', healthRouter);

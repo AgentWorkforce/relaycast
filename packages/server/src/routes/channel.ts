@@ -43,12 +43,14 @@ channelRouter.post(
       publishEvent({ type: 'channel.created', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'channel.created', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      const status = error.status || 500;
-      res.status(status).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        const status = error.status || 500;
+        res.status(status).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -137,11 +139,13 @@ channelRouter.patch(
       publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -185,11 +189,13 @@ channelRouter.patch(
       publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -222,11 +228,13 @@ channelRouter.delete(
       publishEvent({ type: 'channel.archived', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'channel.archived', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -250,11 +258,13 @@ channelRouter.post(
       publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -278,11 +288,13 @@ channelRouter.post(
       publishEvent({ type: 'member.left', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'member.left', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -352,11 +364,13 @@ channelRouter.post(
       publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
