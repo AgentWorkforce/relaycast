@@ -183,6 +183,10 @@ vi.mock('../ws/pubsub.js', () => ({
   publishEvent: vi.fn(),
 }));
 
+vi.mock('../engine/eventDelivery.js', () => ({
+  deliverEvent: vi.fn(),
+}));
+
 import { app } from '../app.js';
 
 import { createWorkspace } from '../engine/workspace.js';

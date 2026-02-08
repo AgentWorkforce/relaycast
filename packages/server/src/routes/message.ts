@@ -6,6 +6,8 @@ import {
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const messageRouter = Router();
 
@@ -57,6 +59,11 @@ messageRouter.post(
         { text, blocks, attachments, data, content_type },
       );
       res.status(201).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result, channel_name: channelName };
+      publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

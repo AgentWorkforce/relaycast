@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { workspaces } from '../db/schema.js';
+import { resetUsageCounters } from './usage.js';
 
 export interface WebhookEvent {
   type: string;
@@ -34,7 +35,8 @@ export async function handleInvoicePaid(data: Record<string, unknown>): Promise<
   const db = getDb();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.stripeCustomerId, customerId));
   if (!ws) return;
-  // Record invoice payment - could trigger usage reset, notifications, etc.
+  // Reset usage counters for the new billing period
+  await resetUsageCounters(ws.id);
 }
 
 export async function handlePaymentFailed(data: Record<string, unknown>): Promise<void> {
@@ -43,7 +45,10 @@ export async function handlePaymentFailed(data: Record<string, unknown>): Promis
   const db = getDb();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.stripeCustomerId, customerId));
   if (!ws) return;
-  // Could downgrade plan, send notifications, etc.
+  // Downgrade workspace to free plan on payment failure
+  await db.update(workspaces).set({
+    plan: 'free',
+  }).where(eq(workspaces.id, ws.id));
 }
 
 export async function processWebhook(event: WebhookEvent): Promise<{ received: boolean }> {

@@ -5,6 +5,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as dmEngine from '../engine/dm.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const dmRouter = Router();
 
@@ -39,6 +41,11 @@ dmRouter.post(
         text,
       });
       res.status(201).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result };
+      publishEvent({ type: 'dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'dm.received', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

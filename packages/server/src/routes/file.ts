@@ -6,6 +6,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const fileRouter = Router();
 
@@ -77,6 +79,11 @@ fileRouter.post(
       }
 
       res.status(200).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result, agent_id: req.agent!.id };
+      publishEvent({ type: 'file.uploaded', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'file.uploaded', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

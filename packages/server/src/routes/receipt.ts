@@ -6,6 +6,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const receiptRouter = Router();
 
@@ -30,6 +32,11 @@ receiptRouter.post(
       }
 
       res.status(200).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result };
+      publishEvent({ type: 'message.read', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'message.read', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({

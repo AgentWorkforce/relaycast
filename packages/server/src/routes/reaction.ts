@@ -6,6 +6,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const reactionRouter = Router();
 
@@ -40,6 +42,11 @@ reactionRouter.post(
       }
 
       res.status(201).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result };
+      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.added', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({
@@ -72,6 +79,11 @@ reactionRouter.delete(
       }
 
       res.status(204).send();
+
+      // Fire-and-forget event publishing
+      const eventData = { message_id: req.params.id, agent_id: req.agent!.id, emoji: req.params.emoji };
+      publishEvent({ type: 'reaction.removed', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.removed', eventData).catch(() => {});
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       res.status(error.status || 500).json({
