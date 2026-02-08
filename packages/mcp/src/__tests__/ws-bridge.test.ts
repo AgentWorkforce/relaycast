@@ -94,6 +94,57 @@ describe('eventToResourceUris', () => {
     expect(eventToResourceUris(event)).toEqual(['relay://channels']);
   });
 
+  it('maps channel.updated to channels resource', () => {
+    const event = {
+      type: 'channel.updated',
+      channel: { name: 'general', topic: 'New topic' },
+    } as ServerEvent;
+    expect(eventToResourceUris(event)).toEqual(['relay://channels']);
+  });
+
+  it('maps member.joined to channels resource', () => {
+    const event = {
+      type: 'member.joined',
+      channel: 'general',
+      agent_name: 'bot1',
+    } as ServerEvent;
+    expect(eventToResourceUris(event)).toEqual(['relay://channels']);
+  });
+
+  it('maps member.left to channels resource', () => {
+    const event = {
+      type: 'member.left',
+      channel: 'general',
+      agent_name: 'bot1',
+    } as ServerEvent;
+    expect(eventToResourceUris(event)).toEqual(['relay://channels']);
+  });
+
+  it('maps webhook.received to channel messages', () => {
+    const event = {
+      type: 'webhook.received',
+      webhook_id: 'wh_1',
+      channel: 'alerts',
+      message: { id: 'm1', text: 'deploy', source: null },
+    } as ServerEvent;
+    expect(eventToResourceUris(event)).toEqual([
+      'relay://channels/alerts/messages',
+    ]);
+  });
+
+  it('maps command.invoked to channel messages', () => {
+    const event = {
+      type: 'command.invoked',
+      command: '/deploy',
+      channel: 'general',
+      invoked_by: 'agent1',
+      args: null,
+    } as ServerEvent;
+    expect(eventToResourceUris(event)).toEqual([
+      'relay://channels/general/messages',
+    ]);
+  });
+
   it('returns empty array for unknown event types', () => {
     const event = { type: 'pong' } as ServerEvent;
     expect(eventToResourceUris(event)).toEqual([]);

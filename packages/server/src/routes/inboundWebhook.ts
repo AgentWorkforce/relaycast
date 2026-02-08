@@ -6,6 +6,8 @@ import {
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const inboundWebhookRouter = Router();
 
@@ -124,13 +126,21 @@ inboundWebhookRouter.post(
         });
         return;
       }
-      res.status(201).json({ ok: true, data: result });
+      const { workspace_id, channel_id, ...responseData } = result;
+      res.status(201).json({ ok: true, data: responseData });
+
+      // Fire-and-forget event publishing
+      const eventData = { webhook_id: result.webhook_id, channel: result.channel, message_id: result.message_id, text: result.text, source: result.source };
+      publishEvent({ type: 'webhook.received', workspace_id, channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(workspace_id, 'webhook.received', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );

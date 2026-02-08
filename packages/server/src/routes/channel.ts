@@ -6,6 +6,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const channelRouter = Router();
 
@@ -35,13 +37,20 @@ channelRouter.post(
         req.agent?.id,
       );
       res.status(201).json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...result, channel_name: result.name };
+      publishEvent({ type: 'channel.created', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.created', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      const status = error.status || 500;
-      res.status(status).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        const status = error.status || 500;
+        res.status(status).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -124,12 +133,19 @@ channelRouter.patch(
         return;
       }
       res.json({ ok: true, data: updated });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...updated, channel_name: updated.name };
+      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -167,12 +183,19 @@ channelRouter.patch(
         return;
       }
       res.json({ ok: true, data: updated });
+
+      // Fire-and-forget event publishing
+      const eventData = { ...updated, channel_name: updated.name };
+      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -199,12 +222,19 @@ channelRouter.delete(
         return;
       }
       res.status(204).send();
+
+      // Fire-and-forget event publishing
+      const eventData = { channel_name: paramName(req) };
+      publishEvent({ type: 'channel.archived', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'channel.archived', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -222,12 +252,19 @@ channelRouter.post(
         req.agent!.id,
       );
       res.json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing
+      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
+      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -245,12 +282,19 @@ channelRouter.post(
         req.agent!.id,
       );
       res.status(204).send();
+
+      // Fire-and-forget event publishing
+      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
+      publishEvent({ type: 'member.left', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.left', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -314,12 +358,19 @@ channelRouter.post(
         agent,
       );
       res.json({ ok: true, data: result });
+
+      // Fire-and-forget event publishing — invited agent joins the channel
+      const eventData = { channel_name: paramName(req), agent_name: agent };
+      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );

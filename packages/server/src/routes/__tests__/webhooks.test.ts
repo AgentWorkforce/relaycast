@@ -102,6 +102,37 @@ vi.mock('../../engine/systemPrompt.js', () => ({
   setSystemPrompt: vi.fn(),
 }));
 
+vi.mock('../../engine/command.js', () => ({
+  registerCommand: vi.fn(),
+  listCommands: vi.fn(),
+  getCommand: vi.fn(),
+  deleteCommand: vi.fn(),
+  invokeCommand: vi.fn(),
+}));
+
+vi.mock('../../engine/inboundWebhook.js', () => ({
+  createWebhook: vi.fn(),
+  listWebhooks: vi.fn(),
+  getWebhook: vi.fn(),
+  deleteWebhook: vi.fn(),
+  triggerWebhook: vi.fn(),
+}));
+
+vi.mock('../../engine/eventSubscription.js', () => ({
+  createSubscription: vi.fn(),
+  listSubscriptions: vi.fn(),
+  deleteSubscription: vi.fn(),
+  getActiveSubscriptions: vi.fn(),
+}));
+
+vi.mock('../../ws/pubsub.js', () => ({
+  publishEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../engine/eventDelivery.js', () => ({
+  deliverEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
@@ -113,12 +144,14 @@ vi.mock('../../redis/index.js', () => ({
   })),
 }));
 
+import { createHmac } from 'node:crypto';
 import { app } from '../../app.js';
 import * as webhooksEngine from '../../engine/webhooks.js';
 
 describe('POST /v1/billing/webhooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.STRIPE_WEBHOOK_SECRET;
   });
 
   it('handles subscription.updated', async () => {
@@ -180,16 +213,16 @@ describe('POST /v1/billing/webhooks', () => {
     expect(res.body.error.message).toContain('type');
   });
 
-  it('returns 200 even on processing failure', async () => {
+  it('returns 500 on processing failure so Stripe retries', async () => {
     vi.mocked(webhooksEngine.processWebhook).mockRejectedValue(new Error('DB error'));
 
     const res = await request(app)
       .post('/v1/billing/webhooks')
       .send({ type: 'subscription.updated', data: {} });
 
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.received).toBe(true);
+    expect(res.status).toBe(500);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error.code).toBe('webhook_processing_error');
   });
 
   it('does not require auth', async () => {
@@ -212,5 +245,66 @@ describe('POST /v1/billing/webhooks', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.received).toBe(true);
+  });
+
+  it('rejects requests with invalid signature when STRIPE_WEBHOOK_SECRET is set', async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret';
+
+    const res = await request(app)
+      .post('/v1/billing/webhooks')
+      .set('stripe-signature', 't=12345,v1=invalid')
+      .send({ type: 'subscription.updated', data: {} });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('invalid_signature');
+  });
+
+  it('rejects requests without stripe-signature header when secret is set', async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret';
+
+    const res = await request(app)
+      .post('/v1/billing/webhooks')
+      .send({ type: 'subscription.updated', data: {} });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('invalid_signature');
+  });
+
+  it('accepts requests with valid signature when STRIPE_WEBHOOK_SECRET is set', async () => {
+    const secret = 'whsec_test_secret';
+    process.env.STRIPE_WEBHOOK_SECRET = secret;
+    vi.mocked(webhooksEngine.processWebhook).mockResolvedValue({ received: true });
+
+    const body = JSON.stringify({ type: 'subscription.updated', data: {} });
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sig = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+
+    const res = await request(app)
+      .post('/v1/billing/webhooks')
+      .set('Content-Type', 'application/json')
+      .set('stripe-signature', `t=${timestamp},v1=${sig}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('rejects stale signatures older than 5 minutes', async () => {
+    const secret = 'whsec_test_secret';
+    process.env.STRIPE_WEBHOOK_SECRET = secret;
+
+    const body = JSON.stringify({ type: 'subscription.updated', data: {} });
+    // Timestamp 10 minutes in the past
+    const staleTimestamp = (Math.floor(Date.now() / 1000) - 600).toString();
+    const sig = createHmac('sha256', secret).update(`${staleTimestamp}.${body}`).digest('hex');
+
+    const res = await request(app)
+      .post('/v1/billing/webhooks')
+      .set('Content-Type', 'application/json')
+      .set('stripe-signature', `t=${staleTimestamp},v1=${sig}`)
+      .send(body);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('invalid_signature');
   });
 });

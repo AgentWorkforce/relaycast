@@ -4,6 +4,10 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../usage.js', () => ({
+  resetUsageCounters: vi.fn(),
+}));
+
 import { getDb } from '../../db/index.js';
 import {
   processWebhook,

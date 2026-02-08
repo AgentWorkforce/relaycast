@@ -33,8 +33,26 @@ export function eventToResourceUris(event: ServerEvent): string[] {
     case 'agent.offline':
       return ['relay://agents'];
     case 'channel.created':
+    case 'channel.updated':
     case 'channel.archived':
+    case 'member.joined':
+    case 'member.left':
       return ['relay://channels'];
+    case 'webhook.received':
+      return [
+        `relay://channels/${(event as any).channel}/messages`,
+      ];
+    case 'command.invoked':
+      return [
+        `relay://channels/${(event as any).channel}/messages`,
+      ];
+    case 'message.read':
+      return [];
+    case 'file.uploaded':
+      return [];
+    case 'reaction.added':
+    case 'reaction.removed':
+      return [];
     default:
       return [];
   }

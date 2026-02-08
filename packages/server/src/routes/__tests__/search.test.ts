@@ -112,6 +112,14 @@ vi.mock('../../redis/index.js', () => ({
   })),
 }));
 
+vi.mock('../../ws/pubsub.js', () => ({
+  publishEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../engine/eventDelivery.js', () => ({
+  deliverEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { app } from '../../app.js';
 import * as searchEngine from '../../engine/search.js';
 import { getDb } from '../../db/index.js';

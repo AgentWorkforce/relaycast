@@ -6,8 +6,8 @@ import { generateId } from './snowflake.js';
 
 export const PLAN_LIMITS: Record<string, { messages: number; agents: number; file_bytes: number; rate_per_min: number }> = {
   free: { messages: 10000, agents: 5, file_bytes: 100 * 1024 * 1024, rate_per_min: 60 },
-  pro: { messages: 500000, agents: 50, file_bytes: 10 * 1024 * 1024 * 1024, rate_per_min: 600 },
-  enterprise: { messages: Infinity, agents: Infinity, file_bytes: 100 * 1024 * 1024 * 1024, rate_per_min: 6000 },
+  pro: { messages: 1000000, agents: 100, file_bytes: 50 * 1024 * 1024 * 1024, rate_per_min: 1200 },
+  enterprise: { messages: Infinity, agents: Infinity, file_bytes: 500 * 1024 * 1024 * 1024, rate_per_min: 6000 },
 };
 
 type StripeSubscription = { id: string; customer: string; status: string; current_period_end: number; metadata: { plan: string; workspace_id: string } };

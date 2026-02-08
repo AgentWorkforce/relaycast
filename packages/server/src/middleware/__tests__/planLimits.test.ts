@@ -19,10 +19,10 @@ describe('PLAN_LIMITS', () => {
 
   it('has correct pro limits', () => {
     expect(PLAN_LIMITS.pro).toEqual({
-      messages: 500_000,
-      agents: 50,
-      file_bytes: 10 * 1024 * 1024 * 1024,
-      rate_per_min: 600,
+      messages: 1_000_000,
+      agents: 100,
+      file_bytes: 50 * 1024 * 1024 * 1024,
+      rate_per_min: 1200,
     });
   });
 
@@ -30,7 +30,7 @@ describe('PLAN_LIMITS', () => {
     expect(PLAN_LIMITS.enterprise).toEqual({
       messages: Infinity,
       agents: Infinity,
-      file_bytes: 100 * 1024 * 1024 * 1024,
+      file_bytes: 500 * 1024 * 1024 * 1024,
       rate_per_min: 6000,
     });
   });
@@ -139,8 +139,8 @@ describe('checkPlanLimit("agents")', () => {
     expect(res.status).toHaveBeenCalledWith(429);
   });
 
-  it('allows pro plan up to 50 agents', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('49') };
+  it('allows pro plan up to 100 agents', async () => {
+    const mockRedis = { get: vi.fn().mockResolvedValue('99') };
     vi.mocked(getRedis).mockReturnValue(mockRedis as any);
 
     const middleware = checkPlanLimit('agents');

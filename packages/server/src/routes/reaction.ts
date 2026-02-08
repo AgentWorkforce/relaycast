@@ -6,6 +6,8 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const reactionRouter = Router();
 
@@ -39,13 +41,21 @@ reactionRouter.post(
         return;
       }
 
-      res.status(201).json({ ok: true, data: result });
+      // Strip internal channel_id before sending to client
+      const { channel_id, ...reactionData } = result;
+      res.status(201).json({ ok: true, data: reactionData });
+
+      // Fire-and-forget event publishing — scope to the message's channel
+      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: reactionData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.added', reactionData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
@@ -72,12 +82,19 @@ reactionRouter.delete(
       }
 
       res.status(204).send();
+
+      // Fire-and-forget event publishing
+      const eventData = { message_id: req.params.id, agent_id: req.agent!.id, emoji: req.params.emoji };
+      publishEvent({ type: 'reaction.removed', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.removed', eventData).catch(() => {});
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+      if (!res.headersSent) {
+        const error = err as Error & { code?: string; status?: number };
+        res.status(error.status || 500).json({
+          ok: false,
+          error: { code: error.code || 'internal_error', message: error.message },
+        });
+      }
     }
   },
 );
