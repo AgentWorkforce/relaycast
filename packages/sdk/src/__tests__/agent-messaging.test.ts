@@ -60,6 +60,15 @@ describe('AgentClient', () => {
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['att_1', 'att_2'] }));
     });
+
+    it('forwards Idempotency-Key when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello', { idempotencyKey: 'msg-key-1' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('msg-key-1');
+    });
   });
 
   describe('messages()', () => {
@@ -118,6 +127,15 @@ describe('AgentClient', () => {
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'reply' }));
     });
+
+    it('forwards Idempotency-Key when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.reply('m_1', 'reply', { idempotencyKey: 'reply-key-1' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('reply-key-1');
+    });
   });
 
   describe('thread()', () => {
@@ -153,6 +171,15 @@ describe('AgentClient', () => {
       expect(url).toBe('https://api.agentrelay.dev/v1/dm');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi' }));
+    });
+
+    it('forwards Idempotency-Key when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi', { idempotencyKey: 'dm-key-1' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('dm-key-1');
     });
   });
 
@@ -210,6 +237,15 @@ describe('AgentClient', () => {
       expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
     });
 
+    it('sendMessage() forwards Idempotency-Key when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.dms.sendMessage('c_1', 'hello', { idempotencyKey: 'gdm-key-1' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('gdm-key-1');
+    });
+
     it('addParticipant() adds agent', async () => {
       mockFetch.mockImplementation(() => mockResponse({ ok: true }));
 
@@ -233,4 +269,3 @@ describe('AgentClient', () => {
     });
   });
 });
-

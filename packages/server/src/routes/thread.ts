@@ -4,6 +4,7 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { publishEvent } from '../ws/pubsub.js';
 import { deliverEvent } from '../engine/eventDelivery.js';
@@ -26,6 +27,15 @@ threadRouter.post(
         return;
       }
 
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      if (idempotencyError) {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_idempotency_key', message: idempotencyError },
+        });
+        return;
+      }
+
       const agentId = req.agent?.id;
       if (!agentId) {
         res.status(403).json({
@@ -36,18 +46,35 @@ threadRouter.post(
       }
 
       const parentId = req.params.id as string;
-      const result = await threadEngine.postReply(
-        req.workspace!.id,
-        parentId,
-        agentId,
-        { text },
-      );
-      res.status(201).json({ ok: true, data: result });
+      const idempotent = await runIdempotent({
+        workspaceId: req.workspace!.id,
+        actorId: agentId,
+        scope: `thread-reply:${parentId}`,
+        key: idempotencyKey,
+        status: 201,
+        fingerprint: JSON.stringify({ parentId, text }),
+        operation: () =>
+          threadEngine.postReply(
+            req.workspace!.id,
+            parentId,
+            agentId,
+            { text },
+          ),
+      });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result };
-      publishEvent({ type: 'thread.reply', workspace_id: req.workspace!.id, channel_id: result.channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'thread.reply', eventData).catch(() => {});
+      if (idempotent.replayed) {
+        res.setHeader('Idempotency-Replayed', 'true');
+      }
+
+      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
+
+      // Fire-and-forget event publishing only for fresh writes.
+      if (!idempotent.replayed) {
+        const eventData = { ...idempotent.data } as Record<string, unknown>;
+        const channelId = typeof eventData.channel_id === 'string' ? eventData.channel_id : undefined;
+        publishEvent({ type: 'thread.reply', workspace_id: req.workspace!.id, channel_id: channelId, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+        deliverEvent(req.workspace!.id, 'thread.reply', eventData).catch(() => {});
+      }
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };

@@ -4,6 +4,7 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { publishEvent } from '../ws/pubsub.js';
@@ -23,6 +24,15 @@ messageRouter.post(
         res.status(400).json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
+        });
+        return;
+      }
+
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      if (idempotencyError) {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_idempotency_key', message: idempotencyError },
         });
         return;
       }
@@ -52,18 +62,34 @@ messageRouter.post(
         return;
       }
 
-      const result = await messageEngine.postMessage(
-        req.workspace!.id,
-        channel.id,
-        agentId,
-        { text, blocks, attachments, data, content_type },
-      );
-      res.status(201).json({ ok: true, data: result });
+      const idempotent = await runIdempotent({
+        workspaceId: req.workspace!.id,
+        actorId: agentId,
+        scope: `channel-message:${channel.id}`,
+        key: idempotencyKey,
+        status: 201,
+        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type }),
+        operation: () =>
+          messageEngine.postMessage(
+            req.workspace!.id,
+            channel.id,
+            agentId,
+            { text, blocks, attachments, data, content_type },
+          ),
+      });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result, channel_name: channelName };
-      publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
+      if (idempotent.replayed) {
+        res.setHeader('Idempotency-Replayed', 'true');
+      }
+
+      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
+
+      // Fire-and-forget event publishing only for fresh writes.
+      if (!idempotent.replayed) {
+        const eventData = { ...idempotent.data, channel_name: channelName };
+        publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+        deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
+      }
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };

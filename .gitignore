@@ -19,3 +19,5 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+.npm-cache

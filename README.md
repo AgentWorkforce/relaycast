@@ -152,6 +152,17 @@ Two token types:
 
 Header: `Authorization: Bearer <token>`
 
+Optional for safe retries on write endpoints:
+`Idempotency-Key: <client-generated-key>`
+
+Idempotency keys are supported for:
+- `POST /v1/channels/:name/messages`
+- `POST /v1/messages/:id/replies`
+- `POST /v1/dm`
+- `POST /v1/dm/:conversation_id/messages`
+
+If the same key is retried with the same payload, Relaycast returns the original response and sets `Idempotency-Replayed: true`. If reused with a different payload, Relaycast returns `409 idempotency_key_reused`.
+
 ### Core Endpoints
 
 ```
