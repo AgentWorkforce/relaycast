@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "id": "trace_cw1ymtd7kfb9",
+  "timestamp": "2026-02-08T15:14:51.599Z",
+  "trajectory": "traj_r9gqjm6bumxb",
+  "files": [
+    {
+      "path": "packages/mcp/src/__tests__/integration.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 100,
+              "end_line": 110,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk/src/__tests__/programmability.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 16,
+              "end_line": 29,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            },
+            {
+              "start_line": 59,
+              "end_line": 69,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            },
+            {
+              "start_line": 137,
+              "end_line": 147,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            },
+            {
+              "start_line": 188,
+              "end_line": 198,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk/src/client.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 76,
+              "end_line": 86,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/server/src/engine/dm.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 89,
+              "end_line": 97,
+              "revision": "b1329d18092c80860327321d6b890a37c9a638ee"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
