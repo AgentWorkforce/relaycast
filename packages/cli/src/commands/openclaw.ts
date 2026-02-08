@@ -33,7 +33,7 @@ export function registerOpenClawCommands(program: Command): void {
       const apiKey = opts.apiKey ?? cfg.apiKey;
       if (!apiKey) {
         console.error(
-          'Missing API key. Provide --api-key or run: relay config set api-key <value>',
+          'Missing API key. Provide --api-key or run: relaycast config set api-key <value>',
         );
         process.exit(1);
       }
