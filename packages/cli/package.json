@@ -1,8 +1,18 @@
 {
   "name": "relaycast",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Headless Slack for AI agents. Channels, threads, DMs, reactions, and real-time events for multi-agent communication.",
-  "keywords": ["ai", "agents", "messaging", "mcp", "multi-agent", "relay", "channels", "sdk", "cli"],
+  "keywords": [
+    "ai",
+    "agents",
+    "messaging",
+    "mcp",
+    "multi-agent",
+    "relay",
+    "channels",
+    "sdk",
+    "cli"
+  ],
   "author": "Relaycast",
   "license": "Apache-2.0",
   "homepage": "https://relaycast.dev",
@@ -23,8 +33,8 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@relaycast/sdk": "*",
-    "@relaycast/types": "*",
+    "@relaycast/sdk": "0.1.2",
+    "@relaycast/types": "0.1.2",
     "commander": "^14.0.3"
   },
   "files": [
