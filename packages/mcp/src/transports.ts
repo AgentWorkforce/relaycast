@@ -16,17 +16,15 @@ export async function startStdio(options: McpServerOptions): Promise<void> {
 
 /**
  * Session map for HTTP transport (multi-agent).
- * Each session gets its own MCP server + transport instance.
+ * Each session gets its own MCP server + transport + telemetry instance.
  */
 const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
 /**
  * Create Express middleware for HTTP+SSE transport (multi-agent).
- * Each connecting client gets its own session with isolated state.
+ * Each connecting client gets its own session with isolated state and telemetry.
  */
 export function createHttpHandler(baseOptions: McpServerOptions) {
-  const telemetry = createMcpTelemetry('0.1.0');
-
   return {
     handleRequest: async (
       req: import('node:http').IncomingMessage,
@@ -41,7 +39,9 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
         return;
       }
 
-      // New session — create fresh MCP server + transport
+      // New session — create fresh MCP server + transport + telemetry
+      const telemetry = createMcpTelemetry('0.1.0');
+      
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
@@ -49,6 +49,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
       const mcpServer = createRelayMcpServer({
         ...baseOptions,
         telemetryTransport: 'http',
+        telemetry,
       });
 
       transport.onclose = () => {
@@ -64,7 +65,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
         telemetry.capture('relaycast_mcp_http_session_started', {
           source_surface: 'mcp',
           transport: 'http',
-          session_id: transport.sessionId,
+          mcp_transport_session_id: transport.sessionId,
         });
       }
 

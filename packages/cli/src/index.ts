@@ -14,7 +14,7 @@ import { registerBillingCommands } from './commands/billing.js';
 import { registerTelemetryCommands } from './commands/telemetry.js';
 import { createCliTelemetry } from './telemetry.js';
 
-export const CLI_VERSION = '0.1.0' as const;
+export const CLI_VERSION = '0.1.2' as const;
 
 const program = new Command();
 const telemetry = createCliTelemetry(CLI_VERSION);

@@ -56,6 +56,6 @@ describe('relaycast', () => {
   it('exports CLI_VERSION', async () => {
     // Import after mocks are set so the CLI entrypoint does not call process.exit().
     const { CLI_VERSION } = await import('../index.js');
-    expect(CLI_VERSION).toBe('0.1.0');
+    expect(CLI_VERSION).toBe('0.1.2');
   });
 });
