@@ -19,93 +19,117 @@ The Relaycast Dashboard is a single-page application that gives workspace owners
 
 ## 2. Architecture & Tech Stack
 
-### Frontend
+### Existing Codebase: `../relay-dashboard`
+
+**The Relaycast cloud dashboard will be built inside the existing `relay-dashboard` monorepo** at `../relay-dashboard` (GitHub: `AgentWorkforce/relay-dashboard`). This repo already contains a mature dashboard with reusable components that we can leverage directly.
+
+#### Existing Packages (Reusable)
+
+| Package | Version | Description |
+|---------|---------|-------------|
+| `@agent-relay/dashboard` | 2.0.65 | Next.js 14 frontend with 40+ components |
+| `@agent-relay/dashboard-server` | 2.0.65 | Express server (proxy + full modes) |
+| `@agent-relay/dashboard-v2` | 0.1.0 | Cloud-focused dashboard (agents, billing, credentials) |
+
+#### Components We Can Directly Reuse
+
+The existing `@agent-relay/dashboard` package contains components that map directly to our needs:
+
+| Existing Component | Relaycast Usage |
+|-------------------|-----------------|
+| `MessageList.tsx` | Channel message feed |
+| `MessageComposer.tsx` | Send messages as human |
+| `ChannelChat.tsx` | Full channel view (messages + compose) |
+| `ChannelSidebar.tsx` | Channel list in sidebar |
+| `ChannelBrowser.tsx` | Channel discovery/listing |
+| `DirectMessageView.tsx` | DM conversations |
+| `AgentCard.tsx` | Agent detail cards |
+| `AgentList.tsx` | Agent directory with status |
+| `AgentProfilePanel.tsx` | Agent detail panel |
+| `ActivityFeed.tsx` | Recent activity overview |
+| `BillingPanel.tsx` | Usage and billing |
+| `CommandPalette.tsx` | Cmd+K search |
+| `MentionAutocomplete.tsx` | @mention support |
+| `MessageSenderName.tsx` | Agent name display |
+| `MessageStatusIndicator.tsx` | Read receipts |
+| `OnlineUsersIndicator.tsx` | Presence dots |
+| `NotificationToast.tsx` | Toast notifications |
+| `ConversationHistory.tsx` | Message history |
+| `NewConversationModal.tsx` | New DM creation |
+| `BroadcastComposer.tsx` | Broadcast messages |
+| `ConfirmationDialog.tsx` | Confirmation modals |
+
+The `dashboard-v2` package also has cloud-relevant components:
+- `AgentConfigEditor.tsx` — Agent configuration
+- `TokenMeteringPanel.tsx` — Token/billing metering
+- Credentials management pages
+
+### Strategy: New Package in Existing Monorepo
+
+Rather than creating a new repo, add a `packages/relaycast` package to the existing `relay-dashboard` monorepo:
+
+```
+relay-dashboard/                        # Existing repo at ../relay-dashboard
+├── packages/
+│   ├── dashboard/                      # Existing — reuse components from here
+│   ├── dashboard-server/               # Existing — reuse server patterns
+│   ├── dashboard-v2/                   # Existing — reuse cloud components
+│   └── relaycast/                      # NEW — Relaycast cloud dashboard
+│       ├── src/
+│       │   ├── app/
+│       │   │   ├── layout.tsx
+│       │   │   ├── page.tsx            # Overview dashboard
+│       │   │   ├── globals.css
+│       │   │   ├── login/
+│       │   │   │   └── page.tsx        # API key entry
+│       │   │   ├── channels/
+│       │   │   │   └── [name]/
+│       │   │   │       └── page.tsx    # Channel view
+│       │   │   ├── dm/
+│       │   │   │   └── [id]/
+│       │   │   │       └── page.tsx    # DM view
+│       │   │   ├── agents/
+│       │   │   │   └── page.tsx        # Agent directory
+│       │   │   ├── search/
+│       │   │   │   └── page.tsx        # Search results
+│       │   │   └── settings/
+│       │   │       ├── page.tsx        # Workspace settings
+│       │   │       └── billing/
+│       │   │           └── page.tsx    # Billing
+│       │   ├── components/             # Relaycast-specific wrappers
+│       │   │   ├── RelaycastProvider.tsx  # SDK + WS context
+│       │   │   ├── AuthGate.tsx          # API key auth wrapper
+│       │   │   └── RelaycastSidebar.tsx  # Sidebar with channels/DMs/agents
+│       │   ├── hooks/
+│       │   │   ├── useRelaycast.ts     # SDK singleton hook
+│       │   │   ├── useWebSocket.ts     # WS connection lifecycle
+│       │   │   └── usePresence.ts      # Agent presence tracking
+│       │   └── lib/
+│       │       ├── relay.ts            # @relaycast/sdk initialization
+│       │       └── store.ts            # Zustand stores (auth, channels, messages)
+│       ├── next.config.js
+│       ├── tailwind.config.cjs
+│       ├── tsconfig.json
+│       └── package.json                # @relaycast/dashboard
+```
+
+### Frontend Stack
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| **Framework** | Vite + React 19 | SPA with no SSR needs; fast HMR; simple deployment to static hosting |
-| **Routing** | React Router v7 | Client-side routing for SPA pages |
-| **Styling** | Tailwind CSS v4 | Matches landing page design tokens; utility-first for rapid iteration |
-| **State** | Zustand | Lightweight global state for auth, channels, messages; no Redux boilerplate |
-| **Real-time** | Native WebSocket (via `@relaycast/sdk` WsClient) | Already built; reconnection + event typing included |
-| **HTTP Client** | `@relaycast/sdk` Relay class | All REST calls go through the existing SDK; no duplicate API layer |
-| **Icons** | Lucide React | Clean, consistent icon set |
-| **Toasts/Notifications** | Sonner | Minimal toast library |
-| **Date formatting** | date-fns | Lightweight, tree-shakeable |
+| **Framework** | Next.js 14 (App Router) | Matches existing dashboard; enables component sharing via imports |
+| **Styling** | Tailwind CSS v4 | Already configured in existing dashboard; matches landing page tokens |
+| **State** | Zustand (or React context) | Lightweight; existing dashboard patterns available |
+| **Real-time** | `@relaycast/sdk` WsClient | Already built; reconnection + event typing included |
+| **HTTP Client** | `@relaycast/sdk` Relay class | All REST calls via existing SDK |
+| **Component Reuse** | Import from `@agent-relay/dashboard` | 40+ ready-made components |
 
-### Why Not Next.js?
+### Why Next.js (not Vite)?
 
-- No SEO requirements (authenticated app, no public pages)
-- No server-side rendering needed (all data from Relaycast API)
-- Simpler deployment (static files to Cloudflare Pages vs. serverless functions)
-- Faster builds, smaller bundle
-
-### Repository
-
-```
-relay-dashboard/
-├── src/
-│   ├── main.tsx              # App entry
-│   ├── App.tsx               # Router + layout
-│   ├── stores/
-│   │   ├── auth.ts           # API key, human agent token, workspace info
-│   │   ├── channels.ts       # Channel list + active channel state
-│   │   ├── messages.ts       # Messages by channel, with WS updates
-│   │   ├── agents.ts         # Agent registry + presence
-│   │   └── dms.ts            # DM conversations + messages
-│   ├── hooks/
-│   │   ├── useWebSocket.ts   # WS connection lifecycle
-│   │   ├── useMessages.ts    # Message fetching + real-time merge
-│   │   ├── useChannels.ts    # Channel list + membership
-│   │   └── usePresence.ts    # Agent online/offline tracking
-│   ├── components/
-│   │   ├── layout/
-│   │   │   ├── Sidebar.tsx        # Channel list, DM list, agent list
-│   │   │   ├── Header.tsx         # Workspace name, search, settings
-│   │   │   └── MainLayout.tsx     # Sidebar + content area
-│   │   ├── auth/
-│   │   │   └── LoginPage.tsx      # API key entry form
-│   │   ├── channels/
-│   │   │   ├── ChannelList.tsx    # Sidebar channel list with unread badges
-│   │   │   ├── ChannelView.tsx    # Message feed + compose
-│   │   │   ├── ChannelHeader.tsx  # Channel name, topic, member count
-│   │   │   └── ChannelCreate.tsx  # Create channel modal
-│   │   ├── messages/
-│   │   │   ├── MessageFeed.tsx    # Scrollable message list (virtualized)
-│   │   │   ├── MessageItem.tsx    # Single message with avatar, reactions, thread link
-│   │   │   ├── MessageCompose.tsx # Text input + send button
-│   │   │   ├── ThreadPanel.tsx    # Side panel for thread view
-│   │   │   └── ReactionPicker.tsx # Emoji reaction selector
-│   │   ├── dms/
-│   │   │   ├── DmList.tsx         # DM conversation list in sidebar
-│   │   │   ├── DmView.tsx         # DM message feed + compose
-│   │   │   └── NewDmModal.tsx     # Start new DM/group DM
-│   │   ├── agents/
-│   │   │   ├── AgentList.tsx      # Agent directory with status indicators
-│   │   │   ├── AgentCard.tsx      # Agent detail card (persona, channels, activity)
-│   │   │   └── AgentCreate.tsx    # Register new agent modal
-│   │   ├── search/
-│   │   │   ├── SearchBar.tsx      # Global search input (Cmd+K)
-│   │   │   └── SearchResults.tsx  # Search results with message previews
-│   │   ├── overview/
-│   │   │   └── Dashboard.tsx      # Workspace stats overview
-│   │   └── settings/
-│   │       ├── WorkspaceSettings.tsx  # Name, system prompt
-│   │       └── BillingPage.tsx        # Usage stats, plan, Stripe portal link
-│   ├── lib/
-│   │   ├── relay.ts           # SDK singleton (initialized on login)
-│   │   ├── ws.ts              # WebSocket manager
-│   │   └── utils.ts           # Formatting helpers
-│   └── styles/
-│       └── globals.css        # Tailwind directives + custom theme tokens
-├── public/
-│   └── favicon.svg
-├── index.html
-├── package.json
-├── tailwind.config.ts
-├── tsconfig.json
-└── vite.config.ts
-```
+- The existing `relay-dashboard` repo uses Next.js 14 throughout
+- Direct component imports between packages require compatible framework
+- `@agent-relay/dashboard` components use Next.js conventions (Link, Image, etc.)
+- Unified build tooling and deployment patterns across the monorepo
 
 ---
 
@@ -744,54 +768,72 @@ When the WebSocket reconnects after a disconnect:
 
 ## 12. Deployment
 
-### Cloudflare Pages (Primary)
+### Repository Location
 
-```yaml
-# wrangler.toml (optional, for CF Pages config)
-name = "relay-dashboard"
-compatibility_date = "2026-02-01"
+The Relaycast dashboard lives in the existing `relay-dashboard` monorepo:
+- **Local path**: `../relay-dashboard` (relative to relay-cloud-sdk-transport)
+- **GitHub**: `AgentWorkforce/relay-dashboard`
+- **New package**: `packages/relaycast/` within that monorepo
+
+### Fly.io (Primary — matches existing dashboard)
+
+The existing `relay-dashboard` repo already deploys to Fly.io with a Dockerfile. The Relaycast dashboard can follow the same pattern:
+
+```toml
+# fly.toml
+app = "relaycast-dashboard"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  NEXT_PUBLIC_API_URL = "https://api.relaycast.dev"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
 ```
 
-**Build**:
+**Custom Domain**: `dashboard.relaycast.dev`
+
+### Cloudflare Pages (Alternative)
+
+If static export is preferred (`next export`):
+
 ```bash
-npm run build  # vite build → dist/
+cd packages/relaycast && npm run build
+npx wrangler pages deploy out --project-name relaycast-dashboard
 ```
-
-**Deploy**:
-```bash
-npx wrangler pages deploy dist --project-name relay-dashboard
-```
-
-**Custom Domain**: `dashboard.relaycast.dev` → Cloudflare Pages CNAME
 
 **Environment Variables** (build-time):
 ```
-VITE_API_URL=https://api.relaycast.dev
+NEXT_PUBLIC_API_URL=https://api.relaycast.dev
 ```
 
-### Vercel (Alternative)
+### npm Publishing
 
-```json
-// vercel.json
-{
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
-  "env": {
-    "VITE_API_URL": "https://api.relaycast.dev"
-  }
-}
+The package can also be published as `@relaycast/dashboard` for self-hosted use:
+
+```bash
+# In relay-dashboard monorepo
+npm publish -w packages/relaycast
 ```
-
-SPA rewrite rule ensures client-side routing works.
 
 ### CI/CD
 
-GitHub Actions workflow:
+GitHub Actions workflow (in `relay-dashboard` repo):
 
 ```yaml
-name: Deploy Dashboard
+name: Deploy Relaycast Dashboard
 on:
   push:
     branches: [main]
+    paths: ['packages/relaycast/**']
 
 jobs:
   deploy:
@@ -802,11 +844,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: npm run build
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          command: pages deploy dist --project-name relay-dashboard
-          apiToken: ${{ secrets.CF_API_TOKEN }}
+      - run: npm run build -w packages/relaycast
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --app relaycast-dashboard
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 ```
 
 ---

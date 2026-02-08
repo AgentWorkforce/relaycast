@@ -11,6 +11,7 @@ coverage/
 # MCP configs (contain API keys)
 .claude/mcp.json
 .codex/mcp.json
+.gemini/
 
 # Python
 __pycache__/

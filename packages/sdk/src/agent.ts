@@ -167,7 +167,7 @@ export class AgentClient {
       this.client.post(`/v1/channels/${encodeURIComponent(name)}/leave`) as Promise<void>,
 
     setTopic: (name: string, topic: string): Promise<Channel> =>
-      this.client.patch(`/v1/channels/${encodeURIComponent(name)}`, { topic }),
+      this.client.patch(`/v1/channels/${encodeURIComponent(name)}/topic`, { topic }),
 
     archive: (name: string): Promise<void> =>
       this.client.delete(`/v1/channels/${encodeURIComponent(name)}`),

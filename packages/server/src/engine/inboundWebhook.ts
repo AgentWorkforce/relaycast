@@ -124,7 +124,15 @@ export async function triggerWebhook(
       ? `Webhook ${webhook.name}: ${JSON.stringify(data.payload)}`
       : `Webhook event from ${data.source || 'external'}`);
 
-  // Create message in the bound channel (no agent — webhook is identity)
+  // Webhook must have a creator agent to post messages
+  if (!webhook.createdBy) {
+    const err = new Error('Webhook has no associated agent and cannot post messages');
+    (err as Error & { code?: string; status?: number }).code = 'webhook_no_agent';
+    (err as Error & { code?: string; status?: number }).status = 422;
+    throw err;
+  }
+
+  // Create message in the bound channel using the webhook creator's identity
   const messageId = generateId();
   const [message] = await db
     .insert(messages)
@@ -132,7 +140,7 @@ export async function triggerWebhook(
       id: messageId,
       workspaceId: webhook.workspaceId,
       channelId: webhook.channelId,
-      agentId: webhook.createdBy || 'system',
+      agentId: webhook.createdBy,
       body: text,
     })
     .returning();

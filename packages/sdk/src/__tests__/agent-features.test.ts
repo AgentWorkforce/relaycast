@@ -84,12 +84,12 @@ describe('AgentClient features', () => {
       expect(init.method).toBe('POST');
     });
 
-    it('setTopic() patches /v1/channels/:name', async () => {
+    it('setTopic() patches /v1/channels/:name/topic', async () => {
       mockFetch.mockImplementation(() => mockResponse({ topic: 'New' }));
       await me.channels.setTopic('dev', 'New');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev');
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/topic');
       expect(init.method).toBe('PATCH');
       expect(init.body).toBe(JSON.stringify({ topic: 'New' }));
     });
