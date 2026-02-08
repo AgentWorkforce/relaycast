@@ -1,13 +1,23 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AgentClient } from '@relaycast/sdk';
 import type { SessionState } from './types.js';
+import type { McpTelemetry } from './telemetry.js';
 
 const SKIP_PIGGYBACK = new Set(['check_inbox', 'register']);
+const MESSAGE_TOOLS = new Set([
+  'post_message',
+  'reply_to_thread',
+  'send_dm',
+  'send_group_dm',
+  'trigger_webhook',
+  'invoke_command',
+]);
 
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
   getAgentClient: () => AgentClient,
+  telemetry?: McpTelemetry,
 ): void {
   const original = mcpServer.registerTool.bind(mcpServer);
 
@@ -16,14 +26,57 @@ export function enablePiggyback(
     config: any,
     handler: any,
   ) => {
-    if (SKIP_PIGGYBACK.has(name) || !handler) {
+    if (!handler) {
       return original(name, config, handler);
     }
 
-    const wrapped = async (...args: any[]) => {
-      const result = await handler(...args);
+    const shouldPiggybackInbox = !SKIP_PIGGYBACK.has(name);
 
-      if (!getSession().agentToken) return result;
+    const wrapped = async (...args: any[]) => {
+      const startedAt = Date.now();
+      telemetry?.capture('relaycast_mcp_tool_invoked', {
+        source_surface: 'mcp',
+        tool_name: name,
+      });
+
+      let result: any;
+      try {
+        result = await handler(...args);
+      } catch (error) {
+        telemetry?.capture('relaycast_mcp_tool_failed', {
+          source_surface: 'mcp',
+          tool_name: name,
+          duration_ms: Math.max(Date.now() - startedAt, 0),
+          error_name: error instanceof Error ? error.name : 'UnknownError',
+        });
+        throw error;
+      }
+
+      telemetry?.capture('relaycast_mcp_tool_completed', {
+        source_surface: 'mcp',
+        tool_name: name,
+        duration_ms: Math.max(Date.now() - startedAt, 0),
+      });
+
+      if (MESSAGE_TOOLS.has(name)) {
+        telemetry?.capture('relaycast_message_sent', {
+          source_surface: 'mcp',
+          tool_name: name,
+          message_kind: name,
+        });
+      } else if (name === 'check_inbox') {
+        telemetry?.capture('relaycast_inbox_checked', {
+          source_surface: 'mcp',
+          tool_name: name,
+        });
+      } else if (name === 'register') {
+        telemetry?.capture('relaycast_agent_registered', {
+          source_surface: 'mcp',
+          tool_name: name,
+        });
+      }
+
+      if (!shouldPiggybackInbox || !getSession().agentToken) return result;
 
       try {
         const client = getAgentClient();
@@ -34,7 +87,7 @@ export function enablePiggyback(
           (inbox.mentions?.length ?? 0) > 0 ||
           (inbox.unread_dms?.length ?? 0) > 0;
 
-        if (hasUnread) {
+        if (hasUnread && Array.isArray(result?.content)) {
           result.content.push({
             type: 'text' as const,
             text: formatInbox(inbox),

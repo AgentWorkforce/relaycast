@@ -11,15 +11,18 @@ import { enablePiggyback } from './piggyback.js';
 import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
+import { createMcpTelemetry } from './telemetry.js';
 
 export interface McpServerOptions {
   apiKey: string;
   baseUrl?: string;
+  telemetryTransport?: 'stdio' | 'http';
 }
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const relay = new Relay({ apiKey: options.apiKey, baseUrl: options.baseUrl });
   const session: SessionState = createInitialSession();
+  const telemetry = createMcpTelemetry('0.1.0');
 
   const mcpServer = new McpServer(
     { name: 'agent-relay', version: '0.1.0' },
@@ -31,6 +34,11 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       },
     },
   );
+
+  telemetry.capture('relaycast_mcp_server_started', {
+    source_surface: 'mcp',
+    transport: options.telemetryTransport ?? 'unknown',
+  });
 
   const getRelay = () => relay;
   const getSession = () => session;
@@ -53,6 +61,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       );
       wsBridge.start();
       Object.assign(session, partial, { wsBridge, subscriptions });
+      telemetry.capture('relaycast_mcp_session_authenticated', {
+        source_surface: 'mcp',
+        agent_name: partial.agentName ?? session.agentName ?? null,
+      });
     } else {
       Object.assign(session, partial);
     }
@@ -66,7 +78,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   };
 
   // Enable piggybacking of unread messages on all tool responses
-  enablePiggyback(mcpServer, getSession, getAgentClient);
+  enablePiggyback(mcpServer, getSession, getAgentClient, telemetry);
 
   // Register resource definitions (inbox, agents, channels, etc.)
   registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
@@ -83,4 +95,3 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
   return mcpServer;
 }
-
