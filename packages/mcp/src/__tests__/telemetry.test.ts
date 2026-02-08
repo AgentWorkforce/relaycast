@@ -42,13 +42,10 @@ describe('createMcpTelemetry', () => {
       vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
 
       const telemetry = createMcpTelemetry('1.0.0');
-      const captureSpy = vi.fn();
       
-      // Capture should be a no-op when telemetry is disabled
-      telemetry.capture('test_event', {});
-      
-      // Since capture is internal, we can't directly spy on it,
-      // but we can verify the state file was created (or not)
+      // Capture should return early (no-op) when telemetry is disabled
+      // We verify this doesn't throw and state file is still created for future use
+      expect(() => telemetry.capture('test_event', {})).not.toThrow();
       expect(fs.mkdirSync).toHaveBeenCalled();
     });
 
@@ -61,8 +58,9 @@ describe('createMcpTelemetry', () => {
       vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
 
       const telemetry = createMcpTelemetry('1.0.0');
-      telemetry.capture('test_event', {});
       
+      // Capture should return early (no-op) when telemetry is disabled
+      expect(() => telemetry.capture('test_event', {})).not.toThrow();
       expect(fs.mkdirSync).toHaveBeenCalled();
     });
 
@@ -74,7 +72,9 @@ describe('createMcpTelemetry', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(stateWithOptOut));
 
       const telemetry = createMcpTelemetry('1.0.0');
-      telemetry.capture('test_event', {});
+      
+      // Capture should return early (no-op) when telemetry is disabled via state
+      expect(() => telemetry.capture('test_event', {})).not.toThrow();
       
       // Should read the file but not write a new one
       expect(fs.readFileSync).toHaveBeenCalledWith(mockTelemetryPath, 'utf8');
@@ -89,7 +89,9 @@ describe('createMcpTelemetry', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(stateWithOptIn));
 
       const telemetry = createMcpTelemetry('1.0.0');
-      telemetry.capture('test_event', {});
+      
+      // Capture should return early because env opt-out takes precedence
+      expect(() => telemetry.capture('test_event', {})).not.toThrow();
       
       // Should still respect env opt-out
       expect(fs.readFileSync).toHaveBeenCalledWith(mockTelemetryPath, 'utf8');

@@ -112,7 +112,7 @@ function sanitizeReferrer(referrer) {
 function trackSiteView() {
   telemetry.capture('relaycast_site_viewed', {
     referrer: sanitizeReferrer(document.referrer),
-    query: sanitizeUrl(window.location.href),
+    query_params: sanitizeUrl(window.location.href),
   });
 }
 
