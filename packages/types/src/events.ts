@@ -96,6 +96,21 @@ export interface PongEvent {
   type: 'pong';
 }
 
+export interface WebhookReceivedEvent {
+  type: 'webhook.received';
+  webhook_id: string;
+  channel: string;
+  message: { id: string; text: string; source: string | null };
+}
+
+export interface CommandInvokedEvent {
+  type: 'command.invoked';
+  command: string;
+  channel: string;
+  invoked_by: string;
+  args: string | null;
+}
+
 export type ServerEvent =
   | MessageCreatedEvent
   | MessageUpdatedEvent
@@ -110,6 +125,8 @@ export type ServerEvent =
   | ChannelArchivedEvent
   | MessageReadEvent
   | FileUploadedEvent
+  | WebhookReceivedEvent
+  | CommandInvokedEvent
   | PongEvent;
 
 export type ServerEventType = ServerEvent['type'];

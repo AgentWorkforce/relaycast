@@ -125,6 +125,7 @@ export const messages = pgTable(
       .references(() => agents.id),
     threadId: text('thread_id').references((): AnyPgColumn => messages.id),
     body: text('body').notNull(),
+    blocks: jsonb('blocks'),
     hasAttachments: boolean('has_attachments').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }),
@@ -297,5 +298,89 @@ export const usageRecords = pgTable(
   },
   (table) => [
     index('idx_usage_workspace_period').on(table.workspaceId, table.periodStart),
+  ],
+);
+
+// ============================================
+// Inbound Webhooks
+// ============================================
+export const webhooks = pgTable(
+  'webhooks',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => agents.id),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('webhooks_workspace_name_unique').on(table.workspaceId, table.name),
+    index('idx_webhooks_workspace').on(table.workspaceId),
+  ],
+);
+
+// ============================================
+// Outbound Event Subscriptions
+// ============================================
+export const eventSubscriptions = pgTable(
+  'event_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    events: jsonb('events').notNull().$type<string[]>(),
+    filter: jsonb('filter').$type<{ channel?: string; mentions?: string }>(),
+    url: text('url').notNull(),
+    secret: text('secret'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_event_subscriptions_workspace').on(table.workspaceId),
+  ],
+);
+
+// ============================================
+// Agent Commands
+// ============================================
+export const commands = pgTable(
+  'commands',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    command: text('command').notNull(),
+    description: text('description').notNull(),
+    handlerAgentId: text('handler_agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    parameters: jsonb('parameters')
+      .$type<
+        Array<{
+          name: string;
+          description?: string;
+          type: string;
+          required?: boolean;
+        }>
+      >()
+      .default([]),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('commands_workspace_command_unique').on(
+      table.workspaceId,
+      table.command,
+    ),
+    index('idx_commands_workspace').on(table.workspaceId),
+    index('idx_commands_handler').on(table.handlerAgentId),
   ],
 );

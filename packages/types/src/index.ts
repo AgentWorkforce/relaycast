@@ -9,3 +9,6 @@ export * from './dm.js';
 export * from './billing.js';
 export * from './events.js';
 export * from './api.js';
+export * from './webhook.js';
+export * from './subscription.js';
+export * from './command.js';
