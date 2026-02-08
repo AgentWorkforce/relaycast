@@ -1,0 +1,547 @@
+"""Agent client — messaging, channels, DMs, files, reactions, search, inbox."""
+
+from __future__ import annotations
+
+from typing import Any
+from urllib.parse import quote
+
+from .client import AsyncHttpClient, HttpClient
+from .models import (
+    Channel,
+    ChannelMemberInfo,
+    ChannelReadStatus,
+    CreateChannelRequest,
+    CreateGroupDmRequest,
+    DmConversationSummary,
+    FileInfo,
+    InboxResponse,
+    MessageWithMeta,
+    ReactionGroup,
+    ReaderInfo,
+    ThreadResponse,
+    UploadRequest,
+    UploadResponse,
+)
+
+
+def _strip_hash(channel: str) -> str:
+    return channel[1:] if channel.startswith("#") else channel
+
+
+def _enc(value: str) -> str:
+    return quote(value, safe="")
+
+
+# ── Namespace helpers ────────────────────────────────────────────
+
+
+class _DmsNamespace:
+    """Sync DM sub-operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def conversations(self) -> list[DmConversationSummary]:
+        result = self._client.get("/v1/dm/conversations")
+        return [DmConversationSummary.model_validate(r) for r in result]
+
+    def messages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[MessageWithMeta]:
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = self._client.get(
+            f"/v1/dm/{_enc(conversation_id)}/messages", query or None
+        )
+        return [MessageWithMeta.model_validate(m) for m in result]
+
+    def create_group(self, participants: list[str], text: str, *, name: str | None = None) -> Any:
+        data = CreateGroupDmRequest(participants=participants, text=text, name=name)
+        return self._client.post("/v1/dm/group", data.model_dump(exclude_none=True))
+
+    def send_message(self, conversation_id: str, text: str) -> Any:
+        return self._client.post(
+            f"/v1/dm/{_enc(conversation_id)}/messages", {"text": text}
+        )
+
+    def add_participant(self, conversation_id: str, agent: str) -> Any:
+        return self._client.post(
+            f"/v1/dm/{_enc(conversation_id)}/participants", {"agent": agent}
+        )
+
+    def remove_participant(self, conversation_id: str, agent: str) -> None:
+        self._client.delete(
+            f"/v1/dm/{_enc(conversation_id)}/participants/{_enc(agent)}"
+        )
+
+
+class _ChannelsNamespace:
+    """Sync channel sub-operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def create(self, name: str, *, topic: str | None = None) -> Channel:
+        data = CreateChannelRequest(name=name, topic=topic)
+        result = self._client.post("/v1/channels", data.model_dump(exclude_none=True))
+        return Channel.model_validate(result)
+
+    def list(self, *, include_archived: bool = False) -> list[Channel]:
+        query: dict[str, str] = {}
+        if include_archived:
+            query["include_archived"] = "true"
+        result = self._client.get("/v1/channels", query or None)
+        return [Channel.model_validate(c) for c in result]
+
+    def get(self, name: str) -> dict[str, Any]:
+        return self._client.get(f"/v1/channels/{_enc(name)}")
+
+    def join(self, name: str) -> Any:
+        return self._client.post(f"/v1/channels/{_enc(name)}/join")
+
+    def leave(self, name: str) -> None:
+        self._client.post(f"/v1/channels/{_enc(name)}/leave")
+
+    def set_topic(self, name: str, topic: str) -> Channel:
+        result = self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        return Channel.model_validate(result)
+
+    def archive(self, name: str) -> None:
+        self._client.delete(f"/v1/channels/{_enc(name)}")
+
+    def invite(self, channel: str, agent: str) -> Any:
+        return self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+
+    def members(self, name: str) -> list[ChannelMemberInfo]:
+        result = self._client.get(f"/v1/channels/{_enc(name)}/members")
+        return [ChannelMemberInfo.model_validate(m) for m in result]
+
+
+class _FilesNamespace:
+    """Sync file sub-operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def upload(self, filename: str, content_type: str, size: int) -> UploadResponse:
+        data = UploadRequest(filename=filename, content_type=content_type, size=size)
+        result = self._client.post("/v1/files/upload", data.model_dump())
+        return UploadResponse.model_validate(result)
+
+    def complete(self, file_id: str) -> FileInfo:
+        result = self._client.post(f"/v1/files/{_enc(file_id)}/complete")
+        return FileInfo.model_validate(result)
+
+    def get(self, file_id: str) -> FileInfo:
+        result = self._client.get(f"/v1/files/{_enc(file_id)}")
+        return FileInfo.model_validate(result)
+
+    def delete(self, file_id: str) -> None:
+        self._client.delete(f"/v1/files/{_enc(file_id)}")
+
+    def list(self, *, uploaded_by: str | None = None, limit: int | None = None) -> list[FileInfo]:
+        query: dict[str, str] = {}
+        if uploaded_by:
+            query["uploaded_by"] = uploaded_by
+        if limit:
+            query["limit"] = str(limit)
+        result = self._client.get("/v1/files", query or None)
+        return [FileInfo.model_validate(f) for f in result]
+
+
+# ── Main AgentClient ──────────────────────────────────────────────
+
+
+class AgentClient:
+    """Synchronous agent client for messaging, channels, DMs, files, etc."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self.client = client
+        self.dms = _DmsNamespace(client)
+        self.channels = _ChannelsNamespace(client)
+        self.files = _FilesNamespace(client)
+
+    # ── Messages ──
+
+    def send(
+        self, channel: str, text: str, *, attachments: list[str] | None = None
+    ) -> MessageWithMeta:
+        name = _strip_hash(channel)
+        body: dict[str, Any] = {"text": text}
+        if attachments:
+            body["attachments"] = attachments
+        result = self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
+        return MessageWithMeta.model_validate(result)
+
+    def messages(
+        self,
+        channel: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[MessageWithMeta]:
+        name = _strip_hash(channel)
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = self.client.get(f"/v1/channels/{_enc(name)}/messages", query or None)
+        return [MessageWithMeta.model_validate(m) for m in result]
+
+    def message(self, id: str) -> MessageWithMeta:
+        result = self.client.get(f"/v1/messages/{_enc(id)}")
+        return MessageWithMeta.model_validate(result)
+
+    def reply(self, id: str, text: str) -> MessageWithMeta:
+        result = self.client.post(f"/v1/messages/{_enc(id)}/replies", {"text": text})
+        return MessageWithMeta.model_validate(result)
+
+    def thread(
+        self,
+        id: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> ThreadResponse:
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = self.client.get(f"/v1/messages/{_enc(id)}/replies", query or None)
+        return ThreadResponse.model_validate(result)
+
+    # ── DMs ──
+
+    def dm(self, agent: str, text: str) -> Any:
+        return self.client.post("/v1/dm", {"to": agent, "text": text})
+
+    # ── Reactions ──
+
+    def react(self, message_id: str, emoji: str) -> Any:
+        return self.client.post(f"/v1/messages/{_enc(message_id)}/reactions", {"emoji": emoji})
+
+    def unreact(self, message_id: str, emoji: str) -> None:
+        self.client.delete(f"/v1/messages/{_enc(message_id)}/reactions/{_enc(emoji)}")
+
+    def reactions(self, message_id: str) -> list[ReactionGroup]:
+        result = self.client.get(f"/v1/messages/{_enc(message_id)}/reactions")
+        return [ReactionGroup.model_validate(r) for r in result]
+
+    # ── Search ──
+
+    def search(
+        self,
+        query: str,
+        *,
+        channel: str | None = None,
+        from_: str | None = None,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[Any]:
+        params: dict[str, str] = {"q": query}
+        if channel:
+            params["channel"] = channel
+        if from_:
+            params["from"] = from_
+        if limit:
+            params["limit"] = str(limit)
+        if before:
+            params["before"] = before
+        if after:
+            params["after"] = after
+        return self.client.get("/v1/search", params)
+
+    # ── Inbox ──
+
+    def inbox(self) -> InboxResponse:
+        result = self.client.get("/v1/inbox")
+        return InboxResponse.model_validate(result)
+
+    # ── Read Receipts ──
+
+    def mark_read(self, message_id: str) -> Any:
+        return self.client.post(f"/v1/messages/{_enc(message_id)}/read")
+
+    def readers(self, message_id: str) -> list[ReaderInfo]:
+        result = self.client.get(f"/v1/messages/{_enc(message_id)}/readers")
+        return [ReaderInfo.model_validate(r) for r in result]
+
+    def read_status(self, channel: str) -> list[ChannelReadStatus]:
+        name = _strip_hash(channel)
+        result = self.client.get(f"/v1/channels/{_enc(name)}/read-status")
+        return [ChannelReadStatus.model_validate(r) for r in result]
+
+
+# ── Async variants ────────────────────────────────────────────────
+
+
+class _AsyncDmsNamespace:
+    """Async DM sub-operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def conversations(self) -> list[DmConversationSummary]:
+        result = await self._client.get("/v1/dm/conversations")
+        return [DmConversationSummary.model_validate(r) for r in result]
+
+    async def messages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[MessageWithMeta]:
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = await self._client.get(
+            f"/v1/dm/{_enc(conversation_id)}/messages", query or None
+        )
+        return [MessageWithMeta.model_validate(m) for m in result]
+
+    async def create_group(self, participants: list[str], text: str, *, name: str | None = None) -> Any:
+        data = CreateGroupDmRequest(participants=participants, text=text, name=name)
+        return await self._client.post("/v1/dm/group", data.model_dump(exclude_none=True))
+
+    async def send_message(self, conversation_id: str, text: str) -> Any:
+        return await self._client.post(
+            f"/v1/dm/{_enc(conversation_id)}/messages", {"text": text}
+        )
+
+    async def add_participant(self, conversation_id: str, agent: str) -> Any:
+        return await self._client.post(
+            f"/v1/dm/{_enc(conversation_id)}/participants", {"agent": agent}
+        )
+
+    async def remove_participant(self, conversation_id: str, agent: str) -> None:
+        await self._client.delete(
+            f"/v1/dm/{_enc(conversation_id)}/participants/{_enc(agent)}"
+        )
+
+
+class _AsyncChannelsNamespace:
+    """Async channel sub-operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def create(self, name: str, *, topic: str | None = None) -> Channel:
+        data = CreateChannelRequest(name=name, topic=topic)
+        result = await self._client.post("/v1/channels", data.model_dump(exclude_none=True))
+        return Channel.model_validate(result)
+
+    async def list(self, *, include_archived: bool = False) -> list[Channel]:
+        query: dict[str, str] = {}
+        if include_archived:
+            query["include_archived"] = "true"
+        result = await self._client.get("/v1/channels", query or None)
+        return [Channel.model_validate(c) for c in result]
+
+    async def get(self, name: str) -> dict[str, Any]:
+        return await self._client.get(f"/v1/channels/{_enc(name)}")
+
+    async def join(self, name: str) -> Any:
+        return await self._client.post(f"/v1/channels/{_enc(name)}/join")
+
+    async def leave(self, name: str) -> None:
+        await self._client.post(f"/v1/channels/{_enc(name)}/leave")
+
+    async def set_topic(self, name: str, topic: str) -> Channel:
+        result = await self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        return Channel.model_validate(result)
+
+    async def archive(self, name: str) -> None:
+        await self._client.delete(f"/v1/channels/{_enc(name)}")
+
+    async def invite(self, channel: str, agent: str) -> Any:
+        return await self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+
+    async def members(self, name: str) -> list[ChannelMemberInfo]:
+        result = await self._client.get(f"/v1/channels/{_enc(name)}/members")
+        return [ChannelMemberInfo.model_validate(m) for m in result]
+
+
+class _AsyncFilesNamespace:
+    """Async file sub-operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def upload(self, filename: str, content_type: str, size: int) -> UploadResponse:
+        data = UploadRequest(filename=filename, content_type=content_type, size=size)
+        result = await self._client.post("/v1/files/upload", data.model_dump())
+        return UploadResponse.model_validate(result)
+
+    async def complete(self, file_id: str) -> FileInfo:
+        result = await self._client.post(f"/v1/files/{_enc(file_id)}/complete")
+        return FileInfo.model_validate(result)
+
+    async def get(self, file_id: str) -> FileInfo:
+        result = await self._client.get(f"/v1/files/{_enc(file_id)}")
+        return FileInfo.model_validate(result)
+
+    async def delete(self, file_id: str) -> None:
+        await self._client.delete(f"/v1/files/{_enc(file_id)}")
+
+    async def list(self, *, uploaded_by: str | None = None, limit: int | None = None) -> list[FileInfo]:
+        query: dict[str, str] = {}
+        if uploaded_by:
+            query["uploaded_by"] = uploaded_by
+        if limit:
+            query["limit"] = str(limit)
+        result = await self._client.get("/v1/files", query or None)
+        return [FileInfo.model_validate(f) for f in result]
+
+
+class AsyncAgentClient:
+    """Asynchronous agent client for messaging, channels, DMs, files, etc."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self.client = client
+        self.dms = _AsyncDmsNamespace(client)
+        self.channels = _AsyncChannelsNamespace(client)
+        self.files = _AsyncFilesNamespace(client)
+
+    # ── Messages ──
+
+    async def send(
+        self, channel: str, text: str, *, attachments: list[str] | None = None
+    ) -> MessageWithMeta:
+        name = _strip_hash(channel)
+        body: dict[str, Any] = {"text": text}
+        if attachments:
+            body["attachments"] = attachments
+        result = await self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
+        return MessageWithMeta.model_validate(result)
+
+    async def messages(
+        self,
+        channel: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[MessageWithMeta]:
+        name = _strip_hash(channel)
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = await self.client.get(f"/v1/channels/{_enc(name)}/messages", query or None)
+        return [MessageWithMeta.model_validate(m) for m in result]
+
+    async def message(self, id: str) -> MessageWithMeta:
+        result = await self.client.get(f"/v1/messages/{_enc(id)}")
+        return MessageWithMeta.model_validate(result)
+
+    async def reply(self, id: str, text: str) -> MessageWithMeta:
+        result = await self.client.post(f"/v1/messages/{_enc(id)}/replies", {"text": text})
+        return MessageWithMeta.model_validate(result)
+
+    async def thread(
+        self,
+        id: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> ThreadResponse:
+        query: dict[str, str] = {}
+        if limit:
+            query["limit"] = str(limit)
+        if before:
+            query["before"] = before
+        if after:
+            query["after"] = after
+        result = await self.client.get(f"/v1/messages/{_enc(id)}/replies", query or None)
+        return ThreadResponse.model_validate(result)
+
+    # ── DMs ──
+
+    async def dm(self, agent: str, text: str) -> Any:
+        return await self.client.post("/v1/dm", {"to": agent, "text": text})
+
+    # ── Reactions ──
+
+    async def react(self, message_id: str, emoji: str) -> Any:
+        return await self.client.post(f"/v1/messages/{_enc(message_id)}/reactions", {"emoji": emoji})
+
+    async def unreact(self, message_id: str, emoji: str) -> None:
+        await self.client.delete(f"/v1/messages/{_enc(message_id)}/reactions/{_enc(emoji)}")
+
+    async def reactions(self, message_id: str) -> list[ReactionGroup]:
+        result = await self.client.get(f"/v1/messages/{_enc(message_id)}/reactions")
+        return [ReactionGroup.model_validate(r) for r in result]
+
+    # ── Search ──
+
+    async def search(
+        self,
+        query: str,
+        *,
+        channel: str | None = None,
+        from_: str | None = None,
+        limit: int | None = None,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[Any]:
+        params: dict[str, str] = {"q": query}
+        if channel:
+            params["channel"] = channel
+        if from_:
+            params["from"] = from_
+        if limit:
+            params["limit"] = str(limit)
+        if before:
+            params["before"] = before
+        if after:
+            params["after"] = after
+        return await self.client.get("/v1/search", params)
+
+    # ── Inbox ──
+
+    async def inbox(self) -> InboxResponse:
+        result = await self.client.get("/v1/inbox")
+        return InboxResponse.model_validate(result)
+
+    # ── Read Receipts ──
+
+    async def mark_read(self, message_id: str) -> Any:
+        return await self.client.post(f"/v1/messages/{_enc(message_id)}/read")
+
+    async def readers(self, message_id: str) -> list[ReaderInfo]:
+        result = await self.client.get(f"/v1/messages/{_enc(message_id)}/readers")
+        return [ReaderInfo.model_validate(r) for r in result]
+
+    async def read_status(self, channel: str) -> list[ChannelReadStatus]:
+        name = _strip_hash(channel)
+        result = await self.client.get(f"/v1/channels/{_enc(name)}/read-status")
+        return [ChannelReadStatus.model_validate(r) for r in result]

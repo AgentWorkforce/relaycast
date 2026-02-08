@@ -18,6 +18,9 @@ import { billingRouter } from './routes/billing.js';
 import { webhookRouter } from './routes/webhooks.js';
 import { presenceRouter } from './routes/presence.js';
 import { systemPromptRouter } from './routes/systemPrompt.js';
+import { inboundWebhookRouter } from './routes/inboundWebhook.js';
+import { eventSubscriptionRouter } from './routes/eventSubscription.js';
+import { commandRouter } from './routes/command.js';
 
 export const app = express();
 
@@ -45,6 +48,9 @@ app.use('/v1', receiptRouter);
 app.use('/v1', fileRouter);
 app.use('/v1', billingRouter);
 app.use('/v1', webhookRouter);
+app.use('/v1', inboundWebhookRouter);
+app.use('/v1', eventSubscriptionRouter);
+app.use('/v1', commandRouter);
 
 // 404 handler for unknown routes
 app.use((_req: Request, res: Response) => {

@@ -1,5 +1,3 @@
-// Agent Commands — structured invocation handlers
-
 export interface AgentCommand {
   id: string;
   workspace_id: string;

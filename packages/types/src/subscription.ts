@@ -1,5 +1,3 @@
-// Outbound Event Subscriptions — POST to external URLs on workspace events
-
 export type SubscribableEventType =
   | 'message.created'
   | 'message.updated'
@@ -43,13 +41,4 @@ export interface CreateSubscriptionResponse {
   url: string;
   is_active: boolean;
   created_at: string;
-}
-
-export interface SubscriptionDelivery {
-  subscription_id: string;
-  event_type: SubscribableEventType;
-  payload: Record<string, unknown>;
-  delivered_at: string;
-  status_code: number | null;
-  success: boolean;
 }

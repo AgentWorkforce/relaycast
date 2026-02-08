@@ -30,6 +30,7 @@ vi.mock('@agent-relay/sdk', () => {
     markRead: vi.fn().mockResolvedValue(undefined),
     readers: vi.fn().mockResolvedValue([]),
     files: { upload: vi.fn().mockResolvedValue({ id: 'f1' }) },
+    commands: { invoke: vi.fn().mockResolvedValue({ id: 'inv1' }) },
   };
 
   class MockRelay {
@@ -39,6 +40,23 @@ vi.mock('@agent-relay/sdk', () => {
         token: 'tok_abc',
       }),
       list: vi.fn().mockResolvedValue([]),
+    };
+    webhooks = {
+      create: vi.fn().mockResolvedValue({ webhook_id: 'wh_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+      trigger: vi.fn().mockResolvedValue({ message_id: 'm_1' }),
+    };
+    subscriptions = {
+      create: vi.fn().mockResolvedValue({ id: 'sub_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      get: vi.fn().mockResolvedValue({ id: 'sub_1' }),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    commands = {
+      register: vi.fn().mockResolvedValue({ id: 'cmd_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
     };
     as(_token: string) {
       return mockAgentClient;
@@ -66,33 +84,45 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 23 tools', async () => {
+  it('lists all 35 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(23);
+    expect(tools.tools.length).toBe(35);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'add_reaction',
       'archive_channel',
       'check_inbox',
       'create_channel',
+      'create_subscription',
+      'create_webhook',
+      'delete_command',
+      'delete_subscription',
+      'delete_webhook',
       'get_dms',
       'get_messages',
       'get_readers',
+      'get_subscription',
       'get_thread',
       'invite_to_channel',
+      'invoke_command',
       'join_channel',
       'leave_channel',
       'list_agents',
       'list_channels',
+      'list_commands',
+      'list_subscriptions',
+      'list_webhooks',
       'mark_read',
       'post_message',
       'register',
+      'register_command',
       'remove_reaction',
       'reply_to_thread',
       'search_messages',
       'send_dm',
       'send_group_dm',
       'set_channel_topic',
+      'trigger_webhook',
       'upload_file',
     ]);
   });

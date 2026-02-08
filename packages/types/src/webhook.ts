@@ -1,5 +1,3 @@
-// Inbound Webhooks — external services push events into channels
-
 export interface Webhook {
   id: string;
   workspace_id: string;

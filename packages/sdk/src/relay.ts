@@ -5,6 +5,17 @@ import type {
   CreateAgentResponse,
   UpdateWorkspaceRequest,
   Workspace,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
+  Webhook,
+  WebhookTriggerRequest,
+  WebhookTriggerResponse,
+  CreateSubscriptionRequest,
+  CreateSubscriptionResponse,
+  EventSubscription,
+  CreateCommandRequest,
+  CreateCommandResponse,
+  AgentCommand,
 } from '@agent-relay/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
@@ -40,6 +51,45 @@ export class Relay {
     },
     get: (name: string): Promise<Agent> =>
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
+  };
+
+  webhooks = {
+    create: (data: CreateWebhookRequest): Promise<CreateWebhookResponse> =>
+      this.client.post('/v1/webhooks', data),
+
+    list: (): Promise<Webhook[]> =>
+      this.client.get('/v1/webhooks'),
+
+    delete: (id: string): Promise<void> =>
+      this.client.delete(`/v1/webhooks/${encodeURIComponent(id)}`),
+
+    trigger: (webhookId: string, data: WebhookTriggerRequest): Promise<WebhookTriggerResponse> =>
+      this.client.post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data),
+  };
+
+  subscriptions = {
+    create: (data: CreateSubscriptionRequest): Promise<CreateSubscriptionResponse> =>
+      this.client.post('/v1/subscriptions', data),
+
+    list: (): Promise<EventSubscription[]> =>
+      this.client.get('/v1/subscriptions'),
+
+    get: (id: string): Promise<EventSubscription> =>
+      this.client.get(`/v1/subscriptions/${encodeURIComponent(id)}`),
+
+    delete: (id: string): Promise<void> =>
+      this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
+  };
+
+  commands = {
+    register: (data: CreateCommandRequest): Promise<CreateCommandResponse> =>
+      this.client.post('/v1/commands', data),
+
+    list: (): Promise<AgentCommand[]> =>
+      this.client.get('/v1/commands'),
+
+    delete: (command: string): Promise<void> =>
+      this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
   };
 
   as(agentToken: string): AgentClient {

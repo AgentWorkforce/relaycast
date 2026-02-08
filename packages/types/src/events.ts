@@ -19,7 +19,17 @@ export type ClientEvent = SubscribeEvent | UnsubscribeEvent | PingEvent;
 export interface MessageCreatedEvent {
   type: 'message.created';
   channel: string;
-  message: { id: string; agent_name: string; text: string; attachments: Array<{ file_id: string; filename: string; url: string; size: number }> };
+  message: {
+    id: string;
+    agent_name: string;
+    text: string;
+    attachments: Array<{
+      file_id: string;
+      filename: string;
+      url: string;
+      size: number;
+    }>;
+  };
 }
 
 export interface MessageUpdatedEvent {
