@@ -1,0 +1,20 @@
+{
+  "id": "traj_a71cxv7l5lm7",
+  "version": 1,
+  "task": {
+    "title": "SDK AgentClient messaging"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-02-07T23:14:35.431Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport",
+  "tags": [],
+  "_trace": {
+    "startRef": "9d1f2ad4405a377495056d231bfd5f9705f4c507",
+    "endRef": "9d1f2ad4405a377495056d231bfd5f9705f4c507"
+  },
+  "completedAt": "2026-02-07T23:22:36.548Z"
+}

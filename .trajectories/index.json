@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-07T20:24:24.323Z",
+  "lastUpdated": "2026-02-08T00:12:42.754Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -15,6 +15,75 @@
       "startedAt": "2026-02-07T20:22:35.162Z",
       "completedAt": "2026-02-07T20:24:24.259Z",
       "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_s2v5o3ywbgjd.json"
+    },
+    "traj_ryx07wdsfbc5": {
+      "title": "Wave 9: SDK HttpClient + Relay class + tests",
+      "status": "completed",
+      "startedAt": "2026-02-07T23:08:57.211Z",
+      "completedAt": "2026-02-07T23:12:39.331Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_ryx07wdsfbc5.json"
+    },
+    "traj_a71cxv7l5lm7": {
+      "title": "SDK AgentClient messaging",
+      "status": "abandoned",
+      "startedAt": "2026-02-07T23:14:35.431Z",
+      "completedAt": "2026-02-07T23:22:36.548Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_a71cxv7l5lm7.json"
+    },
+    "traj_ranac1zr8fv9": {
+      "title": "Add AgentClient feature methods (channels, reactions, search, inbox, receipts, files)",
+      "status": "abandoned",
+      "startedAt": "2026-02-07T23:22:39.104Z",
+      "completedAt": "2026-02-07T23:41:39.986Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_ranac1zr8fv9.json"
+    },
+    "traj_6au2qwkfvvdf": {
+      "title": "Create CLI commands for workspace, agent, and config management",
+      "status": "abandoned",
+      "startedAt": "2026-02-07T23:41:42.873Z",
+      "completedAt": "2026-02-07T23:43:02.753Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_6au2qwkfvvdf.json"
+    },
+    "traj_02jv8o3zp3b3": {
+      "title": "Wave-10 MCP: registration + channel tools",
+      "status": "completed",
+      "startedAt": "2026-02-07T23:43:05.376Z",
+      "completedAt": "2026-02-07T23:45:44.265Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_02jv8o3zp3b3.json"
+    },
+    "traj_fbsz0j5hq2rg": {
+      "title": "Wave-10: MCP server factory + transports + system prompt",
+      "status": "completed",
+      "startedAt": "2026-02-07T23:49:23.598Z",
+      "completedAt": "2026-02-07T23:49:53.337Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_fbsz0j5hq2rg.json"
+    },
+    "traj_gtulijd14hp3": {
+      "title": "Create CLI commands for workspace, agent, and config management",
+      "status": "completed",
+      "startedAt": "2026-02-07T23:51:26.736Z",
+      "completedAt": "2026-02-07T23:51:34.744Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_gtulijd14hp3.json"
+    },
+    "traj_dkyup1kajww0": {
+      "title": "Wave 12: Add E2E HTTP lifecycle integration test suite",
+      "status": "abandoned",
+      "startedAt": "2026-02-08T00:05:16.883Z",
+      "completedAt": "2026-02-08T00:06:53.459Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_dkyup1kajww0.json"
+    },
+    "traj_ze3otsspkiv2": {
+      "title": "Wave 12: Create Fly.io deploy configuration",
+      "status": "completed",
+      "startedAt": "2026-02-08T00:06:55.936Z",
+      "completedAt": "2026-02-08T00:09:11.725Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_ze3otsspkiv2.json"
+    },
+    "traj_m2p52kpmvfkb": {
+      "title": "Wave 12: Add E2E HTTP lifecycle integration test suite",
+      "status": "active",
+      "startedAt": "2026-02-08T00:12:39.204Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/active/traj_m2p52kpmvfkb.json"
     }
   }
 }
