@@ -62,7 +62,7 @@ describe('file commands', () => {
     expect(mocks.upload).toHaveBeenCalledWith({
       filename: 'error.log',
       content_type: 'application/octet-stream',
-      size: 512,
+      size_bytes: 512,
     });
     expect(logSpy.mock.calls.some((c) => String(c[0]).includes('file_1'))).toBe(true);
   });

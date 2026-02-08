@@ -79,11 +79,11 @@ export function registerFeatureTools(
     inputSchema: {
       filename: z.string().describe('File name'),
       content_type: z.string().describe('MIME type (e.g. text/plain, image/png)'),
-      size: z.number().describe('File size in bytes'),
+      size_bytes: z.number().describe('File size in bytes'),
     },
-  }, async ({ filename, content_type, size }) => {
+  }, async ({ filename, content_type, size_bytes }) => {
     const client = getAgentClient();
-    const upload = await client.files.upload({ filename, content_type, size });
+    const upload = await client.files.upload({ filename, content_type, size_bytes });
     return { content: [{ type: 'text' as const, text: JSON.stringify(upload, null, 2) }] };
   });
 }

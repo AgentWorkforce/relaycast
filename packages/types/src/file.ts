@@ -15,7 +15,7 @@ export interface FileRecord {
 export interface UploadRequest {
   filename: string;
   content_type: string;
-  size: number;
+  size_bytes: number;
 }
 
 export interface UploadResponse {

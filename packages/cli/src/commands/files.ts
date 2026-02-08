@@ -27,7 +27,7 @@ export function registerFileCommands(program: Command): void {
       const upload = await agent.files.upload({
         filename,
         content_type: 'application/octet-stream',
-        size: stat.size,
+        size_bytes: stat.size,
       });
       console.log(`Upload initiated: ${upload.file_id}`);
       console.log(`Upload URL: ${upload.upload_url}`);

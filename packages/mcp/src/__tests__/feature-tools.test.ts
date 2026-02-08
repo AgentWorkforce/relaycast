@@ -97,13 +97,13 @@ describe('feature tools', () => {
       arguments: {
         filename: 'test.txt',
         content_type: 'text/plain',
-        size: 100,
+        size_bytes: 100,
       },
     });
     expect(mockAgentClient.files.upload).toHaveBeenCalledWith({
       filename: 'test.txt',
       content_type: 'text/plain',
-      size: 100,
+      size_bytes: 100,
     });
   });
 });

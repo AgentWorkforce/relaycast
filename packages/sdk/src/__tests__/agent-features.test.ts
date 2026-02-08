@@ -246,7 +246,7 @@ describe('AgentClient features', () => {
       await me.files.upload({
         filename: 'log.txt',
         content_type: 'text/plain',
-        size: 1024,
+        size_bytes: 1024,
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;

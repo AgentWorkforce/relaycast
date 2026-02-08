@@ -136,13 +136,23 @@ export async function getInbox(workspaceId: string, agentId: string) {
         .orderBy(sql`${messages.id} DESC`)
         .limit(1);
 
-      const [fromAgent] = lastMsg
-        ? await db.select().from(agents).where(eq(agents.id, lastMsg.agentId))
-        : [null];
+      // Get the OTHER participant in the conversation (not the requesting agent)
+      const [otherParticipant] = await db
+        .select({ name: agents.name })
+        .from(dmParticipants)
+        .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+        .where(
+          and(
+            eq(dmParticipants.conversationId, row.dm_conversations.id),
+            ne(dmParticipants.agentId, agentId),
+            isNull(dmParticipants.leftAt),
+          ),
+        )
+        .limit(1);
 
       unreadDms.push({
         conversation_id: row.dm_conversations.id,
-        from: fromAgent?.name ?? 'unknown',
+        from: otherParticipant?.name ?? 'unknown',
         unread_count: count,
         last_message: lastMsg
           ? {

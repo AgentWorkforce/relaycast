@@ -16,8 +16,8 @@ export function registerProgrammabilityTools(
       channel: z.string().describe('Target channel name'),
     },
   }, async ({ name, channel }) => {
-    const relay = getRelay();
-    const result = await relay.webhooks.create({ name, channel });
+    const client = getAgentClient();
+    const result = await client.client.post('/v1/webhooks', { name, channel });
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   });
 

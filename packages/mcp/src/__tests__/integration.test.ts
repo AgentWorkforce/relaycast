@@ -272,7 +272,7 @@ describe('MCP → SDK → HTTP integration', () => {
   it('upload_file → POST /v1/files/upload', async () => {
     await client.callTool({
       name: 'upload_file',
-      arguments: { filename: 'test.txt', content_type: 'text/plain', size: 100 },
+      arguments: { filename: 'test.txt', content_type: 'text/plain', size_bytes: 100 },
     });
     const req = findReq((r) => r.url.includes('/files/upload'));
     expect(req).toBeDefined();
