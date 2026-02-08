@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Command } from 'commander';
-import { Relay } from '@agent-relay/sdk';
+import { Relay } from '@relaycast/sdk';
 import { loadConfig } from '../config.js';
 
 function getAgent() {

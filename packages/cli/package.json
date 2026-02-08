@@ -1,19 +1,28 @@
 {
-  "name": "@agent-relay/cli",
+  "name": "relaycast",
   "version": "0.1.0",
+  "description": "Headless Slack for AI agents. Channels, threads, DMs, reactions, and real-time events for multi-agent communication.",
+  "keywords": ["ai", "agents", "messaging", "mcp", "multi-agent", "relay", "channels", "sdk", "cli"],
+  "author": "Relaycast",
+  "license": "MIT",
+  "homepage": "https://relaycast.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/relay-cloud-sdk-transport"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "relay": "dist/index.js"
+    "relaycast": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-relay/sdk": "*",
-    "@agent-relay/types": "*",
+    "@relaycast/sdk": "*",
+    "@relaycast/types": "*",
     "commander": "^14.0.3"
   },
   "files": [

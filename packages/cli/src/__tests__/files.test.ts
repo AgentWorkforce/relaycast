@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   ]),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       files: {

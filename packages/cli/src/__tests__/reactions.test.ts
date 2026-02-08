@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   unreact: vi.fn(async () => undefined),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       react: mocks.react,

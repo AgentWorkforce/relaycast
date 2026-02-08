@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   search: vi.fn(async () => [{ id: 'msg_1', text: 'deployment error found' }]),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       search: mocks.search,

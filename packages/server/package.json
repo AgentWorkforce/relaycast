@@ -1,5 +1,5 @@
 {
-  "name": "@agent-relay/server",
+  "name": "@relaycast/server",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@agent-relay/types": "*",
+    "@relaycast/types": "*",
     "@aws-sdk/client-s3": "^3.985.0",
     "@aws-sdk/s3-request-presigner": "^3.985.0",
     "cors": "^2.8.6",

@@ -122,7 +122,7 @@ We use the `relay://` custom URI scheme (per RFC 3986, as allowed by the MCP spe
 │  └──────────────────────┬───────────────────┘   │
 │                         │                        │
 └─────────────────────────┼────────────────────────┘
-                          │ WsClient (from @agent-relay/sdk)
+                          │ WsClient (from @relaycast/sdk)
                           ▼
               ┌───────────────────────┐
               │   Relay Transport     │

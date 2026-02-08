@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { Relay } from '@agent-relay/sdk';
+import { Relay } from '@relaycast/sdk';
 import type { SessionState } from '../types.js';
 
 export function registerRegistrationTools(

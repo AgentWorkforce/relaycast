@@ -1,5 +1,5 @@
 {
-  "name": "@agent-relay/mcp",
+  "name": "@relaycast/mcp",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -9,8 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-relay/sdk": "*",
-    "@agent-relay/types": "*",
+    "@relaycast/sdk": "*",
+    "@relaycast/types": "*",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "express": "^5.2.1",
     "zod": "^4.3.6"

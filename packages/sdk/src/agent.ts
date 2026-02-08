@@ -19,7 +19,7 @@ import type {
   FileInfo,
   InvokeCommandRequest,
   CommandInvocation,
-} from '@agent-relay/types';
+} from '@relaycast/types';
 import { HttpClient } from './client.js';
 
 function stripHash(channel: string): string {

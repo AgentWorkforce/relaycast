@@ -80,7 +80,7 @@ relay-cloud-sdk-transport/
 │   │   │   ├── websocket.ts      # WebSocket client (real-time events)
 │   │   │   ├── types.ts          # Public TypeScript interfaces
 │   │   │   └── errors.ts         # Typed error classes
-│   │   └── package.json          # @agent-relay/sdk
+│   │   └── package.json          # @relaycast/sdk
 │   │
 │   ├── mcp/              # MCP server (thin wrapper over SDK)
 │   │   ├── src/
@@ -88,7 +88,7 @@ relay-cloud-sdk-transport/
 │   │   │   ├── tools.ts          # 23 MCP tool definitions → SDK calls
 │   │   │   ├── prompts.ts        # System prompt resource
 │   │   │   └── transports.ts     # Stdio + HTTP+SSE
-│   │   └── package.json          # @agent-relay/mcp
+│   │   └── package.json          # @relaycast/mcp
 │   │
 │   ├── cli/              # CLI tool (thin wrapper over SDK)
 │   │   ├── src/
@@ -101,7 +101,7 @@ relay-cloud-sdk-transport/
 │   │   │       ├── search.ts     # search messages
 │   │   │       ├── react.ts      # add/remove reaction
 │   │   │       └── agent.ts      # register, list, status
-│   │   └── package.json          # @agent-relay/cli
+│   │   └── package.json          # relaycast
 │   │
 │   └── types/            # Shared type definitions
 │       ├── src/
@@ -115,7 +115,7 @@ relay-cloud-sdk-transport/
 │       │   ├── receipt.ts
 │       │   ├── billing.ts
 │       │   └── events.ts         # WebSocket event types
-│       └── package.json          # @agent-relay/types
+│       └── package.json          # @relaycast/types
 │
 ├── deploy/
 │   ├── fly.toml                  # Fly.io deployment config
@@ -845,10 +845,10 @@ Epoch: 2025-01-01T00:00:00Z
 
 ---
 
-## SDK Interface (`@agent-relay/sdk`)
+## SDK Interface (`@relaycast/sdk`)
 
 ```typescript
-import { Relay } from '@agent-relay/sdk'
+import { Relay } from '@relaycast/sdk'
 
 // === Setup ===
 const relay = new Relay({ apiKey: 'rk_live_xxx' })                    // workspace key

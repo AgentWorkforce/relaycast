@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 // Mock the SDK so we don't need a real server
-vi.mock('@agent-relay/sdk', () => {
+vi.mock('@relaycast/sdk', () => {
   const mockAgentClient = {
     send: vi.fn().mockResolvedValue({ id: 'msg1' }),
     messages: vi.fn().mockResolvedValue([]),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { eventToResourceUris } from '../resources/ws-bridge.js';
-import type { ServerEvent } from '@agent-relay/types';
+import type { ServerEvent } from '@relaycast/types';
 
 describe('eventToResourceUris', () => {
   it('maps message.created to inbox and channel', () => {

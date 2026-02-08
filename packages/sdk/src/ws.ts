@@ -1,4 +1,4 @@
-import type { ServerEvent } from '@agent-relay/types';
+import type { ServerEvent } from '@relaycast/types';
 
 export type EventHandler<T = ServerEvent> = (event: T) => void;
 

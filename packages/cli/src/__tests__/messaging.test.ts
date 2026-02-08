@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   createGroup: vi.fn(async () => ({})),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       send: mocks.send,

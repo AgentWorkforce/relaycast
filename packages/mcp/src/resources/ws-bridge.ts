@@ -1,5 +1,5 @@
-import type { ServerEvent } from '@agent-relay/types';
-import type { WsClient } from '@agent-relay/sdk';
+import type { ServerEvent } from '@relaycast/types';
+import type { WsClient } from '@relaycast/sdk';
 import type { SubscriptionManager } from './subscriptions.js';
 
 /**

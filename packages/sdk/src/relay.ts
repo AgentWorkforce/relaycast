@@ -16,7 +16,7 @@ import type {
   CreateCommandRequest,
   CreateCommandResponse,
   AgentCommand,
-} from '@agent-relay/types';
+} from '@relaycast/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
 import { HttpClient } from './client.js';

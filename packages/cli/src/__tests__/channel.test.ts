@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   archive: vi.fn(async () => undefined),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       channels: {

@@ -38,7 +38,7 @@ vi.mock('../commands/reactions.js', () => ({ registerReactionCommands: () => {} 
 vi.mock('../commands/files.js', () => ({ registerFileCommands: () => {} }));
 vi.mock('../commands/billing.js', () => ({ registerBillingCommands: () => {} }));
 
-describe('@agent-relay/cli', () => {
+describe('relaycast', () => {
   it('exports CLI_VERSION', async () => {
     // Import after mocks are set so the CLI entrypoint does not call process.exit().
     const { CLI_VERSION } = await import('../index.js');

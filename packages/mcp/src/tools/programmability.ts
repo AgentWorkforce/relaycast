@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { Relay, AgentClient } from '@agent-relay/sdk';
+import type { Relay, AgentClient } from '@relaycast/sdk';
 
 export function registerProgrammabilityTools(
   server: McpServer,

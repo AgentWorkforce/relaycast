@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { AgentClient } from '@agent-relay/sdk';
+import { AgentClient } from '@relaycast/sdk';
 
 export function registerChannelTools(
   server: McpServer,

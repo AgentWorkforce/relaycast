@@ -1,8 +1,8 @@
 app = "relay-transport"
-primary_region = "iad"
+primary_region = "sjc"
 
 [build]
-  dockerfile = "deploy/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = "production"
@@ -14,13 +14,6 @@ primary_region = "iad"
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
-
-[[services]]
-  protocol = "tcp"
-  internal_port = 8080
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
 
 [checks]
   [checks.health]

@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   readers: vi.fn(async () => [{ agent_name: 'Reviewer', agent_id: 'a_1', read_at: '2025-01-01T00:00:00Z' }]),
 }));
 
-vi.mock('@agent-relay/sdk', () => ({
+vi.mock('@relaycast/sdk', () => ({
   Relay: vi.fn(() => ({
     as: vi.fn(() => ({
       messages: mocks.messages,

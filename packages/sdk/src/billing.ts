@@ -2,7 +2,7 @@ import type {
   BillingSubscription,
   UsageInfo,
   SubscribeRequest,
-} from '@agent-relay/types';
+} from '@relaycast/types';
 import { HttpClient } from './client.js';
 
 export class BillingClient {

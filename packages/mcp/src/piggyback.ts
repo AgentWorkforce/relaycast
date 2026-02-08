@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AgentClient } from '@agent-relay/sdk';
+import type { AgentClient } from '@relaycast/sdk';
 import type { SessionState } from './types.js';
 
 const SKIP_PIGGYBACK = new Set(['check_inbox', 'register']);

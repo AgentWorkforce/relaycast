@@ -16,7 +16,7 @@ COPY packages/types/ packages/types/
 COPY packages/server/ packages/server/
 
 # Build the server and its dependencies
-RUN npx turbo build --filter=@agent-relay/server...
+RUN npx turbo build --filter=@relaycast/server...
 
 # Stage 2: Production
 FROM node:20-alpine AS runner

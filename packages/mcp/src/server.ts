@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Relay, AgentClient, WsClient } from '@agent-relay/sdk';
+import { Relay, AgentClient, WsClient } from '@relaycast/sdk';
 import { registerRegistrationTools } from './tools/registration.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';

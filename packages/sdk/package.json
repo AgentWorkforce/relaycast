@@ -1,5 +1,5 @@
 {
-  "name": "@agent-relay/sdk",
+  "name": "@relaycast/sdk",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -15,7 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-relay/types": "*"
+    "@relaycast/types": "*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

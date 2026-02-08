@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SubscriptionManager } from '../resources/subscriptions.js';
 import { eventToResourceUris } from '../resources/ws-bridge.js';
-import type { ServerEvent } from '@agent-relay/types';
+import type { ServerEvent } from '@relaycast/types';
 
 describe('Resource subscription integration', () => {
   let manager: SubscriptionManager;

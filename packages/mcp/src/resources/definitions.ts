@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AgentClient, Relay } from '@agent-relay/sdk';
+import type { AgentClient, Relay } from '@relaycast/sdk';
 
 export function registerResourceDefinitions(
   server: McpServer,

@@ -1,5 +1,5 @@
 {
-  "name": "@agent-relay/types",
+  "name": "@relaycast/types",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
