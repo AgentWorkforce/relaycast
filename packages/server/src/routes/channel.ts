@@ -134,6 +134,49 @@ channelRouter.patch(
   },
 );
 
+// PATCH /v1/channels/:name/topic - set channel topic
+// Alias for PATCH /v1/channels/:name with { topic }, kept for backwards compatibility.
+channelRouter.patch(
+  '/channels/:name/topic',
+  requireAuth,
+  rateLimit,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { topic } = req.body ?? {};
+      if (topic === undefined || typeof topic !== 'string') {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'topic is required' },
+        });
+        return;
+      }
+
+      const updated = await channelEngine.updateChannel(
+        req.workspace!.id,
+        paramName(req),
+        { topic },
+      );
+      if (!updated) {
+        res.status(404).json({
+          ok: false,
+          error: {
+            code: 'channel_not_found',
+            message: `Channel "${paramName(req)}" not found`,
+          },
+        });
+        return;
+      }
+      res.json({ ok: true, data: updated });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      res.status(error.status || 500).json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      });
+    }
+  },
+);
+
 // DELETE /v1/channels/:name - archive channel (soft delete)
 channelRouter.delete(
   '/channels/:name',
@@ -241,11 +284,12 @@ channelRouter.post(
   rateLimit,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { agent } = req.body;
+      const agent =
+        req.body?.agent ?? req.body?.agent_name ?? req.body?.agentName;
       if (!agent || typeof agent !== 'string') {
         res.status(400).json({
           ok: false,
-          error: { code: 'invalid_request', message: 'agent name is required' },
+          error: { code: 'invalid_request', message: 'agent is required' },
         });
         return;
       }

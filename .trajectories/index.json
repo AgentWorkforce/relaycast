@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-08T00:12:42.754Z",
+  "lastUpdated": "2026-02-08T10:40:20.665Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -81,9 +81,10 @@
     },
     "traj_m2p52kpmvfkb": {
       "title": "Wave 12: Add E2E HTTP lifecycle integration test suite",
-      "status": "active",
+      "status": "completed",
       "startedAt": "2026-02-08T00:12:39.204Z",
-      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/active/traj_m2p52kpmvfkb.json"
+      "completedAt": "2026-02-08T10:40:20.509Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relay-cloud-sdk-transport/.trajectories/completed/2026-02/traj_m2p52kpmvfkb.json"
     }
   }
 }
