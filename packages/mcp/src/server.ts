@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Relay, AgentClient } from '@agent-relay/sdk';
+import { Relay, AgentClient, WsClient } from '@agent-relay/sdk';
 import { registerRegistrationTools } from './tools/registration.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';
@@ -7,6 +7,9 @@ import { registerFeatureTools } from './tools/features.js';
 import { registerSystemPrompt } from './prompts.js';
 import { createInitialSession, type SessionState } from './types.js';
 import { enablePiggyback } from './piggyback.js';
+import { registerResourceDefinitions } from './resources/definitions.js';
+import { SubscriptionManager } from './resources/subscriptions.js';
+import { WsBridge } from './resources/ws-bridge.js';
 
 export interface McpServerOptions {
   apiKey: string;
@@ -21,6 +24,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     { name: 'agent-relay', version: '0.1.0' },
     {
       capabilities: {
+        resources: { subscribe: true, listChanged: true },
         tools: {},
         prompts: {},
       },
@@ -30,7 +34,27 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const getRelay = () => relay;
   const getSession = () => session;
   const setSession = (partial: Partial<SessionState>) => {
-    Object.assign(session, partial);
+    // When an agent token is set, initialize the WebSocket bridge
+    if (partial.agentToken && !session.wsBridge) {
+      const subscriptions = new SubscriptionManager();
+      const wsClient = new WsClient({
+        token: partial.agentToken,
+        baseUrl: options.baseUrl,
+      });
+      const wsBridge = new WsBridge(
+        wsClient,
+        subscriptions,
+        (uri: string) => {
+          mcpServer.server.sendResourceUpdated({ uri }).catch(() => {
+            // Silently ignore notification failures
+          });
+        },
+      );
+      wsBridge.start();
+      Object.assign(session, partial, { wsBridge, subscriptions });
+    } else {
+      Object.assign(session, partial);
+    }
   };
 
   const getAgentClient = (): AgentClient => {
@@ -42,6 +66,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
   // Enable piggybacking of unread messages on all tool responses
   enablePiggyback(mcpServer, getSession, getAgentClient);
+
+  // Register resource definitions (inbox, agents, channels, etc.)
+  registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
 
   // Register all tools
   registerRegistrationTools(mcpServer, getRelay, getSession, setSession);
