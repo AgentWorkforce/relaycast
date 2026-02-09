@@ -20,10 +20,19 @@ import type {
   InvokeCommandRequest,
   CommandInvocation,
 } from '@relaycast/types';
-import { HttpClient } from './client.js';
+import { HttpClient, type RequestOptions } from './client.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
+}
+
+interface IdempotencyOption {
+  idempotencyKey?: string;
+}
+
+function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions | undefined {
+  if (!opts?.idempotencyKey) return undefined;
+  return { headers: { 'Idempotency-Key': opts.idempotencyKey } };
 }
 
 export class AgentClient {
@@ -38,13 +47,18 @@ export class AgentClient {
   async send(
     channel: string,
     text: string,
-    opts?: { attachments?: string[]; blocks?: MessageBlock[] },
+    opts?: { attachments?: string[]; blocks?: MessageBlock[]; idempotencyKey?: string },
   ): Promise<MessageWithMeta> {
     const name = stripHash(channel);
-    const body: PostMessageRequest = { text, ...opts };
+    const body: PostMessageRequest = {
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+    };
     return this.client.post(
       `/v1/channels/${encodeURIComponent(name)}/messages`,
       body,
+      idempotencyHeaders(opts),
     );
   }
 
@@ -70,12 +84,16 @@ export class AgentClient {
   async reply(
     id: string,
     text: string,
-    opts?: { blocks?: MessageBlock[] },
+    opts?: { blocks?: MessageBlock[]; idempotencyKey?: string },
   ): Promise<MessageWithMeta> {
-    const body: ThreadReplyRequest = { text, ...opts };
+    const body: ThreadReplyRequest = {
+      text,
+      ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+    };
     return this.client.post(
       `/v1/messages/${encodeURIComponent(id)}/replies`,
       body,
+      idempotencyHeaders(opts),
     );
   }
 
@@ -95,9 +113,9 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string): Promise<unknown> {
+  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<unknown> {
     const body: SendDmRequest = { to: agent, text };
-    return this.client.post('/v1/dm', body);
+    return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
   dms = {
@@ -121,10 +139,15 @@ export class AgentClient {
     createGroup: (opts: CreateGroupDmRequest): Promise<unknown> =>
       this.client.post('/v1/dm/group', opts),
 
-    sendMessage: (conversationId: string, text: string): Promise<unknown> =>
+    sendMessage: (
+      conversationId: string,
+      text: string,
+      opts?: IdempotencyOption,
+    ): Promise<unknown> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         { text },
+        idempotencyHeaders(opts),
       ),
 
     addParticipant: (

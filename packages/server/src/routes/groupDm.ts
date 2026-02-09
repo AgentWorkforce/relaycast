@@ -4,6 +4,7 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { publishEvent } from '../ws/pubsub.js';
 import { deliverEvent } from '../engine/eventDelivery.js';
@@ -58,19 +59,44 @@ groupDmRouter.post(
         return;
       }
 
-      const conversationId = req.params.conversation_id as string;
-      const result = await groupDmEngine.postGroupMessage(
-        req.workspace!.id,
-        conversationId,
-        req.agent!.id,
-        { text },
-      );
-      res.status(201).json({ ok: true, data: result });
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      if (idempotencyError) {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_idempotency_key', message: idempotencyError },
+        });
+        return;
+      }
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result };
-      publishEvent({ type: 'group_dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'group_dm.received', eventData).catch(() => {});
+      const conversationId = req.params.conversation_id as string;
+      const idempotent = await runIdempotent({
+        workspaceId: req.workspace!.id,
+        actorId: req.agent!.id,
+        scope: `dm-group-message:${conversationId}`,
+        key: idempotencyKey,
+        status: 201,
+        fingerprint: JSON.stringify({ conversationId, text }),
+        operation: () =>
+          groupDmEngine.postGroupMessage(
+            req.workspace!.id,
+            conversationId,
+            req.agent!.id,
+            { text },
+          ),
+      });
+
+      if (idempotent.replayed) {
+        res.setHeader('Idempotency-Replayed', 'true');
+      }
+
+      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
+
+      // Fire-and-forget event publishing only for fresh writes.
+      if (!idempotent.replayed) {
+        const eventData = { ...idempotent.data };
+        publishEvent({ type: 'group_dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+        deliverEvent(req.workspace!.id, 'group_dm.received', eventData).catch(() => {});
+      }
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };
