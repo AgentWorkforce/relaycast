@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { createCliTelemetry, type TelemetryStatus } from '../telemetry.js';
+import type { CliTelemetry, TelemetryStatus } from '../telemetry.js';
 
 function reasonMessage(status: TelemetryStatus): string {
   if (status.reason === 'enabled') return 'Telemetry is enabled.';
@@ -25,7 +25,7 @@ function printStatus(status: TelemetryStatus): void {
   );
 }
 
-export function registerTelemetryCommands(program: Command): void {
+export function registerTelemetryCommands(program: Command, telemetryInstance: CliTelemetry): void {
   const telemetry = program
     .command('telemetry')
     .description('Anonymous usage telemetry settings (opt-out)');
@@ -34,15 +34,14 @@ export function registerTelemetryCommands(program: Command): void {
     .command('status')
     .description('Show telemetry status and opt-out source')
     .action(() => {
-      const status = createCliTelemetry().status();
-      printStatus(status);
+      printStatus(telemetryInstance.status());
     });
 
   telemetry
     .command('enable')
     .description('Enable telemetry')
     .action(() => {
-      const status = createCliTelemetry().setEnabled(true);
+      const status = telemetryInstance.setEnabled(true);
       printStatus(status);
     });
 
@@ -50,7 +49,7 @@ export function registerTelemetryCommands(program: Command): void {
     .command('disable')
     .description('Disable telemetry')
     .action(() => {
-      const status = createCliTelemetry().setEnabled(false);
+      const status = telemetryInstance.setEnabled(false);
       printStatus(status);
     });
 }

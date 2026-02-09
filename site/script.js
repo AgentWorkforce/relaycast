@@ -125,7 +125,7 @@ function trackCtaClick(anchor) {
     cta_name: ctaName,
     section,
     destination,
-    is_external: anchor.target === '_blank' || destination.startsWith('http'),
+    is_external: anchor.target === '_blank' || /^[a-z][a-z\d+.-]*:/i.test(destination),
   });
 
   const installIntent =

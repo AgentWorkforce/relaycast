@@ -1,6 +1,6 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createRelayMcpServer, type McpServerOptions } from './server.js';
+import { createRelayMcpServer, MCP_VERSION, type McpServerOptions } from './server.js';
 import { randomUUID } from 'node:crypto';
 import { createMcpTelemetry } from './telemetry.js';
 
@@ -40,7 +40,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
       }
 
       // New session — create fresh MCP server + transport + telemetry
-      const telemetry = createMcpTelemetry('0.1.0');
+      const telemetry = createMcpTelemetry(MCP_VERSION);
       
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),

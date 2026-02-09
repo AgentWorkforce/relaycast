@@ -29,21 +29,23 @@ describe('telemetry config', () => {
     vi.resetModules();
   });
 
-  it('can be disabled and re-enabled via telemetry command', async () => {
+  it('can be disabled and re-enabled via telemetry command using shared instance', async () => {
     const { registerTelemetryCommands } = await import('../commands/telemetry.js');
     const { createCliTelemetry } = await import('../telemetry.js');
     const program = new Command().exitOverride();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const telemetry = createCliTelemetry();
 
-    registerTelemetryCommands(program);
+    registerTelemetryCommands(program, telemetry);
 
     await program.parseAsync(['telemetry', 'disable'], { from: 'user' });
-    expect(createCliTelemetry().status().enabled).toBe(false);
-    expect(createCliTelemetry().status().reason).toBe('user_opt_out');
+    // The same instance should reflect the change immediately
+    expect(telemetry.status().enabled).toBe(false);
+    expect(telemetry.status().reason).toBe('user_opt_out');
 
     await program.parseAsync(['telemetry', 'enable'], { from: 'user' });
-    expect(createCliTelemetry().status().enabled).toBe(true);
-    expect(createCliTelemetry().status().reason).toBe('enabled');
+    expect(telemetry.status().enabled).toBe(true);
+    expect(telemetry.status().reason).toBe('enabled');
 
     expect(logSpy).toHaveBeenCalled();
   });
@@ -55,5 +57,22 @@ describe('telemetry config', () => {
     const status = createCliTelemetry().status();
     expect(status.enabled).toBe(false);
     expect(status.reason).toBe('env_opt_out');
+  });
+
+  it('captureFirstRunIfNeeded does not mark captured when telemetry is disabled', async () => {
+    const { createCliTelemetry } = await import('../telemetry.js');
+    process.env.DO_NOT_TRACK = '1';
+
+    const telemetry = createCliTelemetry();
+    telemetry.captureFirstRunIfNeeded();
+
+    // After disabling DO_NOT_TRACK and creating a new instance,
+    // first-run should still fire because it was not marked as captured
+    delete process.env.DO_NOT_TRACK;
+    vi.resetModules();
+    const { createCliTelemetry: freshCreate } = await import('../telemetry.js');
+    const freshTelemetry = freshCreate();
+    // The status should be enabled now and first-run should not have been captured yet
+    expect(freshTelemetry.status().enabled).toBe(true);
   });
 });

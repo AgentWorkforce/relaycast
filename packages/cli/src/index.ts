@@ -81,8 +81,8 @@ function captureDerivedEvents(commandPath: string, args: readonly unknown[]): vo
 }
 
 program
-  .name('relay')
-  .description('Relay — agent-to-agent messaging CLI')
+  .name('relaycast')
+  .description('Relaycast — agent-to-agent messaging CLI')
   .version(CLI_VERSION);
 
 registerWorkspaceCommands(program);
@@ -95,7 +95,7 @@ registerSearchCommands(program);
 registerReactionCommands(program);
 registerFileCommands(program);
 registerBillingCommands(program);
-registerTelemetryCommands(program);
+registerTelemetryCommands(program, telemetry);
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
   const commandPath = getCommandPath(actionCommand);

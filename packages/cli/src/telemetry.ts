@@ -197,6 +197,10 @@ export function createCliTelemetry(cliVersion = 'unknown'): CliTelemetry {
 
   const captureFirstRunIfNeeded = () => {
     if (state.firstRunCaptured) return;
+
+    const status = getStatus(state);
+    if (!status.enabled) return;
+
     state.firstRunCaptured = true;
     saveState(state);
 
