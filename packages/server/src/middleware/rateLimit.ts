@@ -101,17 +101,17 @@ export async function rateLimit(
       return;
     }
   } catch {
-    // In-memory fallback when Redis is down
-    const { allowed, count } = inMemoryRateCheck(req.workspace.id, globalLimit);
-    res.setHeader('X-RateLimit-Limit', globalLimit);
-    res.setHeader('X-RateLimit-Remaining', Math.max(0, globalLimit - count));
+    // In-memory fallback when Redis is down — still respects route multipliers
+    const { allowed, count } = inMemoryRateCheck(req.workspace.id, limit);
+    res.setHeader('X-RateLimit-Limit', limit);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - count));
 
     if (!allowed) {
       res.status(429).json({
         ok: false,
         error: {
           code: 'rate_limit_exceeded',
-          message: `Rate limit exceeded. ${globalLimit} requests per minute allowed for ${req.workspace.plan} plan.`,
+          message: `Rate limit exceeded. ${limit} requests per minute allowed for ${req.workspace.plan} plan.`,
         },
       });
       return;

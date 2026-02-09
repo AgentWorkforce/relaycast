@@ -1,15 +1,13 @@
-import { eq, and, sql, lte } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import { eq, and, sql, lte, inArray } from 'drizzle-orm';
+import { getDb, getSql } from '../db/index.js';
 import { pendingEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { deliverEvent } from './eventDelivery.js';
-import { publishEvent, type WsEvent } from '../ws/pubsub.js';
 
 export async function enqueueEvent(
   workspaceId: string,
   eventType: string,
   payload: Record<string, unknown>,
-  wsEvent?: WsEvent,
 ): Promise<string> {
   const db = getDb();
   const id = generateId();
@@ -18,77 +16,68 @@ export async function enqueueEvent(
     id,
     workspaceId,
     eventType,
-    payload: { ...payload, _wsEvent: wsEvent || null },
+    payload,
   });
 
   return id;
 }
 
 export async function processEventQueue(batchSize = 20): Promise<number> {
+  const rawSql = getSql();
   const db = getDb();
   const now = new Date();
 
-  // Claim a batch of pending events using atomic update
-  const batch = await db
-    .select()
-    .from(pendingEvents)
-    .where(
-      and(
-        eq(pendingEvents.status, 'pending'),
-        lte(pendingEvents.processAfter, now),
-      ),
+  // Atomically claim a batch: UPDATE ... WHERE status='pending' RETURNING
+  // This prevents duplicate processing across multiple workers
+  const claimed = await rawSql`
+    UPDATE pending_events
+    SET status = 'processing',
+        attempts = attempts + 1
+    WHERE id IN (
+      SELECT id FROM pending_events
+      WHERE status = 'pending' AND process_after <= ${now}
+      ORDER BY created_at
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
     )
-    .orderBy(pendingEvents.createdAt)
-    .limit(batchSize);
+    RETURNING *
+  `;
 
-  if (batch.length === 0) return 0;
+  if (claimed.length === 0) return 0;
 
   let processed = 0;
-  for (const event of batch) {
-    // Mark as processing
-    await db
-      .update(pendingEvents)
-      .set({ status: 'processing', attempts: sql`${pendingEvents.attempts} + 1` })
-      .where(eq(pendingEvents.id, event.id));
+  for (const event of claimed) {
+    const currentAttempts = event.attempts as number;
 
     try {
-      const payload = event.payload as Record<string, unknown>;
-      const wsEvent = payload._wsEvent as WsEvent | null;
-
-      // Publish to WebSocket subscribers
-      if (wsEvent) {
-        await publishEvent(wsEvent);
-      }
-
-      // Deliver webhooks
-      const { _wsEvent, ...cleanPayload } = payload;
-      await deliverEvent(event.workspaceId, event.eventType, cleanPayload);
+      // Deliver webhooks only — real-time pub/sub is handled
+      // directly in the route handler for low latency
+      await deliverEvent(event.workspace_id as string, event.event_type as string, event.payload as Record<string, unknown>);
 
       // Mark completed
       await db
         .update(pendingEvents)
         .set({ status: 'completed', completedAt: new Date() })
-        .where(eq(pendingEvents.id, event.id));
+        .where(eq(pendingEvents.id, event.id as string));
 
       processed++;
     } catch (err) {
-      const attempts = (event.attempts ?? 0) + 1;
-      const maxAttempts = event.maxAttempts ?? 5;
+      const maxAttempts = (event.max_attempts as number) ?? 5;
       const errorMsg = err instanceof Error ? err.message : String(err);
 
-      if (attempts >= maxAttempts) {
+      if (currentAttempts >= maxAttempts) {
         await db
           .update(pendingEvents)
           .set({ status: 'failed', lastError: errorMsg })
-          .where(eq(pendingEvents.id, event.id));
+          .where(eq(pendingEvents.id, event.id as string));
       } else {
         // Exponential backoff: 2^attempts seconds
-        const backoffMs = Math.pow(2, attempts) * 1000;
+        const backoffMs = Math.pow(2, currentAttempts) * 1000;
         const processAfter = new Date(Date.now() + backoffMs);
         await db
           .update(pendingEvents)
           .set({ status: 'pending', lastError: errorMsg, processAfter })
-          .where(eq(pendingEvents.id, event.id));
+          .where(eq(pendingEvents.id, event.id as string));
       }
     }
   }
@@ -96,8 +85,8 @@ export async function processEventQueue(batchSize = 20): Promise<number> {
   return processed;
 }
 
-// Cleanup completed events older than given age (default 24h)
-export async function cleanupCompletedEvents(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+// Cleanup completed and failed events older than given age (default 24h)
+export async function cleanupOldEvents(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
   const db = getDb();
   const cutoff = new Date(Date.now() - maxAgeMs);
 
@@ -105,8 +94,8 @@ export async function cleanupCompletedEvents(maxAgeMs = 24 * 60 * 60 * 1000): Pr
     .delete(pendingEvents)
     .where(
       and(
-        eq(pendingEvents.status, 'completed'),
-        lte(pendingEvents.completedAt, cutoff),
+        inArray(pendingEvents.status, ['completed', 'failed']),
+        lte(pendingEvents.createdAt, cutoff),
       ),
     )
     .returning();
