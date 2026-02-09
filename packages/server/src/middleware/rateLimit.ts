@@ -36,7 +36,7 @@ const inMemoryBuckets = new Map<string, { tokens: number; lastRefill: number }>(
 const BUCKET_CLEANUP_INTERVAL = 60_000;
 let lastCleanup = Date.now();
 
-function inMemoryRateCheck(workspaceId: string, limit: number): { allowed: boolean; count: number } {
+function inMemoryRateCheck(workspaceId: string, routeKey: string | null, limit: number): { allowed: boolean; count: number } {
   const now = Date.now();
 
   // Periodic cleanup of stale buckets
@@ -48,7 +48,7 @@ function inMemoryRateCheck(workspaceId: string, limit: number): { allowed: boole
   }
 
   const window = Math.floor(now / 60000);
-  const key = `${workspaceId}:${window}`;
+  const key = routeKey ? `${workspaceId}:${routeKey}:${window}` : `${workspaceId}:${window}`;
   let bucket = inMemoryBuckets.get(key);
   if (!bucket) {
     bucket = { tokens: 0, lastRefill: now };
@@ -56,6 +56,7 @@ function inMemoryRateCheck(workspaceId: string, limit: number): { allowed: boole
   }
 
   bucket.tokens++;
+  bucket.lastRefill = now;
   return { allowed: bucket.tokens <= limit, count: bucket.tokens };
 }
 
@@ -102,7 +103,7 @@ export async function rateLimit(
     }
   } catch {
     // In-memory fallback when Redis is down — still respects route multipliers
-    const { allowed, count } = inMemoryRateCheck(req.workspace.id, limit);
+    const { allowed, count } = inMemoryRateCheck(req.workspace.id, routeKey, limit);
     res.setHeader('X-RateLimit-Limit', limit);
     res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - count));
 

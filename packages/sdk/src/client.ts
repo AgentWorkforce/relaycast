@@ -5,6 +5,10 @@ export interface ClientOptions {
   baseUrl?: string;
 }
 
+export interface RequestOptions {
+  headers?: Record<string, string>;
+}
+
 export class RelayError extends Error {
   code: string;
   status: number;
@@ -42,6 +46,7 @@ export class HttpClient {
     path: string,
     body?: unknown,
     query?: Record<string, string>,
+    options?: RequestOptions,
   ): Promise<T> {
     const url = new URL(path, this._baseUrl);
     if (query) {
@@ -53,6 +58,7 @@ export class HttpClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       'X-SDK-Version': SDK_VERSION,
+      ...(options?.headers || {}),
     };
 
     const hasBody = body !== undefined && method.toUpperCase() !== 'GET';
@@ -96,20 +102,19 @@ export class HttpClient {
     }
   }
 
-  get<T>(path: string, query?: Record<string, string>): Promise<T> {
-    return this.request<T>('GET', path, undefined, query);
+  get<T>(path: string, query?: Record<string, string>, options?: RequestOptions): Promise<T> {
+    return this.request<T>('GET', path, undefined, query, options);
   }
 
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
+  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, body, undefined, options);
   }
 
-  patch<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('PATCH', path, body);
+  patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PATCH', path, body, undefined, options);
   }
 
-  async delete(path: string): Promise<void> {
-    await this.request<unknown>('DELETE', path);
+  async delete(path: string, options?: RequestOptions): Promise<void> {
+    await this.request<unknown>('DELETE', path, undefined, undefined, options);
   }
 }
-

@@ -9,6 +9,7 @@ export type { AuthenticatedRequest } from './middleware/auth.js';
 export { startWsServer } from './ws/server.js';
 export { publishEvent } from './ws/pubsub.js';
 export type { WsEvent, EventType } from './ws/pubsub.js';
+export { enqueueEvent, startEventQueuePoller, stopEventQueuePoller, cleanupOldEvents } from './engine/eventQueue.js';
 
 // Start server when run directly
 const isDirectRun =
@@ -39,6 +40,12 @@ if (isDirectRun) {
   // Connect Redis subscriber and set up pub/sub fanout
   await connectRedisSub();
   setupPubSubListener();
+
+  // Start durable event queue poller for webhook delivery
+  const { startEventQueuePoller: startPoller, cleanupOldEvents: cleanupEvents } = await import('./engine/eventQueue.js');
+  startPoller(2000);
+  // Cleanup completed/failed events hourly
+  setInterval(() => cleanupEvents().catch(() => {}), 60 * 60 * 1000);
 
   httpServer.listen(port, () => {
     console.log(`Relay server listening on port ${port} (HTTP + WebSocket)`);

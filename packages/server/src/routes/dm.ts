@@ -4,6 +4,7 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
 import { publishEvent } from '../ws/pubsub.js';
 import { deliverEvent } from '../engine/eventDelivery.js';
@@ -36,16 +37,37 @@ dmRouter.post(
         return;
       }
 
-      const result = await dmEngine.sendDm(req.workspace!.id, req.agent!.id, {
-        to,
-        text,
-      });
-      res.status(201).json({ ok: true, data: result });
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      if (idempotencyError) {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_idempotency_key', message: idempotencyError },
+        });
+        return;
+      }
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result };
-      publishEvent({ type: 'dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'dm.received', eventData).catch(() => {});
+      const idempotent = await runIdempotent({
+        workspaceId: req.workspace!.id,
+        actorId: req.agent!.id,
+        scope: 'dm:direct',
+        key: idempotencyKey,
+        status: 201,
+        fingerprint: JSON.stringify({ to, text }),
+        operation: () => dmEngine.sendDm(req.workspace!.id, req.agent!.id, { to, text }),
+      });
+
+      if (idempotent.replayed) {
+        res.setHeader('Idempotency-Replayed', 'true');
+      }
+
+      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
+
+      // Fire-and-forget event publishing only for fresh writes.
+      if (!idempotent.replayed) {
+        const eventData = { ...idempotent.data };
+        publishEvent({ type: 'dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+        deliverEvent(req.workspace!.id, 'dm.received', eventData).catch(() => {});
+      }
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };
@@ -110,4 +132,3 @@ dmRouter.get(
     }
   },
 );
-

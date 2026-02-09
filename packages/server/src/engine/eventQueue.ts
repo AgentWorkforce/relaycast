@@ -1,4 +1,4 @@
-import { eq, and, sql, lte, inArray } from 'drizzle-orm';
+import { eq, and, lte, inArray } from 'drizzle-orm';
 import { getDb, getSql } from '../db/index.js';
 import { pendingEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -27,12 +27,24 @@ export async function processEventQueue(batchSize = 20): Promise<number> {
   const db = getDb();
   const now = new Date();
 
+  // Recover events stuck in 'processing' for more than 60s (worker died).
+  // We use process_after as a proxy for "processing started at" since the
+  // claim query sets process_after = now when claiming.
+  const stuckCutoff = new Date(Date.now() - 60_000);
+  await rawSql`
+    UPDATE pending_events
+    SET status = 'pending'
+    WHERE status = 'processing'
+      AND process_after <= ${stuckCutoff}
+  `;
+
   // Atomically claim a batch: UPDATE ... WHERE status='pending' RETURNING
   // This prevents duplicate processing across multiple workers
   const claimed = await rawSql`
     UPDATE pending_events
     SET status = 'processing',
-        attempts = attempts + 1
+        attempts = attempts + 1,
+        process_after = ${now}
     WHERE id IN (
       SELECT id FROM pending_events
       WHERE status = 'pending' AND process_after <= ${now}
@@ -104,14 +116,19 @@ export async function cleanupOldEvents(maxAgeMs = 24 * 60 * 60 * 1000): Promise<
 }
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let pollingInFlight = false;
 
 export function startEventQueuePoller(intervalMs = 2000): void {
   if (pollingTimer) return;
   pollingTimer = setInterval(async () => {
+    if (pollingInFlight) return;
+    pollingInFlight = true;
     try {
       await processEventQueue();
     } catch {
       // Polling errors are non-critical; will retry next interval
+    } finally {
+      pollingInFlight = false;
     }
   }, intervalMs);
 }
