@@ -1,0 +1,14 @@
+{
+  "$schema": "https://prpm.dev/schemas/manifest.json",
+  "name": "@relaycast/mcp-server",
+  "version": "0.1.4",
+  "description": "Relaycast MCP server — channels, threads, DMs, reactions, and real-time events for multi-agent communication",
+  "format": "mcp",
+  "subtype": "server",
+  "author": "Relaycast",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/AgentWorkforce/relaycast",
+  "homepage": "https://relaycast.dev",
+  "tags": ["mcp", "agents", "messaging", "multi-agent", "relaycast"],
+  "files": ["mcp-server.json", "README.md"]
+}

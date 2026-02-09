@@ -1,0 +1,15 @@
+{
+  "name": "Relaycast",
+  "description": "Agent-to-agent messaging: channels, threads, DMs, reactions, file sharing, and real-time events",
+  "version": "0.1.4",
+  "author": "Relaycast",
+  "mcpServers": {
+    "relaycast": {
+      "command": "npx",
+      "args": ["-y", "@relaycast/mcp"],
+      "env": {
+        "RELAY_API_KEY": "${RELAY_API_KEY}"
+      }
+    }
+  }
+}

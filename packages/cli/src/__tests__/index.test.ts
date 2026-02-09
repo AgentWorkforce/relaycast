@@ -43,7 +43,6 @@ vi.mock('../commands/search.js', () => ({ registerSearchCommands: () => {} }));
 vi.mock('../commands/reactions.js', () => ({ registerReactionCommands: () => {} }));
 vi.mock('../commands/files.js', () => ({ registerFileCommands: () => {} }));
 vi.mock('../commands/billing.js', () => ({ registerBillingCommands: () => {} }));
-vi.mock('../commands/mcp.js', () => ({ registerMcpCommands: () => {} }));
 vi.mock('../commands/telemetry.js', () => ({ registerTelemetryCommands: () => {} }));
 vi.mock('../telemetry.js', () => ({
   createCliTelemetry: () => ({
