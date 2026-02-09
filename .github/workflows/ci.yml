@@ -36,3 +36,5 @@ jobs:
 
       - name: Test
         run: npx turbo test
+        env:
+          DO_NOT_TRACK: '1'
