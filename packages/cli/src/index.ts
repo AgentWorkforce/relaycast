@@ -12,6 +12,7 @@ import { registerReactionCommands } from './commands/reactions.js';
 import { registerFileCommands } from './commands/files.js';
 import { registerBillingCommands } from './commands/billing.js';
 import { registerOpenClawCommands } from './commands/openclaw.js';
+import { registerMcpCommands } from './commands/mcp.js';
 import { registerTelemetryCommands } from './commands/telemetry.js';
 import { createCliTelemetry } from './telemetry.js';
 
@@ -96,6 +97,7 @@ registerSearchCommands(program);
 registerReactionCommands(program);
 registerFileCommands(program);
 registerBillingCommands(program);
+registerMcpCommands(program);
 registerOpenClawCommands(program);
 registerTelemetryCommands(program, telemetry);
 
