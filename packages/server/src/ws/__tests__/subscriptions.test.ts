@@ -1,10 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WebSocket } from 'ws';
 import { handleClientMessage, broadcastToChannel, broadcastToWorkspace } from '../subscriptions.js';
-import { getClients, type WsClient } from '../server.js';
+import { getClients, getChannelIndex, getWorkspaceIndex, indexSubscribe, indexUnsubscribe, type WsClient } from '../server.js';
+
+const mockChannelIndex = new Map<string, Set<string>>();
+const mockWorkspaceIndex = new Map<string, Set<string>>();
 
 vi.mock('../server.js', () => ({
   getClients: vi.fn(),
+  getChannelIndex: vi.fn(() => mockChannelIndex),
+  getWorkspaceIndex: vi.fn(() => mockWorkspaceIndex),
+  indexSubscribe: vi.fn((client: { id: string; workspaceId: string }, channel: string) => {
+    const key = `${client.workspaceId}:${channel}`;
+    let set = mockChannelIndex.get(key);
+    if (!set) { set = new Set(); mockChannelIndex.set(key, set); }
+    set.add(client.id);
+  }),
+  indexUnsubscribe: vi.fn((client: { id: string; workspaceId: string }, channel: string) => {
+    const key = `${client.workspaceId}:${channel}`;
+    const set = mockChannelIndex.get(key);
+    if (set) { set.delete(client.id); if (set.size === 0) mockChannelIndex.delete(key); }
+  }),
 }));
 
 function createMockClient(overrides: Partial<WsClient> = {}): WsClient {
@@ -94,6 +110,11 @@ describe('Subscription Management', () => {
   });
 
   describe('broadcastToChannel', () => {
+    beforeEach(() => {
+      mockChannelIndex.clear();
+      mockWorkspaceIndex.clear();
+    });
+
     it('sends to subscribed clients only', () => {
       const clientA = createMockClient({ id: 'a', workspaceId: 'ws_1' });
       clientA.subscriptions.add('ch-1');
@@ -110,6 +131,9 @@ describe('Subscription Management', () => {
         ['c', clientC],
       ]);
       (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+
+      // Populate the channel index (simulates subscribe)
+      mockChannelIndex.set('ws_1:ch-1', new Set(['a', 'c']));
 
       const event = { type: 'message.created', data: { text: 'hello' } };
       broadcastToChannel('ws_1', 'ch-1', event);
@@ -132,6 +156,11 @@ describe('Subscription Management', () => {
       ]);
       (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
 
+      // Only ws_1:ch-1 has clientA indexed
+      mockChannelIndex.set('ws_1:ch-1', new Set(['a']));
+      // ws_2:ch-1 would be separate
+      mockChannelIndex.set('ws_2:ch-1', new Set(['b']));
+
       broadcastToChannel('ws_1', 'ch-1', { type: 'test' });
 
       expect(clientA.ws.send).toHaveBeenCalled();
@@ -140,6 +169,11 @@ describe('Subscription Management', () => {
   });
 
   describe('broadcastToWorkspace', () => {
+    beforeEach(() => {
+      mockChannelIndex.clear();
+      mockWorkspaceIndex.clear();
+    });
+
     it('sends to all clients in workspace', () => {
       const clientA = createMockClient({ id: 'a', workspaceId: 'ws_1' });
       const clientB = createMockClient({ id: 'b', workspaceId: 'ws_1' });
@@ -151,6 +185,10 @@ describe('Subscription Management', () => {
         ['c', clientC],
       ]);
       (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+
+      // Populate workspace index
+      mockWorkspaceIndex.set('ws_1', new Set(['a', 'b']));
+      mockWorkspaceIndex.set('ws_2', new Set(['c']));
 
       const event = { type: 'agent.online', data: { agent_id: 'x' } };
       broadcastToWorkspace('ws_1', event);

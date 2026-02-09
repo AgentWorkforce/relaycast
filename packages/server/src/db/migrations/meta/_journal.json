@@ -15,6 +15,13 @@
       "when": 1770547175858,
       "tag": "0001_massive_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770800000000,
+      "tag": "0002_pending_events",
+      "breakpoints": true
     }
   ]
 }

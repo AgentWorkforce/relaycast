@@ -8,7 +8,7 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { enqueueEvent } from '../engine/eventQueue.js';
 
 export const messageRouter = Router();
 
@@ -84,11 +84,12 @@ messageRouter.post(
 
       res.status(idempotent.status).json({ ok: true, data: idempotent.data });
 
-      // Fire-and-forget event publishing only for fresh writes.
+      // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
+      // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
         const eventData = { ...idempotent.data, channel_name: channelName };
         publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-        deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
+        enqueueEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
       }
     } catch (err: unknown) {
       if (!res.headersSent) {

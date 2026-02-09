@@ -133,6 +133,10 @@ vi.mock('../../engine/eventDelivery.js', () => ({
   deliverEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../engine/eventQueue.js', () => ({
+  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));

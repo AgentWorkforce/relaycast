@@ -136,6 +136,10 @@ vi.mock('../../engine/eventDelivery.js', () => ({
   deliverEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../engine/eventQueue.js', () => ({
+  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
+}));
+
 import { app } from '../../app.js';
 import * as statsEngine from '../../engine/stats.js';
 import * as activityEngine from '../../engine/activity.js';

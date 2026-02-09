@@ -1,6 +1,6 @@
 import { WebSocket } from 'ws';
 import type { WsClient } from './server.js';
-import { getClients } from './server.js';
+import { getClients, getChannelIndex, getWorkspaceIndex, indexSubscribe, indexUnsubscribe } from './server.js';
 
 export interface SubscribeMessage {
   type: 'subscribe';
@@ -31,6 +31,7 @@ export function handleClientMessage(client: WsClient, raw: string): void {
     for (const ch of msg.channels) {
       if (typeof ch === 'string') {
         client.subscriptions.add(ch);
+        indexSubscribe(client, ch);
       }
     }
     client.ws.send(JSON.stringify({
@@ -43,6 +44,7 @@ export function handleClientMessage(client: WsClient, raw: string): void {
       return;
     }
     for (const ch of msg.channels) {
+      indexUnsubscribe(client, ch);
       client.subscriptions.delete(ch);
     }
     client.ws.send(JSON.stringify({
@@ -55,18 +57,29 @@ export function handleClientMessage(client: WsClient, raw: string): void {
 }
 
 export function broadcastToChannel(workspaceId: string, channel: string, event: object): void {
+  const key = `${workspaceId}:${channel}`;
+  const subscriberIds = getChannelIndex().get(key);
+  if (!subscriberIds || subscriberIds.size === 0) return;
+
   const payload = JSON.stringify(event);
-  for (const client of getClients().values()) {
-    if (client.workspaceId === workspaceId && client.subscriptions.has(channel) && client.ws.readyState === WebSocket.OPEN) {
+  const clients = getClients();
+  for (const id of subscriberIds) {
+    const client = clients.get(id);
+    if (client && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(payload);
     }
   }
 }
 
 export function broadcastToWorkspace(workspaceId: string, event: object): void {
+  const clientIds = getWorkspaceIndex().get(workspaceId);
+  if (!clientIds || clientIds.size === 0) return;
+
   const payload = JSON.stringify(event);
-  for (const client of getClients().values()) {
-    if (client.workspaceId === workspaceId && client.ws.readyState === WebSocket.OPEN) {
+  const clients = getClients();
+  for (const id of clientIds) {
+    const client = clients.get(id);
+    if (client && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(payload);
     }
   }
