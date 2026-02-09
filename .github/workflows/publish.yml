@@ -14,6 +14,8 @@ on:
           - sdk
           - mcp
           - cli
+          - react
+          - openclaw
         default: "all"
       version:
         description: "Version bump type"
@@ -175,6 +177,8 @@ jobs:
           - sdk
           - mcp
           - cli
+          - react
+          - openclaw
 
     steps:
       - name: Checkout code
@@ -298,7 +302,9 @@ jobs:
             ### Install
             ```bash
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/openclaw@${{ needs.build.outputs.new_version }}
             npm install -g relaycast@${{ needs.build.outputs.new_version }}
             ```
 
@@ -309,6 +315,8 @@ jobs:
             | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/react | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/openclaw | ${{ needs.build.outputs.new_version }} |
             | relaycast (CLI) | ${{ needs.build.outputs.new_version }} |
           generate_release_notes: true
         env:

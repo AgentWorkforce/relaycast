@@ -1,27 +1,28 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createRelayMcpServer, type McpServerOptions } from './server.js';
+import { createRelayMcpServer, MCP_VERSION, type McpServerOptions } from './server.js';
 import { randomUUID } from 'node:crypto';
+import { createMcpTelemetry } from './telemetry.js';
 
 /**
  * Start MCP server with stdio transport (single agent).
  * Reads from stdin, writes to stdout.
  */
 export async function startStdio(options: McpServerOptions): Promise<void> {
-  const mcpServer = createRelayMcpServer(options);
+  const mcpServer = createRelayMcpServer({ ...options, telemetryTransport: 'stdio' });
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
 }
 
 /**
  * Session map for HTTP transport (multi-agent).
- * Each session gets its own MCP server + transport instance.
+ * Each session gets its own MCP server + transport + telemetry instance.
  */
 const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
 /**
  * Create Express middleware for HTTP+SSE transport (multi-agent).
- * Each connecting client gets its own session with isolated state.
+ * Each connecting client gets its own session with isolated state and telemetry.
  */
 export function createHttpHandler(baseOptions: McpServerOptions) {
   return {
@@ -38,12 +39,18 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
         return;
       }
 
-      // New session — create fresh MCP server + transport
+      // New session — create fresh MCP server + transport + telemetry
+      const telemetry = createMcpTelemetry(MCP_VERSION);
+      
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
 
-      const mcpServer = createRelayMcpServer(baseOptions);
+      const mcpServer = createRelayMcpServer({
+        ...baseOptions,
+        telemetryTransport: 'http',
+        telemetry,
+      });
 
       transport.onclose = () => {
         if (transport.sessionId) {
@@ -55,10 +62,14 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
 
       if (transport.sessionId) {
         sessions.set(transport.sessionId, { transport });
+        telemetry.capture('relaycast_mcp_http_session_started', {
+          source_surface: 'mcp',
+          transport: 'http',
+          mcp_transport_session_id: transport.sessionId,
+        });
       }
 
       await transport.handleRequest(req, res);
     },
   };
 }
-

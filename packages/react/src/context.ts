@@ -1,0 +1,13 @@
+import { createContext } from 'react';
+import type { Relay, AgentClient, WsClient } from '@relaycast/sdk';
+import type { RelayStore } from './types.js';
+
+export interface ClientContextValue {
+  relay: Relay;
+  agent: AgentClient;
+  ws: WsClient;
+}
+
+export const ClientContext = createContext<ClientContextValue | null>(null);
+
+export const StoreContext = createContext<RelayStore | null>(null);
