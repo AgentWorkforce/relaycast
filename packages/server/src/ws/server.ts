@@ -5,6 +5,8 @@ import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { workspaces, agents } from '../db/schema.js';
+import { handleClientMessage } from './subscriptions.js';
+import { subscribeToWorkspace } from './pubsub.js';
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -164,6 +166,13 @@ export function startWsServer(httpServer: HttpServer): WebSocketServer {
           clients.delete(client.id);
           ws.terminate();
         });
+
+        ws.on('message', (raw) => {
+          handleClientMessage(client, raw.toString());
+        });
+
+        // Subscribe to Redis pubsub for this workspace so events get forwarded
+        subscribeToWorkspace(auth.workspaceId).catch(() => {});
 
         ws.send(JSON.stringify({ type: 'connected', client_id: client.id }));
       });

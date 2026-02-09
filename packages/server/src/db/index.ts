@@ -18,7 +18,7 @@ export function getDb(config?: DbConfig) {
     const url =
       config?.url ||
       process.env.DATABASE_URL ||
-      'postgresql://relay:relay@localhost:5432/relay';
+      'postgresql://relay:relay@localhost:5433/relay';
 
     sql = postgres(url, {
       max: config?.max || 25,

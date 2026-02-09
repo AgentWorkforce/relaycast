@@ -87,7 +87,7 @@ messageRouter.post(
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, channel_name: channelName };
+        const eventData = { ...idempotent.data, channel_name: channelName, from_name: req.agent?.name };
         publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
         enqueueEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
       }
