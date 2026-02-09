@@ -154,7 +154,7 @@ export async function runIdempotent<T>(
 
       lockAcquired = true;
     } catch (err) {
-      if (err instanceof Error && (err as any).code) {
+      if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as any).code)) {
         throw err;
       }
       // Redis unavailable or decode failure: proceed without idempotency.
@@ -176,6 +176,8 @@ export async function runIdempotent<T>(
       };
       try {
         await redis.set(redisKey, JSON.stringify(record), 'EX', ttlSeconds);
+      } catch {
+        // Redis failure during record storage — proceed without idempotency record.
       } finally {
         if (lockKey) {
           await redis.del(lockKey).catch(() => {});
