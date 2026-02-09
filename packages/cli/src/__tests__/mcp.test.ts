@@ -352,6 +352,7 @@ describe('mcp-install', () => {
     });
 
     it('mcp install --key installs for detected tools', async () => {
+      process.chdir(tmpDir);
       fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
       const { registerMcpCommands } = await import('../commands/mcp.js');
       const program = new Command().exitOverride();
