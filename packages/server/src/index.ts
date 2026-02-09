@@ -10,6 +10,7 @@ export { startWsServer } from './ws/server.js';
 export { publishEvent } from './ws/pubsub.js';
 export type { WsEvent, EventType } from './ws/pubsub.js';
 export { enqueueEvent, startEventQueuePoller, stopEventQueuePoller, cleanupOldEvents } from './engine/eventQueue.js';
+export { sweepStaleAgents } from './engine/agent.js';
 
 // Start server when run directly
 const isDirectRun =
@@ -46,6 +47,10 @@ if (isDirectRun) {
   startPoller(2000);
   // Cleanup completed/failed events hourly
   setInterval(() => cleanupEvents().catch(() => {}), 60 * 60 * 1000);
+
+  // Sweep stale agents every 60 seconds
+  const { sweepStaleAgents } = await import('./engine/agent.js');
+  setInterval(() => sweepStaleAgents().catch(() => {}), 60 * 1000);
 
   httpServer.listen(port, () => {
     console.log(`Relay server listening on port ${port} (HTTP + WebSocket)`);

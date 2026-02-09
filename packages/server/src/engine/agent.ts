@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, lt, sql } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { agents, channels, channelMembers } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+
+const STALE_THRESHOLD_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS) || 5 * 60 * 1000; // 5 minutes
 
 export async function registerAgent(
   workspaceId: string,
@@ -189,4 +191,25 @@ export async function deleteAgent(workspaceId: string, name: string) {
 
   await db.delete(agents).where(eq(agents.id, agent.id));
   return true;
+}
+
+export async function touchLastSeen(agentId: string): Promise<void> {
+  const db = getDb();
+  await db
+    .update(agents)
+    .set({ lastSeen: new Date(), status: 'online' })
+    .where(eq(agents.id, agentId));
+}
+
+export async function sweepStaleAgents(): Promise<number> {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+
+  const result = await db
+    .update(agents)
+    .set({ status: 'offline' })
+    .where(and(eq(agents.status, 'online'), lt(agents.lastSeen, cutoff)))
+    .returning({ id: agents.id });
+
+  return result.length;
 }
