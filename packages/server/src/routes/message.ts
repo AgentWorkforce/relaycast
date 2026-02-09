@@ -8,6 +8,7 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { publishEvent } from '../ws/pubsub.js';
 import { deliverEvent } from '../engine/eventDelivery.js';
+import { enqueueEvent } from '../engine/eventQueue.js';
 
 export const messageRouter = Router();
 
@@ -60,10 +61,11 @@ messageRouter.post(
       );
       res.status(201).json({ ok: true, data: result });
 
-      // Fire-and-forget event publishing
+      // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget
       const eventData = { ...result, channel_name: channelName };
-      publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
+      const wsEvent = { type: 'message.created' as const, workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() };
+      publishEvent(wsEvent).catch(() => {});
+      enqueueEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };

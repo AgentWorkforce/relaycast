@@ -2,6 +2,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 
 export async function createChannel(
   workspaceId: string,
@@ -115,6 +116,10 @@ export async function listChannels(
 }
 
 export async function getChannel(workspaceId: string, name: string) {
+  // Check Redis cache first
+  const cached = await getCachedChannel(workspaceId, name);
+  if (cached) return cached;
+
   const db = getDb();
   const [channel] = await db
     .select()
@@ -137,7 +142,7 @@ export async function getChannel(workspaceId: string, name: string) {
     .innerJoin(agents, eq(channelMembers.agentId, agents.id))
     .where(eq(channelMembers.channelId, channel.id));
 
-  return {
+  const result = {
     id: channel.id,
     name: channel.name,
     topic: channel.topic,
@@ -151,6 +156,11 @@ export async function getChannel(workspaceId: string, name: string) {
     created_at: channel.createdAt.toISOString(),
     is_archived: channel.isArchived,
   };
+
+  // Populate cache
+  await setCachedChannel(workspaceId, name, result);
+
+  return result;
 }
 
 export async function updateChannel(
@@ -187,6 +197,9 @@ export async function updateChannel(
     .where(eq(channels.id, channel.id))
     .returning();
 
+  // Invalidate cache on update
+  await invalidateChannelCache(workspaceId, name);
+
   return {
     id: updated.id,
     name: updated.name,
@@ -219,6 +232,8 @@ export async function archiveChannel(workspaceId: string, name: string) {
     .update(channels)
     .set({ isArchived: true })
     .where(eq(channels.id, channel.id));
+
+  await invalidateChannelCache(workspaceId, name);
 
   return true;
 }
@@ -272,6 +287,8 @@ export async function joinChannel(
     role: 'member',
   });
 
+  await invalidateChannelCache(workspaceId, channelName);
+
   return { channel: channelName, agent_id: agentId, already_member: false };
 }
 
@@ -305,6 +322,8 @@ export async function leaveChannel(
         eq(channelMembers.agentId, agentId),
       ),
     );
+
+  await invalidateChannelCache(workspaceId, channelName);
 }
 
 export async function getMembers(workspaceId: string, channelName: string) {
@@ -424,6 +443,7 @@ export async function inviteAgent(
       agentId: invitee.id,
       role: 'member',
     });
+    await invalidateChannelCache(workspaceId, channelName);
   }
 
   return { channel: channelName, agent: inviteeAgentName };

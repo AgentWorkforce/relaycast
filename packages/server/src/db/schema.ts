@@ -384,3 +384,29 @@ export const commands = pgTable(
     index('idx_commands_handler').on(table.handlerAgentId),
   ],
 );
+
+// ============================================
+// Pending Events (durable event queue)
+// ============================================
+export const pendingEvents = pgTable(
+  'pending_events',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').notNull(),
+    status: text('status').notNull().default('pending'), // pending | processing | completed | failed
+    attempts: smallint('attempts').notNull().default(0),
+    maxAttempts: smallint('max_attempts').notNull().default(5),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    processAfter: timestamp('process_after', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('idx_pending_events_status').on(table.status, table.processAfter),
+    index('idx_pending_events_workspace').on(table.workspaceId),
+  ],
+);

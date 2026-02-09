@@ -210,9 +210,14 @@ vi.mock('../engine/eventDelivery.js', () => ({
   deliverEvent: vi.fn(),
 }));
 
+vi.mock('../engine/eventQueue.js', () => ({
+  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
+}));
+
 import { app } from '../app.js';
 import { publishEvent } from '../ws/pubsub.js';
 import { deliverEvent } from '../engine/eventDelivery.js';
+import { enqueueEvent } from '../engine/eventQueue.js';
 import { getChannel, createChannel, archiveChannel } from '../engine/channel.js';
 import { postMessage } from '../engine/message.js';
 import { postReply } from '../engine/thread.js';
@@ -245,7 +250,8 @@ describe('Event Publishing - message.created', () => {
     expect(vi.mocked(publishEvent)).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'message.created', workspace_id: 'ws_test123', channel_id: 'ch_1' }),
     );
-    expect(vi.mocked(deliverEvent)).toHaveBeenCalledWith(
+    // message.created now uses the durable event queue instead of direct delivery
+    expect(vi.mocked(enqueueEvent)).toHaveBeenCalledWith(
       'ws_test123', 'message.created',
       expect.objectContaining({ id: 'msg_1', text: 'hello', channel_name: 'general' }),
     );

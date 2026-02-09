@@ -187,6 +187,10 @@ vi.mock('../engine/eventDelivery.js', () => ({
   deliverEvent: vi.fn(),
 }));
 
+vi.mock('../engine/eventQueue.js', () => ({
+  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
+}));
+
 import { app } from '../app.js';
 
 import { createWorkspace } from '../engine/workspace.js';

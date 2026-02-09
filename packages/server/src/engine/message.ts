@@ -1,11 +1,17 @@
-import { eq, and, sql, isNull, lt, gt } from 'drizzle-orm';
+import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
-async function fetchAttachments(db: ReturnType<typeof getDb>, msgId: string) {
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+async function fetchAttachmentsBatch(db: ReturnType<typeof getDb>, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
   const rows = await db
     .select({
+      messageId: messageAttachments.messageId,
       fileId: messageAttachments.fileId,
       filename: files.filename,
       contentType: files.contentType,
@@ -13,13 +19,19 @@ async function fetchAttachments(db: ReturnType<typeof getDb>, msgId: string) {
     })
     .from(messageAttachments)
     .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(eq(messageAttachments.messageId, msgId));
-  return rows.map((a) => ({
-    file_id: a.fileId,
-    filename: a.filename,
-    content_type: a.contentType,
-    size_bytes: a.sizeBytes,
-  }));
+    .where(inArray(messageAttachments.messageId, msgIds));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
 }
 
 export async function postMessage(
@@ -61,7 +73,8 @@ export async function postMessage(
   }
 
   // Fetch attachment details if any
-  const attachments = hasAttachments ? await fetchAttachments(db, messageId) : [];
+  const attachmentMap = hasAttachments ? await fetchAttachmentsBatch(db, [messageId]) : new Map();
+  const attachments = attachmentMap.get(messageId) || [];
 
   return {
     id: message.id,
@@ -105,51 +118,76 @@ export async function getMessages(
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
 
-  // Batch enrichment
-  const enriched = [];
-  for (const row of rows) {
-    // reply count
-    const [replyCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(eq(messages.threadId, row.id));
+  if (rows.length === 0) return [];
 
-    // reaction groups
-    const reactionRows = await db
-      .select({
-        emoji: reactions.emoji,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(reactions)
-      .where(eq(reactions.messageId, row.id))
-      .groupBy(reactions.emoji);
+  const msgIds = rows.map((r) => r.id);
 
-    // read_by_count
-    const [readCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(readReceipts)
-      .where(eq(readReceipts.messageId, row.id));
+  // Batch: reply counts (single query for all messages)
+  const replyCounts = await db
+    .select({
+      threadId: messages.threadId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(messages)
+    .where(inArray(messages.threadId, msgIds))
+    .groupBy(messages.threadId);
 
-    // attachments
-    const attachments = row.hasAttachments ? await fetchAttachments(db, row.id) : [];
-
-    enriched.push({
-      id: row.id,
-      channel_id: row.channelId,
-      agent_id: row.agentId,
-      text: row.body,
-      blocks: (row.blocks as unknown[] | null) || null,
-      has_attachments: row.hasAttachments,
-      thread_id: row.threadId,
-      created_at: row.createdAt.toISOString(),
-      reply_count: replyCount?.count ?? 0,
-      reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
-      read_by_count: readCount?.count ?? 0,
-      attachments,
-    });
+  const replyCountMap = new Map<string, number>();
+  for (const r of replyCounts) {
+    if (r.threadId) replyCountMap.set(r.threadId, r.count);
   }
 
-  return enriched;
+  // Batch: reaction groups (single query for all messages)
+  const reactionRows = await db
+    .select({
+      messageId: reactions.messageId,
+      emoji: reactions.emoji,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(reactions)
+    .where(inArray(reactions.messageId, msgIds))
+    .groupBy(reactions.messageId, reactions.emoji);
+
+  const reactionMap = new Map<string, Array<{ emoji: string; count: number }>>();
+  for (const r of reactionRows) {
+    const list = reactionMap.get(r.messageId) || [];
+    list.push({ emoji: r.emoji, count: r.count });
+    reactionMap.set(r.messageId, list);
+  }
+
+  // Batch: read receipt counts (single query for all messages)
+  const readCounts = await db
+    .select({
+      messageId: readReceipts.messageId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(readReceipts)
+    .where(inArray(readReceipts.messageId, msgIds))
+    .groupBy(readReceipts.messageId);
+
+  const readCountMap = new Map<string, number>();
+  for (const r of readCounts) {
+    readCountMap.set(r.messageId, r.count);
+  }
+
+  // Batch: attachments (single query for all messages with attachments)
+  const attachmentMsgIds = rows.filter((r) => r.hasAttachments).map((r) => r.id);
+  const attachmentMap = await fetchAttachmentsBatch(db, attachmentMsgIds);
+
+  return rows.map((row) => ({
+    id: row.id,
+    channel_id: row.channelId,
+    agent_id: row.agentId,
+    text: row.body,
+    blocks: (row.blocks as unknown[] | null) || null,
+    has_attachments: row.hasAttachments,
+    thread_id: row.threadId,
+    created_at: row.createdAt.toISOString(),
+    reply_count: replyCountMap.get(row.id) ?? 0,
+    reactions: reactionMap.get(row.id) || [],
+    read_by_count: readCountMap.get(row.id) ?? 0,
+    attachments: attachmentMap.get(row.id) || [],
+  }));
 }
 
 export async function getMessage(workspaceId: string, messageId: string) {
@@ -161,30 +199,26 @@ export async function getMessage(workspaceId: string, messageId: string) {
 
   if (!row) return null;
 
-  // reply count
-  const [replyCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(messages)
-    .where(eq(messages.threadId, row.id));
-
-  // reaction groups
-  const reactionRows = await db
-    .select({
-      emoji: reactions.emoji,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(reactions)
-    .where(eq(reactions.messageId, row.id))
-    .groupBy(reactions.emoji);
-
-  // read_by_count
-  const [readCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(readReceipts)
-    .where(eq(readReceipts.messageId, row.id));
-
-  // attachments
-  const attachments = row.hasAttachments ? await fetchAttachments(db, row.id) : [];
+  // Parallel enrichment queries for single message
+  const [replyCounts, reactionRows, readCounts, attachmentMap] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(eq(messages.threadId, row.id)),
+    db
+      .select({
+        emoji: reactions.emoji,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(reactions)
+      .where(eq(reactions.messageId, row.id))
+      .groupBy(reactions.emoji),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(readReceipts)
+      .where(eq(readReceipts.messageId, row.id)),
+    row.hasAttachments ? fetchAttachmentsBatch(db, [row.id]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
+  ]);
 
   return {
     id: row.id,
@@ -195,9 +229,9 @@ export async function getMessage(workspaceId: string, messageId: string) {
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
-    reply_count: replyCount?.count ?? 0,
+    reply_count: replyCounts[0]?.count ?? 0,
     reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
-    read_by_count: readCount?.count ?? 0,
-    attachments,
+    read_by_count: readCounts[0]?.count ?? 0,
+    attachments: attachmentMap.get(row.id) || [],
   };
 }
