@@ -1,0 +1,51 @@
+{
+  "name": "@relaycast/openclaw",
+  "version": "0.1.2",
+  "description": "Drop-in Relaycast integration for OpenClaw — structured messaging for multi-claw setups.",
+  "keywords": [
+    "openclaw",
+    "relaycast",
+    "ai",
+    "agents",
+    "messaging",
+    "multi-agent"
+  ],
+  "author": "Relaycast",
+  "license": "Apache-2.0",
+  "homepage": "https://relaycast.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/relaycast",
+    "directory": "packages/openclaw"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "relaycast-openclaw": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@relaycast/sdk": "0.1.2",
+    "@relaycast/types": "0.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "vitest": "^3.0.0",
+    "typescript": "^5.7.0"
+  },
+  "files": [
+    "dist",
+    "skill"
+  ]
+}

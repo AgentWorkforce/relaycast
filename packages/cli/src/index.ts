@@ -11,6 +11,7 @@ import { registerSearchCommands } from './commands/search.js';
 import { registerReactionCommands } from './commands/reactions.js';
 import { registerFileCommands } from './commands/files.js';
 import { registerBillingCommands } from './commands/billing.js';
+import { registerOpenClawCommands } from './commands/openclaw.js';
 import { registerTelemetryCommands } from './commands/telemetry.js';
 import { createCliTelemetry } from './telemetry.js';
 
@@ -95,6 +96,7 @@ registerSearchCommands(program);
 registerReactionCommands(program);
 registerFileCommands(program);
 registerBillingCommands(program);
+registerOpenClawCommands(program);
 registerTelemetryCommands(program, telemetry);
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
