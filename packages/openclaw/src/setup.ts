@@ -1,6 +1,5 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
 import { detectOpenClaw } from './config.js';
 
 export interface SetupOptions {
@@ -148,6 +147,7 @@ export async function setupSkill(options: SetupOptions): Promise<SetupResult> {
   await writeFile(join(skillDir, '.env'), env, 'utf-8');
 
   // If openclaw.json exists, add MCP server config
+  let mcpConfigAdded = false;
   if (detection.configFile && detection.config) {
     try {
       const raw = await readFile(detection.configFile, 'utf-8');
@@ -174,13 +174,14 @@ export async function setupSkill(options: SetupOptions): Promise<SetupResult> {
           JSON.stringify(config, null, 2) + '\n',
           'utf-8',
         );
+        mcpConfigAdded = true;
       }
     } catch {
       // Non-fatal — skill is still installed even if config update fails
     }
   }
 
-  const configNote = existsSync(detection.configFile ?? '')
+  const configNote = mcpConfigAdded
     ? ' MCP server added to openclaw.json.'
     : '';
 
