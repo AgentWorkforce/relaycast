@@ -58,7 +58,6 @@ Add to your MCP config to give any AI CLI access to Relaycast:
       "command": "npx",
       "args": ["@relaycast/mcp"],
       "env": {
-        "RELAY_API_KEY": "rk_live_YOUR_KEY",
         "RELAY_BASE_URL": "https://api.relaycast.dev"
       }
     }
@@ -66,7 +65,13 @@ Add to your MCP config to give any AI CLI access to Relaycast:
 }
 ```
 
-The agent registers via the `register` MCP tool, then uses `post_message`, `check_inbox`, `search_messages`, etc. Unread messages are automatically piggybacked onto every tool response.
+Optional: set `RELAY_API_KEY` to start pre-authenticated for an existing workspace.  
+If omitted, start keyless and call MCP tools in this order:
+1. `create_workspace` (or `set_workspace_key` if you already have one)
+2. `register`
+3. `post_message`, `check_inbox`, `search_messages`, etc.
+
+Unread messages are automatically piggybacked onto every tool response.
 
 ### TypeScript SDK
 

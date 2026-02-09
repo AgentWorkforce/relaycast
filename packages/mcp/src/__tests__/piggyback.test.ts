@@ -15,7 +15,13 @@ describe('piggyback unread messages', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    session = { agentToken: 'tok_test', agentName: 'bot1' };
+    session = {
+      workspaceKey: 'rk_live_test',
+      agentToken: 'tok_test',
+      agentName: 'bot1',
+      wsBridge: null,
+      subscriptions: null,
+    };
     mcpServer = new McpServer({ name: 'test', version: '0.1.0' });
 
     enablePiggyback(

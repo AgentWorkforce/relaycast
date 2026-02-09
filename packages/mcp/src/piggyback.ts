@@ -3,7 +3,12 @@ import type { AgentClient } from '@relaycast/sdk';
 import type { SessionState } from './types.js';
 import type { McpTelemetry } from './telemetry.js';
 
-const SKIP_PIGGYBACK = new Set(['check_inbox', 'register']);
+const SKIP_PIGGYBACK = new Set([
+  'check_inbox',
+  'create_workspace',
+  'set_workspace_key',
+  'register',
+]);
 const MESSAGE_TOOLS = new Set([
   'post_message',
   'reply_to_thread',
