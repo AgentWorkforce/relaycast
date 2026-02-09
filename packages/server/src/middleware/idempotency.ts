@@ -153,6 +153,23 @@ export async function runIdempotent<T>(
       }
 
       lockAcquired = true;
+
+      // Re-check record after acquiring lock to handle race with completed request
+      const recheckRaw = await redis.get(redisKey);
+      if (recheckRaw) {
+        await redis.del(lockKey).catch(() => {});
+        const parsed = JSON.parse(recheckRaw) as StoredIdempotencyRecord<T>;
+        if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
+          const err = new Error('Idempotency-Key was reused with a different request payload');
+          Object.assign(err, { code: 'idempotency_key_reused', status: 409 });
+          throw err;
+        }
+        return {
+          status: parsed.status || status,
+          data: parsed.data,
+          replayed: true,
+        };
+      }
     } catch (err) {
       if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as any).code)) {
         throw err;
