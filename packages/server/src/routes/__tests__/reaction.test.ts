@@ -167,7 +167,7 @@ function mockDbForAgentAuth() {
   let callCount = 0;
   mockWhere.mockImplementation(() => {
     callCount++;
-    if (callCount === 1) return Promise.resolve([fakeAgent]);
+    if (callCount % 2 === 1) return Promise.resolve([fakeAgent]);
     return Promise.resolve([fakeWorkspace]);
   });
   mockFrom.mockReturnValue({ where: mockWhere });
