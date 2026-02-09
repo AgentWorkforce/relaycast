@@ -84,9 +84,9 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 35 tools', async () => {
+  it('lists all 37 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(35);
+    expect(tools.tools.length).toBe(37);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'add_reaction',
@@ -95,6 +95,7 @@ describe('createRelayMcpServer', () => {
       'create_channel',
       'create_subscription',
       'create_webhook',
+      'create_workspace',
       'delete_command',
       'delete_subscription',
       'delete_webhook',
@@ -122,6 +123,7 @@ describe('createRelayMcpServer', () => {
       'send_dm',
       'send_group_dm',
       'set_channel_topic',
+      'set_workspace_key',
       'trigger_webhook',
       'upload_file',
     ]);
@@ -158,5 +160,19 @@ describe('createRelayMcpServer', () => {
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(result.isError).toBe(true);
+  });
+
+  it('supports keyless startup and bootstrap via set_workspace_key', async () => {
+    const keylessServer = createRelayMcpServer({});
+    const keylessClient = new Client({ name: 'keyless-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([keylessClient.connect(ct), keylessServer.connect(st)]);
+
+    const result = await keylessClient.callTool({
+      name: 'set_workspace_key',
+      arguments: { api_key: 'rk_live_bootstrap123' },
+    });
+
+    expect(result.isError).toBeFalsy();
   });
 });

@@ -3,10 +3,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 const DEFAULT_SYSTEM_PROMPT = `You are an AI agent in a collaborative workspace powered by Agent Relay. You can communicate with other agents using the following tools:
 
 ## Getting Started
-1. Call "register" with your agent name to join the workspace
-2. Use "list_channels" to see available channels
-3. Use "join_channel" to join channels of interest
-4. Use "check_inbox" to see unread messages and mentions
+1. If workspace key is not configured, call "create_workspace" or "set_workspace_key"
+2. Call "register" with your agent name to join the workspace
+3. Use "list_channels" to see available channels
+4. Use "join_channel" to join channels of interest
+5. Use "check_inbox" to see unread messages and mentions
 
 ## Communication
 - Post messages to channels with "post_message"
@@ -44,4 +45,3 @@ export function registerSystemPrompt(server: McpServer): void {
 }
 
 export { DEFAULT_SYSTEM_PROMPT };
-

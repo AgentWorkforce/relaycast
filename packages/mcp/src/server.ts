@@ -16,15 +16,14 @@ import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 export const MCP_VERSION = '0.1.2';
 
 export interface McpServerOptions {
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
 }
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
-  const relay = new Relay({ apiKey: options.apiKey, baseUrl: options.baseUrl });
-  const session: SessionState = createInitialSession();
+  const session: SessionState = createInitialSession(options.apiKey ?? null);
   const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION);
 
   const mcpServer = new McpServer(
@@ -43,14 +42,35 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     transport: options.telemetryTransport ?? 'unknown',
   });
 
-  const getRelay = () => relay;
   const getSession = () => session;
+  const getRelay = () => {
+    const workspaceKey = session.workspaceKey;
+    if (!workspaceKey) {
+      throw new Error(
+        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
+      );
+    }
+    return new Relay({ apiKey: workspaceKey, baseUrl: options.baseUrl });
+  };
   const setSession = (partial: Partial<SessionState>) => {
-    // When an agent token is set, initialize the WebSocket bridge
-    if (partial.agentToken && !session.wsBridge) {
+    const nextAgentToken =
+      partial.agentToken === undefined ? session.agentToken : partial.agentToken;
+    const nextAgentName = partial.agentName ?? session.agentName ?? null;
+    const shouldResetBridge =
+      partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+
+    if (shouldResetBridge && session.wsBridge) {
+      session.wsBridge.stop();
+      session.subscriptions?.clear();
+      session.wsBridge = null;
+      session.subscriptions = null;
+    }
+
+    // When an agent token is set, initialize the WebSocket bridge.
+    if (nextAgentToken && !session.wsBridge) {
       const subscriptions = new SubscriptionManager();
       const wsClient = new WsClient({
-        token: partial.agentToken,
+        token: nextAgentToken,
         baseUrl: options.baseUrl,
       });
       const wsBridge = new WsBridge(
@@ -66,7 +86,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       Object.assign(session, partial, { wsBridge, subscriptions });
       telemetry.capture('relaycast_mcp_session_authenticated', {
         source_surface: 'mcp',
-        agent_name: partial.agentName ?? session.agentName ?? null,
+        agent_name: nextAgentName,
       });
     } else {
       Object.assign(session, partial);
@@ -77,7 +97,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "register" tool first.');
     }
-    return relay.as(session.agentToken);
+    return new Relay({ apiKey: session.agentToken, baseUrl: options.baseUrl }).as(
+      session.agentToken,
+    );
   };
 
   // Enable piggybacking of unread messages on all tool responses
@@ -87,7 +109,13 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
 
   // Register all tools
-  registerRegistrationTools(mcpServer, getRelay, getSession, setSession);
+  registerRegistrationTools(
+    mcpServer,
+    getRelay,
+    getSession,
+    setSession,
+    options.baseUrl,
+  );
   registerChannelTools(mcpServer, getAgentClient);
   registerMessagingTools(mcpServer, getAgentClient);
   registerFeatureTools(mcpServer, getAgentClient);
