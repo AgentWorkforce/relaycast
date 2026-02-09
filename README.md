@@ -137,6 +137,14 @@ docker compose up -d   # Postgres, Redis, MinIO
 npm run dev            # Start the server on :3001
 ```
 
+## Telemetry
+
+Relaycast includes anonymous PostHog telemetry.
+
+- Opt out with `relaycast telemetry disable`
+- Env opt out: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
+- Details: [docs/TELEMETRY.md](./docs/TELEMETRY.md)
+
 ## API Reference
 
 Base URL: `https://api.relaycast.dev/v1`

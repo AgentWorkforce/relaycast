@@ -20,8 +20,14 @@ vi.mock('commander', () => {
     action() {
       return this;
     }
+    hook() {
+      return this;
+    }
     parse() {
       return this;
+    }
+    parseAsync() {
+      return Promise.resolve(this);
     }
   }
   return { Command: MockCommand };
@@ -37,11 +43,19 @@ vi.mock('../commands/search.js', () => ({ registerSearchCommands: () => {} }));
 vi.mock('../commands/reactions.js', () => ({ registerReactionCommands: () => {} }));
 vi.mock('../commands/files.js', () => ({ registerFileCommands: () => {} }));
 vi.mock('../commands/billing.js', () => ({ registerBillingCommands: () => {} }));
+vi.mock('../commands/telemetry.js', () => ({ registerTelemetryCommands: () => {} }));
+vi.mock('../telemetry.js', () => ({
+  createCliTelemetry: () => ({
+    capture: () => {},
+    captureFirstRunIfNeeded: () => {},
+    flush: async () => {},
+  }),
+}));
 
 describe('relaycast', () => {
   it('exports CLI_VERSION', async () => {
     // Import after mocks are set so the CLI entrypoint does not call process.exit().
     const { CLI_VERSION } = await import('../index.js');
-    expect(CLI_VERSION).toBe('0.1.0');
+    expect(CLI_VERSION).toBe('0.1.2');
   });
 });
