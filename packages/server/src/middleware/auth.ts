@@ -3,6 +3,9 @@ import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { workspaces, agents } from '../db/schema.js';
+import { touchLastSeen } from '../engine/agent.js';
+
+const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
 
 export interface AuthenticatedRequest extends Request {
   workspace?: typeof workspaces.$inferSelect;
@@ -97,6 +100,12 @@ export async function requireAuth(
       return;
     }
     req.agent = agent;
+
+    // Touch lastSeen (debounced, fire-and-forget)
+    if (Date.now() - agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+      touchLastSeen(agent.id).catch(() => {});
+    }
+
     const [workspace] = await db
       .select()
       .from(workspaces)
@@ -155,6 +164,12 @@ export async function requireAgentToken(
   }
 
   req.agent = agent;
+
+  // Touch lastSeen (debounced, fire-and-forget)
+  if (Date.now() - agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+    touchLastSeen(agent.id).catch(() => {});
+  }
+
   const [workspace] = await db
     .select()
     .from(workspaces)

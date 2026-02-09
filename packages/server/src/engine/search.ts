@@ -1,6 +1,7 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { messages, agents, channels } from '../db/schema.js';
+import { buildTsquery } from './searchQuery.js';
 
 export async function searchMessages(
   workspaceId: string,
@@ -16,15 +17,9 @@ export async function searchMessages(
   const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
 
-  // Build tsquery from user input
-  const tsquery = opts.q
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.replace(/[^a-zA-Z0-9]/g, ''))
-    .filter(Boolean)
-    .join(' & ');
-
+  // Build a conservative tsquery from user input.
+  // Important: treat punctuation (e.g. "cursor-test") as a delimiter, not a joiner.
+  const tsquery = buildTsquery(opts.q);
   if (!tsquery) return [];
 
   const conditions: ReturnType<typeof eq>[] = [
