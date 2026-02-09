@@ -40,8 +40,8 @@ export function registerMcpCommands(program: Command): void {
     )
     .option(
       '-s, --scope <scope>',
-      'Config scope: "user" (default) or "project"',
-      'user',
+      'Config scope: "project" (default) or "user"',
+      'project',
     )
     .action(
       (options: {
@@ -61,7 +61,7 @@ export function registerMcpCommands(program: Command): void {
         }
 
         const scope =
-          options.scope === 'project' ? ('project' as const) : ('user' as const);
+          options.scope === 'user' ? ('user' as const) : ('project' as const);
         const results = installMcp({
           apiKey,
           baseUrl: options.baseUrl ?? cfg.endpoint,

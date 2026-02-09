@@ -11,7 +11,7 @@ export interface McpInstallOptions {
   baseUrl?: string;
   /** Install for a specific tool only. */
   tool?: string;
-  /** 'user' (default) or 'project'. */
+  /** 'project' (default) or 'user'. */
   scope?: 'user' | 'project';
 }
 
@@ -248,7 +248,7 @@ export function installForTool(
   adapter: ToolAdapter,
   options: McpInstallOptions,
 ): InstallResult {
-  const scope = options.scope ?? 'user';
+  const scope = options.scope ?? 'project';
   const configPath = adapter.configPath(scope);
   const entry = buildServerEntry(options);
 
@@ -284,7 +284,7 @@ export function installForTool(
 }
 
 export function installMcp(options: McpInstallOptions): InstallResult[] {
-  const scope = options.scope ?? 'user';
+  const scope = options.scope ?? 'project';
   const results: InstallResult[] = [];
 
   // If a specific tool is requested, use only that adapter

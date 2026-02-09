@@ -95,14 +95,15 @@ describe('mcp-install', () => {
   /* ------------------------------------------------------------------ */
 
   describe('installForTool', () => {
-    it('installs Claude Code config at user scope', async () => {
-      fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+    it('installs Claude Code config at project scope (default)', async () => {
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('claude')!;
       const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
 
       expect(result.status).toBe('installed');
       expect(result.configPath).toContain('.claude');
+      expect(result.configPath).toContain(tmpDir);
 
       const config = JSON.parse(fs.readFileSync(result.configPath, 'utf8'));
       expect(config.mcpServers.relaycast).toEqual({
@@ -112,8 +113,20 @@ describe('mcp-install', () => {
       });
     });
 
+    it('installs Claude Code config at user scope', async () => {
+      fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+      const { installForTool, getAdapterById } = await import('../mcp-install.js');
+      const adapter = getAdapterById('claude')!;
+      const result = installForTool(adapter, { apiKey: 'rk_test_abc', scope: 'user' });
+
+      expect(result.status).toBe('installed');
+      expect(result.configPath).toBe(
+        path.join(tmpDir, '.claude', 'settings.local.json'),
+      );
+    });
+
     it('installs Cursor config', async () => {
-      fs.mkdirSync(path.join(tmpDir, '.cursor'), { recursive: true });
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('cursor')!;
       const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
@@ -124,7 +137,7 @@ describe('mcp-install', () => {
     });
 
     it('installs Codex CLI config', async () => {
-      fs.mkdirSync(path.join(tmpDir, '.codex'), { recursive: true });
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('codex')!;
       const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
@@ -135,7 +148,7 @@ describe('mcp-install', () => {
     });
 
     it('installs Gemini CLI config', async () => {
-      fs.mkdirSync(path.join(tmpDir, '.gemini'), { recursive: true });
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('gemini')!;
       const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
@@ -146,7 +159,7 @@ describe('mcp-install', () => {
     });
 
     it('includes baseUrl in env when provided', async () => {
-      fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('claude')!;
       const result = installForTool(adapter, {
@@ -162,6 +175,7 @@ describe('mcp-install', () => {
     });
 
     it('preserves existing config keys when merging', async () => {
+      process.chdir(tmpDir);
       const claudeDir = path.join(tmpDir, '.claude');
       fs.mkdirSync(claudeDir, { recursive: true });
       const configPath = path.join(claudeDir, 'settings.local.json');
@@ -185,6 +199,7 @@ describe('mcp-install', () => {
     });
 
     it('returns already-configured when relaycast entry exists', async () => {
+      process.chdir(tmpDir);
       const claudeDir = path.join(tmpDir, '.claude');
       fs.mkdirSync(claudeDir, { recursive: true });
       const configPath = path.join(claudeDir, 'settings.local.json');
@@ -202,25 +217,21 @@ describe('mcp-install', () => {
       expect(result.status).toBe('already-configured');
     });
 
-    it('installs at project scope', async () => {
-      const projectDir = path.join(tmpDir, 'project');
-      fs.mkdirSync(projectDir, { recursive: true });
-      process.chdir(projectDir);
-
+    it('installs at user scope when specified', async () => {
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('claude')!;
       const result = installForTool(adapter, {
         apiKey: 'rk_test_abc',
-        scope: 'project',
+        scope: 'user',
       });
 
       expect(result.status).toBe('installed');
-      expect(result.configPath).toContain(projectDir);
+      expect(result.configPath).toContain(tmpDir);
       expect(fs.existsSync(result.configPath)).toBe(true);
     });
 
     it('creates parent directories if missing', async () => {
-      // Don't pre-create ~/.codex — installForTool should create the config dir
+      process.chdir(tmpDir);
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('codex')!;
       const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
@@ -235,8 +246,21 @@ describe('mcp-install', () => {
   /* ------------------------------------------------------------------ */
 
   describe('VS Code adapter', () => {
-    it('uses "servers" key with type: "stdio"', async () => {
-      // Create the VS Code user dir for detection
+    it('uses "servers" key with type: "stdio" at project scope', async () => {
+      process.chdir(tmpDir);
+      const { installForTool, getAdapterById } = await import('../mcp-install.js');
+      const adapter = getAdapterById('vscode')!;
+      const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
+
+      expect(result.status).toBe('installed');
+      expect(result.configPath).toBe(path.join(tmpDir, '.vscode', 'mcp.json'));
+      const config = JSON.parse(fs.readFileSync(result.configPath, 'utf8'));
+      expect(config.servers.relaycast.type).toBe('stdio');
+      expect(config.servers.relaycast.command).toBe('npx');
+      expect(config.servers.relaycast.env.RELAY_API_KEY).toBe('rk_test_abc');
+    });
+
+    it('uses VS Code user dir at user scope', async () => {
       const platform = process.platform;
       let vsDir: string;
       if (platform === 'darwin') {
@@ -248,13 +272,10 @@ describe('mcp-install', () => {
 
       const { installForTool, getAdapterById } = await import('../mcp-install.js');
       const adapter = getAdapterById('vscode')!;
-      const result = installForTool(adapter, { apiKey: 'rk_test_abc' });
+      const result = installForTool(adapter, { apiKey: 'rk_test_abc', scope: 'user' });
 
       expect(result.status).toBe('installed');
-      const config = JSON.parse(fs.readFileSync(result.configPath, 'utf8'));
-      expect(config.servers.relaycast.type).toBe('stdio');
-      expect(config.servers.relaycast.command).toBe('npx');
-      expect(config.servers.relaycast.env.RELAY_API_KEY).toBe('rk_test_abc');
+      expect(result.configPath).toBe(path.join(vsDir, 'mcp.json'));
     });
   });
 
@@ -264,6 +285,7 @@ describe('mcp-install', () => {
 
   describe('installMcp', () => {
     it('installs for all detected tools', async () => {
+      process.chdir(tmpDir);
       fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
       fs.mkdirSync(path.join(tmpDir, '.cursor'), { recursive: true });
       const { installMcp } = await import('../mcp-install.js');
@@ -282,6 +304,7 @@ describe('mcp-install', () => {
     });
 
     it('installs for a specific tool even if not detected', async () => {
+      process.chdir(tmpDir);
       const { installMcp } = await import('../mcp-install.js');
       const results = installMcp({ apiKey: 'rk_test_abc', tool: 'claude' });
       expect(results.length).toBe(1);
