@@ -103,20 +103,21 @@ describe('Redis Pub/Sub Fanout', () => {
       expect(mockOn).toHaveBeenCalledWith('message', expect.any(Function));
     });
 
-    it('routes channel events to broadcastToChannel', () => {
+    it('falls back to channel_id when channel_name is missing', () => {
       setupPubSubListener();
       const handler = mockOn.mock.calls.find((c: unknown[]) => c[0] === 'message')![1] as (channel: string, message: string) => void;
 
       const event: WsEvent = {
-        type: 'message.created',
+        type: 'reaction.added',
         workspace_id: 'ws_123',
         channel_id: 'ch_456',
-        data: { text: 'hello' },
+        data: { message_id: 'msg_1', emoji: '👍' },
         timestamp: new Date().toISOString(),
       };
 
       handler('ws:ws_123', JSON.stringify(event));
 
+      // Falls back to channel_id when no channel_name in data
       expect(mockBroadcastToChannel).toHaveBeenCalledWith('ws_123', 'ch_456', event);
       expect(mockBroadcastToWorkspace).not.toHaveBeenCalled();
     });

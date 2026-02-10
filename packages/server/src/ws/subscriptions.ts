@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import type { WsClient } from './server.js';
 import { getClients, getChannelIndex, getWorkspaceIndex, indexSubscribe, indexUnsubscribe } from './server.js';
+import type { WsEvent } from './pubsub.js';
+import { transformForClient } from './transform.js';
 
 export interface SubscribeMessage {
   type: 'subscribe';
@@ -56,12 +58,13 @@ export function handleClientMessage(client: WsClient, raw: string): void {
   }
 }
 
-export function broadcastToChannel(workspaceId: string, channel: string, event: object): void {
+export function broadcastToChannel(workspaceId: string, channel: string, event: WsEvent | object): void {
   const key = `${workspaceId}:${channel}`;
   const subscriberIds = getChannelIndex().get(key);
   if (!subscriberIds || subscriberIds.size === 0) return;
 
-  const payload = JSON.stringify(event);
+  const clientEvent = 'data' in event && 'workspace_id' in event ? transformForClient(event as WsEvent) : event;
+  const payload = JSON.stringify(clientEvent);
   const clients = getClients();
   for (const id of subscriberIds) {
     const client = clients.get(id);
@@ -71,11 +74,12 @@ export function broadcastToChannel(workspaceId: string, channel: string, event: 
   }
 }
 
-export function broadcastToWorkspace(workspaceId: string, event: object): void {
+export function broadcastToWorkspace(workspaceId: string, event: WsEvent | object): void {
   const clientIds = getWorkspaceIndex().get(workspaceId);
   if (!clientIds || clientIds.size === 0) return;
 
-  const payload = JSON.stringify(event);
+  const clientEvent = 'data' in event && 'workspace_id' in event ? transformForClient(event as WsEvent) : event;
+  const payload = JSON.stringify(clientEvent);
   const clients = getClients();
   for (const id of clientIds) {
     const client = clients.get(id);

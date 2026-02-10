@@ -180,13 +180,6 @@ export function startWsServer(httpServer: HttpServer): WebSocketServer {
           ws.terminate();
         });
 
-        ws.on('message', (raw) => {
-          handleClientMessage(client, raw.toString());
-        });
-
-        // Subscribe to Redis pubsub for this workspace so events get forwarded
-        subscribeToWorkspace(auth.workspaceId).catch(() => {});
-
         ws.send(JSON.stringify({ type: 'connected', client_id: client.id }));
       });
     } catch {

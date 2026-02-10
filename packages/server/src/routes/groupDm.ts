@@ -93,7 +93,7 @@ groupDmRouter.post(
 
       // Fire-and-forget event publishing only for fresh writes.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data };
+        const eventData = { ...idempotent.data, from_name: req.agent!.name };
         publishEvent({ type: 'group_dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
         deliverEvent(req.workspace!.id, 'group_dm.received', eventData).catch(() => {});
       }

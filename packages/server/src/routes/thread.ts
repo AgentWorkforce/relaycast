@@ -70,7 +70,7 @@ threadRouter.post(
 
       // Fire-and-forget event publishing only for fresh writes.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data } as Record<string, unknown>;
+        const eventData = { ...idempotent.data, from_name: req.agent?.name } as Record<string, unknown>;
         const channelId = typeof eventData.channel_id === 'string' ? eventData.channel_id : undefined;
         publishEvent({ type: 'thread.reply', workspace_id: req.workspace!.id, channel_id: channelId, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
         deliverEvent(req.workspace!.id, 'thread.reply', eventData).catch(() => {});

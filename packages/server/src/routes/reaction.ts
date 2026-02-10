@@ -85,7 +85,7 @@ reactionRouter.delete(
       res.status(204).send();
 
       // Fire-and-forget event publishing
-      const eventData = { message_id: req.params.id, agent_id: req.agent!.id, emoji: req.params.emoji };
+      const eventData = { message_id: req.params.id, agent_id: req.agent!.id, agent_name: req.agent!.name, emoji: req.params.emoji };
       publishEvent({ type: 'reaction.removed', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'reaction.removed', eventData).catch(() => {});
     } catch (err: unknown) {
