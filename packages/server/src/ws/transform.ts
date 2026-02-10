@@ -164,8 +164,10 @@ export function transformForClient(event: WsEvent): object {
         args: (d.args as string | null) ?? null,
       };
 
-    default:
-      // Fallback: pass through the raw event for unknown types
-      return event;
+    default: {
+      // Strip internal fields for unknown event types to avoid leaking workspace_id etc.
+      const { workspace_id, channel_id, timestamp, data, ...rest } = event as WsEvent & Record<string, unknown>;
+      return { ...rest, ...data };
+    }
   }
 }

@@ -144,10 +144,12 @@ describe('Broker Compatibility', () => {
     const eventPromise = nextMessage(ws);
 
     // Simulate a WsEvent as the server would publish it via Redis
+    // Note: channel_id is a DB snowflake ID, NOT the channel name.
+    // Clients subscribe by name, so broadcastToChannel must route by name.
     const wsEvent: WsEvent = {
       type: 'message.created',
       workspace_id: 'ws_broker',
-      channel_id: 'general',
+      channel_id: '144115188075855872',
       data: {
         id: 'msg_123',
         channel_name: 'general',
@@ -157,6 +159,7 @@ describe('Broker Compatibility', () => {
       },
       timestamp: new Date().toISOString(),
     };
+    // Route by channel name (from event.data.channel_name), not channel_id
     broadcastToChannel('ws_broker', 'general', wsEvent);
 
     const received = await eventPromise;

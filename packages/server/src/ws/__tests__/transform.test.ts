@@ -338,4 +338,27 @@ describe('transformForClient', () => {
     expect(result).not.toHaveProperty('timestamp');
     expect(result).not.toHaveProperty('data');
   });
+
+  it('strips internal fields for unknown event types (default case)', () => {
+    const event: WsEvent = {
+      type: 'some.future.event' as WsEvent['type'],
+      workspace_id: 'ws_secret',
+      channel_id: 'ch_internal',
+      data: { foo: 'bar', baz: 42 },
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    const result = transformForClient(event) as Record<string, unknown>;
+
+    // Internal fields must be stripped
+    expect(result).not.toHaveProperty('workspace_id');
+    expect(result).not.toHaveProperty('channel_id');
+    expect(result).not.toHaveProperty('timestamp');
+    expect(result).not.toHaveProperty('data');
+
+    // Data fields should be spread into the result
+    expect(result.type).toBe('some.future.event');
+    expect(result.foo).toBe('bar');
+    expect(result.baz).toBe(42);
+  });
 });
