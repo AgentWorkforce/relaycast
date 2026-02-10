@@ -17,9 +17,18 @@
       "WebFetch(domain:microsoft.github.io)",
       "WebFetch(domain:developers.cloudflare.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(npx turbo build:*)",
-      "Bash(npx turbo test:*)",
-      "Bash(gh api:*)"
+      "WebFetch(domain:clawhub.ai)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:missioncontrolhq.ai)",
+      "WebFetch(domain:usemissioncontrol.com)",
+      "WebFetch(domain:www.dan-malone.com)",
+      "WebFetch(domain:aiagentslist.com)",
+      "WebFetch(domain:docs.missionsquad.ai)",
+      "WebFetch(domain:missionsquad.ai)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "relaycast"
+  ]
 }
