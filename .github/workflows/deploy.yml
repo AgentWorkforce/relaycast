@@ -34,6 +34,8 @@ jobs:
 
       - name: Test
         run: npx turbo test
+        env:
+          DO_NOT_TRACK: '1'
 
   deploy:
     name: Deploy to Fly.io

@@ -3,6 +3,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const mockHomedir = vi.hoisted(() => '/mock/home');
+const posthogRequestMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      _options: unknown,
+      callback?: (res: { resume: () => void; on: (event: string, listener: () => void) => void }) => void,
+    ) => {
+      const endListeners: Array<() => void> = [];
+      callback?.({
+        resume: () => undefined,
+        on: (event: string, listener: () => void) => {
+          if (event === 'end') {
+            endListeners.push(listener);
+          }
+        },
+      });
+
+      return {
+        on: vi.fn(),
+        setTimeout: vi.fn(),
+        destroy: vi.fn(),
+        write: vi.fn(),
+        end: vi.fn(() => {
+          for (const listener of endListeners) {
+            listener();
+          }
+        }),
+      };
+    },
+  ),
+);
 
 vi.mock('node:os', () => ({
   default: {
@@ -11,6 +41,16 @@ vi.mock('node:os', () => ({
 }));
 
 vi.mock('node:fs');
+vi.mock('node:http', () => ({
+  default: {
+    request: posthogRequestMock,
+  },
+}));
+vi.mock('node:https', () => ({
+  default: {
+    request: posthogRequestMock,
+  },
+}));
 
 import { createMcpTelemetry } from '../telemetry.js';
 
