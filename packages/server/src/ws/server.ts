@@ -5,6 +5,8 @@ import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { workspaces, agents } from '../db/schema.js';
+import { handleClientMessage } from './subscriptions.js';
+import { subscribeToWorkspace } from './pubsub.js';
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -149,6 +151,11 @@ export function startWsServer(httpServer: HttpServer): WebSocketServer {
 
         clients.set(client.id, client);
         indexAddClient(client);
+        subscribeToWorkspace(auth.workspaceId).catch(() => {});
+
+        ws.on('message', (raw) => {
+          handleClientMessage(client, raw.toString());
+        });
 
         ws.on('pong', () => {
           client.alive = true;

@@ -121,6 +121,23 @@ describe('Redis Pub/Sub Fanout', () => {
       expect(mockBroadcastToWorkspace).not.toHaveBeenCalled();
     });
 
+    it('prefers channel_name from data over channel_id', () => {
+      setupPubSubListener();
+      const handler = mockOn.mock.calls.find((c: unknown[]) => c[0] === 'message')![1] as (channel: string, message: string) => void;
+
+      const event: WsEvent = {
+        type: 'message.created',
+        workspace_id: 'ws_123',
+        channel_id: 'ch_456',
+        data: { text: 'hello', channel_name: 'general' },
+        timestamp: new Date().toISOString(),
+      };
+
+      handler('ws:ws_123', JSON.stringify(event));
+
+      expect(mockBroadcastToChannel).toHaveBeenCalledWith('ws_123', 'general', event);
+    });
+
     it('routes workspace events to broadcastToWorkspace', () => {
       setupPubSubListener();
       const handler = mockOn.mock.calls.find((c: unknown[]) => c[0] === 'message')![1] as (channel: string, message: string) => void;
