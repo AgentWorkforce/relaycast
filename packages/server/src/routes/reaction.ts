@@ -41,13 +41,14 @@ reactionRouter.post(
         return;
       }
 
-      // Strip internal channel_id before sending to client
-      const { channel_id, ...reactionData } = result;
+      // Strip internal channel_id/channel_name before sending to client
+      const { channel_id, channel_name, ...reactionData } = result;
       res.status(201).json({ ok: true, data: reactionData });
 
       // Fire-and-forget event publishing — scope to the message's channel
-      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: reactionData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'reaction.added', reactionData).catch(() => {});
+      const eventData = { ...reactionData, channel_name };
+      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'reaction.added', eventData).catch(() => {});
     } catch (err: unknown) {
       if (!res.headersSent) {
         const error = err as Error & { code?: string; status?: number };

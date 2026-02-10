@@ -1,6 +1,6 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
-import { reactions, messages, agents } from '../db/schema.js';
+import { reactions, messages, agents, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 export async function addReaction(
@@ -18,8 +18,9 @@ export async function addReaction(
     .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
   if (!msg) return null;
 
-  // Look up agent name
+  // Look up agent name and channel name
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+  const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, msg.channelId));
 
   try {
     const id = generateId();
@@ -32,6 +33,7 @@ export async function addReaction(
       id: reaction.id,
       message_id: reaction.messageId,
       channel_id: msg.channelId,
+      channel_name: ch?.name,
       agent_name: agent?.name ?? 'unknown',
       emoji: reaction.emoji,
       created_at: reaction.createdAt.toISOString(),
@@ -54,6 +56,7 @@ export async function addReaction(
         id: existing.id,
         message_id: existing.messageId,
         channel_id: msg.channelId,
+        channel_name: ch?.name,
         agent_name: agent?.name ?? 'unknown',
         emoji: existing.emoji,
         created_at: existing.createdAt.toISOString(),

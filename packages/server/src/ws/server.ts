@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { workspaces, agents } from '../db/schema.js';
 import { handleClientMessage } from './subscriptions.js';
-import { subscribeToWorkspace } from './pubsub.js';
+import { subscribeToWorkspace, unsubscribeFromWorkspace } from './pubsub.js';
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -151,19 +151,32 @@ export function startWsServer(httpServer: HttpServer): WebSocketServer {
 
         clients.set(client.id, client);
         indexAddClient(client);
+        subscribeToWorkspace(auth.workspaceId).catch((err) => {
+          console.error(`Failed to subscribe to workspace ${auth.workspaceId} Redis channel:`, err);
+        });
+
+        ws.on('message', (raw) => {
+          handleClientMessage(client, raw.toString());
+        });
 
         ws.on('pong', () => {
           client.alive = true;
         });
 
-        ws.on('close', () => {
+        const removeClient = () => {
+          const wid = client.workspaceId;
           indexRemoveClient(client);
           clients.delete(client.id);
-        });
+          // Unsubscribe from Redis when no more clients in this workspace
+          if (!workspaceIndex.has(wid)) {
+            unsubscribeFromWorkspace(wid).catch(() => {});
+          }
+        };
+
+        ws.on('close', removeClient);
 
         ws.on('error', () => {
-          indexRemoveClient(client);
-          clients.delete(client.id);
+          removeClient();
           ws.terminate();
         });
 

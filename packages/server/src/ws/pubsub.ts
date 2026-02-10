@@ -71,8 +71,14 @@ export function setupPubSubListener(): void {
       return;
     }
 
-    if (event.channel_id) {
-      broadcastToChannel(event.workspace_id, event.channel_id, event);
+    // Clients subscribe by channel name, so broadcast using channel_name
+    // (included in event data) rather than the snowflake channel_id.
+    const rawName = typeof event.data?.channel_name === 'string'
+      ? (event.data.channel_name as string).trim()
+      : undefined;
+    const channelName = rawName || event.channel_id;
+    if (channelName) {
+      broadcastToChannel(event.workspace_id, channelName, event);
     } else {
       broadcastToWorkspace(event.workspace_id, event);
     }

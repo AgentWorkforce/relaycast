@@ -130,7 +130,7 @@ inboundWebhookRouter.post(
       res.status(201).json({ ok: true, data: responseData });
 
       // Fire-and-forget event publishing
-      const eventData = { webhook_id: result.webhook_id, channel: result.channel, message_id: result.message_id, text: result.text, source: result.source };
+      const eventData = { webhook_id: result.webhook_id, channel: result.channel, channel_name: result.channel, message_id: result.message_id, text: result.text, source: result.source };
       publishEvent({ type: 'webhook.received', workspace_id, channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(workspace_id, 'webhook.received', eventData).catch(() => {});
     } catch (err: unknown) {
