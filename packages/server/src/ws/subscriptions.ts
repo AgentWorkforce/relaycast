@@ -14,7 +14,11 @@ export interface UnsubscribeMessage {
   channels: string[];
 }
 
-export type ClientMessage = SubscribeMessage | UnsubscribeMessage;
+export interface PingMessage {
+  type: 'ping';
+}
+
+export type ClientMessage = SubscribeMessage | UnsubscribeMessage | PingMessage;
 
 export function handleClientMessage(client: WsClient, raw: string): void {
   let msg: ClientMessage;
@@ -22,6 +26,11 @@ export function handleClientMessage(client: WsClient, raw: string): void {
     msg = JSON.parse(raw);
   } catch {
     client.ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+    return;
+  }
+
+  if (msg.type === 'ping') {
+    client.ws.send(JSON.stringify({ type: 'pong' }));
     return;
   }
 

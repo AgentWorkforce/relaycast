@@ -87,6 +87,15 @@ describe('Subscription Management', () => {
       );
     });
 
+    it('responds to ping with pong', () => {
+      const client = createMockClient();
+      handleClientMessage(client, JSON.stringify({ type: 'ping' }));
+
+      expect(client.ws.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: 'pong' }),
+      );
+    });
+
     it('handles unknown message type', () => {
       const client = createMockClient();
       handleClientMessage(client, JSON.stringify({ type: 'unknown' }));
