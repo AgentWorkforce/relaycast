@@ -1,6 +1,6 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
-import { messages } from '../db/schema.js';
+import { messages, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 export async function postReply(
@@ -26,6 +26,8 @@ export async function postReply(
   // If parent itself has a thread_id, resolve to root (reply-to-reply goes to original parent)
   const threadId = parent.threadId || parent.id;
 
+  const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
+
   const replyId = generateId();
   const [reply] = await db
     .insert(messages)
@@ -43,6 +45,7 @@ export async function postReply(
   return {
     id: reply.id,
     channel_id: reply.channelId,
+    channel_name: ch?.name,
     agent_id: reply.agentId,
     thread_id: reply.threadId,
     text: reply.body,

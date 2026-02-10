@@ -17,11 +17,9 @@
       "WebFetch(domain:microsoft.github.io)",
       "WebFetch(domain:developers.cloudflare.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(chmod:*)",
-      "Bash(npx wscat --version)",
-      "Bash(node test-prod-ws.mjs:*)",
       "Bash(npx turbo build:*)",
-      "Bash(npx turbo test:*)"
+      "Bash(npx turbo test:*)",
+      "Bash(gh api:*)"
     ]
   }
 }
