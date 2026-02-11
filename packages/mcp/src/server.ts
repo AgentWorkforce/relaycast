@@ -5,6 +5,7 @@ import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';
 import { registerFeatureTools } from './tools/features.js';
 import { registerProgrammabilityTools } from './tools/programmability.js';
+import { registerIntegrationTools } from './tools/integrations.js';
 import { registerSystemPrompt } from './prompts.js';
 import { createInitialSession, type SessionState } from './types.js';
 import { enablePiggyback } from './piggyback.js';
@@ -120,6 +121,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   registerMessagingTools(mcpServer, getAgentClient);
   registerFeatureTools(mcpServer, getAgentClient);
   registerProgrammabilityTools(mcpServer, getRelay, getAgentClient);
+  registerIntegrationTools(mcpServer, getRelay, getAgentClient);
 
   // Register system prompt
   registerSystemPrompt(mcpServer);
