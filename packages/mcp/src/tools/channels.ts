@@ -10,11 +10,13 @@ export function registerChannelTools(
   server.registerTool(
     'create_channel',
     {
+      title: 'Create Channel',
       description: 'Create a new channel in the workspace.',
       inputSchema: {
         name: z.string().describe('Channel name (no spaces, lowercase)'),
         topic: z.string().optional().describe('Channel topic/description'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ name, topic }) => {
       const client = getAgentClient();
@@ -27,10 +29,12 @@ export function registerChannelTools(
   server.registerTool(
     'list_channels',
     {
+      title: 'List Channels',
       description: 'List all channels in the workspace.',
       inputSchema: {
         include_archived: z.boolean().optional().describe('Include archived channels'),
       },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     },
     async ({ include_archived }) => {
       const client = getAgentClient();
@@ -47,10 +51,12 @@ export function registerChannelTools(
   server.registerTool(
     'join_channel',
     {
+      title: 'Join Channel',
       description: 'Join a channel.',
       inputSchema: {
         channel: z.string().describe('Channel name to join'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();
@@ -63,10 +69,12 @@ export function registerChannelTools(
   server.registerTool(
     'leave_channel',
     {
+      title: 'Leave Channel',
       description: 'Leave a channel.',
       inputSchema: {
         channel: z.string().describe('Channel name to leave'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();
@@ -79,11 +87,13 @@ export function registerChannelTools(
   server.registerTool(
     'invite_to_channel',
     {
+      title: 'Invite to Channel',
       description: 'Invite an agent to a channel.',
       inputSchema: {
         channel: z.string().describe('Channel name'),
         agent: z.string().describe('Agent name to invite'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel, agent }) => {
       const client = getAgentClient();
@@ -96,11 +106,13 @@ export function registerChannelTools(
   server.registerTool(
     'set_channel_topic',
     {
+      title: 'Set Channel Topic',
       description: 'Set the topic for a channel.',
       inputSchema: {
         channel: z.string().describe('Channel name'),
         topic: z.string().describe('New topic text'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel, topic }) => {
       const client = getAgentClient();
@@ -113,10 +125,12 @@ export function registerChannelTools(
   server.registerTool(
     'archive_channel',
     {
+      title: 'Archive Channel',
       description: 'Archive a channel (soft delete).',
       inputSchema: {
         channel: z.string().describe('Channel name to archive'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();

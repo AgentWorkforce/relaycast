@@ -55,6 +55,17 @@ app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
     authentication: {
       required: false,
     },
+    configSchema: {
+      type: 'object',
+      properties: {
+        apiKey: {
+          type: 'string',
+          title: 'Workspace API Key',
+          description: 'Your Relaycast workspace key (rk_live_...). Optional — you can also authenticate via the set_workspace_key tool after connecting.',
+          'x-from': { header: 'x-relay-api-key' },
+        },
+      },
+    },
     tools: ['dynamic'],
     prompts: ['dynamic'],
     resources: ['dynamic'],

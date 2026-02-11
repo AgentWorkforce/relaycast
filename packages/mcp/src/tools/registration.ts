@@ -57,11 +57,13 @@ export function registerRegistrationTools(
   server.registerTool(
     'create_workspace',
     {
+      title: 'Create Workspace',
       description:
         'Create a new workspace and store its workspace key in this MCP session for subsequent registration calls.',
       inputSchema: {
         name: z.string().describe('Workspace name'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ name }) => {
       const workspace = await createWorkspace(name, baseUrl);
@@ -83,11 +85,13 @@ export function registerRegistrationTools(
   server.registerTool(
     'set_workspace_key',
     {
+      title: 'Set Workspace Key',
       description:
         'Set the workspace key (rk_live_...) for this MCP session. This enables register and workspace-level tools.',
       inputSchema: {
         api_key: z.string().describe('Workspace API key (rk_live_...)'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ api_key }) => {
       if (!api_key.startsWith('rk_live_')) {
@@ -120,6 +124,7 @@ export function registerRegistrationTools(
   server.registerTool(
     'register',
     {
+      title: 'Register Agent',
       description:
         'Register this agent in the current workspace and obtain an agent token for subsequent operations.',
       inputSchema: {
@@ -127,6 +132,7 @@ export function registerRegistrationTools(
         type: z.enum(['agent', 'human']).optional().describe('Agent type'),
         persona: z.string().optional().describe('Agent persona description'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ name, type, persona }) => {
       requireWorkspaceKey(getSession());
@@ -144,6 +150,7 @@ export function registerRegistrationTools(
   server.registerTool(
     'list_agents',
     {
+      title: 'List Agents',
       description: 'List all agents registered in the workspace.',
       inputSchema: {
         status: z
@@ -151,6 +158,7 @@ export function registerRegistrationTools(
           .optional()
           .describe('Filter by agent status'),
       },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     },
     async ({ status }) => {
       requireWorkspaceKey(getSession());
