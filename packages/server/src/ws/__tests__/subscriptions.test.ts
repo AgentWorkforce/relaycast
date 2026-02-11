@@ -152,6 +152,51 @@ describe('Subscription Management', () => {
       expect(clientC.ws.send).toHaveBeenCalledWith(JSON.stringify(event));
     });
 
+    it('skips sending to the originating agent (channel message)', () => {
+      const sender = createMockClient({ id: 'a', workspaceId: 'ws_1', agentId: 'agent_sender' });
+      const receiver = createMockClient({ id: 'b', workspaceId: 'ws_1', agentId: 'agent_other' });
+
+      const mockClients = new Map<string, WsClient>([['a', sender], ['b', receiver]]);
+      (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+      mockChannelIndex.set('ws_1:ch-1', new Set(['a', 'b']));
+
+      const event = { type: 'message.created', data: { text: 'hello', agent_id: 'agent_sender', channel_name: 'ch-1' } };
+      broadcastToChannel('ws_1', 'ch-1', event);
+
+      expect(sender.ws.send).not.toHaveBeenCalled();
+      expect(receiver.ws.send).toHaveBeenCalled();
+    });
+
+    it('skips sending to the originating agent (DM)', () => {
+      const sender = createMockClient({ id: 'a', workspaceId: 'ws_1', agentId: 'agent_sender' });
+      const receiver = createMockClient({ id: 'b', workspaceId: 'ws_1', agentId: 'agent_other' });
+
+      const mockClients = new Map<string, WsClient>([['a', sender], ['b', receiver]]);
+      (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+      mockChannelIndex.set('ws_1:ch-1', new Set(['a', 'b']));
+
+      const event = { type: 'dm.received', data: { text: 'hi', from_agent_id: 'agent_sender' } };
+      broadcastToChannel('ws_1', 'ch-1', event);
+
+      expect(sender.ws.send).not.toHaveBeenCalled();
+      expect(receiver.ws.send).toHaveBeenCalled();
+    });
+
+    it('sends to all when event has no sender agent ID', () => {
+      const clientA = createMockClient({ id: 'a', workspaceId: 'ws_1', agentId: 'agent_a' });
+      const clientB = createMockClient({ id: 'b', workspaceId: 'ws_1', agentId: 'agent_b' });
+
+      const mockClients = new Map<string, WsClient>([['a', clientA], ['b', clientB]]);
+      (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+      mockChannelIndex.set('ws_1:ch-1', new Set(['a', 'b']));
+
+      const event = { type: 'channel.created', data: { channel_name: 'ch-1' } };
+      broadcastToChannel('ws_1', 'ch-1', event);
+
+      expect(clientA.ws.send).toHaveBeenCalled();
+      expect(clientB.ws.send).toHaveBeenCalled();
+    });
+
     it('does not send to other workspaces', () => {
       const clientA = createMockClient({ id: 'a', workspaceId: 'ws_1' });
       clientA.subscriptions.add('ch-1');
@@ -199,12 +244,27 @@ describe('Subscription Management', () => {
       mockWorkspaceIndex.set('ws_1', new Set(['a', 'b']));
       mockWorkspaceIndex.set('ws_2', new Set(['c']));
 
-      const event = { type: 'agent.online', data: { agent_id: 'x' } };
+      const event = { type: 'agent.online', data: { agent_name: 'x' } };
       broadcastToWorkspace('ws_1', event);
 
       expect(clientA.ws.send).toHaveBeenCalledWith(JSON.stringify(event));
       expect(clientB.ws.send).toHaveBeenCalledWith(JSON.stringify(event));
       expect(clientC.ws.send).not.toHaveBeenCalled();
+    });
+
+    it('skips sending DM back to the sender', () => {
+      const sender = createMockClient({ id: 'a', workspaceId: 'ws_1', agentId: 'agent_sender' });
+      const receiver = createMockClient({ id: 'b', workspaceId: 'ws_1', agentId: 'agent_receiver' });
+
+      const mockClients = new Map<string, WsClient>([['a', sender], ['b', receiver]]);
+      (getClients as ReturnType<typeof vi.fn>).mockReturnValue(mockClients);
+      mockWorkspaceIndex.set('ws_1', new Set(['a', 'b']));
+
+      const event = { type: 'dm.received', data: { text: 'hi', from_agent_id: 'agent_sender' } };
+      broadcastToWorkspace('ws_1', event);
+
+      expect(sender.ws.send).not.toHaveBeenCalled();
+      expect(receiver.ws.send).toHaveBeenCalled();
     });
   });
 });
