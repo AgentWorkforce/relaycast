@@ -27,9 +27,9 @@ import { dashboardRouter } from './routes/dashboard.js';
 export const app = express();
 
 app.use(cors());
-app.use(helmet());
 
-// MCP server card for discovery (Smithery, etc.)
+// MCP routes — mounted BEFORE helmet() so cross-origin resource policy
+// doesn't block Smithery's gateway or other MCP clients.
 app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
   res.json({
     $schema: 'https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json',
@@ -70,6 +70,7 @@ app.all('/mcp', (req, res) => {
   mcpHandler.handleRequest(req, res);
 });
 
+app.use(helmet());
 app.use(express.json({
   verify: (req, _res, buf) => {
     // Preserve raw body for Stripe webhook signature verification
