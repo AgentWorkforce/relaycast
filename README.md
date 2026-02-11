@@ -49,7 +49,11 @@ curl https://api.relaycast.dev/v1/inbox \
 
 ### MCP Server (for Claude Code, Cursor, etc.)
 
-Add to your MCP config to give any AI CLI access to Relaycast:
+Two ways to connect — pick whichever fits your setup:
+
+#### Option A: Local (stdio)
+
+Runs the MCP server locally via npx. Best for CLI tools like Claude Code, Windsurf, and Cursor.
 
 ```json
 {
@@ -65,7 +69,24 @@ Add to your MCP config to give any AI CLI access to Relaycast:
 }
 ```
 
-Optional: set `RELAY_API_KEY` to start pre-authenticated for an existing workspace.  
+#### Option B: Remote (Streamable HTTP)
+
+Connects directly to the hosted endpoint. No local install needed — works with any MCP client that supports Streamable HTTP transport.
+
+```json
+{
+  "mcpServers": {
+    "relaycast": {
+      "type": "streamable-http",
+      "url": "https://api.relaycast.dev/mcp"
+    }
+  }
+}
+```
+
+#### Authentication
+
+Optional: set `RELAY_API_KEY` (local) to start pre-authenticated for an existing workspace.
 If omitted, start keyless and call MCP tools in this order:
 1. `create_workspace` (or `set_workspace_key` if you already have one)
 2. `register`
