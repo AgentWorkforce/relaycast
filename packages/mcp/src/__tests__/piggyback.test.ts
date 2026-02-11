@@ -171,6 +171,92 @@ describe('piggyback unread messages', () => {
     expect(mockInbox).not.toHaveBeenCalled();
   });
 
+  it('filters out self-sent DMs from piggyback', async () => {
+    mockInbox.mockResolvedValue({
+      unread_channels: [],
+      mentions: [],
+      unread_dms: [
+        { from: 'bot1', unread_count: 1 },
+        { from: 'alice', unread_count: 2 },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(2);
+    const piggyback = (result.content as any[])[1];
+    expect(piggyback.text).toContain('From alice: 2 unread');
+    expect(piggyback.text).not.toContain('From bot1');
+  });
+
+  it('filters out self-mentions from piggyback', async () => {
+    mockInbox.mockResolvedValue({
+      unread_channels: [],
+      mentions: [
+        { agent_name: 'bot1', channel_name: 'general', text: 'my own msg' },
+        { agent_name: 'alice', channel_name: 'dev', text: 'hey there' },
+      ],
+      unread_dms: [],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(2);
+    const piggyback = (result.content as any[])[1];
+    expect(piggyback.text).toContain('@alice in #dev');
+    expect(piggyback.text).not.toContain('@bot1');
+  });
+
+  it('filters self-sent DMs with case and @ prefix differences', async () => {
+    mockInbox.mockResolvedValue({
+      unread_channels: [],
+      mentions: [
+        { agent_name: '@Bot1', channel_name: 'general', text: 'echo' },
+        { agent_name: 'alice', channel_name: 'dev', text: 'real mention' },
+      ],
+      unread_dms: [
+        { from: 'BOT1', unread_count: 1 },
+        { from: ' @bot1 ', unread_count: 1 },
+        { from: 'carol', unread_count: 3 },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(2);
+    const piggyback = (result.content as any[])[1];
+    expect(piggyback.text).toContain('From carol: 3 unread');
+    expect(piggyback.text).not.toContain('BOT1');
+    expect(piggyback.text).not.toContain('@bot1');
+    expect(piggyback.text).toContain('@alice in #dev');
+    expect(piggyback.text).not.toContain('@Bot1');
+  });
+
+  it('suppresses piggyback entirely when all messages are self-sent', async () => {
+    mockInbox.mockResolvedValue({
+      unread_channels: [],
+      mentions: [],
+      unread_dms: [{ from: 'bot1', unread_count: 3 }],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect((result.content as any[])[0].text).toBe('original result');
+  });
+
   it('handles inbox error gracefully', async () => {
     mockInbox.mockRejectedValue(new Error('Network error'));
 

@@ -93,10 +93,14 @@ export function enablePiggyback(
           (inbox.unread_dms?.length ?? 0) > 0;
 
         if (hasUnread && Array.isArray(result?.content)) {
-          result.content.push({
-            type: 'text' as const,
-            text: formatInbox(inbox),
-          });
+          const selfName = getSession().agentName;
+          const inboxText = formatInbox(inbox, selfName);
+          if (inboxText) {
+            result.content.push({
+              type: 'text' as const,
+              text: inboxText,
+            });
+          }
         }
       } catch {
         // Silently ignore — never break the original tool response
@@ -113,7 +117,11 @@ function formatInbox(inbox: {
   unread_channels?: Array<{ channel_name: string; unread_count: number }>;
   mentions?: Array<{ agent_name: string; channel_name: string; text: string }>;
   unread_dms?: Array<{ from: string; unread_count: number }>;
-}): string {
+}, selfName?: string | null): string {
+  const norm = (s: string) => s.trim().replace(/^@/, '').toLowerCase();
+  const selfNorm = selfName ? norm(selfName) : null;
+  const isSelf = (name: string) => selfNorm != null && norm(name) === selfNorm;
+
   const lines: string[] = ['--- Pending Messages ---'];
 
   if (inbox.unread_channels?.length) {
@@ -123,19 +131,27 @@ function formatInbox(inbox: {
     }
   }
 
-  if (inbox.mentions?.length) {
+  const mentions = selfNorm
+    ? inbox.mentions?.filter((m) => !isSelf(m.agent_name))
+    : inbox.mentions;
+  if (mentions?.length) {
     lines.push('Mentions:');
-    for (const m of inbox.mentions) {
+    for (const m of mentions) {
       lines.push(`  @${m.agent_name} in #${m.channel_name}: "${m.text}"`);
     }
   }
 
-  if (inbox.unread_dms?.length) {
+  const dms = selfNorm
+    ? inbox.unread_dms?.filter((dm) => !isSelf(dm.from))
+    : inbox.unread_dms;
+  if (dms?.length) {
     lines.push('Unread DMs:');
-    for (const dm of inbox.unread_dms) {
+    for (const dm of dms) {
       lines.push(`  From ${dm.from}: ${dm.unread_count} unread`);
     }
   }
+
+  if (lines.length === 1) return '';
 
   return lines.join('\n');
 }
