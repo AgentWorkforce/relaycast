@@ -327,6 +327,27 @@ describe('transformForClient', () => {
       channel: 'ops',
       invoked_by: 'agent_1',
       args: '--env production',
+      parameters: null,
+    });
+  });
+
+  it('transforms command.invoked with parameters', () => {
+    const event = makeEvent('command.invoked', {
+      command: 'spawn',
+      channel: 'general',
+      invoked_by: 'agent_1',
+      args: null,
+      parameters: { name: 'Worker1', cli: 'codex', args: ['--full-auto'] },
+    });
+
+    const result = transformForClient(event) as Record<string, unknown>;
+    expect(result).toEqual({
+      type: 'command.invoked',
+      command: 'spawn',
+      channel: 'general',
+      invoked_by: 'agent_1',
+      args: null,
+      parameters: { name: 'Worker1', cli: 'codex', args: ['--full-auto'] },
     });
   });
 
