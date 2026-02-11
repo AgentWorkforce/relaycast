@@ -16,6 +16,7 @@ describe('transformForClient', () => {
   it('transforms message.created to ServerEvent shape', () => {
     const event = makeEvent('message.created', {
       id: 'msg_1',
+      agent_id: 'agent_alice',
       channel_name: 'general',
       from_name: 'alice',
       text: 'hello world',
@@ -28,6 +29,7 @@ describe('transformForClient', () => {
       channel: 'general',
       message: {
         id: 'msg_1',
+        agent_id: 'agent_alice',
         agent_name: 'alice',
         text: 'hello world',
         attachments: [{ file_id: 'f1', filename: 'test.txt', url: '/files/f1', size: 100 }],
@@ -38,6 +40,7 @@ describe('transformForClient', () => {
   it('transforms message.created with no attachments', () => {
     const event = makeEvent('message.created', {
       id: 'msg_2',
+      agent_id: 'agent_bob',
       channel_name: 'dev',
       from_name: 'bob',
       text: 'test',
@@ -49,6 +52,7 @@ describe('transformForClient', () => {
       channel: 'dev',
       message: {
         id: 'msg_2',
+        agent_id: 'agent_bob',
         agent_name: 'bob',
         text: 'test',
         attachments: [],
@@ -59,6 +63,7 @@ describe('transformForClient', () => {
   it('transforms message.updated', () => {
     const event = makeEvent('message.updated', {
       id: 'msg_1',
+      agent_id: 'agent_alice',
       channel_name: 'general',
       from_name: 'alice',
       text: 'updated text',
@@ -70,6 +75,7 @@ describe('transformForClient', () => {
       channel: 'general',
       message: {
         id: 'msg_1',
+        agent_id: 'agent_alice',
         agent_name: 'alice',
         text: 'updated text',
       },
@@ -79,6 +85,7 @@ describe('transformForClient', () => {
   it('transforms thread.reply', () => {
     const event = makeEvent('thread.reply', {
       id: 'msg_reply',
+      agent_id: 'agent_bob',
       thread_id: 'msg_parent',
       from_name: 'bob',
       text: 'a reply',
@@ -90,6 +97,7 @@ describe('transformForClient', () => {
       parent_id: 'msg_parent',
       message: {
         id: 'msg_reply',
+        agent_id: 'agent_bob',
         agent_name: 'bob',
         text: 'a reply',
       },
@@ -132,6 +140,7 @@ describe('transformForClient', () => {
     const event = makeEvent('dm.received', {
       id: 'dm_1',
       conversation_id: 'conv_1',
+      from_agent_id: 'agent_alice',
       from_name: 'alice',
       text: 'private message',
     });
@@ -142,6 +151,7 @@ describe('transformForClient', () => {
       conversation_id: 'conv_1',
       message: {
         id: 'dm_1',
+        agent_id: 'agent_alice',
         agent_name: 'alice',
         text: 'private message',
       },
@@ -151,6 +161,7 @@ describe('transformForClient', () => {
   it('transforms group_dm.received', () => {
     const event = makeEvent('group_dm.received', {
       id: 'gdm_1',
+      agent_id: 'agent_bob',
       conversation_id: 'conv_2',
       from_name: 'bob',
       text: 'group message',
@@ -162,6 +173,7 @@ describe('transformForClient', () => {
       conversation_id: 'conv_2',
       message: {
         id: 'gdm_1',
+        agent_id: 'agent_bob',
         agent_name: 'bob',
         text: 'group message',
       },
