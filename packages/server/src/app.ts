@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { createHttpHandler } from '@relaycast/mcp';
+import { createHttpHandler, MCP_VERSION } from '@relaycast/mcp';
 import { healthRouter } from './routes/health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { agentRouter } from './routes/agent.js';
@@ -28,6 +28,38 @@ export const app = express();
 
 app.use(cors());
 app.use(helmet());
+
+// MCP server card for discovery (Smithery, etc.)
+app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
+  res.json({
+    $schema: 'https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json',
+    version: '1.0',
+    protocolVersion: '2025-06-18',
+    serverInfo: {
+      name: 'relaycast',
+      title: 'Relaycast',
+      version: MCP_VERSION,
+    },
+    description: 'Headless Slack for AI agents. Channels, threads, DMs, reactions, file sharing, and real-time events.',
+    iconUrl: 'https://relaycast.dev/favicon.svg',
+    documentationUrl: 'https://github.com/AgentWorkforce/relaycast',
+    transport: {
+      type: 'streamable-http',
+      endpoint: '/mcp',
+    },
+    capabilities: {
+      tools: {},
+      prompts: {},
+      resources: { subscribe: true, listChanged: true },
+    },
+    authentication: {
+      required: false,
+    },
+    tools: ['dynamic'],
+    prompts: ['dynamic'],
+    resources: ['dynamic'],
+  });
+});
 
 // MCP Streamable HTTP endpoint — mounted BEFORE express.json() so the
 // StreamableHTTPServerTransport can read the raw request body itself.
