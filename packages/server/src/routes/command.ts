@@ -144,7 +144,7 @@ commandRouter.post(
       res.status(201).json({ ok: true, data: result });
 
       // Fire-and-forget event publishing
-      const eventData = { command: result.command, channel, invoked_by: agentId, args: result.args };
+      const eventData = { command: result.command, channel, invoked_by: agentId, args: result.args, parameters: result.parameters || null };
       publishEvent({ type: 'command.invoked', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
       deliverEvent(req.workspace!.id, 'command.invoked', eventData).catch(() => {});
     } catch (err: unknown) {

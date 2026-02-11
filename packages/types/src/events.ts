@@ -136,6 +136,7 @@ export interface CommandInvokedEvent {
   channel: string;
   invoked_by: string;
   args: string | null;
+  parameters: Record<string, unknown> | null;
 }
 
 export type ServerEvent =
