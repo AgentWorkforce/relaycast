@@ -68,22 +68,28 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
     // When an agent token is set, initialize the WebSocket bridge.
     if (nextAgentToken && !session.wsBridge) {
-      const subscriptions = new SubscriptionManager();
-      const wsClient = new WsClient({
-        token: nextAgentToken,
-        baseUrl: options.baseUrl,
-      });
-      const wsBridge = new WsBridge(
-        wsClient,
-        subscriptions,
-        (uri: string) => {
-          mcpServer.server.sendResourceUpdated({ uri }).catch(() => {
-            // Silently ignore notification failures
-          });
-        },
-      );
-      wsBridge.start();
-      Object.assign(session, partial, { wsBridge, subscriptions });
+      try {
+        const subscriptions = new SubscriptionManager();
+        const wsClient = new WsClient({
+          token: nextAgentToken,
+          baseUrl: options.baseUrl,
+        });
+        const wsBridge = new WsBridge(
+          wsClient,
+          subscriptions,
+          (uri: string) => {
+            mcpServer.server.sendResourceUpdated({ uri }).catch(() => {
+              // Silently ignore notification failures
+            });
+          },
+        );
+        wsBridge.start();
+        Object.assign(session, partial, { wsBridge, subscriptions });
+      } catch {
+        // In non-WS runtimes (e.g. some test environments), keep session usable
+        // without real-time resource updates.
+        Object.assign(session, partial, { wsBridge: null, subscriptions: null });
+      }
       telemetry.capture('relaycast_mcp_session_authenticated', {
         source_surface: 'mcp',
         agent_name: nextAgentName,

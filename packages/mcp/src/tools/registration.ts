@@ -5,6 +5,20 @@ import type { SessionState } from '../types.js';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
+const readOnlyAnnotations = {
+  title: 'Read-only operation',
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const writeAnnotations = {
+  title: 'State-changing operation',
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
 
 interface CreateWorkspaceResponse {
   workspace_id?: string;
@@ -59,6 +73,7 @@ export function registerRegistrationTools(
     {
       description:
         'Create a new workspace and store its workspace key in this MCP session for subsequent registration calls.',
+      annotations: writeAnnotations,
       inputSchema: {
         name: z.string().describe('Workspace name'),
       },
@@ -85,6 +100,7 @@ export function registerRegistrationTools(
     {
       description:
         'Set the workspace key (rk_live_...) for this MCP session. This enables register and workspace-level tools.',
+      annotations: writeAnnotations,
       inputSchema: {
         api_key: z.string().describe('Workspace API key (rk_live_...)'),
       },
@@ -122,6 +138,7 @@ export function registerRegistrationTools(
     {
       description:
         'Register this agent in the current workspace and obtain an agent token for subsequent operations.',
+      annotations: writeAnnotations,
       inputSchema: {
         name: z.string().describe('Unique agent name'),
         type: z.enum(['agent', 'human']).optional().describe('Agent type'),
@@ -145,6 +162,7 @@ export function registerRegistrationTools(
     'list_agents',
     {
       description: 'List all agents registered in the workspace.',
+      annotations: readOnlyAnnotations,
       inputSchema: {
         status: z
           .enum(['online', 'offline'])

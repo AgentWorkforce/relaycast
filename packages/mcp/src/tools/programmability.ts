@@ -2,6 +2,28 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Relay, AgentClient } from '@relaycast/sdk';
 
+const readOnlyAnnotations = {
+  title: 'Read-only operation',
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const writeAnnotations = {
+  title: 'State-changing operation',
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+const destructiveAnnotations = {
+  title: 'Destructive operation',
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
 export function registerProgrammabilityTools(
   server: McpServer,
   getRelay: () => Relay,
@@ -11,6 +33,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('create_webhook', {
     description: 'Create an inbound webhook that external services can POST to, delivering messages into a channel.',
+    annotations: writeAnnotations,
     inputSchema: {
       name: z.string().describe('Webhook name (e.g. "GitHub Alerts")'),
       channel: z.string().describe('Target channel name'),
@@ -23,6 +46,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_webhooks', {
     description: 'List all inbound webhooks in the workspace.',
+    annotations: readOnlyAnnotations,
   }, async () => {
     const relay = getRelay();
     const webhooks = await relay.webhooks.list();
@@ -31,6 +55,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_webhook', {
     description: 'Delete an inbound webhook by ID.',
+    annotations: destructiveAnnotations,
     inputSchema: {
       webhook_id: z.string().describe('Webhook ID to delete'),
     },
@@ -42,6 +67,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('trigger_webhook', {
     description: 'Trigger an inbound webhook to post a message into its channel.',
+    annotations: writeAnnotations,
     inputSchema: {
       webhook_id: z.string().describe('Webhook ID to trigger'),
       text: z.string().optional().describe('Message text'),
@@ -57,6 +83,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('create_subscription', {
     description: 'Create an outbound event subscription. The server will POST to the given URL when matching events occur.',
+    annotations: writeAnnotations,
     inputSchema: {
       events: z.array(z.string()).describe('Event types to subscribe to (e.g. ["message.created", "reaction.added"])'),
       url: z.string().describe('URL to POST events to'),
@@ -80,6 +107,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_subscriptions', {
     description: 'List all outbound event subscriptions in the workspace.',
+    annotations: readOnlyAnnotations,
   }, async () => {
     const relay = getRelay();
     const subs = await relay.subscriptions.list();
@@ -88,6 +116,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('get_subscription', {
     description: 'Get details of a specific event subscription.',
+    annotations: readOnlyAnnotations,
     inputSchema: {
       subscription_id: z.string().describe('Subscription ID'),
     },
@@ -99,6 +128,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_subscription', {
     description: 'Delete an event subscription by ID.',
+    annotations: destructiveAnnotations,
     inputSchema: {
       subscription_id: z.string().describe('Subscription ID to delete'),
     },
@@ -112,6 +142,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('register_command', {
     description: 'Register a slash command that an agent can handle. Other agents can invoke it.',
+    annotations: writeAnnotations,
     inputSchema: {
       command: z.string().describe('Command name (e.g. "deploy")'),
       description: z.string().describe('What the command does'),
@@ -136,6 +167,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_commands', {
     description: 'List all registered agent commands in the workspace.',
+    annotations: readOnlyAnnotations,
   }, async () => {
     const relay = getRelay();
     const commands = await relay.commands.list();
@@ -144,6 +176,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_command', {
     description: 'Delete a registered command.',
+    annotations: destructiveAnnotations,
     inputSchema: {
       command: z.string().describe('Command name to delete'),
     },
@@ -155,6 +188,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('invoke_command', {
     description: 'Invoke a registered slash command as the current agent.',
+    annotations: writeAnnotations,
     inputSchema: {
       command: z.string().describe('Command name to invoke'),
       channel: z.string().describe('Channel context for invocation'),

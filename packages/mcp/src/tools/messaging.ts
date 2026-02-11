@@ -2,12 +2,28 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
 
+const readOnlyAnnotations = {
+  title: 'Read-only operation',
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const writeAnnotations = {
+  title: 'State-changing operation',
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
 export function registerMessagingTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
 ): void {
   server.registerTool('post_message', {
     description: 'Post a message to a channel.',
+    annotations: writeAnnotations,
     inputSchema: {
       channel: z.string().describe('Channel name'),
       text: z.string().describe('Message text'),
@@ -21,6 +37,7 @@ export function registerMessagingTools(
 
   server.registerTool('get_messages', {
     description: 'Get message history from a channel.',
+    annotations: readOnlyAnnotations,
     inputSchema: {
       channel: z.string().describe('Channel name'),
       limit: z.number().optional().describe('Max messages to return'),
@@ -35,6 +52,7 @@ export function registerMessagingTools(
 
   server.registerTool('reply_to_thread', {
     description: 'Reply to a message thread.',
+    annotations: writeAnnotations,
     inputSchema: {
       message_id: z.string().describe('Parent message ID'),
       text: z.string().describe('Reply text'),
@@ -47,6 +65,7 @@ export function registerMessagingTools(
 
   server.registerTool('get_thread', {
     description: 'Get a thread (parent message + replies).',
+    annotations: readOnlyAnnotations,
     inputSchema: {
       message_id: z.string().describe('Parent message ID'),
       limit: z.number().optional().describe('Max replies to return'),
@@ -59,6 +78,7 @@ export function registerMessagingTools(
 
   server.registerTool('send_dm', {
     description: 'Send a direct message to another agent.',
+    annotations: writeAnnotations,
     inputSchema: {
       to: z.string().describe('Recipient agent name'),
       text: z.string().describe('Message text'),
@@ -71,6 +91,7 @@ export function registerMessagingTools(
 
   server.registerTool('get_dms', {
     description: 'List DM conversations.',
+    annotations: readOnlyAnnotations,
   }, async () => {
     const client = getAgentClient();
     const convos = await client.dms.conversations();
@@ -79,6 +100,7 @@ export function registerMessagingTools(
 
   server.registerTool('send_group_dm', {
     description: 'Create a group DM conversation.',
+    annotations: writeAnnotations,
     inputSchema: {
       participants: z.array(z.string()).describe('Agent names to include'),
       name: z.string().optional().describe('Group name'),

@@ -2,6 +2,28 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgentClient } from '@relaycast/sdk';
 
+const readOnlyAnnotations = {
+  title: 'Read-only operation',
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const writeAnnotations = {
+  title: 'State-changing operation',
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+const destructiveAnnotations = {
+  title: 'Destructive operation',
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
 export function registerChannelTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
@@ -11,6 +33,7 @@ export function registerChannelTools(
     'create_channel',
     {
       description: 'Create a new channel in the workspace.',
+      annotations: writeAnnotations,
       inputSchema: {
         name: z.string().describe('Channel name (no spaces, lowercase)'),
         topic: z.string().optional().describe('Channel topic/description'),
@@ -28,6 +51,7 @@ export function registerChannelTools(
     'list_channels',
     {
       description: 'List all channels in the workspace.',
+      annotations: readOnlyAnnotations,
       inputSchema: {
         include_archived: z.boolean().optional().describe('Include archived channels'),
       },
@@ -48,6 +72,7 @@ export function registerChannelTools(
     'join_channel',
     {
       description: 'Join a channel.',
+      annotations: writeAnnotations,
       inputSchema: {
         channel: z.string().describe('Channel name to join'),
       },
@@ -64,6 +89,7 @@ export function registerChannelTools(
     'leave_channel',
     {
       description: 'Leave a channel.',
+      annotations: writeAnnotations,
       inputSchema: {
         channel: z.string().describe('Channel name to leave'),
       },
@@ -80,6 +106,7 @@ export function registerChannelTools(
     'invite_to_channel',
     {
       description: 'Invite an agent to a channel.',
+      annotations: writeAnnotations,
       inputSchema: {
         channel: z.string().describe('Channel name'),
         agent: z.string().describe('Agent name to invite'),
@@ -97,6 +124,7 @@ export function registerChannelTools(
     'set_channel_topic',
     {
       description: 'Set the topic for a channel.',
+      annotations: writeAnnotations,
       inputSchema: {
         channel: z.string().describe('Channel name'),
         topic: z.string().describe('New topic text'),
@@ -114,6 +142,7 @@ export function registerChannelTools(
     'archive_channel',
     {
       description: 'Archive a channel (soft delete).',
+      annotations: destructiveAnnotations,
       inputSchema: {
         channel: z.string().describe('Channel name to archive'),
       },
@@ -125,4 +154,3 @@ export function registerChannelTools(
     },
   );
 }
-
