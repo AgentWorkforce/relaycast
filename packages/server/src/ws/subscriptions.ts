@@ -72,15 +72,14 @@ export function broadcastToChannel(workspaceId: string, channel: string, event: 
   const subscriberIds = getChannelIndex().get(key);
   if (!subscriberIds || subscriberIds.size === 0) return;
 
-  const senderAgentId = extractSenderAgentId(event);
   const clientEvent = 'data' in event && 'workspace_id' in event ? transformForClient(event as WsEvent) : event;
   const payload = JSON.stringify(clientEvent);
   const clients = getClients();
   for (const id of subscriberIds) {
     const client = clients.get(id);
-    if (!client || client.ws.readyState !== WebSocket.OPEN) continue;
-    if (senderAgentId && client.agentId === senderAgentId) continue;
-    client.ws.send(payload);
+    if (client && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(payload);
+    }
   }
 }
 
@@ -88,26 +87,13 @@ export function broadcastToWorkspace(workspaceId: string, event: WsEvent | objec
   const clientIds = getWorkspaceIndex().get(workspaceId);
   if (!clientIds || clientIds.size === 0) return;
 
-  const senderAgentId = extractSenderAgentId(event);
   const clientEvent = 'data' in event && 'workspace_id' in event ? transformForClient(event as WsEvent) : event;
   const payload = JSON.stringify(clientEvent);
   const clients = getClients();
   for (const id of clientIds) {
     const client = clients.get(id);
-    if (!client || client.ws.readyState !== WebSocket.OPEN) continue;
-    if (senderAgentId && client.agentId === senderAgentId) continue;
-    client.ws.send(payload);
+    if (client && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(payload);
+    }
   }
-}
-
-/**
- * Extract the sender's agent ID from an event so broadcast can skip
- * echoing the event back to the originating agent.
- */
-function extractSenderAgentId(event: WsEvent | object): string | undefined {
-  if (!('data' in event) || !event.data) return undefined;
-  const data = event.data as Record<string, unknown>;
-  // DMs use from_agent_id, channel messages use agent_id
-  const id = data.from_agent_id ?? data.agent_id;
-  return typeof id === 'string' ? id : undefined;
 }
