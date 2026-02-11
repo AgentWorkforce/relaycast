@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { createHttpHandler } from '@relaycast/mcp';
 import { healthRouter } from './routes/health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { agentRouter } from './routes/agent.js';
@@ -27,6 +28,16 @@ export const app = express();
 
 app.use(cors());
 app.use(helmet());
+
+// MCP Streamable HTTP endpoint — mounted BEFORE express.json() so the
+// StreamableHTTPServerTransport can read the raw request body itself.
+const mcpHandler = createHttpHandler({
+  baseUrl: process.env.RELAY_BASE_URL ?? 'https://api.relaycast.dev',
+});
+app.all('/mcp', (req, res) => {
+  mcpHandler.handleRequest(req, res);
+});
+
 app.use(express.json({
   verify: (req, _res, buf) => {
     // Preserve raw body for Stripe webhook signature verification

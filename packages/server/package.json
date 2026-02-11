@@ -20,6 +20,7 @@
     "ioredis": "^5.9.2",
     "postgres": "^3.4.8",
     "ws": "^8.19.0",
+    "@relaycast/mcp": "0.2.1",
     "@relaycast/types": "0.2.1"
   },
   "repository": {
