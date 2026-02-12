@@ -60,7 +60,11 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
 
       await mcpServer.connect(transport);
 
-      if (transport.sessionId) {
+      // handleRequest must run first — the session ID is generated during
+      // the initialize handshake, not during connect().
+      await transport.handleRequest(req, res);
+
+      if (transport.sessionId && !sessions.has(transport.sessionId)) {
         sessions.set(transport.sessionId, { transport });
         telemetry.capture('relaycast_mcp_http_session_started', {
           source_surface: 'mcp',
@@ -68,8 +72,6 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
           mcp_transport_session_id: transport.sessionId,
         });
       }
-
-      await transport.handleRequest(req, res);
     },
   };
 }
