@@ -96,10 +96,58 @@ app.get('/.well-known/mcp-config', (_req: Request, res: Response) => {
 
 // MCP Streamable HTTP endpoint — mounted BEFORE express.json() so the
 // StreamableHTTPServerTransport can read the raw request body itself.
-const mcpHandler = createHttpHandler({
-  baseUrl: process.env.RELAY_BASE_URL ?? 'https://api.relaycast.dev',
-});
-app.all('/mcp', (req, res) => {
+//
+// Session affinity: MCP sessions hold live SSE connections in-memory and
+// can't be serialized. When running multiple Fly.io machines, we register
+// session→machine mappings in Redis. If a request arrives at the wrong
+// machine, we reply with `fly-replay` so Fly's proxy re-routes it.
+import { getRedis } from './redis/index.js';
+
+const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID;
+const MCP_SESSION_TTL = 7200; // 2 hours
+
+const mcpHandler = createHttpHandler(
+  { baseUrl: process.env.RELAY_BASE_URL ?? 'https://api.relaycast.dev' },
+  {
+    onCreated: (sessionId) => {
+      if (FLY_MACHINE_ID) {
+        getRedis().set(`mcp:session:${sessionId}`, FLY_MACHINE_ID, 'EX', MCP_SESSION_TTL).catch(() => {});
+      }
+    },
+    onClosed: (sessionId) => {
+      if (FLY_MACHINE_ID) {
+        getRedis().del(`mcp:session:${sessionId}`).catch(() => {});
+      }
+    },
+  },
+);
+
+app.all('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+  // Session exists locally or no session yet — handle directly
+  if (!sessionId || mcpHandler.hasSession(sessionId)) {
+    mcpHandler.handleRequest(req, res);
+    return;
+  }
+
+  // Session not local — check Redis for the owning machine
+  if (FLY_MACHINE_ID) {
+    try {
+      const ownerMachine = await getRedis().get(`mcp:session:${sessionId}`);
+      if (ownerMachine && ownerMachine !== FLY_MACHINE_ID) {
+        // Fly proxy intercepts this header and replays the request to the
+        // correct machine, returning that machine's response to the client.
+        res.setHeader('fly-replay', `instance=${ownerMachine}`);
+        res.status(200).end();
+        return;
+      }
+    } catch {
+      // Redis unavailable — fall through and let the handler create a new session
+    }
+  }
+
+  // Session doesn't exist anywhere — handler will create a new one
   mcpHandler.handleRequest(req, res);
 });
 

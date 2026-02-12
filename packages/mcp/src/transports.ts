@@ -15,6 +15,15 @@ export async function startStdio(options: McpServerOptions): Promise<void> {
 }
 
 /**
+ * Lifecycle callbacks for session events, used for external session
+ * registries (e.g. Redis) to support multi-machine deployments.
+ */
+export interface SessionLifecycle {
+  onCreated?: (sessionId: string) => void;
+  onClosed?: (sessionId: string) => void;
+}
+
+/**
  * Session map for HTTP transport (multi-agent).
  * Each session gets its own MCP server + transport + telemetry instance.
  */
@@ -24,8 +33,11 @@ const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>()
  * Create Express middleware for HTTP+SSE transport (multi-agent).
  * Each connecting client gets its own session with isolated state and telemetry.
  */
-export function createHttpHandler(baseOptions: McpServerOptions) {
+export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: SessionLifecycle) {
   return {
+    /** Check whether a session ID is owned by this process. */
+    hasSession: (sessionId: string) => sessions.has(sessionId),
+
     handleRequest: async (
       req: import('node:http').IncomingMessage,
       res: import('node:http').ServerResponse,
@@ -41,7 +53,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
 
       // New session — create fresh MCP server + transport + telemetry
       const telemetry = createMcpTelemetry(MCP_VERSION);
-      
+
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
@@ -55,6 +67,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
       transport.onclose = () => {
         if (transport.sessionId) {
           sessions.delete(transport.sessionId);
+          lifecycle?.onClosed?.(transport.sessionId);
         }
       };
 
@@ -66,6 +79,7 @@ export function createHttpHandler(baseOptions: McpServerOptions) {
 
       if (transport.sessionId && !sessions.has(transport.sessionId)) {
         sessions.set(transport.sessionId, { transport });
+        lifecycle?.onCreated?.(transport.sessionId);
         telemetry.capture('relaycast_mcp_http_session_started', {
           source_surface: 'mcp',
           transport: 'http',
