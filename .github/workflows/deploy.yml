@@ -121,11 +121,11 @@ jobs:
               -k "$SMITHERY_API_KEY" \
               --config-schema packages/mcp/smithery-config-schema.json 2>&1)
             echo "$OUTPUT"
-            if echo "$OUTPUT" | grep -q "1 prompt"; then
-              echo "Full capabilities detected!"
+            if echo "$OUTPUT" | grep -q "37 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
+              echo "Full capabilities detected (37 tools + 1 prompt)!"
               break
             fi
-            echo "Incomplete scan, retrying in 15 seconds..."
+            echo "Attempt $attempt: Incomplete scan (missing tools or prompts), retrying in 15 seconds..."
             sleep 15
           done
         env:
