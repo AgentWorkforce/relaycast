@@ -8,11 +8,11 @@ export function registerMessagingTools(
 ): void {
   server.registerTool('post_message', {
     title: 'Post Message',
-    description: 'Post a message to a channel.',
+    description: 'Post a new message to a channel. The message is sent as the currently registered agent and appears in real-time for all channel members. Optionally attach files by providing their upload IDs. The agent must be a member of the channel to post.',
     inputSchema: {
-      channel: z.string().describe('Channel name'),
-      text: z.string().describe('Message text'),
-      attachments: z.array(z.string()).optional().describe('File IDs to attach'),
+      channel: z.string().describe('Name of the channel to post the message to (e.g. "general", "build-alerts")'),
+      text: z.string().describe('The message body text, which may include @mentions of other agents'),
+      attachments: z.array(z.string()).optional().describe('Array of file attachment IDs obtained from the upload_file tool'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ channel, text, attachments }) => {
@@ -23,12 +23,12 @@ export function registerMessagingTools(
 
   server.registerTool('get_messages', {
     title: 'Get Messages',
-    description: 'Get message history from a channel.',
+    description: 'Retrieve message history from a channel with optional cursor-based pagination. Returns messages in reverse chronological order, including each message\'s ID, author, text, timestamp, and reaction counts. Use the before/after cursors to page through older or newer messages.',
     inputSchema: {
-      channel: z.string().describe('Channel name'),
-      limit: z.number().optional().describe('Max messages to return'),
-      before: z.string().optional().describe('Cursor: messages before this ID'),
-      after: z.string().optional().describe('Cursor: messages after this ID'),
+      channel: z.string().describe('Name of the channel to fetch messages from'),
+      limit: z.number().optional().describe('Maximum number of messages to return per page (default varies by server configuration)'),
+      before: z.string().optional().describe('Message ID cursor — return only messages older than this ID, used for backward pagination'),
+      after: z.string().optional().describe('Message ID cursor — return only messages newer than this ID, used for forward pagination'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ channel, limit, before, after }) => {
@@ -39,10 +39,10 @@ export function registerMessagingTools(
 
   server.registerTool('reply_to_thread', {
     title: 'Reply to Thread',
-    description: 'Reply to a message thread.',
+    description: 'Post a reply to an existing message thread. Threads allow focused side-conversations without cluttering the main channel timeline. The reply is associated with the parent message and visible to anyone viewing the thread. If this is the first reply, it starts a new thread on the parent message.',
     inputSchema: {
-      message_id: z.string().describe('Parent message ID'),
-      text: z.string().describe('Reply text'),
+      message_id: z.string().describe('ID of the parent message to reply to, which becomes the thread root'),
+      text: z.string().describe('The reply body text, which may include @mentions of other agents'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ message_id, text }) => {
@@ -53,10 +53,10 @@ export function registerMessagingTools(
 
   server.registerTool('get_thread', {
     title: 'Get Thread',
-    description: 'Get a thread (parent message + replies).',
+    description: 'Retrieve a complete thread including the parent message and all its replies. Threads provide focused conversations attached to a specific message. Returns the parent message followed by replies in chronological order, with each message\'s ID, author, text, and timestamp.',
     inputSchema: {
-      message_id: z.string().describe('Parent message ID'),
-      limit: z.number().optional().describe('Max replies to return'),
+      message_id: z.string().describe('ID of the parent message whose thread should be retrieved'),
+      limit: z.number().optional().describe('Maximum number of replies to return (the parent message is always included)'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ message_id, limit }) => {
@@ -67,10 +67,10 @@ export function registerMessagingTools(
 
   server.registerTool('send_dm', {
     title: 'Send Direct Message',
-    description: 'Send a direct message to another agent.',
+    description: 'Send a private direct message to another agent in the workspace. DMs are visible only to the sender and recipient, unlike channel messages which are visible to all members. The recipient agent must be registered in the same workspace.',
     inputSchema: {
-      to: z.string().describe('Recipient agent name'),
-      text: z.string().describe('Message text'),
+      to: z.string().describe('Name of the registered agent to send the direct message to'),
+      text: z.string().describe('The direct message body text'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ to, text }) => {
@@ -81,7 +81,7 @@ export function registerMessagingTools(
 
   server.registerTool('get_dms', {
     title: 'List DM Conversations',
-    description: 'List DM conversations.',
+    description: 'List all direct message conversations for the current agent. Returns a summary of each conversation including the other participant\'s name, the last message preview, and unread count. Use this to discover ongoing private conversations.',
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of conversations to return'),
     },
@@ -94,11 +94,11 @@ export function registerMessagingTools(
 
   server.registerTool('send_group_dm', {
     title: 'Send Group DM',
-    description: 'Create a group DM conversation.',
+    description: 'Create a new group direct message conversation with multiple agents. Group DMs allow private multi-party conversations outside of public channels. Provide a list of participant agent names and the first message to start the conversation. Optionally give the group a descriptive name.',
     inputSchema: {
-      participants: z.array(z.string()).describe('Agent names to include'),
-      name: z.string().optional().describe('Group name'),
-      text: z.string().describe('First message text'),
+      participants: z.array(z.string()).describe('Array of agent names to include in the group conversation'),
+      name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
+      text: z.string().describe('The first message to send to the group, which initiates the conversation'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text }) => {

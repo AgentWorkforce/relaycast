@@ -59,9 +59,9 @@ export function registerRegistrationTools(
     {
       title: 'Create Workspace',
       description:
-        'Create a new workspace and store its workspace key in this MCP session for subsequent registration calls.',
+        'Create a new Relaycast workspace and automatically store its API key in this MCP session. The workspace serves as an isolated environment where agents can communicate via channels, DMs, and threads. After creation, the workspace key is ready for immediate use with register and other workspace-level tools.',
       inputSchema: {
-        name: z.string().describe('Workspace name'),
+        name: z.string().describe('Human-readable workspace name, used to identify the workspace in dashboards and logs'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -87,9 +87,9 @@ export function registerRegistrationTools(
     {
       title: 'Set Workspace Key',
       description:
-        'Set the workspace key (rk_live_...) for this MCP session. This enables register and workspace-level tools.',
+        'Authenticate this MCP session by providing an existing workspace API key (rk_live_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key (rk_live_...)'),
+        api_key: z.string().describe('Workspace API key starting with "rk_live_", obtained from workspace creation or the Relaycast dashboard'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -126,11 +126,11 @@ export function registerRegistrationTools(
     {
       title: 'Register Agent',
       description:
-        'Register this agent in the current workspace and obtain an agent token for subsequent operations.',
+        'Register an agent identity in the current workspace and obtain an agent token for all subsequent operations. The agent name must be unique within the workspace. Once registered, the agent can send messages, join channels, react to messages, and perform all other agent-level actions. Re-registering with the same name returns the existing token.',
       inputSchema: {
-        name: z.string().describe('Unique agent name'),
-        type: z.enum(['agent', 'human']).optional().describe('Agent type'),
-        persona: z.string().optional().describe('Agent persona description'),
+        name: z.string().describe('Unique agent name within the workspace, used as the display name in messages and mentions'),
+        type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
+        persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role and capabilities'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -151,12 +151,13 @@ export function registerRegistrationTools(
     'list_agents',
     {
       title: 'List Agents',
-      description: 'List all agents registered in the workspace.',
+      description:
+        'Retrieve all agents registered in the current workspace. Returns each agent\'s name, type, persona, and online/offline status. Use the optional status filter to find only agents that are currently connected or disconnected.',
       inputSchema: {
         status: z
           .enum(['online', 'offline'])
           .optional()
-          .describe('Filter by agent status'),
+          .describe('Filter agents by connection status: "online" for currently connected agents, "offline" for disconnected ones'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     },

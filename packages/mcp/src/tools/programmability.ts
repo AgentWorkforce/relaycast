@@ -11,10 +11,10 @@ export function registerProgrammabilityTools(
 
   server.registerTool('create_webhook', {
     title: 'Create Webhook',
-    description: 'Create an inbound webhook that external services can POST to, delivering messages into a channel.',
+    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL that accepts POST requests with a JSON body.',
     inputSchema: {
-      name: z.string().describe('Webhook name (e.g. "GitHub Alerts")'),
-      channel: z.string().describe('Target channel name'),
+      name: z.string().describe('Human-readable webhook name to identify its purpose (e.g. "GitHub Alerts", "CI Pipeline")'),
+      channel: z.string().describe('Name of the target channel where webhook messages will be delivered'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ name, channel }) => {
@@ -25,9 +25,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_webhooks', {
     title: 'List Webhooks',
-    description: 'List all inbound webhooks in the workspace.',
+    description: 'List all inbound webhooks configured in the workspace. Returns each webhook\'s ID, name, target channel, URL, and creation date. Use this to audit existing integrations or find a webhook\'s URL for external service configuration.',
     inputSchema: {
-      channel: z.string().optional().describe('Filter webhooks by target channel name'),
+      channel: z.string().optional().describe('Filter webhooks by target channel name to see only webhooks delivering to a specific channel'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
@@ -38,9 +38,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_webhook', {
     title: 'Delete Webhook',
-    description: 'Delete an inbound webhook by ID.',
+    description: 'Permanently delete an inbound webhook by its ID. Once deleted, the webhook URL stops accepting requests and any external services still posting to it will receive errors. This action cannot be undone, so verify the webhook is no longer needed before deleting.',
     inputSchema: {
-      webhook_id: z.string().describe('Webhook ID to delete'),
+      webhook_id: z.string().describe('Unique identifier of the webhook to delete, obtained from list_webhooks or create_webhook'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ webhook_id }) => {
@@ -51,11 +51,11 @@ export function registerProgrammabilityTools(
 
   server.registerTool('trigger_webhook', {
     title: 'Trigger Webhook',
-    description: 'Trigger an inbound webhook to post a message into its channel.',
+    description: 'Manually trigger an inbound webhook to post a message into its target channel. This is useful for testing webhook integrations or programmatically injecting external events into the workspace. Provide optional text and source identifier to customize the delivered message.',
     inputSchema: {
-      webhook_id: z.string().describe('Webhook ID to trigger'),
-      text: z.string().optional().describe('Message text'),
-      source: z.string().optional().describe('Source identifier (e.g. "github")'),
+      webhook_id: z.string().describe('Unique identifier of the webhook to trigger, obtained from list_webhooks or create_webhook'),
+      text: z.string().optional().describe('Message text to deliver through the webhook into the target channel'),
+      source: z.string().optional().describe('Source identifier for the webhook payload (e.g. "github", "jenkins", "datadog")'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ webhook_id, text, source }) => {
@@ -68,13 +68,13 @@ export function registerProgrammabilityTools(
 
   server.registerTool('create_subscription', {
     title: 'Create Event Subscription',
-    description: 'Create an outbound event subscription. The server will POST to the given URL when matching events occur.',
+    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
-      events: z.array(z.string()).describe('Event types to subscribe to (e.g. ["message.created", "reaction.added"])'),
-      url: z.string().describe('URL to POST events to'),
-      filter_channel: z.string().optional().describe('Only fire for this channel'),
-      filter_mentions: z.string().optional().describe('Only fire when this agent is mentioned'),
-      secret: z.string().optional().describe('Secret for HMAC signature verification'),
+      events: z.array(z.string()).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
+      url: z.string().describe('HTTPS endpoint URL that will receive POST requests with event payloads'),
+      filter_channel: z.string().optional().describe('Only fire events that occur in this specific channel'),
+      filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
+      secret: z.string().optional().describe('Shared secret used to generate HMAC-SHA256 signatures for payload verification'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
@@ -93,9 +93,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_subscriptions', {
     title: 'List Subscriptions',
-    description: 'List all outbound event subscriptions in the workspace.',
+    description: 'List all outbound event subscriptions configured in the workspace. Returns each subscription\'s ID, target URL, subscribed event types, filters, and status. Use this to audit which external services are receiving event notifications from the workspace.',
     inputSchema: {
-      event: z.string().optional().describe('Filter subscriptions by event type (e.g. "message.created")'),
+      event: z.string().optional().describe('Filter subscriptions by event type (e.g. "message.created") to see only relevant subscriptions'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
@@ -106,9 +106,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('get_subscription', {
     title: 'Get Subscription',
-    description: 'Get details of a specific event subscription.',
+    description: 'Retrieve detailed information about a specific event subscription by its ID. Returns the subscription\'s target URL, subscribed event types, filter configuration, delivery status, and creation date. Use this to inspect or debug a particular subscription\'s configuration.',
     inputSchema: {
-      subscription_id: z.string().describe('Subscription ID'),
+      subscription_id: z.string().describe('Unique identifier of the subscription to retrieve, obtained from list_subscriptions or create_subscription'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ subscription_id }) => {
@@ -119,9 +119,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_subscription', {
     title: 'Delete Subscription',
-    description: 'Delete an event subscription by ID.',
+    description: 'Permanently delete an outbound event subscription by its ID. Once deleted, the external URL will stop receiving event notifications. This action cannot be undone, so verify the subscription is no longer needed before deleting.',
     inputSchema: {
-      subscription_id: z.string().describe('Subscription ID to delete'),
+      subscription_id: z.string().describe('Unique identifier of the subscription to delete, obtained from list_subscriptions'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ subscription_id }) => {
@@ -134,17 +134,17 @@ export function registerProgrammabilityTools(
 
   server.registerTool('register_command', {
     title: 'Register Command',
-    description: 'Register a slash command that an agent can handle. Other agents can invoke it.',
+    description: 'Register a custom slash command that a specific agent can handle. Other agents in the workspace can invoke this command, and the handler agent receives the invocation with its parameters. Commands enable structured inter-agent workflows, such as /deploy, /review, or /summarize. Re-registering an existing command updates its definition.',
     inputSchema: {
-      command: z.string().describe('Command name (e.g. "deploy")'),
-      description: z.string().describe('What the command does'),
-      handler_agent: z.string().describe('Name of the agent that handles this command'),
+      command: z.string().describe('Command name without the leading slash (e.g. "deploy", "review", "summarize")'),
+      description: z.string().describe('Human-readable description of what the command does, shown when listing available commands'),
+      handler_agent: z.string().describe('Name of the registered agent responsible for handling invocations of this command'),
       parameters: z.array(z.object({
-        name: z.string().describe('Parameter name'),
-        description: z.string().optional().describe('Parameter description'),
-        type: z.enum(['string', 'number', 'boolean']).describe('Parameter type'),
-        required: z.boolean().optional().describe('Whether the parameter is required'),
-      })).optional().describe('Command parameters'),
+        name: z.string().describe('Parameter name used as the key when passing structured arguments'),
+        description: z.string().optional().describe('Human-readable description of what this parameter controls'),
+        type: z.enum(['string', 'number', 'boolean']).describe('Data type for input validation: "string", "number", or "boolean"'),
+        required: z.boolean().optional().describe('Whether this parameter must be provided when invoking the command'),
+      })).optional().describe('Array of parameter definitions that the command accepts for structured input'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ command, description, handler_agent, parameters }) => {
@@ -160,9 +160,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('list_commands', {
     title: 'List Commands',
-    description: 'List all registered agent commands in the workspace.',
+    description: 'List all registered slash commands available in the workspace. Returns each command\'s name, description, handler agent, and parameter definitions. Use this to discover what commands other agents have registered and how to invoke them.',
     inputSchema: {
-      handler_agent: z.string().optional().describe('Filter commands by handler agent name'),
+      handler_agent: z.string().optional().describe('Filter commands to show only those handled by this specific agent name'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
@@ -173,9 +173,9 @@ export function registerProgrammabilityTools(
 
   server.registerTool('delete_command', {
     title: 'Delete Command',
-    description: 'Delete a registered command.',
+    description: 'Permanently remove a registered slash command from the workspace. Once deleted, other agents can no longer invoke the command. This action cannot be undone, so verify the command is no longer needed before deleting.',
     inputSchema: {
-      command: z.string().describe('Command name to delete'),
+      command: z.string().describe('Name of the command to delete, without the leading slash (e.g. "deploy")'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ command }) => {
@@ -186,12 +186,12 @@ export function registerProgrammabilityTools(
 
   server.registerTool('invoke_command', {
     title: 'Invoke Command',
-    description: 'Invoke a registered slash command as the current agent.',
+    description: 'Invoke a registered slash command as the current agent within a channel context. The invocation is routed to the command\'s handler agent for processing. You can pass arguments as a raw string or as structured JSON parameters matching the command\'s parameter definitions.',
     inputSchema: {
-      command: z.string().describe('Command name to invoke'),
-      channel: z.string().describe('Channel context for invocation'),
-      args: z.string().optional().describe('Raw argument string'),
-      parameters: z.string().optional().describe('JSON-encoded structured parameters object'),
+      command: z.string().describe('Name of the command to invoke, without the leading slash (e.g. "deploy", "review")'),
+      channel: z.string().describe('Name of the channel providing context for the command invocation'),
+      args: z.string().optional().describe('Raw argument string passed to the command handler (e.g. "production --force")'),
+      parameters: z.string().optional().describe('JSON-encoded object of structured parameters matching the command\'s parameter definitions'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ command, channel, args, parameters }) => {

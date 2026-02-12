@@ -8,10 +8,10 @@ export function registerFeatureTools(
 ): void {
   server.registerTool('add_reaction', {
     title: 'Add Reaction',
-    description: 'Add an emoji reaction to a message.',
+    description: 'Add an emoji reaction to a message. Reactions are a lightweight way for agents to acknowledge, vote on, or express sentiment about messages without posting a reply. Each agent can add multiple different emoji reactions to the same message. Adding a reaction that already exists from the same agent has no effect.',
     inputSchema: {
-      message_id: z.string().describe('Message ID'),
-      emoji: z.string().describe('Emoji to react with'),
+      message_id: z.string().describe('ID of the message to react to'),
+      emoji: z.string().describe('Emoji character or shortcode to react with (e.g. "thumbsup", "rocket", "check")'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
@@ -22,10 +22,10 @@ export function registerFeatureTools(
 
   server.registerTool('remove_reaction', {
     title: 'Remove Reaction',
-    description: 'Remove an emoji reaction from a message.',
+    description: 'Remove a previously added emoji reaction from a message. Only reactions added by the current agent can be removed. This is useful for correcting accidental reactions or changing your response to a message.',
     inputSchema: {
-      message_id: z.string().describe('Message ID'),
-      emoji: z.string().describe('Emoji to remove'),
+      message_id: z.string().describe('ID of the message to remove the reaction from'),
+      emoji: z.string().describe('Emoji character or shortcode to remove (must match a reaction previously added by this agent)'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
@@ -36,12 +36,12 @@ export function registerFeatureTools(
 
   server.registerTool('search_messages', {
     title: 'Search Messages',
-    description: 'Search messages across channels.',
+    description: 'Search for messages across all channels in the workspace using a text query. Results can be filtered by channel name or sender agent to narrow down matches. Returns matching messages with their channel, author, text content, and timestamp.',
     inputSchema: {
-      query: z.string().describe('Search query'),
-      channel: z.string().optional().describe('Limit to channel'),
-      from: z.string().optional().describe('Filter by sender agent'),
-      limit: z.number().optional().describe('Max results'),
+      query: z.string().describe('Text search query to match against message content'),
+      channel: z.string().optional().describe('Restrict search results to messages in this channel only'),
+      from: z.string().optional().describe('Restrict search results to messages sent by this agent name'),
+      limit: z.number().optional().describe('Maximum number of search results to return'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ query, channel, from, limit }) => {
@@ -52,7 +52,7 @@ export function registerFeatureTools(
 
   server.registerTool('check_inbox', {
     title: 'Check Inbox',
-    description: 'Check inbox for unread messages, mentions, and DMs.',
+    description: 'Check the current agent\'s inbox for unread messages, @mentions, and direct messages. The inbox aggregates all notifications across channels and DMs into a single view. Use this to stay up-to-date on conversations that require your attention.',
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of inbox items to return'),
     },
@@ -65,9 +65,9 @@ export function registerFeatureTools(
 
   server.registerTool('mark_read', {
     title: 'Mark as Read',
-    description: 'Mark a message as read.',
+    description: 'Mark a specific message as read by the current agent. This updates the agent\'s read receipt for the message, which other agents can query using get_readers. Marking a message as read also clears it from the agent\'s inbox notifications.',
     inputSchema: {
-      message_id: z.string().describe('Message ID to mark as read'),
+      message_id: z.string().describe('ID of the message to mark as read by the current agent'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id }) => {
@@ -78,9 +78,9 @@ export function registerFeatureTools(
 
   server.registerTool('get_readers', {
     title: 'Get Readers',
-    description: 'Get list of agents who have read a message.',
+    description: 'Get the list of agents who have read a specific message. Returns each reader\'s agent name and the timestamp when they marked the message as read. This is useful for confirming that important messages have been seen by their intended audience.',
     inputSchema: {
-      message_id: z.string().describe('Message ID'),
+      message_id: z.string().describe('ID of the message to check read receipts for'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ message_id }) => {
@@ -91,11 +91,11 @@ export function registerFeatureTools(
 
   server.registerTool('upload_file', {
     title: 'Upload File',
-    description: 'Upload a file and get an attachment ID.',
+    description: 'Upload a file to the workspace and receive an attachment ID that can be used when posting messages. Files are stored securely and can be shared across channels and DMs. Provide the filename, MIME type, and size in bytes to initiate the upload. The returned attachment ID should be passed to post_message or send_dm to attach the file.',
     inputSchema: {
-      filename: z.string().describe('File name'),
-      content_type: z.string().describe('MIME type (e.g. text/plain, image/png)'),
-      size_bytes: z.number().describe('File size in bytes'),
+      filename: z.string().describe('Name of the file including extension (e.g. "report.pdf", "screenshot.png")'),
+      content_type: z.string().describe('MIME type of the file content (e.g. "text/plain", "image/png", "application/pdf")'),
+      size_bytes: z.number().describe('Size of the file in bytes, used for upload validation and storage allocation'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ filename, content_type, size_bytes }) => {
