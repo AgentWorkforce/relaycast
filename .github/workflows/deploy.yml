@@ -93,6 +93,11 @@ jobs:
         run: npm ci
 
       - name: Publish to Smithery
-        run: npx @smithery/cli@latest publish -u https://api.relaycast.dev/mcp -n "relaycast/relay" -k "$SMITHERY_API_KEY" --config-schema packages/mcp/smithery-config-schema.json
+        run: >-
+          npx @smithery/cli@latest publish
+          -u https://api.relaycast.dev/mcp
+          -n "relaycast/relay"
+          -k "$SMITHERY_API_KEY"
+          --config-schema '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"relayApiKey":{"type":"string","title":"Workspace API Key","description":"Workspace API key (rk_live_...)"},"relayBaseUrl":{"type":"string","title":"API Base URL","description":"Override API base URL","default":"https://api.relaycast.dev"}}}'
         env:
           SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
