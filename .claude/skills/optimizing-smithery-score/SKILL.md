@@ -147,6 +147,34 @@ deploy-smithery:
 | Tool/param descriptions | Works | Works but flaky | Scanner timeout causes 0/0 detection |
 | Prompts/Resources | Works | Flaky | Most common scan failure |
 
+## Response Size Limits
+
+Smithery's scanner has an effective tools/list response size limit of ~30KB. Beyond this, tools are not detected (shows 0/0 tools) while smaller responses like prompts/list and resources/list succeed.
+
+**Root cause**: MCP SDK v1.26+ adds `execution: { taskSupport: 'forbidden' }` to every tool, and `outputSchema` adds ~8KB for 37 tools. Combined with `_meta`, these fields push the response past the scanner's limit.
+
+**Fix**: Strip `execution`, `outputSchema`, and `_meta` from the tools/list response only (keep them for tool call validation):
+
+```typescript
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+// After registering all tools:
+const handlers = (mcpServer.server as any)._requestHandlers;
+const origHandler = handlers.get('tools/list');
+mcpServer.server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
+  const result = await origHandler(req, extra);
+  if (result?.tools) {
+    result.tools = result.tools.map(t => {
+      const { execution, outputSchema, _meta, ...clean } = t;
+      return clean;
+    });
+  }
+  return result;
+});
+```
+
+This reduces the response from ~39KB to ~29KB without losing tool call functionality.
+
 ## Common Mistakes
 
 | Mistake | Impact | Fix |
@@ -159,6 +187,8 @@ deploy-smithery:
 | `needs: ci` instead of `needs: deploy` | Publishes before deploy finishes | Chain deploy-smithery after deploy job |
 | Empty `inputSchema: {}` | Doesn't fix param ratio | Add real optional parameters instead |
 | Expanding descriptions for quality | No effect | 14pt is fixed max for presence, not quality |
+| tools/list response > ~30KB | Scanner shows 0/0 tools | Strip execution, outputSchema, _meta from list response |
+| MCP SDK v1.26+ execution field | Scanner rejects unknown fields | Delete from registered tools or override handler |
 
 ## Score Debugging
 
