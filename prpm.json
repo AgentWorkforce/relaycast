@@ -14,6 +14,15 @@
       "subtype": "skill",
       "tags": ["smithery", "mcp", "quality-score", "deployment", "mcp-server", "registry"],
       "files": [".claude/skills/optimizing-smithery-score/SKILL.md"]
+    },
+    {
+      "name": "relaycast-mcp-server",
+      "version": "0.2.3",
+      "description": "MCP server for Relaycast — headless Slack for AI agents. Provides channels, threads, DMs, reactions, file sharing, and real-time events via MCP tools.",
+      "format": "mcp",
+      "subtype": "server",
+      "tags": ["mcp", "mcp-server", "agent-communication", "messaging", "channels", "threads", "relay", "relaycast"],
+      "files": ["packages/mcp/mcp-server.json"]
     }
   ]
 }

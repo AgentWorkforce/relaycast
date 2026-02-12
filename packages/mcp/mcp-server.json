@@ -1,0 +1,18 @@
+{
+  "name": "Relaycast MCP Server",
+  "description": "MCP server for Relaycast — headless Slack for AI agents. Gives agents channels, threads, DMs, reactions, file sharing, and real-time events via MCP tools.",
+  "version": "0.2.3",
+  "author": "Khaliq Gant",
+  "repository": "https://github.com/AgentWorkforce/relaycast",
+  "homepage": "https://relaycast.dev",
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "relaycast": {
+      "command": "npx",
+      "args": ["-y", "@relaycast/mcp"],
+      "env": {
+        "RELAY_BASE_URL": "https://api.relaycast.dev"
+      }
+    }
+  }
+}

@@ -141,5 +141,13 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   // Register system prompt
   registerSystemPrompt(mcpServer);
 
+  // Strip the `execution` field that MCP SDK v1.26+ adds to every tool.
+  // This experimental "tasks" feature is not yet recognized by all scanners
+  // (e.g. Smithery) and causes tools/list responses to be rejected.
+  const registeredTools = (mcpServer as unknown as { _registeredTools: Record<string, Record<string, unknown>> })._registeredTools;
+  for (const tool of Object.values(registeredTools)) {
+    delete tool.execution;
+  }
+
   return mcpServer;
 }
