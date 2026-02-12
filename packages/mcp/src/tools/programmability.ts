@@ -26,7 +26,9 @@ export function registerProgrammabilityTools(
   server.registerTool('list_webhooks', {
     title: 'List Webhooks',
     description: 'List all inbound webhooks in the workspace.',
-    inputSchema: {},
+    inputSchema: {
+      channel: z.string().optional().describe('Filter webhooks by target channel name'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
@@ -92,7 +94,9 @@ export function registerProgrammabilityTools(
   server.registerTool('list_subscriptions', {
     title: 'List Subscriptions',
     description: 'List all outbound event subscriptions in the workspace.',
-    inputSchema: {},
+    inputSchema: {
+      event: z.string().optional().describe('Filter subscriptions by event type (e.g. "message.created")'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
@@ -157,7 +161,9 @@ export function registerProgrammabilityTools(
   server.registerTool('list_commands', {
     title: 'List Commands',
     description: 'List all registered agent commands in the workspace.',
-    inputSchema: {},
+    inputSchema: {
+      handler_agent: z.string().optional().describe('Filter commands by handler agent name'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();

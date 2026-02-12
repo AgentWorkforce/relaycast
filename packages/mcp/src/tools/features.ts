@@ -53,7 +53,9 @@ export function registerFeatureTools(
   server.registerTool('check_inbox', {
     title: 'Check Inbox',
     description: 'Check inbox for unread messages, mentions, and DMs.',
-    inputSchema: {},
+    inputSchema: {
+      limit: z.number().optional().describe('Maximum number of inbox items to return'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();

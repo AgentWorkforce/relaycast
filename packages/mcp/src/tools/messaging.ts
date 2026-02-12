@@ -82,7 +82,9 @@ export function registerMessagingTools(
   server.registerTool('get_dms', {
     title: 'List DM Conversations',
     description: 'List DM conversations.',
-    inputSchema: {},
+    inputSchema: {
+      limit: z.number().optional().describe('Maximum number of conversations to return'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
