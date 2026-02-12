@@ -84,20 +84,44 @@ jobs:
       - name: Wait for Fly.io instances to warm up
         run: sleep 30
 
-      - name: Verify MCP endpoint is ready
+      - name: Warm up MCP endpoint (initialize + tools/list)
         run: |
+          # Step 1: Wait for initialize to work
           for i in $(seq 1 10); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-              https://api.relaycast.dev/mcp \
-              -H "Content-Type: application/json" \
-              -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"health-check","version":"1.0.0"}},"id":1}')
-            if [ "$STATUS" = "200" ]; then
-              echo "MCP endpoint ready after $i attempts"
+            RESP=$(curl -s -D /tmp/mcp-headers -X POST 'https://api.relaycast.dev/mcp' \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              --max-time 10 \
+              -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"warmup","version":"1.0.0"}},"id":1}' 2>/dev/null)
+            if echo "$RESP" | grep -q '"tools"'; then
+              echo "Initialize OK after $i attempts"
               break
             fi
-            echo "Attempt $i: MCP returned $STATUS, waiting..."
+            echo "Attempt $i: waiting for MCP..."
             sleep 5
           done
+
+          # Step 2: Extract session ID and warm up tools/list (the 39KB payload Smithery needs)
+          SESSION_ID=$(grep -i 'mcp-session-id' /tmp/mcp-headers | tr -d '\r' | awk '{print $2}')
+          if [ -n "$SESSION_ID" ]; then
+            curl -s -X POST 'https://api.relaycast.dev/mcp' \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -H "Mcp-Session-Id: $SESSION_ID" \
+              --max-time 5 \
+              -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' 2>/dev/null > /dev/null
+
+            TOOLS_RESP=$(curl -s -X POST 'https://api.relaycast.dev/mcp' \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -H "Mcp-Session-Id: $SESSION_ID" \
+              --max-time 15 \
+              -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}' 2>/dev/null)
+            TOOL_COUNT=$(echo "$TOOLS_RESP" | grep -o '"name":"[^"]*"' | wc -l)
+            echo "tools/list warm-up returned $TOOL_COUNT name fields ($(echo "$TOOLS_RESP" | wc -c) bytes)"
+          else
+            echo "Warning: No session ID from initialize"
+          fi
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,8 +137,8 @@ jobs:
 
       - name: Publish to Smithery (with retry)
         run: |
-          for attempt in 1 2 3; do
-            echo "Attempt $attempt..."
+          for attempt in 1 2 3 4 5; do
+            echo "=== Attempt $attempt of 5 ==="
             OUTPUT=$(npx @smithery/cli@latest publish \
               -u https://api.relaycast.dev/mcp \
               -n "relaycast/relay" \
@@ -125,8 +149,12 @@ jobs:
               echo "Full capabilities detected (37 tools + 1 prompt)!"
               break
             fi
-            echo "Attempt $attempt: Incomplete scan (missing tools or prompts), retrying in 15 seconds..."
-            sleep 15
+            if [ "$attempt" -lt 5 ]; then
+              echo "Attempt $attempt: Incomplete scan, retrying in 30 seconds..."
+              sleep 30
+            else
+              echo "All 5 attempts completed without full detection."
+            fi
           done
         env:
           SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
