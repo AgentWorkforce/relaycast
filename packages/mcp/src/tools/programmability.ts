@@ -2,6 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Relay, AgentClient } from '@relaycast/sdk';
 
+/** Passthrough object schema for dynamic API responses. */
+const jsonResult = z.object({}).passthrough();
+
 export function registerProgrammabilityTools(
   server: McpServer,
   getRelay: () => Relay,
@@ -16,11 +19,15 @@ export function registerProgrammabilityTools(
       name: z.string().describe('Human-readable webhook name to identify its purpose (e.g. "GitHub Alerts", "CI Pipeline")'),
       channel: z.string().describe('Name of the target channel where webhook messages will be delivered'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ name, channel }) => {
     const client = getAgentClient();
     const result = await client.client.post('/v1/webhooks', { name, channel });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('list_webhooks', {
@@ -29,11 +36,17 @@ export function registerProgrammabilityTools(
     inputSchema: {
       channel: z.string().optional().describe('Filter webhooks by target channel name to see only webhooks delivering to a specific channel'),
     },
+    outputSchema: {
+      webhooks: z.array(z.object({}).passthrough()).describe('Array of webhook objects with id, name, channel, and URL'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const webhooks = await relay.webhooks.list();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(webhooks, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(webhooks, null, 2) }],
+      structuredContent: { webhooks: webhooks as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('delete_webhook', {
@@ -42,11 +55,18 @@ export function registerProgrammabilityTools(
     inputSchema: {
       webhook_id: z.string().describe('Unique identifier of the webhook to delete, obtained from list_webhooks or create_webhook'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the webhook was deleted'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ webhook_id }) => {
     const relay = getRelay();
     await relay.webhooks.delete(webhook_id);
-    return { content: [{ type: 'text' as const, text: `Deleted webhook ${webhook_id}` }] };
+    const message = `Deleted webhook ${webhook_id}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   server.registerTool('trigger_webhook', {
@@ -57,11 +77,15 @@ export function registerProgrammabilityTools(
       text: z.string().optional().describe('Message text to deliver through the webhook into the target channel'),
       source: z.string().optional().describe('Source identifier for the webhook payload (e.g. "github", "jenkins", "datadog")'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ webhook_id, text, source }) => {
     const relay = getRelay();
     const result = await relay.webhooks.trigger(webhook_id, { text, source });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 
   // === Event Subscriptions ===
@@ -76,6 +100,7 @@ export function registerProgrammabilityTools(
       filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
       secret: z.string().optional().describe('Shared secret used to generate HMAC-SHA256 signatures for payload verification'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
     const relay = getRelay();
@@ -88,7 +113,10 @@ export function registerProgrammabilityTools(
       filter,
       secret,
     });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('list_subscriptions', {
@@ -97,11 +125,17 @@ export function registerProgrammabilityTools(
     inputSchema: {
       event: z.string().optional().describe('Filter subscriptions by event type (e.g. "message.created") to see only relevant subscriptions'),
     },
+    outputSchema: {
+      subscriptions: z.array(z.object({}).passthrough()).describe('Array of subscription objects with id, URL, events, and filters'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const subs = await relay.subscriptions.list();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(subs, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(subs, null, 2) }],
+      structuredContent: { subscriptions: subs as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('get_subscription', {
@@ -110,11 +144,15 @@ export function registerProgrammabilityTools(
     inputSchema: {
       subscription_id: z.string().describe('Unique identifier of the subscription to retrieve, obtained from list_subscriptions or create_subscription'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ subscription_id }) => {
     const relay = getRelay();
     const sub = await relay.subscriptions.get(subscription_id);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(sub, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(sub, null, 2) }],
+      structuredContent: sub as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('delete_subscription', {
@@ -123,11 +161,18 @@ export function registerProgrammabilityTools(
     inputSchema: {
       subscription_id: z.string().describe('Unique identifier of the subscription to delete, obtained from list_subscriptions'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the subscription was deleted'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ subscription_id }) => {
     const relay = getRelay();
     await relay.subscriptions.delete(subscription_id);
-    return { content: [{ type: 'text' as const, text: `Deleted subscription ${subscription_id}` }] };
+    const message = `Deleted subscription ${subscription_id}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   // === Agent Commands ===
@@ -146,6 +191,7 @@ export function registerProgrammabilityTools(
         required: z.boolean().optional().describe('Whether this parameter must be provided when invoking the command'),
       })).optional().describe('Array of parameter definitions that the command accepts for structured input'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ command, description, handler_agent, parameters }) => {
     const relay = getRelay();
@@ -155,7 +201,10 @@ export function registerProgrammabilityTools(
       handler_agent,
       parameters,
     });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('list_commands', {
@@ -164,11 +213,17 @@ export function registerProgrammabilityTools(
     inputSchema: {
       handler_agent: z.string().optional().describe('Filter commands to show only those handled by this specific agent name'),
     },
+    outputSchema: {
+      commands: z.array(z.object({}).passthrough()).describe('Array of command objects with name, description, handler, and parameters'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const commands = await relay.commands.list();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(commands, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(commands, null, 2) }],
+      structuredContent: { commands: commands as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('delete_command', {
@@ -177,11 +232,18 @@ export function registerProgrammabilityTools(
     inputSchema: {
       command: z.string().describe('Name of the command to delete, without the leading slash (e.g. "deploy")'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the command was deleted'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ command }) => {
     const relay = getRelay();
     await relay.commands.delete(command);
-    return { content: [{ type: 'text' as const, text: `Deleted command /${command}` }] };
+    const message = `Deleted command /${command}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   server.registerTool('invoke_command', {
@@ -193,11 +255,15 @@ export function registerProgrammabilityTools(
       args: z.string().optional().describe('Raw argument string passed to the command handler (e.g. "production --force")'),
       parameters: z.string().optional().describe('JSON-encoded object of structured parameters matching the command\'s parameter definitions'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ command, channel, args, parameters }) => {
     const client = getAgentClient();
     const parsedParams = parameters ? JSON.parse(parameters) : undefined;
     const result = await client.commands.invoke(command, { channel, args, parameters: parsedParams });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 }

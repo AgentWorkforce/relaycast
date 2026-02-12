@@ -15,6 +15,9 @@ interface CreateWorkspaceResponse {
 
 const DEFAULT_BASE_URL = 'https://api.relaycast.dev';
 
+/** Passthrough object schema for dynamic API responses. */
+const jsonResult = z.object({}).passthrough();
+
 function normalizeBaseUrl(baseUrl?: string): string {
   return (baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
@@ -63,6 +66,7 @@ export function registerRegistrationTools(
       inputSchema: {
         name: z.string().describe('Human-readable workspace name, used to identify the workspace in dashboards and logs'),
       },
+      outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ name }) => {
@@ -77,6 +81,7 @@ export function registerRegistrationTools(
 
       return {
         content: [{ type: 'text', text: JSON.stringify(workspace, null, 2) }],
+        structuredContent: workspace as unknown as Record<string, unknown>,
       };
     },
   );
@@ -90,6 +95,9 @@ export function registerRegistrationTools(
         'Authenticate this MCP session by providing an existing workspace API key (rk_live_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
       inputSchema: {
         api_key: z.string().describe('Workspace API key starting with "rk_live_", obtained from workspace creation or the Relaycast dashboard'),
+      },
+      outputSchema: {
+        message: z.string().describe('Confirmation message indicating whether the workspace key was set successfully'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -107,15 +115,13 @@ export function registerRegistrationTools(
         setSession({ workspaceKey: api_key });
       }
 
+      const message = switchingWorkspace
+        ? 'Workspace key set. Previous agent session was cleared; call "register" again.'
+        : 'Workspace key set.';
+
       return {
-        content: [
-          {
-            type: 'text',
-            text: switchingWorkspace
-              ? 'Workspace key set. Previous agent session was cleared; call "register" again.'
-              : 'Workspace key set.',
-          },
-        ],
+        content: [{ type: 'text', text: message }],
+        structuredContent: { message },
       };
     },
   );
@@ -132,6 +138,7 @@ export function registerRegistrationTools(
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
         persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role and capabilities'),
       },
+      outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ name, type, persona }) => {
@@ -142,6 +149,7 @@ export function registerRegistrationTools(
       setSession({ agentToken: result.token, agentName: name });
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
       };
     },
   );
@@ -159,6 +167,9 @@ export function registerRegistrationTools(
           .optional()
           .describe('Filter agents by connection status: "online" for currently connected agents, "offline" for disconnected ones'),
       },
+      outputSchema: {
+        agents: z.array(z.object({}).passthrough()).describe('Array of registered agent objects with name, type, persona, and status'),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     },
     async ({ status }) => {
@@ -167,6 +178,7 @@ export function registerRegistrationTools(
       const agents = await relay.agents.list(status ? { status } : undefined);
       return {
         content: [{ type: 'text', text: JSON.stringify(agents, null, 2) }],
+        structuredContent: { agents: agents as unknown as Record<string, unknown>[] },
       };
     },
   );

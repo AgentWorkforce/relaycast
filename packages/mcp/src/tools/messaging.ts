@@ -2,6 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
 
+/** Passthrough object schema for dynamic API responses. */
+const jsonResult = z.object({}).passthrough();
+
 export function registerMessagingTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
@@ -14,11 +17,15 @@ export function registerMessagingTools(
       text: z.string().describe('The message body text, which may include @mentions of other agents'),
       attachments: z.array(z.string()).optional().describe('Array of file attachment IDs obtained from the upload_file tool'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ channel, text, attachments }) => {
     const client = getAgentClient();
     const msg = await client.send(channel, text, attachments ? { attachments } : undefined);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(msg, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(msg, null, 2) }],
+      structuredContent: msg as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('get_messages', {
@@ -30,11 +37,17 @@ export function registerMessagingTools(
       before: z.string().optional().describe('Message ID cursor — return only messages older than this ID, used for backward pagination'),
       after: z.string().optional().describe('Message ID cursor — return only messages newer than this ID, used for forward pagination'),
     },
+    outputSchema: {
+      messages: z.array(z.object({}).passthrough()).describe('Array of message objects with id, author, text, and timestamp'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ channel, limit, before, after }) => {
     const client = getAgentClient();
     const msgs = await client.messages(channel, { limit, before, after });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(msgs, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(msgs, null, 2) }],
+      structuredContent: { messages: msgs as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('reply_to_thread', {
@@ -44,11 +57,15 @@ export function registerMessagingTools(
       message_id: z.string().describe('ID of the parent message to reply to, which becomes the thread root'),
       text: z.string().describe('The reply body text, which may include @mentions of other agents'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ message_id, text }) => {
     const client = getAgentClient();
     const reply = await client.reply(message_id, text);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(reply, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(reply, null, 2) }],
+      structuredContent: reply as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('get_thread', {
@@ -58,11 +75,15 @@ export function registerMessagingTools(
       message_id: z.string().describe('ID of the parent message whose thread should be retrieved'),
       limit: z.number().optional().describe('Maximum number of replies to return (the parent message is always included)'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ message_id, limit }) => {
     const client = getAgentClient();
     const thread = await client.thread(message_id, limit ? { limit } : undefined);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(thread, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(thread, null, 2) }],
+      structuredContent: thread as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('send_dm', {
@@ -72,11 +93,15 @@ export function registerMessagingTools(
       to: z.string().describe('Name of the registered agent to send the direct message to'),
       text: z.string().describe('The direct message body text'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ to, text }) => {
     const client = getAgentClient();
     const result = await client.dm(to, text);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('get_dms', {
@@ -85,11 +110,17 @@ export function registerMessagingTools(
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of conversations to return'),
     },
+    outputSchema: {
+      conversations: z.array(z.object({}).passthrough()).describe('Array of DM conversation summaries'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
     const convos = await client.dms.conversations();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(convos, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(convos, null, 2) }],
+      structuredContent: { conversations: convos as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('send_group_dm', {
@@ -100,10 +131,14 @@ export function registerMessagingTools(
       name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
       text: z.string().describe('The first message to send to the group, which initiates the conversation'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text }) => {
     const client = getAgentClient();
     const result = await client.dms.createGroup({ participants, name, text });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
   });
 }

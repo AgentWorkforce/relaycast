@@ -2,6 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
 
+/** Passthrough object schema for dynamic API responses. */
+const jsonResult = z.object({}).passthrough();
+
 export function registerFeatureTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
@@ -13,11 +16,18 @@ export function registerFeatureTools(
       message_id: z.string().describe('ID of the message to react to'),
       emoji: z.string().describe('Emoji character or shortcode to react with (e.g. "thumbsup", "rocket", "check")'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the reaction was added'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
     await client.react(message_id, emoji);
-    return { content: [{ type: 'text' as const, text: `Reacted with ${emoji}` }] };
+    const message = `Reacted with ${emoji}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   server.registerTool('remove_reaction', {
@@ -27,11 +37,18 @@ export function registerFeatureTools(
       message_id: z.string().describe('ID of the message to remove the reaction from'),
       emoji: z.string().describe('Emoji character or shortcode to remove (must match a reaction previously added by this agent)'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the reaction was removed'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
     await client.unreact(message_id, emoji);
-    return { content: [{ type: 'text' as const, text: `Removed reaction ${emoji}` }] };
+    const message = `Removed reaction ${emoji}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   server.registerTool('search_messages', {
@@ -43,11 +60,17 @@ export function registerFeatureTools(
       from: z.string().optional().describe('Restrict search results to messages sent by this agent name'),
       limit: z.number().optional().describe('Maximum number of search results to return'),
     },
+    outputSchema: {
+      results: z.array(z.object({}).passthrough()).describe('Array of matching message objects'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ query, channel, from, limit }) => {
     const client = getAgentClient();
     const results = await client.search(query, { channel, from, limit });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }],
+      structuredContent: { results: results as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('check_inbox', {
@@ -56,11 +79,15 @@ export function registerFeatureTools(
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of inbox items to return'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
     const inbox = await client.inbox();
-    return { content: [{ type: 'text' as const, text: JSON.stringify(inbox, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(inbox, null, 2) }],
+      structuredContent: inbox as unknown as Record<string, unknown>,
+    };
   });
 
   server.registerTool('mark_read', {
@@ -69,11 +96,18 @@ export function registerFeatureTools(
     inputSchema: {
       message_id: z.string().describe('ID of the message to mark as read by the current agent'),
     },
+    outputSchema: {
+      message: z.string().describe('Confirmation message indicating the message was marked as read'),
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id }) => {
     const client = getAgentClient();
     await client.markRead(message_id);
-    return { content: [{ type: 'text' as const, text: `Marked message ${message_id} as read` }] };
+    const message = `Marked message ${message_id} as read`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
   });
 
   server.registerTool('get_readers', {
@@ -82,11 +116,17 @@ export function registerFeatureTools(
     inputSchema: {
       message_id: z.string().describe('ID of the message to check read receipts for'),
     },
+    outputSchema: {
+      readers: z.array(z.object({}).passthrough()).describe('Array of reader objects with agent name and read timestamp'),
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ message_id }) => {
     const client = getAgentClient();
     const readers = await client.readers(message_id);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(readers, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(readers, null, 2) }],
+      structuredContent: { readers: readers as unknown as Record<string, unknown>[] },
+    };
   });
 
   server.registerTool('upload_file', {
@@ -97,10 +137,14 @@ export function registerFeatureTools(
       content_type: z.string().describe('MIME type of the file content (e.g. "text/plain", "image/png", "application/pdf")'),
       size_bytes: z.number().describe('Size of the file in bytes, used for upload validation and storage allocation'),
     },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ filename, content_type, size_bytes }) => {
     const client = getAgentClient();
     const upload = await client.files.upload({ filename, content_type, size_bytes });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(upload, null, 2) }] };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(upload, null, 2) }],
+      structuredContent: upload as unknown as Record<string, unknown>,
+    };
   });
 }

@@ -2,11 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgentClient } from '@relaycast/sdk';
 
+/** Passthrough object schema for dynamic API responses. */
+const jsonResult = z.object({}).passthrough();
+
 export function registerChannelTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
 ): void {
-  // Tool 3: create_channel
   server.registerTool(
     'create_channel',
     {
@@ -16,16 +18,19 @@ export function registerChannelTools(
         name: z.string().describe('Unique channel name using lowercase letters, numbers, and hyphens (e.g. "build-alerts", "team-chat")'),
         topic: z.string().optional().describe('Short description of the channel\'s purpose, visible to all members when they view channel details'),
       },
+      outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ name, topic }) => {
       const client = getAgentClient();
       const channel = await client.channels.create({ name, topic });
-      return { content: [{ type: 'text', text: JSON.stringify(channel, null, 2) }] };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(channel, null, 2) }],
+        structuredContent: channel as unknown as Record<string, unknown>,
+      };
     },
   );
 
-  // Tool 4: list_channels
   server.registerTool(
     'list_channels',
     {
@@ -33,6 +38,9 @@ export function registerChannelTools(
       description: 'List all channels available in the workspace. Returns each channel\'s name, topic, member count, and creation date. By default only active channels are shown; set include_archived to true to also see archived channels.',
       inputSchema: {
         include_archived: z.boolean().optional().describe('When true, include archived channels in the response alongside active ones'),
+      },
+      outputSchema: {
+        channels: z.array(z.object({}).passthrough()).describe('Array of channel objects with name, topic, and member details'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     },
@@ -43,11 +51,11 @@ export function registerChannelTools(
       );
       return {
         content: [{ type: 'text', text: JSON.stringify(channels, null, 2) }],
+        structuredContent: { channels: channels as unknown as Record<string, unknown>[] },
       };
     },
   );
 
-  // Tool 5: join_channel
   server.registerTool(
     'join_channel',
     {
@@ -56,16 +64,22 @@ export function registerChannelTools(
       inputSchema: {
         channel: z.string().describe('Name of the channel to join (e.g. "general", "build-alerts")'),
       },
+      outputSchema: {
+        message: z.string().describe('Confirmation message indicating the channel was joined'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();
       await client.channels.join(channel);
-      return { content: [{ type: 'text', text: `Joined channel #${channel}` }] };
+      const message = `Joined channel #${channel}`;
+      return {
+        content: [{ type: 'text', text: message }],
+        structuredContent: { message },
+      };
     },
   );
 
-  // Tool 6: leave_channel
   server.registerTool(
     'leave_channel',
     {
@@ -74,16 +88,22 @@ export function registerChannelTools(
       inputSchema: {
         channel: z.string().describe('Name of the channel to leave (e.g. "general", "build-alerts")'),
       },
+      outputSchema: {
+        message: z.string().describe('Confirmation message indicating the channel was left'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();
       await client.channels.leave(channel);
-      return { content: [{ type: 'text', text: `Left channel #${channel}` }] };
+      const message = `Left channel #${channel}`;
+      return {
+        content: [{ type: 'text', text: message }],
+        structuredContent: { message },
+      };
     },
   );
 
-  // Tool 7: invite_to_channel
   server.registerTool(
     'invite_to_channel',
     {
@@ -93,16 +113,22 @@ export function registerChannelTools(
         channel: z.string().describe('Name of the channel to invite the agent to (e.g. "general", "build-alerts")'),
         agent: z.string().describe('Name of the registered agent to invite into the channel'),
       },
+      outputSchema: {
+        message: z.string().describe('Confirmation message indicating the agent was invited'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel, agent }) => {
       const client = getAgentClient();
       await client.channels.invite(channel, agent);
-      return { content: [{ type: 'text', text: `Invited ${agent} to #${channel}` }] };
+      const message = `Invited ${agent} to #${channel}`;
+      return {
+        content: [{ type: 'text', text: message }],
+        structuredContent: { message },
+      };
     },
   );
 
-  // Tool 8: set_channel_topic
   server.registerTool(
     'set_channel_topic',
     {
@@ -112,16 +138,19 @@ export function registerChannelTools(
         channel: z.string().describe('Name of the channel whose topic should be updated'),
         topic: z.string().describe('New topic text describing the channel\'s purpose or current focus'),
       },
+      outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel, topic }) => {
       const client = getAgentClient();
       const updated = await client.channels.setTopic(channel, topic);
-      return { content: [{ type: 'text', text: JSON.stringify(updated, null, 2) }] };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(updated, null, 2) }],
+        structuredContent: updated as unknown as Record<string, unknown>,
+      };
     },
   );
 
-  // Tool 9: archive_channel
   server.registerTool(
     'archive_channel',
     {
@@ -130,12 +159,19 @@ export function registerChannelTools(
       inputSchema: {
         channel: z.string().describe('Name of the channel to archive (e.g. "old-project", "temp-discussion")'),
       },
+      outputSchema: {
+        message: z.string().describe('Confirmation message indicating the channel was archived'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ channel }) => {
       const client = getAgentClient();
       await client.channels.archive(channel);
-      return { content: [{ type: 'text', text: `Archived channel #${channel}` }] };
+      const message = `Archived channel #${channel}`;
+      return {
+        content: [{ type: 'text', text: message }],
+        structuredContent: { message },
+      };
     },
   );
 }
