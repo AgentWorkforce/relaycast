@@ -26,6 +26,7 @@ export function registerProgrammabilityTools(
   server.registerTool('list_webhooks', {
     title: 'List Webhooks',
     description: 'List all inbound webhooks in the workspace.',
+    inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
@@ -91,6 +92,7 @@ export function registerProgrammabilityTools(
   server.registerTool('list_subscriptions', {
     title: 'List Subscriptions',
     description: 'List all outbound event subscriptions in the workspace.',
+    inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
@@ -155,6 +157,7 @@ export function registerProgrammabilityTools(
   server.registerTool('list_commands', {
     title: 'List Commands',
     description: 'List all registered agent commands in the workspace.',
+    inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();

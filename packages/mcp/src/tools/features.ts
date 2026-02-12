@@ -53,6 +53,7 @@ export function registerFeatureTools(
   server.registerTool('check_inbox', {
     title: 'Check Inbox',
     description: 'Check inbox for unread messages, mentions, and DMs.',
+    inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();

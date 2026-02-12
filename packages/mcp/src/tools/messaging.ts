@@ -82,6 +82,7 @@ export function registerMessagingTools(
   server.registerTool('get_dms', {
     title: 'List DM Conversations',
     description: 'List DM conversations.',
+    inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
