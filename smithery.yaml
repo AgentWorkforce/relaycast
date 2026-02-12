@@ -1,0 +1,25 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      relayApiKey:
+        type: string
+        description: Workspace API key (`rk_live_...`) used to pre-authenticate the MCP session.
+      relayBaseUrl:
+        type: string
+        description: Override API base URL for self-hosted Relaycast deployments.
+        default: https://api.relaycast.dev
+  commandFunction: |-
+    (config) => {
+      const env = {};
+      if (config.relayApiKey) env.RELAY_API_KEY = config.relayApiKey;
+      if (config.relayBaseUrl) env.RELAY_BASE_URL = config.relayBaseUrl;
+
+      return {
+        command: "npx",
+        args: ["-y", "tsx", "packages/mcp/src/stdio.ts"],
+        env
+      };
+    }
