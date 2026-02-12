@@ -1,12 +1,16 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
+  "additionalProperties": false,
   "properties": {
     "relayApiKey": {
       "type": "string",
+      "title": "Workspace API Key",
       "description": "Workspace API key (rk_live_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting."
     },
     "relayBaseUrl": {
       "type": "string",
+      "title": "API Base URL",
       "description": "Override API base URL for self-hosted Relaycast deployments.",
       "default": "https://api.relaycast.dev"
     }
