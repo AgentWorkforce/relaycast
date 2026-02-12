@@ -125,39 +125,6 @@ const mcpHandler = createHttpHandler(
 app.all('/mcp', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  // --- Temporary MCP debug logging (remove after Smithery scanner is fixed) ---
-  const chunks: Buffer[] = [];
-  req.on('data', (chunk: Buffer) => chunks.push(chunk));
-  req.on('end', () => {
-    const body = Buffer.concat(chunks).toString();
-    const methods: string[] = [];
-    try {
-      const parsed = JSON.parse(body);
-      if (Array.isArray(parsed)) {
-        for (const r of parsed) methods.push(r.method ?? '?');
-      } else {
-        methods.push(parsed.method ?? '?');
-      }
-    } catch { /* not JSON */ }
-    console.log(`[mcp-debug] ${req.method} session=${sessionId ?? 'none'} methods=[${methods.join(',')}] body=${body.length}B accept=${req.headers.accept}`);
-  });
-  const origWrite = res.write.bind(res);
-  const origEnd = res.end.bind(res);
-  let totalBytes = 0;
-  res.write = (chunk: unknown, ...args: unknown[]) => {
-    if (Buffer.isBuffer(chunk)) totalBytes += chunk.length;
-    else if (typeof chunk === 'string') totalBytes += Buffer.byteLength(chunk);
-    return (origWrite as (...a: unknown[]) => boolean)(chunk, ...args);
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (res as any).end = (chunk?: unknown, ...args: unknown[]) => {
-    if (Buffer.isBuffer(chunk)) totalBytes += chunk.length;
-    else if (typeof chunk === 'string') totalBytes += Buffer.byteLength(chunk);
-    console.log(`[mcp-debug] response status=${res.statusCode} bytes=${totalBytes} content-type=${res.getHeader('content-type')}`);
-    return (origEnd as (...a: unknown[]) => unknown)(chunk, ...args);
-  };
-  // --- End debug logging ---
-
   // Session exists locally or no session yet — handle directly
   if (!sessionId || mcpHandler.hasSession(sessionId)) {
     mcpHandler.handleRequest(req, res);
