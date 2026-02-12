@@ -81,6 +81,24 @@ jobs:
     needs: deploy
 
     steps:
+      - name: Wait for Fly.io instances to warm up
+        run: sleep 30
+
+      - name: Verify MCP endpoint is ready
+        run: |
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+              https://api.relaycast.dev/mcp \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"health-check","version":"1.0.0"}},"id":1}')
+            if [ "$STATUS" = "200" ]; then
+              echo "MCP endpoint ready after $i attempts"
+              break
+            fi
+            echo "Attempt $i: MCP returned $STATUS, waiting..."
+            sleep 5
+          done
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -93,12 +111,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Publish to Smithery
-        run: >-
-          npx @smithery/cli@latest publish
-          -u https://api.relaycast.dev/mcp
-          -n "relaycast/relay"
-          -k "$SMITHERY_API_KEY"
-          --config-schema packages/mcp/smithery-config-schema.json
+      - name: Publish to Smithery (with retry)
+        run: |
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt..."
+            OUTPUT=$(npx @smithery/cli@latest publish \
+              -u https://api.relaycast.dev/mcp \
+              -n "relaycast/relay" \
+              -k "$SMITHERY_API_KEY" \
+              --config-schema packages/mcp/smithery-config-schema.json 2>&1)
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "1 prompt"; then
+              echo "Full capabilities detected!"
+              break
+            fi
+            echo "Incomplete scan, retrying in 15 seconds..."
+            sleep 15
+          done
         env:
           SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
