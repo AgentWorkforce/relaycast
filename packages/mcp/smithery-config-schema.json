@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "relayApiKey": {
+      "type": "string",
+      "description": "Workspace API key (rk_live_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting."
+    },
+    "relayBaseUrl": {
+      "type": "string",
+      "description": "Override API base URL for self-hosted Relaycast deployments.",
+      "default": "https://api.relaycast.dev"
+    }
+  }
+}

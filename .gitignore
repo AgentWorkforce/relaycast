@@ -13,6 +13,9 @@ coverage/
 .codex/mcp.json
 .gemini/
 
+# Smithery build artifacts
+.smithery/
+
 # Python
 __pycache__/
 *.pyc
