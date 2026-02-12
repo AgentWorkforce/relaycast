@@ -2,28 +2,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Relay, AgentClient } from '@relaycast/sdk';
 
-const readOnlyAnnotations = {
-  title: 'Read-only operation',
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-};
-const writeAnnotations = {
-  title: 'State-changing operation',
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: true,
-};
-const destructiveAnnotations = {
-  title: 'Destructive operation',
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: true,
-};
-
 export function registerProgrammabilityTools(
   server: McpServer,
   getRelay: () => Relay,
@@ -32,12 +10,13 @@ export function registerProgrammabilityTools(
   // === Inbound Webhooks ===
 
   server.registerTool('create_webhook', {
+    title: 'Create Webhook',
     description: 'Create an inbound webhook that external services can POST to, delivering messages into a channel.',
-    annotations: writeAnnotations,
     inputSchema: {
       name: z.string().describe('Webhook name (e.g. "GitHub Alerts")'),
       channel: z.string().describe('Target channel name'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ name, channel }) => {
     const client = getAgentClient();
     const result = await client.client.post('/v1/webhooks', { name, channel });
@@ -45,8 +24,9 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('list_webhooks', {
+    title: 'List Webhooks',
     description: 'List all inbound webhooks in the workspace.',
-    annotations: readOnlyAnnotations,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const webhooks = await relay.webhooks.list();
@@ -54,11 +34,12 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('delete_webhook', {
+    title: 'Delete Webhook',
     description: 'Delete an inbound webhook by ID.',
-    annotations: destructiveAnnotations,
     inputSchema: {
       webhook_id: z.string().describe('Webhook ID to delete'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ webhook_id }) => {
     const relay = getRelay();
     await relay.webhooks.delete(webhook_id);
@@ -66,13 +47,14 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('trigger_webhook', {
+    title: 'Trigger Webhook',
     description: 'Trigger an inbound webhook to post a message into its channel.',
-    annotations: writeAnnotations,
     inputSchema: {
       webhook_id: z.string().describe('Webhook ID to trigger'),
       text: z.string().optional().describe('Message text'),
       source: z.string().optional().describe('Source identifier (e.g. "github")'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ webhook_id, text, source }) => {
     const relay = getRelay();
     const result = await relay.webhooks.trigger(webhook_id, { text, source });
@@ -82,8 +64,8 @@ export function registerProgrammabilityTools(
   // === Event Subscriptions ===
 
   server.registerTool('create_subscription', {
+    title: 'Create Event Subscription',
     description: 'Create an outbound event subscription. The server will POST to the given URL when matching events occur.',
-    annotations: writeAnnotations,
     inputSchema: {
       events: z.array(z.string()).describe('Event types to subscribe to (e.g. ["message.created", "reaction.added"])'),
       url: z.string().describe('URL to POST events to'),
@@ -91,6 +73,7 @@ export function registerProgrammabilityTools(
       filter_mentions: z.string().optional().describe('Only fire when this agent is mentioned'),
       secret: z.string().optional().describe('Secret for HMAC signature verification'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
     const relay = getRelay();
     const filter = (filter_channel || filter_mentions)
@@ -106,8 +89,9 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('list_subscriptions', {
+    title: 'List Subscriptions',
     description: 'List all outbound event subscriptions in the workspace.',
-    annotations: readOnlyAnnotations,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const subs = await relay.subscriptions.list();
@@ -115,11 +99,12 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('get_subscription', {
+    title: 'Get Subscription',
     description: 'Get details of a specific event subscription.',
-    annotations: readOnlyAnnotations,
     inputSchema: {
       subscription_id: z.string().describe('Subscription ID'),
     },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ subscription_id }) => {
     const relay = getRelay();
     const sub = await relay.subscriptions.get(subscription_id);
@@ -127,11 +112,12 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('delete_subscription', {
+    title: 'Delete Subscription',
     description: 'Delete an event subscription by ID.',
-    annotations: destructiveAnnotations,
     inputSchema: {
       subscription_id: z.string().describe('Subscription ID to delete'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ subscription_id }) => {
     const relay = getRelay();
     await relay.subscriptions.delete(subscription_id);
@@ -141,8 +127,8 @@ export function registerProgrammabilityTools(
   // === Agent Commands ===
 
   server.registerTool('register_command', {
+    title: 'Register Command',
     description: 'Register a slash command that an agent can handle. Other agents can invoke it.',
-    annotations: writeAnnotations,
     inputSchema: {
       command: z.string().describe('Command name (e.g. "deploy")'),
       description: z.string().describe('What the command does'),
@@ -154,6 +140,7 @@ export function registerProgrammabilityTools(
         required: z.boolean().optional(),
       })).optional().describe('Command parameters'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ command, description, handler_agent, parameters }) => {
     const relay = getRelay();
     const result = await relay.commands.register({
@@ -166,8 +153,9 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('list_commands', {
+    title: 'List Commands',
     description: 'List all registered agent commands in the workspace.',
-    annotations: readOnlyAnnotations,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const commands = await relay.commands.list();
@@ -175,11 +163,12 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('delete_command', {
+    title: 'Delete Command',
     description: 'Delete a registered command.',
-    annotations: destructiveAnnotations,
     inputSchema: {
       command: z.string().describe('Command name to delete'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ command }) => {
     const relay = getRelay();
     await relay.commands.delete(command);
@@ -187,14 +176,15 @@ export function registerProgrammabilityTools(
   });
 
   server.registerTool('invoke_command', {
+    title: 'Invoke Command',
     description: 'Invoke a registered slash command as the current agent.',
-    annotations: writeAnnotations,
     inputSchema: {
       command: z.string().describe('Command name to invoke'),
       channel: z.string().describe('Channel context for invocation'),
       args: z.string().optional().describe('Raw argument string'),
       parameters: z.string().optional().describe('JSON-encoded structured parameters object'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ command, channel, args, parameters }) => {
     const client = getAgentClient();
     const parsedParams = parameters ? JSON.parse(parameters) : undefined;

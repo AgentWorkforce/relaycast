@@ -7,8 +7,16 @@ export interface SessionState {
   agentName: string | null;
   wsBridge: WsBridge | null;
   subscriptions: SubscriptionManager | null;
+  wsInitAttempted: boolean;
 }
 
 export function createInitialSession(workspaceKey: string | null = null): SessionState {
-  return { workspaceKey, agentToken: null, agentName: null, wsBridge: null, subscriptions: null };
+  return {
+    workspaceKey,
+    agentToken: null,
+    agentName: null,
+    wsBridge: null,
+    subscriptions: null,
+    wsInitAttempted: false,
+  };
 }

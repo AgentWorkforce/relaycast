@@ -2,33 +2,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
 
-const readOnlyAnnotations = {
-  title: 'Read-only operation',
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-};
-const writeAnnotations = {
-  title: 'State-changing operation',
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: true,
-};
-
 export function registerMessagingTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
 ): void {
   server.registerTool('post_message', {
+    title: 'Post Message',
     description: 'Post a message to a channel.',
-    annotations: writeAnnotations,
     inputSchema: {
       channel: z.string().describe('Channel name'),
       text: z.string().describe('Message text'),
       attachments: z.array(z.string()).optional().describe('File IDs to attach'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ channel, text, attachments }) => {
     const client = getAgentClient();
     const msg = await client.send(channel, text, attachments ? { attachments } : undefined);
@@ -36,14 +22,15 @@ export function registerMessagingTools(
   });
 
   server.registerTool('get_messages', {
+    title: 'Get Messages',
     description: 'Get message history from a channel.',
-    annotations: readOnlyAnnotations,
     inputSchema: {
       channel: z.string().describe('Channel name'),
       limit: z.number().optional().describe('Max messages to return'),
       before: z.string().optional().describe('Cursor: messages before this ID'),
       after: z.string().optional().describe('Cursor: messages after this ID'),
     },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ channel, limit, before, after }) => {
     const client = getAgentClient();
     const msgs = await client.messages(channel, { limit, before, after });
@@ -51,12 +38,13 @@ export function registerMessagingTools(
   });
 
   server.registerTool('reply_to_thread', {
+    title: 'Reply to Thread',
     description: 'Reply to a message thread.',
-    annotations: writeAnnotations,
     inputSchema: {
       message_id: z.string().describe('Parent message ID'),
       text: z.string().describe('Reply text'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ message_id, text }) => {
     const client = getAgentClient();
     const reply = await client.reply(message_id, text);
@@ -64,12 +52,13 @@ export function registerMessagingTools(
   });
 
   server.registerTool('get_thread', {
+    title: 'Get Thread',
     description: 'Get a thread (parent message + replies).',
-    annotations: readOnlyAnnotations,
     inputSchema: {
       message_id: z.string().describe('Parent message ID'),
       limit: z.number().optional().describe('Max replies to return'),
     },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async ({ message_id, limit }) => {
     const client = getAgentClient();
     const thread = await client.thread(message_id, limit ? { limit } : undefined);
@@ -77,12 +66,13 @@ export function registerMessagingTools(
   });
 
   server.registerTool('send_dm', {
+    title: 'Send Direct Message',
     description: 'Send a direct message to another agent.',
-    annotations: writeAnnotations,
     inputSchema: {
       to: z.string().describe('Recipient agent name'),
       text: z.string().describe('Message text'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ to, text }) => {
     const client = getAgentClient();
     const result = await client.dm(to, text);
@@ -90,8 +80,9 @@ export function registerMessagingTools(
   });
 
   server.registerTool('get_dms', {
+    title: 'List DM Conversations',
     description: 'List DM conversations.',
-    annotations: readOnlyAnnotations,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
     const convos = await client.dms.conversations();
@@ -99,13 +90,14 @@ export function registerMessagingTools(
   });
 
   server.registerTool('send_group_dm', {
+    title: 'Send Group DM',
     description: 'Create a group DM conversation.',
-    annotations: writeAnnotations,
     inputSchema: {
       participants: z.array(z.string()).describe('Agent names to include'),
       name: z.string().optional().describe('Group name'),
       text: z.string().describe('First message text'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text }) => {
     const client = getAgentClient();
     const result = await client.dms.createGroup({ participants, name, text });

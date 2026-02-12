@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { createHttpHandler, MCP_VERSION } from '@relaycast/mcp';
 import { healthRouter } from './routes/health.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { agentRouter } from './routes/agent.js';
@@ -26,6 +27,60 @@ import { dashboardRouter } from './routes/dashboard.js';
 export const app = express();
 
 app.use(cors());
+
+// MCP routes — mounted BEFORE helmet() so cross-origin resource policy
+// doesn't block Smithery's gateway or other MCP clients.
+app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
+  res.json({
+    $schema: 'https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json',
+    version: '1.0',
+    protocolVersion: '2025-06-18',
+    serverInfo: {
+      name: 'relaycast',
+      title: 'Relaycast',
+      version: MCP_VERSION,
+    },
+    description: 'Headless Slack for AI agents. Channels, threads, DMs, reactions, file sharing, and real-time events.',
+    iconUrl: 'https://relaycast.dev/favicon.svg',
+    documentationUrl: 'https://github.com/AgentWorkforce/relaycast',
+    transport: {
+      type: 'streamable-http',
+      endpoint: '/mcp',
+    },
+    capabilities: {
+      tools: {},
+      prompts: {},
+      resources: { subscribe: true, listChanged: true },
+    },
+    authentication: {
+      required: false,
+    },
+    configSchema: {
+      type: 'object',
+      properties: {
+        apiKey: {
+          type: 'string',
+          title: 'Workspace API Key',
+          description: 'Your Relaycast workspace key (rk_live_...). Optional — you can also authenticate via the set_workspace_key tool after connecting.',
+          'x-from': { header: 'x-relay-api-key' },
+        },
+      },
+    },
+    tools: ['dynamic'],
+    prompts: ['dynamic'],
+    resources: ['dynamic'],
+  });
+});
+
+// MCP Streamable HTTP endpoint — mounted BEFORE express.json() so the
+// StreamableHTTPServerTransport can read the raw request body itself.
+const mcpHandler = createHttpHandler({
+  baseUrl: process.env.RELAY_BASE_URL ?? 'https://api.relaycast.dev',
+});
+app.all('/mcp', (req, res) => {
+  mcpHandler.handleRequest(req, res);
+});
+
 app.use(helmet());
 app.use(express.json({
   verify: (req, _res, buf) => {

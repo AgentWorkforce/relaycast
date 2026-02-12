@@ -5,6 +5,8 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package.json package-lock.json* ./
 COPY packages/types/package.json packages/types/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/mcp/package.json packages/mcp/
 COPY packages/server/package.json packages/server/
 
 # Install all dependencies (including devDependencies for building)
@@ -13,6 +15,8 @@ RUN npm install
 # Copy source files
 COPY tsconfig.base.json turbo.json ./
 COPY packages/types/ packages/types/
+COPY packages/sdk/ packages/sdk/
+COPY packages/mcp/ packages/mcp/
 COPY packages/server/ packages/server/
 
 # Build the server and its dependencies
@@ -33,6 +37,10 @@ COPY --from=builder /app/packages/server/package.json ./packages/server/
 COPY --from=builder /app/packages/server/src/db/migrations ./packages/server/src/db/migrations
 COPY --from=builder /app/packages/types/dist ./packages/types/dist
 COPY --from=builder /app/packages/types/package.json ./packages/types/
+COPY --from=builder /app/packages/sdk/dist ./packages/sdk/dist
+COPY --from=builder /app/packages/sdk/package.json ./packages/sdk/
+COPY --from=builder /app/packages/mcp/dist ./packages/mcp/dist
+COPY --from=builder /app/packages/mcp/package.json ./packages/mcp/
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 

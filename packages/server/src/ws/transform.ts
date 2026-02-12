@@ -15,6 +15,7 @@ export function transformForClient(event: WsEvent): object {
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
+          agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
           attachments: (d.attachments as unknown[]) ?? [],
@@ -27,6 +28,7 @@ export function transformForClient(event: WsEvent): object {
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
+          agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
         },
@@ -38,6 +40,7 @@ export function transformForClient(event: WsEvent): object {
         parent_id: d.thread_id as string,
         message: {
           id: d.id as string,
+          agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
         },
@@ -65,6 +68,7 @@ export function transformForClient(event: WsEvent): object {
         conversation_id: d.conversation_id as string,
         message: {
           id: d.id as string,
+          agent_id: (d.from_agent_id ?? d.agent_id) as string,
           agent_name: d.from_name as string,
           text: d.text as string,
         },
@@ -76,6 +80,7 @@ export function transformForClient(event: WsEvent): object {
         conversation_id: d.conversation_id as string,
         message: {
           id: d.id as string,
+          agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
         },
