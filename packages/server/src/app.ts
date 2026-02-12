@@ -72,6 +72,28 @@ app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
   });
 });
 
+// Smithery config schema discovery endpoint for external deployments.
+// See: https://smithery.ai/docs/build/session-config
+app.get('/.well-known/mcp-config', (_req: Request, res: Response) => {
+  res.json({
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    type: 'object',
+    properties: {
+      relayApiKey: {
+        type: 'string',
+        title: 'Workspace API Key',
+        description: 'Workspace API key (rk_live_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting.',
+      },
+      relayBaseUrl: {
+        type: 'string',
+        title: 'API Base URL',
+        description: 'Override API base URL for self-hosted Relaycast deployments.',
+        default: 'https://api.relaycast.dev',
+      },
+    },
+  });
+});
+
 // MCP Streamable HTTP endpoint — mounted BEFORE express.json() so the
 // StreamableHTTPServerTransport can read the raw request body itself.
 const mcpHandler = createHttpHandler({
