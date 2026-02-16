@@ -1,6 +1,6 @@
 export { SDK_VERSION } from './version.js';
-export { Relay } from './relay.js';
-export type { RelayOptions } from './relay.js';
+export { RelayCast } from './relay.js';
+export type { RelayCastOptions } from './relay.js';
 export { AgentClient } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';

@@ -1,11 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AgentClient, Relay } from '@relaycast/sdk';
+import type { AgentClient, RelayCast } from '@relaycast/sdk';
 
 export function registerResourceDefinitions(
   server: McpServer,
   getAgentClient: () => AgentClient,
-  getRelay: () => Relay,
+  getRelay: () => RelayCast,
 ): void {
   // Static resource: inbox
   server.registerResource(

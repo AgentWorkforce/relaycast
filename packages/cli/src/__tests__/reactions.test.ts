@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  Relay: vi.fn(() => ({
+  RelayCast: vi.fn(() => ({
     as: vi.fn(() => ({
       react: mocks.react,
       unreact: mocks.unreact,

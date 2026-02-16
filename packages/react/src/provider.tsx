@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { Relay, WsClient } from '@relaycast/sdk';
+import { RelayCast, WsClient } from '@relaycast/sdk';
 import type { ServerEvent } from '@relaycast/types';
 import { ClientContext, StoreContext } from './context.js';
 import { createStore } from './store.js';
@@ -15,7 +15,7 @@ export interface RelayProviderProps {
 
 export function RelayProvider({ apiKey, agentToken, baseUrl, channels, children }: RelayProviderProps) {
   const clients = useMemo(() => {
-    const relay = new Relay({ apiKey, baseUrl });
+    const relay = new RelayCast({ apiKey, baseUrl });
     const agent = relay.as(agentToken);
     const ws = new WsClient({ token: agentToken, baseUrl });
     return { relay, agent, ws };

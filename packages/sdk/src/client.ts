@@ -42,12 +42,16 @@ const apiEnvelopeSchema = z.object({
 });
 
 export class HttpClient {
-  private apiKey: string;
+  private _apiKey: string;
   private _baseUrl: string;
 
   constructor(options: ClientOptions) {
-    this.apiKey = options.apiKey;
+    this._apiKey = options.apiKey;
     this._baseUrl = options.baseUrl ?? 'https://api.agentrelay.dev';
+  }
+
+  get apiKey(): string {
+    return this._apiKey;
   }
 
   get baseUrl(): string {
@@ -69,7 +73,7 @@ export class HttpClient {
     }
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${this._apiKey}`,
       'X-SDK-Version': SDK_VERSION,
       ...(options?.headers || {}),
     };

@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { Relay, AgentClient, WsClient } from '@relaycast/sdk';
+import { RelayCast, AgentClient, WsClient } from '@relaycast/sdk';
 import { registerRegistrationTools } from './tools/registration.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';
@@ -51,7 +51,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
       );
     }
-    return new Relay({ apiKey: workspaceKey, baseUrl: options.baseUrl });
+    return new RelayCast({ apiKey: workspaceKey, baseUrl: options.baseUrl });
   };
   const setSession = (partial: Partial<SessionState>) => {
     const nextAgentToken =
@@ -115,7 +115,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "register" tool first.');
     }
-    return new Relay({ apiKey: session.agentToken, baseUrl: options.baseUrl }).as(
+    return new RelayCast({ apiKey: session.agentToken, baseUrl: options.baseUrl }).as(
       session.agentToken,
     );
   };

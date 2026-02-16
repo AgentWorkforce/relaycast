@@ -32,16 +32,16 @@ import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
 import { SDK_VERSION } from './version.js';
 
-export interface RelayOptions {
+export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
 }
 
-export class Relay {
+export class RelayCast {
   private client: HttpClient;
   billing: BillingClient;
 
-  constructor(options: RelayOptions) {
+  constructor(options: RelayCastOptions) {
     this.client = new HttpClient(options);
     this.billing = new BillingClient(this.client);
   }

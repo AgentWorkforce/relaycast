@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  Relay: vi.fn(() => ({
+  RelayCast: vi.fn(() => ({
     as: vi.fn(() => ({
       send: mocks.send,
       dm: mocks.dm,

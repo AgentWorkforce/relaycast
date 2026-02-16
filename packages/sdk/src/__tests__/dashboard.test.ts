@@ -17,8 +17,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('stats() calls GET /v1/workspace/stats', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() =>
       mockResponse({ agents: 5, channels: 3, messages: 100, dm_conversations: 2, files: 1 }),
@@ -34,8 +34,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('activity() calls GET /v1/activity without params', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() => mockResponse([]));
     await relay.activity();
@@ -45,8 +45,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('activity(5) calls GET /v1/activity?limit=5', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() => mockResponse([]));
     await relay.activity(5);
@@ -56,8 +56,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('allDmConversations() calls GET /v1/dm/conversations/all', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() => mockResponse([]));
     await relay.allDmConversations();
@@ -68,8 +68,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('agents.rotateToken() calls POST /v1/agents/:name/rotate-token', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() =>
       mockResponse({ token: 'at_live_newtoken' }),
@@ -83,8 +83,8 @@ describe('Relay dashboard methods', () => {
   });
 
   it('agents.rotateToken() URL-encodes the agent name', async () => {
-    const { Relay } = await import('../relay.js');
-    const relay = new Relay({ apiKey: 'rk_live_test123' });
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
     mockFetch.mockImplementation(() =>
       mockResponse({ token: 'at_live_tok' }),

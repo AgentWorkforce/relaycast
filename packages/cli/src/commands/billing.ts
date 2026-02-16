@@ -1,13 +1,13 @@
 import { Command } from 'commander';
-import { Relay } from '@relaycast/sdk';
+import { RelayCast } from '@relaycast/sdk';
 import { loadConfig } from '../config.js';
 
-function getRelay(): Relay {
+function getRelay(): RelayCast {
   const config = loadConfig();
   if (!config.apiKey) {
     throw new Error('No API key configured. Run: relay config set api-key <key>');
   }
-  return new Relay({ apiKey: config.apiKey, baseUrl: config.endpoint });
+  return new RelayCast({ apiKey: config.apiKey, baseUrl: config.endpoint });
 }
 
 export function registerBillingCommands(program: Command): void {

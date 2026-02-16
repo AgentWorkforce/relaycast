@@ -20,8 +20,29 @@ import type {
   FileInfo,
   InvokeCommandRequest,
   CommandInvocation,
+  WsClientEvent,
+  MessageCreatedEvent,
+  MessageUpdatedEvent,
+  ThreadReplyEvent,
+  MessageReadEvent,
+  ReactionAddedEvent,
+  ReactionRemovedEvent,
+  DmReceivedEvent,
+  GroupDmReceivedEvent,
+  AgentOnlineEvent,
+  AgentOfflineEvent,
+  ChannelCreatedEvent,
+  ChannelUpdatedEvent,
+  ChannelArchivedEvent,
+  MemberJoinedEvent,
+  MemberLeftEvent,
+  FileUploadedEvent,
+  WebhookReceivedEvent,
+  CommandInvokedEvent,
+  WsReconnectingEvent,
 } from '@relaycast/types';
 import { HttpClient, type RequestOptions } from './client.js';
+import { WsClient } from './ws.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -38,10 +59,81 @@ function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions | undefine
 
 export class AgentClient {
   public readonly client: HttpClient;
+  private ws: WsClient | null = null;
 
   constructor(client: HttpClient) {
     this.client = client;
   }
+
+  // === WebSocket ===
+
+  connect(): void {
+    if (this.ws) return;
+    this.ws = new WsClient({
+      token: this.client.apiKey,
+      baseUrl: this.client.baseUrl,
+    });
+    this.ws.connect();
+  }
+
+  disconnect(): void {
+    if (this.ws) {
+      this.ws.disconnect();
+      this.ws = null;
+    }
+  }
+
+  subscribe(channels: string[]): void {
+    this.ws?.subscribe(channels);
+  }
+
+  unsubscribe(channels: string[]): void {
+    this.ws?.unsubscribe(channels);
+  }
+
+  private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
+    if (!this.ws) {
+      throw new Error('WebSocket not connected. Call connect() first.');
+    }
+    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+  }
+
+  on = {
+    messageCreated:  (handler: (e: MessageCreatedEvent) => void): (() => void)  => this.onEvent('message.created', handler),
+    messageUpdated:  (handler: (e: MessageUpdatedEvent) => void): (() => void)  => this.onEvent('message.updated', handler),
+    threadReply:     (handler: (e: ThreadReplyEvent) => void): (() => void)     => this.onEvent('thread.reply', handler),
+    messageRead:     (handler: (e: MessageReadEvent) => void): (() => void)     => this.onEvent('message.read', handler),
+    reactionAdded:   (handler: (e: ReactionAddedEvent) => void): (() => void)   => this.onEvent('reaction.added', handler),
+    reactionRemoved: (handler: (e: ReactionRemovedEvent) => void): (() => void) => this.onEvent('reaction.removed', handler),
+    dmReceived:      (handler: (e: DmReceivedEvent) => void): (() => void)      => this.onEvent('dm.received', handler),
+    groupDmReceived: (handler: (e: GroupDmReceivedEvent) => void): (() => void) => this.onEvent('group_dm.received', handler),
+    agentOnline:     (handler: (e: AgentOnlineEvent) => void): (() => void)     => this.onEvent('agent.online', handler),
+    agentOffline:    (handler: (e: AgentOfflineEvent) => void): (() => void)    => this.onEvent('agent.offline', handler),
+    channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
+    channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
+    channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
+    memberJoined:    (handler: (e: MemberJoinedEvent) => void): (() => void)    => this.onEvent('member.joined', handler),
+    memberLeft:      (handler: (e: MemberLeftEvent) => void): (() => void)      => this.onEvent('member.left', handler),
+    fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
+    webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
+    commandInvoked:  (handler: (e: CommandInvokedEvent) => void): (() => void)  => this.onEvent('command.invoked', handler),
+    // Lifecycle
+    connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
+    disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
+    reconnecting: (handler: (attempt: number) => void): (() => void) => {
+      if (!this.ws) {
+        throw new Error('WebSocket not connected. Call connect() first.');
+      }
+      return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
+    },
+    // Wildcard
+    any: (handler: (e: WsClientEvent) => void): (() => void) => {
+      if (!this.ws) {
+        throw new Error('WebSocket not connected. Call connect() first.');
+      }
+      return this.ws.on('*', handler);
+    },
+  };
 
   // === Messages ===
 

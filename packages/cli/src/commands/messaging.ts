@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { Relay } from '@relaycast/sdk';
+import { RelayCast } from '@relaycast/sdk';
 import { loadConfig } from '../config.js';
 
 function getAgent() {
@@ -10,7 +10,7 @@ function getAgent() {
   if (!config.agentToken) {
     throw new Error('No agent token configured. Run: relay config set agent-token <token>');
   }
-  const relay = new Relay({ apiKey: config.apiKey, baseUrl: config.endpoint });
+  const relay = new RelayCast({ apiKey: config.apiKey, baseUrl: config.endpoint });
   return relay.as(config.agentToken);
 }
 
