@@ -8,7 +8,8 @@
     "start": "next start"
   },
   "dependencies": {
-    "@agent-relay/dashboard": "^2.0.81",
+    "@agent-relay/dashboard": "^2.0.82",
+    "@agent-relay/pulse": "^1.1.1",
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"

@@ -80,9 +80,12 @@ export default function PulsePage() {
   const [isPaused, setIsPaused] = useState(false);
 
   // Register the custom element on mount
+  const [elementError, setElementError] = useState(false);
   useEffect(() => {
     import('@agent-relay/pulse/element').then(() => {
       setElementReady(true);
+    }).catch(() => {
+      setElementError(true);
     });
   }, []);
 
@@ -178,6 +181,10 @@ export default function PulsePage() {
           {loading ? (
             <div className="flex items-center justify-center flex-1 min-h-[400px]">
               <p className="text-gray-500 text-sm">Loading messages...</p>
+            </div>
+          ) : elementError ? (
+            <div className="flex items-center justify-center flex-1 min-h-[400px]">
+              <p className="text-gray-500 text-sm">Failed to load pulse visualization. Ensure @agent-relay/pulse is installed.</p>
             </div>
           ) : messages.length === 0 ? (
             <div className="flex items-center justify-center flex-1 min-h-[400px]">
