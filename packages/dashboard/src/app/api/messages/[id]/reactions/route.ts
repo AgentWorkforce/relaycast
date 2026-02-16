@@ -11,7 +11,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const res = await relayFetch(`/v1/messages/${encodeURIComponent(id)}/reactions`);
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   return NextResponse.json(data, { status: res.status });
 }
 

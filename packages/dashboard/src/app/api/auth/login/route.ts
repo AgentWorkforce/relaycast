@@ -10,7 +10,7 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  */
 export async function POST(request: NextRequest) {
   try {
-    const { apiKey, serverUrl } = await request.json();
+    const { apiKey } = await request.json();
 
     if (!apiKey || !apiKey.startsWith('rk_live_')) {
       return NextResponse.json(
@@ -19,9 +19,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const relayServer = serverUrl || process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+    // Always validate against the server-configured relay URL (prevents SSRF)
+    const relayServer = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
 
-    // Validate the key against the relay server
     const res = await fetch(`${relayServer}/v1/workspace`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });

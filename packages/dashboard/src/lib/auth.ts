@@ -1,21 +1,13 @@
-const SERVER_URL_KEY = 'relaycast_server_url';
-
-export function getServerUrl(): string {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(SERVER_URL_KEY) || 'https://api.relaycast.dev';
-}
-
 /**
  * Authenticate via server-side endpoint which sets an httpOnly cookie.
  * Returns true on success.
  */
-export async function setAuth(apiKey: string, serverUrl?: string): Promise<boolean> {
-  if (serverUrl) localStorage.setItem(SERVER_URL_KEY, serverUrl);
+export async function setAuth(apiKey: string): Promise<boolean> {
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey, serverUrl }),
+      body: JSON.stringify({ apiKey }),
     });
     const data = await res.json();
     return data.success === true;
@@ -28,7 +20,6 @@ export async function setAuth(apiKey: string, serverUrl?: string): Promise<boole
  * Clear auth by calling server-side logout (removes httpOnly cookie).
  */
 export async function clearAuth(): Promise<void> {
-  localStorage.removeItem(SERVER_URL_KEY);
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
   } catch {

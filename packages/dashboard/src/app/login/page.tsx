@@ -7,7 +7,6 @@ import { setAuth } from '../../lib/auth';
 export default function LoginPage() {
   const router = useRouter();
   const [apiKey, setApiKey] = useState('');
-  const [serverUrl, setServerUrl] = useState('https://api.relaycast.dev');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +20,7 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const success = await setAuth(apiKey, serverUrl);
+    const success = await setAuth(apiKey);
     setLoading(false);
 
     if (!success) {
@@ -41,20 +40,6 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="serverUrl" className="block text-sm font-medium text-gray-300 mb-1">
-              Server URL
-            </label>
-            <input
-              id="serverUrl"
-              type="url"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              placeholder="https://api.relaycast.dev"
-            />
-          </div>
-
           <div>
             <label htmlFor="apiKey" className="block text-sm font-medium text-gray-300 mb-1">
               API Key

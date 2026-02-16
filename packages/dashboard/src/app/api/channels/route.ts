@@ -9,7 +9,10 @@ export async function GET() {
   try {
     const res = await relayFetch('/v1/channels');
     if (!res.ok) {
-      return NextResponse.json({ success: false, channels: [], archivedChannels: [] });
+      return NextResponse.json(
+        { success: false, channels: [], archivedChannels: [] },
+        { status: res.status }
+      );
     }
 
     const data = await res.json();
