@@ -38,3 +38,9 @@ export interface UpdateAgentRequest {
 export interface AgentListQuery {
   status?: AgentStatus | 'all';
 }
+
+export interface AgentPresenceInfo {
+  agent_id: string;
+  agent_name: string;
+  status: 'online' | 'offline';
+}

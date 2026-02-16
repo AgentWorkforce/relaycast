@@ -1,10 +1,15 @@
 import type {
   Agent,
   AgentListQuery,
+  AgentPresenceInfo,
   CreateAgentRequest,
   CreateAgentResponse,
+  UpdateAgentRequest,
   UpdateWorkspaceRequest,
   Workspace,
+  CreateWorkspaceResponse,
+  SystemPrompt,
+  SetSystemPromptRequest,
   CreateWebhookRequest,
   CreateWebhookResponse,
   Webhook,
@@ -23,7 +28,8 @@ import type {
 } from '@relaycast/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
-import { HttpClient } from './client.js';
+import { HttpClient, RelayError } from './client.js';
+import { SDK_VERSION } from './index.js';
 
 export interface RelayOptions {
   apiKey: string;
@@ -39,10 +45,41 @@ export class Relay {
     this.billing = new BillingClient(this.client);
   }
 
+  static async createWorkspace(
+    name: string,
+    baseUrl?: string,
+  ): Promise<CreateWorkspaceResponse> {
+    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.agentrelay.dev');
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-SDK-Version': SDK_VERSION,
+      },
+      body: JSON.stringify({ name }),
+    });
+    const parsed = await res.json();
+    if (!parsed.ok) {
+      throw new RelayError(
+        parsed.error?.code ?? 'unknown_error',
+        parsed.error?.message ?? 'Unknown error',
+        res.status,
+      );
+    }
+    return parsed.data;
+  }
+
   workspace = {
     info: (): Promise<Workspace> => this.client.get('/v1/workspace'),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
+    delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+  };
+
+  systemPrompt = {
+    get: (): Promise<SystemPrompt> => this.client.get('/v1/workspace/system-prompt'),
+    set: (data: SetSystemPromptRequest): Promise<SystemPrompt> =>
+      this.client.put('/v1/workspace/system-prompt', data),
   };
 
   agents = {
@@ -57,6 +94,30 @@ export class Relay {
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
     rotateToken: (name: string): Promise<TokenRotateResponse> =>
       this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
+    update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
+      this.client.patch(`/v1/agents/${encodeURIComponent(name)}`, data),
+    delete: (name: string): Promise<void> =>
+      this.client.delete(`/v1/agents/${encodeURIComponent(name)}`),
+    presence: (): Promise<AgentPresenceInfo[]> =>
+      this.client.get('/v1/agents/presence'),
+    registerOrGet: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
+      try {
+        return await this.agents.register(data);
+      } catch (err) {
+        if (err instanceof RelayError && err.code === 'agent_already_exists') {
+          const agent = await this.agents.get(data.name);
+          const { token } = await this.agents.rotateToken(agent.name);
+          return {
+            id: agent.id,
+            name: agent.name,
+            token,
+            status: agent.status,
+            created_at: agent.created_at,
+          };
+        }
+        throw err;
+      }
+    },
   };
 
   webhooks = {

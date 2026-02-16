@@ -8,6 +8,7 @@ import type {
   CreateGroupDmRequest,
   DmConversationSummary,
   CreateChannelRequest,
+  UpdateChannelRequest,
   Channel,
   ChannelMemberInfo,
   ReactionGroup,
@@ -203,6 +204,9 @@ export class AgentClient {
 
     members: (name: string): Promise<ChannelMemberInfo[]> =>
       this.client.get(`/v1/channels/${encodeURIComponent(name)}/members`),
+
+    update: (name: string, data: UpdateChannelRequest): Promise<Channel> =>
+      this.client.patch(`/v1/channels/${encodeURIComponent(name)}`, data),
   };
 
   // === Reactions ===

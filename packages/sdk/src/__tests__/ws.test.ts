@@ -231,6 +231,47 @@ describe('WsClient', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('emits error event on WebSocket error', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('error', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.onerror?.();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+  });
+
+  it('emits reconnecting event with attempt count', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('reconnecting', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'reconnecting', attempt: 1 }),
+    );
+
+    // Advance timer to trigger reconnect, then close again
+    vi.advanceTimersByTime(1000);
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'reconnecting', attempt: 2 }),
+    );
+  });
+
   it('does not send if WebSocket is not open', () => {
     const client = new WsClient({ token: 'at_live_test' });
     // Don't connect, just try to subscribe

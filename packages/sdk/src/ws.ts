@@ -57,7 +57,7 @@ export class WsClient {
     };
 
     this.ws.onerror = () => {
-      // onclose will fire after this
+      this.emit('error', { type: 'error' } as unknown as ServerEvent);
     };
   }
 
@@ -125,6 +125,7 @@ export class WsClient {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) return;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
     this.reconnectAttempt++;
+    this.emit('reconnecting', { type: 'reconnecting', attempt: this.reconnectAttempt } as unknown as ServerEvent);
     this.reconnectTimer = setTimeout(() => {
       this.connect();
     }, delay);

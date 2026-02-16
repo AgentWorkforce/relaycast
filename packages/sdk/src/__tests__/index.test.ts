@@ -3,7 +3,7 @@ import { SDK_VERSION } from '../index.js';
 
 describe('@relaycast/sdk', () => {
   it('exports SDK_VERSION', () => {
-    expect(SDK_VERSION).toBe('0.1.0');
+    expect(SDK_VERSION).toBe('0.2.3');
   });
 });
 

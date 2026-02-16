@@ -139,6 +139,215 @@ describe('Relay', () => {
     });
   });
 
+  describe('workspace.delete', () => {
+    it('delete() calls DELETE /v1/workspace', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
+      );
+      await relay.workspace.delete();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/workspace');
+      expect(init.method).toBe('DELETE');
+    });
+  });
+
+  describe('systemPrompt', () => {
+    it('get() calls GET /v1/workspace/system-prompt', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ prompt: 'Be helpful', is_default: false }),
+      );
+      const result = await relay.systemPrompt.get();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/workspace/system-prompt');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({ prompt: 'Be helpful', is_default: false });
+    });
+
+    it('set() calls PUT /v1/workspace/system-prompt', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ prompt: 'New prompt', is_default: false }),
+      );
+      await relay.systemPrompt.set({ prompt: 'New prompt' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/workspace/system-prompt');
+      expect(init.method).toBe('PUT');
+      expect(init.body).toBe(JSON.stringify({ prompt: 'New prompt' }));
+    });
+  });
+
+  describe('agents.update', () => {
+    it('update() calls PATCH /v1/agents/:name', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ name: 'Bot', status: 'online' }));
+      await relay.agents.update('Bot', { status: 'online' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/agents/Bot');
+      expect(init.method).toBe('PATCH');
+      expect(init.body).toBe(JSON.stringify({ status: 'online' }));
+    });
+  });
+
+  describe('agents.delete', () => {
+    it('delete() calls DELETE /v1/agents/:name', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
+      );
+      await relay.agents.delete('Bot');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/agents/Bot');
+      expect(init.method).toBe('DELETE');
+    });
+  });
+
+  describe('agents.presence', () => {
+    it('presence() calls GET /v1/agents/presence', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      const data = [{ agent_id: 'a_1', agent_name: 'Bot', status: 'online' }];
+      mockFetch.mockImplementation(() => mockResponse(data));
+      const result = await relay.agents.presence();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/agents/presence');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual(data);
+    });
+  });
+
+  describe('Relay.createWorkspace', () => {
+    it('calls POST /v1/workspaces without auth', async () => {
+      const { Relay } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      const result = await Relay.createWorkspace('My Workspace');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/workspaces');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
+      expect(init.headers.Authorization).toBeUndefined();
+      expect(result.workspace_id).toBe('ws_1');
+    });
+
+    it('uses custom baseUrl', async () => {
+      const { Relay } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await Relay.createWorkspace('Test', 'http://localhost:3000');
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('http://localhost:3000/v1/workspaces');
+    });
+
+    it('throws RelayError on failure', async () => {
+      const { Relay } = await import('../relay.js');
+      const { RelayError } = await import('../client.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () =>
+            Promise.resolve({
+              ok: false,
+              error: { code: 'workspace_exists', message: 'Already exists' },
+            }),
+        }),
+      );
+
+      await expect(Relay.createWorkspace('Dup')).rejects.toBeInstanceOf(RelayError);
+    });
+  });
+
+  describe('agents.registerOrGet', () => {
+    it('returns register result when agent does not exist', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      const created = { id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' };
+      mockFetch.mockImplementation(() => mockResponse(created));
+
+      const result = await relay.agents.registerOrGet({ name: 'Bot' });
+      expect(result).toEqual(created);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to get + rotateToken on agent_already_exists', async () => {
+      const { Relay } = await import('../relay.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+        )
+        .mockImplementationOnce(() =>
+          mockResponse({ id: 'a_1', name: 'Bot', status: 'online', created_at: '2024-01-01' }),
+        )
+        .mockImplementationOnce(() =>
+          mockResponse({ token: 'at_live_rotated' }),
+        );
+
+      const result = await relay.agents.registerOrGet({ name: 'Bot' });
+      expect(result.token).toBe('at_live_rotated');
+      expect(result.name).toBe('Bot');
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('rethrows non-conflict errors', async () => {
+      const { Relay } = await import('../relay.js');
+      const { RelayError } = await import('../client.js');
+      const relay = new Relay({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'internal_error', message: 'boom' }, false, 500),
+      );
+
+      await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+    });
+  });
+
   describe('as()', () => {
     it('returns an AgentClient that uses the agent token for Authorization', async () => {
       const { Relay } = await import('../relay.js');

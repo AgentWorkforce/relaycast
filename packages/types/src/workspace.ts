@@ -24,3 +24,13 @@ export interface UpdateWorkspaceRequest {
   name?: string;
   system_prompt?: string;
 }
+
+export interface SystemPrompt {
+  prompt: string;
+  is_default: boolean;
+}
+
+export interface SetSystemPromptRequest {
+  prompt?: string | null;
+  reset?: boolean;
+}
