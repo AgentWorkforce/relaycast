@@ -3,11 +3,17 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Copy package files first for better layer caching
+# All workspace package.json files are needed for npm install to resolve the
+# full workspace dependency graph, even if only server is built/deployed.
 COPY package.json package-lock.json* ./
 COPY packages/types/package.json packages/types/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/server/package.json packages/server/
+COPY packages/cli/package.json packages/cli/
+COPY packages/dashboard/package.json packages/dashboard/
+COPY packages/openclaw/package.json packages/openclaw/
+COPY packages/react/package.json packages/react/
 
 # Install all dependencies (including devDependencies for building)
 RUN npm install
@@ -31,18 +37,34 @@ ENV NODE_ENV=production
 RUN addgroup -S -g 1001 relay && \
     adduser -S -u 1001 -G relay relay
 
+# Copy all workspace package.json files for production dependency install.
+# npm ci validates the lockfile against the full workspace graph, so all
+# packages referenced by "workspaces": ["packages/*"] must be present.
+COPY package.json package-lock.json* ./
+COPY packages/types/package.json packages/types/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/mcp/package.json packages/mcp/
+COPY packages/server/package.json packages/server/
+COPY packages/cli/package.json packages/cli/
+COPY packages/dashboard/package.json packages/dashboard/
+COPY packages/openclaw/package.json packages/openclaw/
+COPY packages/react/package.json packages/react/
+
+# Install only production dependencies for the server and its workspace deps.
+# This is more robust than copying node_modules from the builder, because npm
+# resolves the full dependency tree correctly regardless of hoisting decisions.
+RUN npm ci --omit=dev \
+    --workspace=@relaycast/server \
+    --workspace=@relaycast/types \
+    --workspace=@relaycast/sdk \
+    --workspace=@relaycast/mcp
+
 # Copy built output
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
-COPY --from=builder /app/packages/server/package.json ./packages/server/
 COPY --from=builder /app/packages/server/src/db/migrations ./packages/server/src/db/migrations
 COPY --from=builder /app/packages/types/dist ./packages/types/dist
-COPY --from=builder /app/packages/types/package.json ./packages/types/
 COPY --from=builder /app/packages/sdk/dist ./packages/sdk/dist
-COPY --from=builder /app/packages/sdk/package.json ./packages/sdk/
 COPY --from=builder /app/packages/mcp/dist ./packages/mcp/dist
-COPY --from=builder /app/packages/mcp/package.json ./packages/mcp/
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
 
 # Set ownership
 RUN chown -R relay:relay /app
