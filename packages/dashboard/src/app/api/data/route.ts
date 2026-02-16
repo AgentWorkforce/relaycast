@@ -14,10 +14,9 @@ export async function GET() {
     ]);
 
     if (!agentsRes.ok) {
-      return NextResponse.json(
-        { agents: [], messages: [], sessions: [] },
-        { status: agentsRes.status }
-      );
+      // Return empty data with 200 so the dashboard renders an empty state
+      // instead of showing a connection error (auth/upstream issues are transient)
+      return NextResponse.json({ agents: [], messages: [], sessions: [] });
     }
 
     const agentsData = await agentsRes.json();
@@ -76,9 +75,6 @@ export async function GET() {
     return NextResponse.json({ agents, messages, sessions: [] });
   } catch (error) {
     console.error('[api/data] Error:', error);
-    return NextResponse.json(
-      { agents: [], messages: [], sessions: [] },
-      { status: 500 }
-    );
+    return NextResponse.json({ agents: [], messages: [], sessions: [] });
   }
 }

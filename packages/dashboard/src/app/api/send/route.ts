@@ -42,9 +42,10 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      const error = await res.json().catch(() => ({ message: 'Send failed' }));
+      const error = await res.json().catch(() => ({ error: { message: 'Send failed' } }));
+      const errorMsg = error?.error?.message || error?.message || 'Failed to send';
       return NextResponse.json(
-        { success: false, error: error.message || 'Failed to send' },
+        { success: false, error: errorMsg },
         { status: res.status }
       );
     }
@@ -68,9 +69,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const error = await res.json().catch(() => ({ message: 'Send failed' }));
+    const error = await res.json().catch(() => ({ error: { message: 'Send failed' } }));
+    const errorMsg = error?.error?.message || error?.message || 'Failed to send';
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to send' },
+      { success: false, error: errorMsg },
       { status: res.status }
     );
   } catch (error) {

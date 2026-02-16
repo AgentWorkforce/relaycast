@@ -35,6 +35,9 @@ export async function GET() {
       channels = data.data || data.channels || [];
     }
 
+    // If both upstream calls failed, report disconnected
+    const connected = agentsRes.ok || channelsRes.ok;
+
     // Build a single project representing the workspace
     return NextResponse.json({
       projects: [
@@ -46,7 +49,7 @@ export async function GET() {
         },
       ],
       messages: [],
-      connected: true,
+      connected,
       channels: channels.map(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (ch: any) => ({

@@ -102,10 +102,16 @@ export default function PulsePage() {
             body: m.content,
           })
         );
-        setMessages(pulseMessages.length > 0 ? pulseMessages : generateSampleMessages());
+        const useSample = pulseMessages.length === 0 && process.env.NODE_ENV === 'development';
+        setMessages(useSample ? generateSampleMessages() : pulseMessages);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (process.env.NODE_ENV === 'development') {
+          setMessages(generateSampleMessages());
+        }
+        setLoading(false);
+      });
   }, []);
 
   // Pass messages to the custom element as a JS property
