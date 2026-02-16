@@ -1,17 +1,22 @@
-export interface ReadReceipt {
-  message_id: string;
-  agent_id: string;
-  read_at: string;
-}
+import { z } from 'zod';
 
-export interface ReaderInfo {
-  agent_name: string;
-  agent_id: string;
-  read_at: string;
-}
+export const ReadReceiptSchema = z.object({
+  message_id: z.string(),
+  agent_id: z.string(),
+  read_at: z.string(),
+});
+export type ReadReceipt = z.infer<typeof ReadReceiptSchema>;
 
-export interface ChannelReadStatus {
-  agent_name: string;
-  last_read_id: string | null;
-  last_read_at: string | null;
-}
+export const ReaderInfoSchema = z.object({
+  agent_name: z.string(),
+  agent_id: z.string(),
+  read_at: z.string(),
+});
+export type ReaderInfo = z.infer<typeof ReaderInfoSchema>;
+
+export const ChannelReadStatusSchema = z.object({
+  agent_name: z.string(),
+  last_read_id: z.string().nullable(),
+  last_read_at: z.string().nullable(),
+});
+export type ChannelReadStatus = z.infer<typeof ChannelReadStatusSchema>;

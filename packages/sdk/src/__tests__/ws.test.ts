@@ -83,7 +83,7 @@ describe('WsClient', () => {
     ws.simulateMessage({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm_1', agent_name: 'Bot', text: 'hi' },
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -175,11 +175,11 @@ describe('WsClient', () => {
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     expect(handler).toHaveBeenCalledTimes(1);
 
     unsub();
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -210,7 +210,7 @@ describe('WsClient', () => {
     ws.simulateOpen();
     // 'open' synthetic event is also emitted to wildcard
 
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     ws.simulateMessage({ type: 'pong' });
 
     // open + message.created + pong = 3

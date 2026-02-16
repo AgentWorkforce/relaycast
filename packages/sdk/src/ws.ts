@@ -1,4 +1,5 @@
 import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from '@relaycast/types';
+import { ServerEventSchema } from '@relaycast/types';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
@@ -40,8 +41,11 @@ export class WsClient {
 
     this.ws.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(String(event.data)) as WsClientEvent;
-        this.emit(data.type, data);
+        const parsed = JSON.parse(String(event.data));
+        const result = ServerEventSchema.safeParse(parsed);
+        if (result.success) {
+          this.emit(result.data.type, result.data);
+        }
       } catch {
         // ignore malformed messages
       }
@@ -49,7 +53,6 @@ export class WsClient {
 
     this.ws.onclose = () => {
       this.stopPing();
-      const ws = this.ws;
       this.ws = null;
       if (!this.closed) {
         this.scheduleReconnect();

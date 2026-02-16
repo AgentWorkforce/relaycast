@@ -26,6 +26,7 @@ import type {
   WorkspaceDmConversation,
   TokenRotateResponse,
 } from '@relaycast/types';
+import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
@@ -58,7 +59,7 @@ export class Relay {
       },
       body: JSON.stringify({ name }),
     });
-    
+
     let parsed: unknown;
     try {
       parsed = await res.json();
@@ -79,14 +80,14 @@ export class Relay {
     }
 
     if (!parsed.ok) {
-      const error = (parsed as { error?: { code?: string; message?: string } }).error;
+      const errResult = ApiErrorSchema.safeParse(parsed);
       throw new RelayError(
-        error?.code ?? 'unknown_error',
-        error?.message ?? 'Unknown error',
+        errResult.success ? errResult.data.error.code : 'unknown_error',
+        errResult.success ? errResult.data.error.message : 'Unknown error',
         res.status,
       );
     }
-    
+
     if (!('data' in parsed)) {
       throw new RelayError(
         'invalid_response',
@@ -94,8 +95,9 @@ export class Relay {
         res.status,
       );
     }
-    
-    return (parsed as { data: CreateWorkspaceResponse }).data;
+
+    const data = (parsed as { data: unknown }).data;
+    return CreateWorkspaceResponseSchema.parse(data);
   }
 
   workspace = {

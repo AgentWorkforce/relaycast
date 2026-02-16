@@ -1,37 +1,45 @@
-export type DmType = '1:1' | 'group';
+import { z } from 'zod';
 
-export interface DmConversation {
-  id: string;
-  workspace_id: string;
-  channel_id: string;
-  dm_type: DmType;
-  name: string | null;
-  created_at: string;
-}
+export const DmTypeSchema = z.enum(['1:1', 'group']);
+export type DmType = z.infer<typeof DmTypeSchema>;
 
-export interface DmParticipant {
-  conversation_id: string;
-  agent_id: string;
-  joined_at: string;
-  left_at: string | null;
-}
+export const DmConversationSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  channel_id: z.string(),
+  dm_type: DmTypeSchema,
+  name: z.string().nullable(),
+  created_at: z.string(),
+});
+export type DmConversation = z.infer<typeof DmConversationSchema>;
 
-export interface SendDmRequest {
-  to: string;
-  text: string;
-}
+export const DmParticipantSchema = z.object({
+  conversation_id: z.string(),
+  agent_id: z.string(),
+  joined_at: z.string(),
+  left_at: z.string().nullable(),
+});
+export type DmParticipant = z.infer<typeof DmParticipantSchema>;
 
-export interface CreateGroupDmRequest {
-  participants: string[];
-  name?: string;
-  text: string;
-}
+export const SendDmRequestSchema = z.object({
+  to: z.string(),
+  text: z.string(),
+});
+export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 
-export interface DmConversationSummary {
-  id: string;
-  type: DmType;
-  name: string | null;
-  participants: string[];
-  last_message: string | null;
-  unread_count: number;
-}
+export const CreateGroupDmRequestSchema = z.object({
+  participants: z.array(z.string()),
+  name: z.string().optional(),
+  text: z.string(),
+});
+export type CreateGroupDmRequest = z.infer<typeof CreateGroupDmRequestSchema>;
+
+export const DmConversationSummarySchema = z.object({
+  id: z.string(),
+  type: DmTypeSchema,
+  name: z.string().nullable(),
+  participants: z.array(z.string()),
+  last_message: z.string().nullable(),
+  unread_count: z.number(),
+});
+export type DmConversationSummary = z.infer<typeof DmConversationSummarySchema>;

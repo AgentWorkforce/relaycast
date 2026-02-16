@@ -187,8 +187,9 @@ export class AgentClient {
     join: (name: string): Promise<unknown> =>
       this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`),
 
-    leave: (name: string): Promise<void> =>
-      this.client.post(`/v1/channels/${encodeURIComponent(name)}/leave`) as Promise<void>,
+    leave: async (name: string): Promise<void> => {
+      await this.client.post(`/v1/channels/${encodeURIComponent(name)}/leave`);
+    },
 
     setTopic: (name: string, topic: string): Promise<Channel> =>
       this.client.patch(`/v1/channels/${encodeURIComponent(name)}/topic`, { topic }),

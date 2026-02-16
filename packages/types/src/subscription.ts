@@ -1,51 +1,59 @@
-export type SubscribableEventType =
-  | 'message.created'
-  | 'message.updated'
-  | 'thread.reply'
-  | 'reaction.added'
-  | 'reaction.removed'
-  | 'agent.online'
-  | 'agent.offline'
-  | 'channel.created'
-  | 'channel.updated'
-  | 'channel.archived'
-  | 'member.joined'
-  | 'member.left'
-  | 'dm.received'
-  | 'group_dm.received'
-  | 'message.read'
-  | 'file.uploaded'
-  | 'webhook.received'
-  | 'command.invoked';
+import { z } from 'zod';
 
-export interface SubscriptionFilter {
-  channel?: string;
-  mentions?: string;
-}
+export const SubscribableEventTypeSchema = z.enum([
+  'message.created',
+  'message.updated',
+  'thread.reply',
+  'reaction.added',
+  'reaction.removed',
+  'agent.online',
+  'agent.offline',
+  'channel.created',
+  'channel.updated',
+  'channel.archived',
+  'member.joined',
+  'member.left',
+  'dm.received',
+  'group_dm.received',
+  'message.read',
+  'file.uploaded',
+  'webhook.received',
+  'command.invoked',
+]);
+export type SubscribableEventType = z.infer<typeof SubscribableEventTypeSchema>;
 
-export interface EventSubscription {
-  id: string;
-  workspace_id: string;
-  events: SubscribableEventType[];
-  filter: SubscriptionFilter | null;
-  url: string;
-  secret: string | null;
-  is_active: boolean;
-  created_at: string;
-}
+export const SubscriptionFilterSchema = z.object({
+  channel: z.string().optional(),
+  mentions: z.string().optional(),
+});
+export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
-export interface CreateSubscriptionRequest {
-  events: SubscribableEventType[];
-  filter?: SubscriptionFilter;
-  url: string;
-  secret?: string;
-}
+export const EventSubscriptionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  events: z.array(SubscribableEventTypeSchema),
+  filter: SubscriptionFilterSchema.nullable(),
+  url: z.string(),
+  secret: z.string().nullable(),
+  is_active: z.boolean(),
+  created_at: z.string(),
+});
+export type EventSubscription = z.infer<typeof EventSubscriptionSchema>;
 
-export interface CreateSubscriptionResponse {
-  id: string;
-  events: SubscribableEventType[];
-  filter: SubscriptionFilter | null;
-  url: string;
-  is_active: boolean;
-  created_at: string;
-}
+export const CreateSubscriptionRequestSchema = z.object({
+  events: z.array(SubscribableEventTypeSchema),
+  filter: SubscriptionFilterSchema.optional(),
+  url: z.string(),
+  secret: z.string().optional(),
+});
+export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
+
+export const CreateSubscriptionResponseSchema = z.object({
+  id: z.string(),
+  events: z.array(SubscribableEventTypeSchema),
+  filter: SubscriptionFilterSchema.nullable(),
+  url: z.string(),
+  is_active: z.boolean(),
+  created_at: z.string(),
+});
+export type CreateSubscriptionResponse = z.infer<typeof CreateSubscriptionResponseSchema>;

@@ -1,38 +1,46 @@
-export interface Channel {
-  id: string;
-  workspace_id: string;
-  name: string;
-  channel_type: number;
-  topic: string | null;
-  created_by: string | null;
-  created_at: string;
-  is_archived: boolean;
-}
+import { z } from 'zod';
 
-export interface ChannelMember {
-  channel_id: string;
-  agent_id: string;
-  role: 'owner' | 'member';
-  joined_at: string;
-  last_read_id: string | null;
-}
+export const ChannelSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  channel_type: z.number(),
+  topic: z.string().nullable(),
+  created_by: z.string().nullable(),
+  created_at: z.string(),
+  is_archived: z.boolean(),
+});
+export type Channel = z.infer<typeof ChannelSchema>;
 
-export interface CreateChannelRequest {
-  name: string;
-  topic?: string;
-}
+export const ChannelMemberSchema = z.object({
+  channel_id: z.string(),
+  agent_id: z.string(),
+  role: z.enum(['owner', 'member']),
+  joined_at: z.string(),
+  last_read_id: z.string().nullable(),
+});
+export type ChannelMember = z.infer<typeof ChannelMemberSchema>;
 
-export interface UpdateChannelRequest {
-  topic?: string;
-}
+export const CreateChannelRequestSchema = z.object({
+  name: z.string(),
+  topic: z.string().optional(),
+});
+export type CreateChannelRequest = z.infer<typeof CreateChannelRequestSchema>;
 
-export interface ChannelMemberInfo {
-  agent_id: string;
-  agent_name: string;
-  role: 'owner' | 'member';
-  joined_at: string;
-}
+export const UpdateChannelRequestSchema = z.object({
+  topic: z.string().optional(),
+});
+export type UpdateChannelRequest = z.infer<typeof UpdateChannelRequestSchema>;
 
-export interface InviteRequest {
-  agent: string;
-}
+export const ChannelMemberInfoSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string(),
+  role: z.enum(['owner', 'member']),
+  joined_at: z.string(),
+});
+export type ChannelMemberInfo = z.infer<typeof ChannelMemberInfoSchema>;
+
+export const InviteRequestSchema = z.object({
+  agent: z.string(),
+});
+export type InviteRequest = z.infer<typeof InviteRequestSchema>;
