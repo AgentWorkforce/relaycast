@@ -1,6 +1,6 @@
-import type { ServerEvent } from '@relaycast/types';
+import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from '@relaycast/types';
 
-export type EventHandler<T = ServerEvent> = (event: T) => void;
+export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
 export interface WsClientOptions {
   token: string;
@@ -34,12 +34,13 @@ export class WsClient {
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.startPing();
-      this.emit('open', { type: 'open' } as unknown as ServerEvent);
+      const openEvent: WsOpenEvent = { type: 'open' };
+      this.emit('open', openEvent);
     };
 
     this.ws.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(String(event.data)) as ServerEvent;
+        const data = JSON.parse(String(event.data)) as WsClientEvent;
         this.emit(data.type, data);
       } catch {
         // ignore malformed messages
@@ -53,11 +54,13 @@ export class WsClient {
       if (!this.closed) {
         this.scheduleReconnect();
       }
-      this.emit('close', { type: 'close' } as unknown as ServerEvent);
+      const closeEvent: WsCloseEvent = { type: 'close' };
+      this.emit('close', closeEvent);
     };
 
     this.ws.onerror = () => {
-      this.emit('error', { type: 'error' } as unknown as ServerEvent);
+      const errorEvent: WsErrorEvent = { type: 'error' };
+      this.emit('error', errorEvent);
     };
   }
 
@@ -96,7 +99,7 @@ export class WsClient {
     this.handlers.get(event)?.delete(handler);
   }
 
-  private emit(event: string, data: ServerEvent): void {
+  private emit(event: string, data: WsClientEvent): void {
     this.handlers.get(event)?.forEach((h) => h(data));
     this.handlers.get('*')?.forEach((h) => h(data));
   }
@@ -125,7 +128,8 @@ export class WsClient {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) return;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
     this.reconnectAttempt++;
-    this.emit('reconnecting', { type: 'reconnecting', attempt: this.reconnectAttempt } as unknown as ServerEvent);
+    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
+    this.emit('reconnecting', reconnectingEvent);
     this.reconnectTimer = setTimeout(() => {
       this.connect();
     }, delay);

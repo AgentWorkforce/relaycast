@@ -1,4 +1,4 @@
-import type { ServerEvent } from '@relaycast/types';
+import type { ServerEvent, WsClientEvent } from '@relaycast/types';
 import type { WsClient } from '@relaycast/sdk';
 import type { SubscriptionManager } from './subscriptions.js';
 
@@ -85,7 +85,12 @@ export class WsBridge {
    * Start listening to WebSocket events and dispatching resource notifications.
    */
   start(): void {
-    this.unsubscribeFn = this.wsClient.on('*', (event: ServerEvent) => {
+    this.unsubscribeFn = this.wsClient.on('*', (event: WsClientEvent) => {
+      // Filter out client-only events (open, close, error, reconnecting)
+      // Only process server events that affect resources
+      if (event.type === 'open' || event.type === 'close' || event.type === 'error' || event.type === 'reconnecting') {
+        return;
+      }
       const uris = eventToResourceUris(event);
       const matched = this.subscriptions.getMatchingSubscriptions(uris);
       for (const uri of matched) {

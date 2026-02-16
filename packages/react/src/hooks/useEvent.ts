@@ -1,9 +1,9 @@
 import { useContext, useEffect, useRef } from 'react';
-import type { ServerEvent } from '@relaycast/types';
+import type { WsClientEvent } from '@relaycast/types';
 import type { EventHandler } from '@relaycast/sdk';
 import { ClientContext } from '../context.js';
 
-export function useEvent(eventType: string, handler: EventHandler<ServerEvent>): void {
+export function useEvent(eventType: string, handler: EventHandler<WsClientEvent>): void {
   const ctx = useContext(ClientContext);
   if (!ctx) throw new Error('useEvent must be used within <RelayProvider>');
 

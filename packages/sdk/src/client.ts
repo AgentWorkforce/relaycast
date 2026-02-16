@@ -1,4 +1,4 @@
-import { SDK_VERSION } from './index.js';
+import { SDK_VERSION } from './version.js';
 
 export interface ClientOptions {
   apiKey: string;
