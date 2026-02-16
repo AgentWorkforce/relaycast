@@ -17,3 +17,24 @@ export async function getRelayApiKey(): Promise<string | null> {
 export function getRelay(apiKey: string): RelayCast {
   return new RelayCast({ apiKey, baseUrl: RELAY_SERVER });
 }
+
+/**
+ * relayFetch - Makes authenticated requests to the Relay API
+ * Uses the workspace key from the cookie for authentication
+ */
+export async function relayFetch(path: string, init?: RequestInit): Promise<Response> {
+  const apiKey = await getRelayApiKey();
+  if (!apiKey) {
+    throw new Error('No API key found');
+  }
+
+  const url = new URL(path, RELAY_SERVER);
+  return fetch(url.toString(), {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      ...init?.headers,
+    },
+  });
+}

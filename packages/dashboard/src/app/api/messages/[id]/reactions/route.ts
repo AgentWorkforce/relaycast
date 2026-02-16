@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RelayError } from '@relaycast/sdk';
-import { getRelayApiKey, getRelay } from '../../../../../lib/relay-api';
+import { getRelayApiKey, getRelay, relayFetch } from '../../../../../lib/relay-api';
 
 /**
  * GET/POST /api/messages/:id/reactions
- * Proxies to relaycast /v1/messages/:id/reactions via SDK.
+ * Proxies to relaycast /v1/messages/:id/reactions via SDK (GET) and relayFetch (POST).
  */
 export async function GET(
   _request: NextRequest,
@@ -13,15 +13,27 @@ export async function GET(
   try {
     const apiKey = await getRelayApiKey();
     if (!apiKey) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Not authenticated' } },
+        { status: 401 }
+      );
     }
 
     const { id } = await params;
     const relay = getRelay(apiKey);
-    const agent = relay.as(apiKey);
 
-    const result = await agent.reactions(id);
-    return NextResponse.json({ ok: true, data: result });
+    // Use workspace-level SDK call for reading reactions
+    const res = await relayFetch(`/v1/messages/${encodeURIComponent(id)}/reactions`);
+    if (res.ok) {
+      const data = await res.json();
+      return NextResponse.json({ ok: true, data: data.data || data });
+    }
+
+    const error = await res.json().catch(() => ({ error: { code: 'unknown_error', message: 'Failed to get reactions' } }));
+    return NextResponse.json(
+      { ok: false, error: { code: error?.error?.code || 'unknown_error', message: error?.error?.message || 'Failed to get reactions' } },
+      { status: res.status }
+    );
   } catch (error) {
     if (error instanceof RelayError) {
       return NextResponse.json(
@@ -30,7 +42,10 @@ export async function GET(
       );
     }
     console.error('[api/reactions] GET error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: { code: 'internal_error', message: 'Internal server error' } },
+      { status: 500 }
+    );
   }
 }
 
@@ -41,16 +56,31 @@ export async function POST(
   try {
     const apiKey = await getRelayApiKey();
     if (!apiKey) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Not authenticated' } },
+        { status: 401 }
+      );
     }
 
     const { id } = await params;
     const body = await request.json();
-    const relay = getRelay(apiKey);
-    const agent = relay.as(apiKey);
 
-    const result = await agent.react(id, body.emoji);
-    return NextResponse.json({ ok: true, data: result });
+    // Use relayFetch for write operations that require agent token
+    const res = await relayFetch(`/v1/messages/${encodeURIComponent(id)}/reactions`, {
+      method: 'POST',
+      body: JSON.stringify({ emoji: body.emoji }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return NextResponse.json({ ok: true, data: data.data || data });
+    }
+
+    const error = await res.json().catch(() => ({ error: { code: 'unknown_error', message: 'Failed to add reaction' } }));
+    return NextResponse.json(
+      { ok: false, error: { code: error?.error?.code || 'unknown_error', message: error?.error?.message || 'Failed to add reaction' } },
+      { status: res.status }
+    );
   } catch (error) {
     if (error instanceof RelayError) {
       return NextResponse.json(
@@ -59,6 +89,9 @@ export async function POST(
       );
     }
     console.error('[api/reactions] POST error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: { code: 'internal_error', message: 'Internal server error' } },
+      { status: 500 }
+    );
   }
 }

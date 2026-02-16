@@ -58,12 +58,10 @@ export async function GET() {
     });
   } catch (error) {
     if (error instanceof RelayError) {
-      return NextResponse.json(
-        { ok: false, error: { code: error.code, message: error.message } },
-        { status: error.status }
-      );
+      console.error('[api/bridge] RelayError:', error.message);
+    } else {
+      console.error('[api/bridge] Error:', error);
     }
-    console.error('[api/bridge] Error:', error);
     return NextResponse.json(
       { projects: [], messages: [], connected: false },
       { status: 500 }
