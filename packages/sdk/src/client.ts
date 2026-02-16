@@ -1,4 +1,6 @@
-import { SDK_VERSION } from './index.js';
+import { z } from 'zod';
+import { ApiErrorSchema } from '@relaycast/types';
+import { SDK_VERSION } from './version.js';
 
 export interface ClientOptions {
   apiKey: string;
@@ -7,6 +9,7 @@ export interface ClientOptions {
 
 export interface RequestOptions {
   headers?: Record<string, string>;
+  schema?: z.ZodType;
 }
 
 export class RelayError extends Error {
@@ -25,16 +28,30 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type ApiOk<T> = { ok: true; data: T };
-type ApiErr = { ok: false; error: { code: string; message: string } };
+const apiEnvelopeSchema = z.object({
+  ok: z.boolean(),
+  data: z.unknown().optional(),
+  cursor: z.object({
+    next: z.string().nullable(),
+    has_more: z.boolean(),
+  }).optional(),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }).optional(),
+});
 
 export class HttpClient {
-  private apiKey: string;
+  private _apiKey: string;
   private _baseUrl: string;
 
   constructor(options: ClientOptions) {
-    this.apiKey = options.apiKey;
+    this._apiKey = options.apiKey;
     this._baseUrl = options.baseUrl ?? 'https://api.agentrelay.dev';
+  }
+
+  get apiKey(): string {
+    return this._apiKey;
   }
 
   get baseUrl(): string {
@@ -56,7 +73,7 @@ export class HttpClient {
     }
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${this._apiKey}`,
       'X-SDK-Version': SDK_VERSION,
       ...(options?.headers || {}),
     };
@@ -87,18 +104,27 @@ export class HttpClient {
         return undefined as T;
       }
 
-      const parsed = (await res.json()) as ApiOk<T> | ApiErr;
-      if (!parsed || typeof parsed !== 'object' || typeof (parsed as any).ok !== 'boolean') {
+      const json: unknown = await res.json();
+      const envelope = apiEnvelopeSchema.safeParse(json);
+
+      if (!envelope.success) {
         throw new RelayError('invalid_response', 'Invalid API response', res.status);
       }
 
-      if (parsed.ok === false) {
-        const code = parsed.error?.code ?? 'unknown_error';
-        const message = parsed.error?.message ?? 'Unknown error';
+      if (!envelope.data.ok) {
+        const errParsed = ApiErrorSchema.safeParse(json);
+        const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
+        const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
         throw new RelayError(code, message, res.status);
       }
 
-      return parsed.data;
+      const data = envelope.data.data;
+
+      if (options?.schema) {
+        return options.schema.parse(data) as T;
+      }
+
+      return data as T;
     }
   }
 
@@ -112,6 +138,10 @@ export class HttpClient {
 
   patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
     return this.request<T>('PATCH', path, body, undefined, options);
+  }
+
+  put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PUT', path, body, undefined, options);
   }
 
   async delete(path: string, options?: RequestOptions): Promise<void> {

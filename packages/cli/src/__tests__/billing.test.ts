@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  Relay: vi.fn(() => ({
+  RelayCast: vi.fn(() => ({
     billing: {
       usage: mocks.usage,
       subscription: mocks.subscription,

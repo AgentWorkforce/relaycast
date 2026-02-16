@@ -1,10 +1,13 @@
-import type { ServerEvent } from '@relaycast/types';
+import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from '@relaycast/types';
+import { ServerEventSchema } from '@relaycast/types';
 
-export type EventHandler<T = ServerEvent> = (event: T) => void;
+export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
 export interface WsClientOptions {
   token: string;
   baseUrl?: string;
+  /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
+  debug?: boolean;
 }
 
 export class WsClient {
@@ -17,9 +20,11 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
+  private debug: boolean;
 
   constructor(options: WsClientOptions) {
     this.token = options.token;
+    this.debug = options.debug ?? false;
     const base = options.baseUrl ?? 'https://api.agentrelay.dev';
     this.baseUrl = base.replace(/^http/, 'ws');
   }
@@ -34,30 +39,46 @@ export class WsClient {
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.startPing();
-      this.emit('open', { type: 'open' } as unknown as ServerEvent);
+      const openEvent: WsOpenEvent = { type: 'open' };
+      this.emit('open', openEvent);
     };
 
     this.ws.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(String(event.data)) as ServerEvent;
-        this.emit(data.type, data);
-      } catch {
-        // ignore malformed messages
+        const parsed = JSON.parse(String(event.data));
+        const result = ServerEventSchema.safeParse(parsed);
+        if (result.success) {
+          this.emit(result.data.type, result.data);
+        } else if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          typeof parsed.type === 'string'
+        ) {
+          // Forward unrecognized event types so wildcard listeners still fire
+          this.emit(parsed.type, parsed as WsClientEvent);
+        } else if (this.debug) {
+          console.warn('[relaycast] Dropped WebSocket message: missing or invalid "type" field', parsed);
+        }
+      } catch (err) {
+        if (this.debug) {
+          console.warn('[relaycast] Dropped malformed WebSocket message:', String(event.data).slice(0, 200), err);
+        }
       }
     };
 
     this.ws.onclose = () => {
       this.stopPing();
-      const ws = this.ws;
       this.ws = null;
       if (!this.closed) {
         this.scheduleReconnect();
       }
-      this.emit('close', { type: 'close' } as unknown as ServerEvent);
+      const closeEvent: WsCloseEvent = { type: 'close' };
+      this.emit('close', closeEvent);
     };
 
     this.ws.onerror = () => {
-      // onclose will fire after this
+      const errorEvent: WsErrorEvent = { type: 'error' };
+      this.emit('error', errorEvent);
     };
   }
 
@@ -96,7 +117,7 @@ export class WsClient {
     this.handlers.get(event)?.delete(handler);
   }
 
-  private emit(event: string, data: ServerEvent): void {
+  private emit(event: string, data: WsClientEvent): void {
     this.handlers.get(event)?.forEach((h) => h(data));
     this.handlers.get('*')?.forEach((h) => h(data));
   }
@@ -125,6 +146,8 @@ export class WsClient {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) return;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
     this.reconnectAttempt++;
+    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
+    this.emit('reconnecting', reconnectingEvent);
     this.reconnectTimer = setTimeout(() => {
       this.connect();
     }, delay);

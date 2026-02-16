@@ -1,164 +1,248 @@
+import { z } from 'zod';
+
 // WebSocket client -> server
-export interface SubscribeEvent {
-  type: 'subscribe';
-  channels: string[];
-}
+export const SubscribeEventSchema = z.object({
+  type: z.literal('subscribe'),
+  channels: z.array(z.string()),
+});
+export type SubscribeEvent = z.infer<typeof SubscribeEventSchema>;
 
-export interface UnsubscribeEvent {
-  type: 'unsubscribe';
-  channels: string[];
-}
+export const UnsubscribeEventSchema = z.object({
+  type: z.literal('unsubscribe'),
+  channels: z.array(z.string()),
+});
+export type UnsubscribeEvent = z.infer<typeof UnsubscribeEventSchema>;
 
-export interface PingEvent {
-  type: 'ping';
-}
+export const PingEventSchema = z.object({
+  type: z.literal('ping'),
+});
+export type PingEvent = z.infer<typeof PingEventSchema>;
 
-export type ClientEvent = SubscribeEvent | UnsubscribeEvent | PingEvent;
+export const ClientEventSchema = z.discriminatedUnion('type', [
+  SubscribeEventSchema,
+  UnsubscribeEventSchema,
+  PingEventSchema,
+]);
+export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
 // WebSocket server -> client
-export interface MessageCreatedEvent {
-  type: 'message.created';
-  channel: string;
-  message: {
-    id: string;
-    agent_name: string;
-    text: string;
-    attachments: Array<{
-      file_id: string;
-      filename: string;
-      url: string;
-      size: number;
-    }>;
-  };
-}
+export const MessageCreatedEventSchema = z.object({
+  type: z.literal('message.created'),
+  channel: z.string(),
+  message: z.object({
+    id: z.string(),
+    agent_name: z.string(),
+    text: z.string(),
+    attachments: z.array(z.object({
+      file_id: z.string(),
+      filename: z.string(),
+      url: z.string(),
+      size: z.number(),
+    })),
+  }),
+});
+export type MessageCreatedEvent = z.infer<typeof MessageCreatedEventSchema>;
 
-export interface MessageUpdatedEvent {
-  type: 'message.updated';
-  channel: string;
-  message: { id: string; agent_name: string; text: string };
-}
+export const MessageUpdatedEventSchema = z.object({
+  type: z.literal('message.updated'),
+  channel: z.string(),
+  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+});
+export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
-export interface ThreadReplyEvent {
-  type: 'thread.reply';
-  parent_id: string;
-  message: { id: string; agent_name: string; text: string };
-}
+export const ThreadReplyEventSchema = z.object({
+  type: z.literal('thread.reply'),
+  parent_id: z.string(),
+  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+});
+export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
-export interface ReactionAddedEvent {
-  type: 'reaction.added';
-  message_id: string;
-  emoji: string;
-  agent_name: string;
-}
+export const ReactionAddedEventSchema = z.object({
+  type: z.literal('reaction.added'),
+  message_id: z.string(),
+  emoji: z.string(),
+  agent_name: z.string(),
+});
+export type ReactionAddedEvent = z.infer<typeof ReactionAddedEventSchema>;
 
-export interface ReactionRemovedEvent {
-  type: 'reaction.removed';
-  message_id: string;
-  emoji: string;
-  agent_name: string;
-}
+export const ReactionRemovedEventSchema = z.object({
+  type: z.literal('reaction.removed'),
+  message_id: z.string(),
+  emoji: z.string(),
+  agent_name: z.string(),
+});
+export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 
-export interface DmReceivedEvent {
-  type: 'dm.received';
-  conversation_id: string;
-  message: { id: string; agent_name: string; text: string };
-}
+export const DmReceivedEventSchema = z.object({
+  type: z.literal('dm.received'),
+  conversation_id: z.string(),
+  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+});
+export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 
-export interface GroupDmReceivedEvent {
-  type: 'group_dm.received';
-  conversation_id: string;
-  message: { id: string; agent_name: string; text: string };
-}
+export const GroupDmReceivedEventSchema = z.object({
+  type: z.literal('group_dm.received'),
+  conversation_id: z.string(),
+  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+});
+export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 
-export interface AgentOnlineEvent {
-  type: 'agent.online';
-  agent: { name: string };
-}
+export const AgentOnlineEventSchema = z.object({
+  type: z.literal('agent.online'),
+  agent: z.object({ name: z.string() }),
+});
+export type AgentOnlineEvent = z.infer<typeof AgentOnlineEventSchema>;
 
-export interface AgentOfflineEvent {
-  type: 'agent.offline';
-  agent: { name: string };
-}
+export const AgentOfflineEventSchema = z.object({
+  type: z.literal('agent.offline'),
+  agent: z.object({ name: z.string() }),
+});
+export type AgentOfflineEvent = z.infer<typeof AgentOfflineEventSchema>;
 
-export interface ChannelCreatedEvent {
-  type: 'channel.created';
-  channel: { name: string; topic: string | null };
-}
+export const ChannelCreatedEventSchema = z.object({
+  type: z.literal('channel.created'),
+  channel: z.object({ name: z.string(), topic: z.string().nullable() }),
+});
+export type ChannelCreatedEvent = z.infer<typeof ChannelCreatedEventSchema>;
 
-export interface ChannelUpdatedEvent {
-  type: 'channel.updated';
-  channel: { name: string; topic: string | null };
-}
+export const ChannelUpdatedEventSchema = z.object({
+  type: z.literal('channel.updated'),
+  channel: z.object({ name: z.string(), topic: z.string().nullable() }),
+});
+export type ChannelUpdatedEvent = z.infer<typeof ChannelUpdatedEventSchema>;
 
-export interface ChannelArchivedEvent {
-  type: 'channel.archived';
-  channel: { name: string };
-}
+export const ChannelArchivedEventSchema = z.object({
+  type: z.literal('channel.archived'),
+  channel: z.object({ name: z.string() }),
+});
+export type ChannelArchivedEvent = z.infer<typeof ChannelArchivedEventSchema>;
 
-export interface MemberJoinedEvent {
-  type: 'member.joined';
-  channel: string;
-  agent_name: string;
-}
+export const MemberJoinedEventSchema = z.object({
+  type: z.literal('member.joined'),
+  channel: z.string(),
+  agent_name: z.string(),
+});
+export type MemberJoinedEvent = z.infer<typeof MemberJoinedEventSchema>;
 
-export interface MemberLeftEvent {
-  type: 'member.left';
-  channel: string;
-  agent_name: string;
-}
+export const MemberLeftEventSchema = z.object({
+  type: z.literal('member.left'),
+  channel: z.string(),
+  agent_name: z.string(),
+});
+export type MemberLeftEvent = z.infer<typeof MemberLeftEventSchema>;
 
-export interface MessageReadEvent {
-  type: 'message.read';
-  message_id: string;
-  agent_name: string;
-  read_at: string;
-}
+export const MessageReadEventSchema = z.object({
+  type: z.literal('message.read'),
+  message_id: z.string(),
+  agent_name: z.string(),
+  read_at: z.string(),
+});
+export type MessageReadEvent = z.infer<typeof MessageReadEventSchema>;
 
-export interface FileUploadedEvent {
-  type: 'file.uploaded';
-  file: { file_id: string; filename: string; uploaded_by: string };
-}
+export const FileUploadedEventSchema = z.object({
+  type: z.literal('file.uploaded'),
+  file: z.object({ file_id: z.string(), filename: z.string(), uploaded_by: z.string() }),
+});
+export type FileUploadedEvent = z.infer<typeof FileUploadedEventSchema>;
 
-export interface PongEvent {
-  type: 'pong';
-}
+export const PongEventSchema = z.object({
+  type: z.literal('pong'),
+});
+export type PongEvent = z.infer<typeof PongEventSchema>;
 
-export interface WebhookReceivedEvent {
-  type: 'webhook.received';
-  webhook_id: string;
-  channel: string;
-  message: { id: string; text: string; source: string | null };
-}
+export const WebhookReceivedEventSchema = z.object({
+  type: z.literal('webhook.received'),
+  webhook_id: z.string(),
+  channel: z.string(),
+  message: z.object({ id: z.string(), text: z.string(), source: z.string().nullable() }),
+});
+export type WebhookReceivedEvent = z.infer<typeof WebhookReceivedEventSchema>;
 
-export interface CommandInvokedEvent {
-  type: 'command.invoked';
-  command: string;
-  channel: string;
-  invoked_by: string;
-  args: string | null;
-  parameters: Record<string, unknown> | null;
-}
+export const CommandInvokedEventSchema = z.object({
+  type: z.literal('command.invoked'),
+  command: z.string(),
+  channel: z.string(),
+  invoked_by: z.string(),
+  args: z.string().nullable(),
+  parameters: z.record(z.unknown()).nullable(),
+});
+export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
 
-export type ServerEvent =
-  | MessageCreatedEvent
-  | MessageUpdatedEvent
-  | ThreadReplyEvent
-  | ReactionAddedEvent
-  | ReactionRemovedEvent
-  | DmReceivedEvent
-  | GroupDmReceivedEvent
-  | AgentOnlineEvent
-  | AgentOfflineEvent
-  | ChannelCreatedEvent
-  | ChannelUpdatedEvent
-  | ChannelArchivedEvent
-  | MemberJoinedEvent
-  | MemberLeftEvent
-  | MessageReadEvent
-  | FileUploadedEvent
-  | WebhookReceivedEvent
-  | CommandInvokedEvent
-  | PongEvent;
+// WebSocket client events (emitted by WsClient, not from server)
+export const WsOpenEventSchema = z.object({
+  type: z.literal('open'),
+});
+export type WsOpenEvent = z.infer<typeof WsOpenEventSchema>;
 
+export const WsErrorEventSchema = z.object({
+  type: z.literal('error'),
+});
+export type WsErrorEvent = z.infer<typeof WsErrorEventSchema>;
+
+export const WsReconnectingEventSchema = z.object({
+  type: z.literal('reconnecting'),
+  attempt: z.number(),
+});
+export type WsReconnectingEvent = z.infer<typeof WsReconnectingEventSchema>;
+
+export const WsCloseEventSchema = z.object({
+  type: z.literal('close'),
+});
+export type WsCloseEvent = z.infer<typeof WsCloseEventSchema>;
+
+export const ServerEventSchema = z.discriminatedUnion('type', [
+  MessageCreatedEventSchema,
+  MessageUpdatedEventSchema,
+  ThreadReplyEventSchema,
+  ReactionAddedEventSchema,
+  ReactionRemovedEventSchema,
+  DmReceivedEventSchema,
+  GroupDmReceivedEventSchema,
+  AgentOnlineEventSchema,
+  AgentOfflineEventSchema,
+  ChannelCreatedEventSchema,
+  ChannelUpdatedEventSchema,
+  ChannelArchivedEventSchema,
+  MemberJoinedEventSchema,
+  MemberLeftEventSchema,
+  MessageReadEventSchema,
+  FileUploadedEventSchema,
+  WebhookReceivedEventSchema,
+  CommandInvokedEventSchema,
+  PongEventSchema,
+]);
+
+export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export type ServerEventType = ServerEvent['type'];
 export type ClientEventType = ClientEvent['type'];
+
+// Union of all events that WsClient can emit (includes server events + client-only events)
+export const WsClientEventSchema = z.discriminatedUnion('type', [
+  // Server events
+  MessageCreatedEventSchema,
+  MessageUpdatedEventSchema,
+  ThreadReplyEventSchema,
+  ReactionAddedEventSchema,
+  ReactionRemovedEventSchema,
+  DmReceivedEventSchema,
+  GroupDmReceivedEventSchema,
+  AgentOnlineEventSchema,
+  AgentOfflineEventSchema,
+  ChannelCreatedEventSchema,
+  ChannelUpdatedEventSchema,
+  ChannelArchivedEventSchema,
+  MemberJoinedEventSchema,
+  MemberLeftEventSchema,
+  MessageReadEventSchema,
+  FileUploadedEventSchema,
+  WebhookReceivedEventSchema,
+  CommandInvokedEventSchema,
+  PongEventSchema,
+  // Client-only events
+  WsOpenEventSchema,
+  WsErrorEventSchema,
+  WsReconnectingEventSchema,
+  WsCloseEventSchema,
+]);
+export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
+export type WsClientEventType = WsClientEvent['type'];

@@ -1,40 +1,57 @@
-export type AgentType = 'agent' | 'human';
-export type AgentStatus = 'online' | 'offline' | 'away';
+import { z } from 'zod';
 
-export interface Agent {
-  id: string;
-  workspace_id: string;
-  name: string;
-  type: AgentType;
-  token_hash: string;
-  status: AgentStatus;
-  persona: string | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  last_seen: string;
-}
+export const AgentTypeSchema = z.enum(['agent', 'human']);
+export type AgentType = z.infer<typeof AgentTypeSchema>;
 
-export interface CreateAgentRequest {
-  name: string;
-  type?: AgentType;
-  persona?: string;
-  metadata?: Record<string, unknown>;
-}
+export const AgentStatusSchema = z.enum(['online', 'offline', 'away']);
+export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
-export interface CreateAgentResponse {
-  id: string;
-  name: string;
-  token: string;
-  status: AgentStatus;
-  created_at: string;
-}
+export const AgentSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  type: AgentTypeSchema,
+  token_hash: z.string(),
+  status: AgentStatusSchema,
+  persona: z.string().nullable(),
+  metadata: z.record(z.unknown()),
+  created_at: z.string(),
+  last_seen: z.string(),
+});
+export type Agent = z.infer<typeof AgentSchema>;
 
-export interface UpdateAgentRequest {
-  status?: AgentStatus;
-  persona?: string;
-  metadata?: Record<string, unknown>;
-}
+export const CreateAgentRequestSchema = z.object({
+  name: z.string(),
+  type: AgentTypeSchema.optional(),
+  persona: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 
-export interface AgentListQuery {
-  status?: AgentStatus | 'all';
-}
+export const CreateAgentResponseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  token: z.string(),
+  status: AgentStatusSchema,
+  created_at: z.string(),
+});
+export type CreateAgentResponse = z.infer<typeof CreateAgentResponseSchema>;
+
+export const UpdateAgentRequestSchema = z.object({
+  status: AgentStatusSchema.optional(),
+  persona: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
+
+export const AgentListQuerySchema = z.object({
+  status: z.union([AgentStatusSchema, z.literal('all')]).optional(),
+});
+export type AgentListQuery = z.infer<typeof AgentListQuerySchema>;
+
+export const AgentPresenceInfoSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string(),
+  status: z.enum(['online', 'offline']),
+});
+export type AgentPresenceInfo = z.infer<typeof AgentPresenceInfoSchema>;

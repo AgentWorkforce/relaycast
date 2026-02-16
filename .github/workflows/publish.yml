@@ -137,6 +137,11 @@ jobs:
                 console.log(pkg.name + '@' + version);
               }
             }
+
+            // Sync SDK_VERSION constant with package version
+            const sdkVersionPath = path.join(packagesDir, 'sdk', 'src', 'version.ts');
+            fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+            console.log('SDK_VERSION -> ' + version);
           "
 
       - name: Clean reinstall after version bump

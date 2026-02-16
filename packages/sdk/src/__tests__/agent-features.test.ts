@@ -113,6 +113,18 @@ describe('AgentClient features', () => {
       expect(init.body).toBe(JSON.stringify({ agent: 'Bot' }));
     });
 
+    it('update() patches /v1/channels/:name', async () => {
+      mockFetch.mockImplementation(() =>
+        mockResponse({ name: 'dev', topic: 'Updated topic' }),
+      );
+      await me.channels.update('dev', { topic: 'Updated topic' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev');
+      expect(init.method).toBe('PATCH');
+      expect(init.body).toBe(JSON.stringify({ topic: 'Updated topic' }));
+    });
+
     it('members() gets /v1/channels/:name/members', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));
       await me.channels.members('dev');

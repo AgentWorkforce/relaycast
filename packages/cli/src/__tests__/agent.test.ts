@@ -8,7 +8,7 @@ vi.mock('../config.js', () => ({
 
 const RelayMock = vi.fn();
 vi.mock('@relaycast/sdk', () => ({
-  Relay: RelayMock,
+  RelayCast: RelayMock,
 }));
 
 describe('agent commands', () => {

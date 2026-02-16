@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { Relay } from '@relaycast/sdk';
+import { RelayCast } from '@relaycast/sdk';
 import type { SessionState } from '../types.js';
 
 type ApiOk<T> = { ok: true; data: T };
@@ -51,7 +51,7 @@ function requireWorkspaceKey(session: SessionState): void {
 
 export function registerRegistrationTools(
   server: McpServer,
-  getRelay: () => Relay,
+  getRelay: () => RelayCast,
   getSession: () => SessionState,
   setSession: (state: Partial<SessionState>) => void,
   baseUrl?: string,

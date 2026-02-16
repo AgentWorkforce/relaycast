@@ -1,34 +1,40 @@
-export interface WorkspaceStats {
-  agents: { total: number; online: number; offline: number };
-  channels: { total: number; archived: number };
-  messages: { total: number; today: number };
-  dms: { total_conversations: number };
-  files: { total: number; storage_bytes: number };
-}
+import { z } from 'zod';
 
-export interface ActivityItem {
-  type: 'message' | 'dm';
-  id: string;
-  channel_name?: string;
-  conversation_id?: string;
-  agent_name: string;
-  text: string;
-  created_at: string;
-}
+export const WorkspaceStatsSchema = z.object({
+  agents: z.object({ total: z.number(), online: z.number(), offline: z.number() }),
+  channels: z.object({ total: z.number(), archived: z.number() }),
+  messages: z.object({ total: z.number(), today: z.number() }),
+  dms: z.object({ total_conversations: z.number() }),
+  files: z.object({ total: z.number(), storage_bytes: z.number() }),
+});
+export type WorkspaceStats = z.infer<typeof WorkspaceStatsSchema>;
 
-export interface WorkspaceDmConversation {
-  id: string;
-  type: string;
-  participants: string[];
-  last_message: {
-    text: string;
-    agent_name: string;
-    created_at: string;
-  } | null;
-  message_count: number;
-}
+export const ActivityItemSchema = z.object({
+  type: z.enum(['message', 'dm']),
+  id: z.string(),
+  channel_name: z.string().optional(),
+  conversation_id: z.string().optional(),
+  agent_name: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type ActivityItem = z.infer<typeof ActivityItemSchema>;
 
-export interface TokenRotateResponse {
-  name: string;
-  token: string;
-}
+export const WorkspaceDmConversationSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  participants: z.array(z.string()),
+  last_message: z.object({
+    text: z.string(),
+    agent_name: z.string(),
+    created_at: z.string(),
+  }).nullable(),
+  message_count: z.number(),
+});
+export type WorkspaceDmConversation = z.infer<typeof WorkspaceDmConversationSchema>;
+
+export const TokenRotateResponseSchema = z.object({
+  name: z.string(),
+  token: z.string(),
+});
+export type TokenRotateResponse = z.infer<typeof TokenRotateResponseSchema>;

@@ -83,7 +83,7 @@ describe('WsClient', () => {
     ws.simulateMessage({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm_1', agent_name: 'Bot', text: 'hi' },
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -175,11 +175,11 @@ describe('WsClient', () => {
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     expect(handler).toHaveBeenCalledTimes(1);
 
     unsub();
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -210,7 +210,7 @@ describe('WsClient', () => {
     ws.simulateOpen();
     // 'open' synthetic event is also emitted to wildcard
 
-    ws.simulateMessage({ type: 'message.created', channel: 'general', message: {} });
+    ws.simulateMessage({ type: 'message.created', channel: 'general', message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] } });
     ws.simulateMessage({ type: 'pong' });
 
     // open + message.created + pong = 3
@@ -229,6 +229,127 @@ describe('WsClient', () => {
     // Send invalid JSON — should not emit anything
     ws.onmessage?.({ data: 'not json' });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('forwards unrecognized event types to wildcard and typed listeners', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const wildcardHandler = vi.fn();
+    const typedHandler = vi.fn();
+    client.on('*', wildcardHandler);
+    client.on('typing.started', typedHandler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ type: 'typing.started', agent_name: 'Alice', channel: 'general' });
+
+    expect(wildcardHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+    );
+    expect(typedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+    );
+  });
+
+  it('ignores objects without a type field', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('*', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    // Reset after open event
+    handler.mockClear();
+
+    ws.simulateMessage({ data: 'no type field' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('logs dropped messages with missing type when debug is enabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test', debug: true });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ data: 'no type field' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('missing or invalid "type"'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('logs malformed JSON when debug is enabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test', debug: true });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.onmessage?.({ data: 'not json' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('malformed'),
+      expect.stringContaining('not json'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not log when debug is disabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ data: 'no type field' });
+    ws.onmessage?.({ data: 'not json' });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('emits error event on WebSocket error', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('error', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.onerror?.();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+  });
+
+  it('emits reconnecting event with attempt count', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('reconnecting', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'reconnecting', attempt: 1 }),
+    );
+
+    // Advance timer to trigger reconnect, then close again
+    vi.advanceTimersByTime(1000);
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'reconnecting', attempt: 2 }),
+    );
   });
 
   it('does not send if WebSocket is not open', () => {

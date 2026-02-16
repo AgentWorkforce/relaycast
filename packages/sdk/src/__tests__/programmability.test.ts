@@ -33,8 +33,8 @@ describe('Programmability SDK', () => {
 
   describe('webhooks', () => {
     it('create() posts to /v1/webhooks', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
         mockResponse({ webhook_id: 'wh_1', name: 'GitHub', channel: 'dev', url: 'https://...', created_at: '2025-01-01' }),
@@ -48,8 +48,8 @@ describe('Programmability SDK', () => {
     });
 
     it('list() gets /v1/webhooks', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mockResponse([]));
       await relay.webhooks.list();
@@ -60,8 +60,8 @@ describe('Programmability SDK', () => {
     });
 
     it('delete() deletes /v1/webhooks/:id (handles 204)', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mock204());
       await relay.webhooks.delete('wh_1');
@@ -72,8 +72,8 @@ describe('Programmability SDK', () => {
     });
 
     it('trigger() posts to /v1/hooks/:webhookId', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
         mockResponse({ message_id: 'm_1', channel: 'dev', text: 'alert', created_at: '2025-01-01' }),
@@ -91,8 +91,8 @@ describe('Programmability SDK', () => {
 
   describe('subscriptions', () => {
     it('create() posts to /v1/subscriptions', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
         mockResponse({ id: 'sub_1', events: ['message.created'], url: 'https://hook.example.com' }),
@@ -112,8 +112,8 @@ describe('Programmability SDK', () => {
     });
 
     it('list() gets /v1/subscriptions', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mockResponse([]));
       await relay.subscriptions.list();
@@ -124,8 +124,8 @@ describe('Programmability SDK', () => {
     });
 
     it('get() gets /v1/subscriptions/:id', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
         mockResponse({ id: 'sub_1', events: ['message.created'], url: 'https://hook.example.com' }),
@@ -138,8 +138,8 @@ describe('Programmability SDK', () => {
     });
 
     it('delete() deletes /v1/subscriptions/:id (handles 204)', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mock204());
       await relay.subscriptions.delete('sub_1');
@@ -154,8 +154,8 @@ describe('Programmability SDK', () => {
 
   describe('commands', () => {
     it('register() posts to /v1/commands', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
         mockResponse({ id: 'cmd_1', command: 'deploy', description: 'Deploy app' }),
@@ -177,8 +177,8 @@ describe('Programmability SDK', () => {
     });
 
     it('list() gets /v1/commands', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mockResponse([]));
       await relay.commands.list();
@@ -189,8 +189,8 @@ describe('Programmability SDK', () => {
     });
 
     it('delete() deletes /v1/commands/:command (handles 204)', async () => {
-      const { Relay } = await import('../relay.js');
-      const relay = new Relay({ apiKey: 'rk_live_test123' });
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mock204());
       await relay.commands.delete('deploy');

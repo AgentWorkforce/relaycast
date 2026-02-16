@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  Relay: vi.fn(() => ({
+  RelayCast: vi.fn(() => ({
     as: vi.fn(() => ({
       search: mocks.search,
     })),

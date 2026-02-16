@@ -1,4 +1,4 @@
-import { Relay, AgentClient, WsClient } from '@relaycast/sdk';
+import { RelayCast, AgentClient, WsClient } from '@relaycast/sdk';
 import type { Agent } from '@relaycast/types';
 
 export interface ClawIdentity {
@@ -40,7 +40,7 @@ export interface OpenClawBridgeOptions {
  * ```
  */
 export class OpenClawBridge {
-  private relay: Relay;
+  private relay: RelayCast;
   private agent: AgentClient | null = null;
   private ws: WsClient | null = null;
   private agentToken: string | null = null;
@@ -48,7 +48,7 @@ export class OpenClawBridge {
 
   constructor(options: OpenClawBridgeOptions) {
     this.options = options;
-    this.relay = new Relay({
+    this.relay = new RelayCast({
       apiKey: options.apiKey,
       baseUrl: options.baseUrl,
     });

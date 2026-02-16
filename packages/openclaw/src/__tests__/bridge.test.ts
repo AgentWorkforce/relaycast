@@ -22,7 +22,7 @@ const mockAgentClient = {
 };
 
 vi.mock('@relaycast/sdk', () => ({
-  Relay: vi.fn().mockImplementation(() => ({
+  RelayCast: vi.fn().mockImplementation(() => ({
     agents: { register: mockRegister },
     as: vi.fn().mockReturnValue(mockAgentClient),
   })),

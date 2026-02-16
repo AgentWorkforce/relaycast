@@ -1,13 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { Relay, AgentClient } from '@relaycast/sdk';
+import type { RelayCast, AgentClient } from '@relaycast/sdk';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
 
 export function registerProgrammabilityTools(
   server: McpServer,
-  getRelay: () => Relay,
+  getRelay: () => RelayCast,
   getAgentClient: () => AgentClient,
 ): void {
   // === Inbound Webhooks ===

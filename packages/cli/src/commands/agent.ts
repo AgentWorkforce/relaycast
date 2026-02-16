@@ -1,14 +1,14 @@
 import { Command } from 'commander';
-import { Relay } from '@relaycast/sdk';
+import { RelayCast } from '@relaycast/sdk';
 
 import { loadConfig } from '../config.js';
 
-function createRelay(): Relay {
+function createRelay(): RelayCast {
   const cfg = loadConfig();
   if (!cfg.apiKey) {
     throw new Error('Missing API key. Run: relay config set api-key <value>');
   }
-  return new Relay({ apiKey: cfg.apiKey, baseUrl: cfg.endpoint });
+  return new RelayCast({ apiKey: cfg.apiKey, baseUrl: cfg.endpoint });
 }
 
 function agentsTable(agents: Array<{ name: string; status?: string; persona?: string | null }>): string {

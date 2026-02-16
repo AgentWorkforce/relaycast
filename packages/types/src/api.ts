@@ -1,3 +1,32 @@
+import { z } from 'zod';
+
+export const ApiSuccessSchema = <T extends z.ZodType>(dataSchema: T) =>
+  z.object({
+    ok: z.literal(true),
+    data: dataSchema,
+    cursor: z.object({
+      next: z.string().nullable(),
+      has_more: z.boolean(),
+    }).optional(),
+  });
+
+export const ApiErrorSchema = z.object({
+  ok: z.literal(false),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }),
+});
+
+export const ApiResponseSchema = <T extends z.ZodType>(dataSchema: T) =>
+  z.discriminatedUnion('ok', [ApiSuccessSchema(dataSchema), ApiErrorSchema]);
+
+export const InboxResponseSchema = z.object({
+  unread_channels: z.array(z.object({ channel_name: z.string(), unread_count: z.number() })),
+  mentions: z.array(z.object({ id: z.string(), channel_name: z.string(), agent_name: z.string(), text: z.string(), created_at: z.string() })),
+  unread_dms: z.array(z.object({ conversation_id: z.string(), from: z.string(), unread_count: z.number(), last_message: z.string().nullable() })),
+});
+
 export interface ApiSuccess<T> {
   ok: true;
   data: T;
@@ -16,9 +45,4 @@ export interface ApiError {
 }
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiError;
-
-export interface InboxResponse {
-  unread_channels: Array<{ channel_name: string; unread_count: number }>;
-  mentions: Array<{ id: string; channel_name: string; agent_name: string; text: string; created_at: string }>;
-  unread_dms: Array<{ conversation_id: string; from: string; unread_count: number; last_message: string | null }>;
-}
+export type InboxResponse = z.infer<typeof InboxResponseSchema>;
