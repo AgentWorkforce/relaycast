@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RelayError } from '@relaycast/sdk';
-import { getRelayApiKey, getRelay, relayFetch } from '../../../../../lib/relay-api';
+import { getRelayApiKey, relayFetch } from '../../../../../lib/relay-api';
 
 /**
  * GET/POST /api/messages/:id/reactions
@@ -20,9 +20,8 @@ export async function GET(
     }
 
     const { id } = await params;
-    const relay = getRelay(apiKey);
 
-    // Use workspace-level SDK call for reading reactions
+    // Use relayFetch for reading reactions
     const res = await relayFetch(`/v1/messages/${encodeURIComponent(id)}/reactions`);
     if (res.ok) {
       const data = await res.json();

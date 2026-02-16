@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RelayError } from '@relaycast/sdk';
-import { getRelayApiKey, getRelay, relayFetch } from '../../../../../lib/relay-api';
+import { getRelayApiKey, relayFetch } from '../../../../../lib/relay-api';
 
 /**
  * GET/POST /api/messages/:id/replies
@@ -20,17 +20,28 @@ export async function GET(
     }
 
     const { id } = await params;
-    const relay = getRelay(apiKey);
 
     const searchParams = request.nextUrl.searchParams;
-    const opts: { limit?: number; before?: string; after?: string } = {};
-    if (searchParams.get('limit')) opts.limit = Number(searchParams.get('limit'));
-    if (searchParams.get('before')) opts.before = searchParams.get('before')!;
-    if (searchParams.get('after')) opts.after = searchParams.get('after')!;
+    const query: Record<string, string> = {};
+    if (searchParams.get('limit')) query.limit = searchParams.get('limit')!;
+    if (searchParams.get('before')) query.before = searchParams.get('before')!;
+    if (searchParams.get('after')) query.after = searchParams.get('after')!;
 
-    const result = await relay.messages.get(id);
-    // For now, return the message itself. Thread endpoint would be better but not in SDK yet.
-    return NextResponse.json({ ok: true, data: result });
+    // Use relayFetch to get thread replies
+    const queryString = new URLSearchParams(query).toString();
+    const path = `/v1/messages/${encodeURIComponent(id)}/replies${queryString ? `?${queryString}` : ''}`;
+    const res = await relayFetch(path);
+
+    if (res.ok) {
+      const data = await res.json();
+      return NextResponse.json({ ok: true, data: data.data || data });
+    }
+
+    const error = await res.json().catch(() => ({ error: { code: 'unknown_error', message: 'Failed to get replies' } }));
+    return NextResponse.json(
+      { ok: false, error: { code: error?.error?.code || 'unknown_error', message: error?.error?.message || 'Failed to get replies' } },
+      { status: res.status }
+    );
   } catch (error) {
     if (error instanceof RelayError) {
       return NextResponse.json(
