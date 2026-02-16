@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { relayFetch } from '../../../lib/relay-api';
+import { RelayError } from '@relaycast/sdk';
+import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
 
 /** Generate sample dashboard data for local development/testing */
 function generateSampleData() {
@@ -57,71 +58,49 @@ function generateSampleData() {
  */
 export async function GET() {
   try {
-    const [agentsRes, channelsRes] = await Promise.all([
-      relayFetch('/v1/agents'),
-      relayFetch('/v1/channels'),
-    ]);
-
-    if (!agentsRes.ok) {
-      // Return sample data in development, empty data in production
+    const apiKey = await getRelayApiKey();
+    if (!apiKey) {
       if (process.env.NODE_ENV === 'development') {
         return NextResponse.json(generateSampleData());
       }
       return NextResponse.json({ agents: [], messages: [], sessions: [] });
     }
 
-    const agentsData = await agentsRes.json();
-    const agents = (agentsData.data || agentsData.agents || []).map(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (a: any) => ({
-        name: a.name,
-        status: a.status || 'online',
-        cli: a.cli || 'unknown',
-        currentTask: a.current_task || a.currentTask || '',
-        lastSeen: a.last_seen_at || a.lastSeen || new Date().toISOString(),
-      })
-    );
+    const relay = getRelay(apiKey);
+    const [agentList, channelList] = await Promise.all([
+      relay.agents.list(),
+      relay.channels.list(),
+    ]);
+
+    const agents = agentList.map((a) => ({
+      name: a.name,
+      status: a.status || 'online',
+      cli: (a.metadata?.cli as string) || 'unknown',
+      currentTask: (a.metadata?.current_task as string) || '',
+      lastSeen: a.last_seen || new Date().toISOString(),
+    }));
 
     // Fetch recent messages from each channel
-    let messages: unknown[] = [];
-    if (channelsRes.ok) {
-      const channelsData = await channelsRes.json();
-      const channels = channelsData.data || channelsData.channels || [];
+    const messagePromises = channelList.slice(0, 10).map(async (ch) => {
+      try {
+        const msgs = await relay.messages.list(ch.name, { limit: 50 });
+        return msgs.map((m) => ({
+          id: m.id,
+          from: m.agent_name || 'unknown',
+          to: `#${ch.name}`,
+          content: m.text || '',
+          timestamp: m.created_at || new Date().toISOString(),
+          thread: undefined,
+          reactions: m.reactions || [],
+          replyCount: m.reply_count || 0,
+        }));
+      } catch {
+        return [];
+      }
+    });
 
-      const messagePromises = channels.slice(0, 10).map(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (ch: any) => {
-          const name = ch.name || ch.id;
-          try {
-            const res = await relayFetch(
-              `/v1/channels/${encodeURIComponent(name)}/messages?limit=50`
-            );
-            if (res.ok) {
-              const data = await res.json();
-              return (data.data || data.messages || []).map(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (m: any) => ({
-                  id: m.id,
-                  from: m.from || m.agent_name || 'unknown',
-                  to: m.to || m.channel || name,
-                  content: m.content || m.body || '',
-                  timestamp: m.created_at || m.timestamp || new Date().toISOString(),
-                  thread: m.thread_id || m.thread,
-                  reactions: m.reactions || [],
-                  replyCount: m.reply_count || m.replyCount || 0,
-                })
-              );
-            }
-          } catch {
-            // Skip channels that fail
-          }
-          return [];
-        }
-      );
-
-      const channelMessages = await Promise.all(messagePromises);
-      messages = channelMessages.flat();
-    }
+    const channelMessages = await Promise.all(messagePromises);
+    const messages = channelMessages.flat();
 
     // If authenticated but no real data, use sample data in development
     if (agents.length === 0 && messages.length === 0 && process.env.NODE_ENV === 'development') {
@@ -130,7 +109,11 @@ export async function GET() {
 
     return NextResponse.json({ agents, messages, sessions: [] });
   } catch (error) {
-    console.error('[api/data] Error:', error);
+    if (error instanceof RelayError) {
+      console.error('[api/data] RelayError:', error.code, error.message);
+    } else {
+      console.error('[api/data] Error:', error);
+    }
     if (process.env.NODE_ENV === 'development') {
       return NextResponse.json(generateSampleData());
     }

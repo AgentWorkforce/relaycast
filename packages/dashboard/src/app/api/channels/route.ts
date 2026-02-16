@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { relayFetch } from '../../../lib/relay-api';
+import { RelayError } from '@relaycast/sdk';
+import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
 
 /**
  * GET /api/channels
@@ -7,23 +8,22 @@ import { relayFetch } from '../../../lib/relay-api';
  */
 export async function GET() {
   try {
-    const res = await relayFetch('/v1/channels');
-    if (!res.ok) {
+    const apiKey = await getRelayApiKey();
+    if (!apiKey) {
       return NextResponse.json(
         { success: false, channels: [], archivedChannels: [] },
-        { status: res.status }
+        { status: 401 }
       );
     }
 
-    const data = await res.json();
-    const raw = data.data || data.channels || [];
+    const relay = getRelay(apiKey);
+    const raw = await relay.channels.list({ include_archived: true });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const channels = raw.filter((ch: any) => !ch.is_archived).map((ch: any) => ({
+    const channels = raw.filter((ch) => !ch.is_archived).map((ch) => ({
       id: ch.name ? `#${ch.name}` : ch.id,
       name: ch.name || ch.id,
-      description: ch.description || ch.topic || '',
-      visibility: ch.is_private ? 'private' : 'public',
+      description: ch.topic || '',
+      visibility: 'public',
       status: 'active',
       createdAt: ch.created_at || new Date().toISOString(),
       createdBy: ch.created_by || 'system',
@@ -33,12 +33,11 @@ export async function GET() {
       isDm: false,
     }));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const archivedChannels = raw.filter((ch: any) => ch.is_archived).map((ch: any) => ({
+    const archivedChannels = raw.filter((ch) => ch.is_archived).map((ch) => ({
       id: ch.name ? `#${ch.name}` : ch.id,
       name: ch.name || ch.id,
-      description: ch.description || ch.topic || '',
-      visibility: ch.is_private ? 'private' : 'public',
+      description: ch.topic || '',
+      visibility: 'public',
       status: 'archived',
       createdAt: ch.created_at || new Date().toISOString(),
       createdBy: ch.created_by || 'system',
@@ -50,6 +49,12 @@ export async function GET() {
 
     return NextResponse.json({ success: true, channels, archivedChannels });
   } catch (error) {
+    if (error instanceof RelayError) {
+      return NextResponse.json(
+        { ok: false, error: { code: error.code, message: error.message } },
+        { status: error.status }
+      );
+    }
     console.error('[api/channels] Error:', error);
     return NextResponse.json(
       { success: false, channels: [], archivedChannels: [] },

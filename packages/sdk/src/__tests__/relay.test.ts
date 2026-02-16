@@ -348,6 +348,91 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('channels', () => {
+    it('list() calls GET /v1/channels', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.channels.list();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels');
+      expect(init.method).toBe('GET');
+    });
+
+    it('list() with include_archived adds query param', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.channels.list({ include_archived: true });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels?include_archived=true');
+    });
+
+    it('get() calls GET /v1/channels/:name', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ name: 'general', members: [] }));
+      await relay.channels.get('general');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general');
+      expect(init.method).toBe('GET');
+    });
+  });
+
+  describe('messages', () => {
+    it('list() calls GET /v1/channels/:name/messages', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('general');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages');
+      expect(init.method).toBe('GET');
+    });
+
+    it('list() with opts adds query params', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('general', { limit: 50 });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages?limit=50');
+    });
+
+    it('list() strips # prefix from channel name', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('#general');
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages');
+    });
+
+    it('get() calls GET /v1/messages/:id', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ id: 'msg_1' }));
+      await relay.messages.get('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/messages/msg_1');
+      expect(init.method).toBe('GET');
+    });
+  });
+
   describe('as()', () => {
     it('returns an AgentClient that uses the agent token for Authorization', async () => {
       const { RelayCast } = await import('../relay.js');

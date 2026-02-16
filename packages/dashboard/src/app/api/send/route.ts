@@ -1,16 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { relayFetch } from '../../../lib/relay-api';
+import { RelayError } from '@relaycast/sdk';
+import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
 
 /**
  * POST /api/send
  * Translates dashboard send format to relaycast /v1 API.
  * Dashboard sends: { to, message, from, thread, attachments }
- * Relaycast expects: POST /v1/channels/:name/messages { content } or POST /v1/dm { to, content }
  */
 export async function POST(request: NextRequest) {
   try {
+    const apiKey = await getRelayApiKey();
+    if (!apiKey) {
+      return NextResponse.json(
+        { success: false, error: 'Not authenticated' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
-    const { to, message, from, thread } = body;
+    const { to, message } = body;
 
     if (!to || !message) {
       return NextResponse.json(
@@ -19,63 +27,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // If "to" starts with #, it's a channel message
+    const relay = getRelay(apiKey);
+    const agent = relay.as(apiKey);
+
     if (to.startsWith('#')) {
       const channelName = to.slice(1);
-      const res = await relayFetch(
-        `/v1/channels/${encodeURIComponent(channelName)}/messages`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            content: message,
-            from: from || 'dashboard',
-            thread_id: thread,
-          }),
-        }
-      );
-
-      if (res.ok) {
-        const data = await res.json();
-        return NextResponse.json({
-          success: true,
-          messageId: data.data?.id || data.id,
-        });
-      }
-
-      const error = await res.json().catch(() => ({ error: { message: 'Send failed' } }));
-      const errorMsg = error?.error?.message || error?.message || 'Failed to send';
-      return NextResponse.json(
-        { success: false, error: errorMsg },
-        { status: res.status }
-      );
+      const result = await agent.send(channelName, message);
+      return NextResponse.json({ success: true, messageId: result.id });
     }
 
     // Direct message to an agent
-    const res = await relayFetch('/v1/dm', {
-      method: 'POST',
-      body: JSON.stringify({
-        to,
-        content: message,
-        from: from || 'dashboard',
-        thread_id: thread,
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      return NextResponse.json({
-        success: true,
-        messageId: data.data?.id || data.id,
-      });
-    }
-
-    const error = await res.json().catch(() => ({ error: { message: 'Send failed' } }));
-    const errorMsg = error?.error?.message || error?.message || 'Failed to send';
-    return NextResponse.json(
-      { success: false, error: errorMsg },
-      { status: res.status }
-    );
+    const result = await agent.dm(to, message);
+    const messageId = result && typeof result === 'object' && 'id' in result
+      ? (result as { id: string }).id
+      : undefined;
+    return NextResponse.json({ success: true, messageId });
   } catch (error) {
+    if (error instanceof RelayError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.status }
+      );
+    }
     console.error('[api/send] Error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal error' },
