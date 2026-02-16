@@ -6,6 +6,8 @@ export type EventHandler<T = WsClientEvent> = (event: T) => void;
 export interface WsClientOptions {
   token: string;
   baseUrl?: string;
+  /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
+  debug?: boolean;
 }
 
 export class WsClient {
@@ -18,9 +20,11 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
+  private debug: boolean;
 
   constructor(options: WsClientOptions) {
     this.token = options.token;
+    this.debug = options.debug ?? false;
     const base = options.baseUrl ?? 'https://api.agentrelay.dev';
     this.baseUrl = base.replace(/^http/, 'ws');
   }
@@ -45,9 +49,20 @@ export class WsClient {
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
           this.emit(result.data.type, result.data);
+        } else if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          typeof parsed.type === 'string'
+        ) {
+          // Forward unrecognized event types so wildcard listeners still fire
+          this.emit(parsed.type, parsed as WsClientEvent);
+        } else if (this.debug) {
+          console.warn('[relaycast] Dropped WebSocket message: missing or invalid "type" field', parsed);
         }
-      } catch {
-        // ignore malformed messages
+      } catch (err) {
+        if (this.debug) {
+          console.warn('[relaycast] Dropped malformed WebSocket message:', String(event.data).slice(0, 200), err);
+        }
       }
     };
 

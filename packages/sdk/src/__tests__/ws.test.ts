@@ -231,6 +231,86 @@ describe('WsClient', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('forwards unrecognized event types to wildcard and typed listeners', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const wildcardHandler = vi.fn();
+    const typedHandler = vi.fn();
+    client.on('*', wildcardHandler);
+    client.on('typing.started', typedHandler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ type: 'typing.started', agent_name: 'Alice', channel: 'general' });
+
+    expect(wildcardHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+    );
+    expect(typedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+    );
+  });
+
+  it('ignores objects without a type field', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('*', handler);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    // Reset after open event
+    handler.mockClear();
+
+    ws.simulateMessage({ data: 'no type field' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('logs dropped messages with missing type when debug is enabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test', debug: true });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ data: 'no type field' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('missing or invalid "type"'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('logs malformed JSON when debug is enabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test', debug: true });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.onmessage?.({ data: 'not json' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('malformed'),
+      expect.stringContaining('not json'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not log when debug is disabled', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    ws.simulateMessage({ data: 'no type field' });
+    ws.onmessage?.({ data: 'not json' });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('emits error event on WebSocket error', () => {
     const client = new WsClient({ token: 'at_live_test' });
     const handler = vi.fn();
