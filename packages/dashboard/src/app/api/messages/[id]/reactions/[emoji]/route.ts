@@ -9,11 +9,16 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string; emoji: string }> }
 ) {
-  const { id, emoji } = await params;
-  const res = await relayFetch(
-    `/v1/messages/${encodeURIComponent(id)}/reactions/${encodeURIComponent(emoji)}`,
-    { method: 'DELETE' }
-  );
-  const data = await res.json().catch(() => ({}));
-  return NextResponse.json(data, { status: res.status });
+  try {
+    const { id, emoji } = await params;
+    const res = await relayFetch(
+      `/v1/messages/${encodeURIComponent(id)}/reactions/${encodeURIComponent(emoji)}`,
+      { method: 'DELETE' }
+    );
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json(data, { status: res.status });
+  } catch (error) {
+    console.error('[api/reactions] DELETE error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
 }

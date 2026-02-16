@@ -51,6 +51,9 @@ export async function GET() {
     return NextResponse.json({ success: true, channels, archivedChannels });
   } catch (error) {
     console.error('[api/channels] Error:', error);
-    return NextResponse.json({ success: false, channels: [], archivedChannels: [] });
+    return NextResponse.json(
+      { success: false, channels: [], archivedChannels: [] },
+      { status: 500 }
+    );
   }
 }
