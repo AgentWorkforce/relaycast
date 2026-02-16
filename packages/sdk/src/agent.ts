@@ -120,6 +120,7 @@ export class AgentClient {
     // Lifecycle
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
+    error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
     reconnecting: (handler: (attempt: number) => void): (() => void) => {
       if (!this.ws) {
         throw new Error('WebSocket not connected. Call connect() first.');
