@@ -1,0 +1,2 @@
+/* Import the full dashboard theme (CSS variables, fonts, Tailwind) */
+@import '@agent-relay/dashboard/src/app/globals.css';
