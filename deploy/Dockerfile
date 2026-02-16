@@ -3,11 +3,17 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Copy package files first for better layer caching
+# All workspace package.json files are needed for npm install to resolve the
+# full workspace dependency graph, even if only server is built/deployed.
 COPY package.json package-lock.json* ./
 COPY packages/types/package.json packages/types/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/server/package.json packages/server/
+COPY packages/cli/package.json packages/cli/
+COPY packages/dashboard/package.json packages/dashboard/
+COPY packages/openclaw/package.json packages/openclaw/
+COPY packages/react/package.json packages/react/
 
 # Install all dependencies (including devDependencies for building)
 RUN npm install
