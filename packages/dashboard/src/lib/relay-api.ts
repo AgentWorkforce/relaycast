@@ -1,7 +1,7 @@
 /**
  * Server-side helper for calling the relaycast API.
  * Reads the API key from the cookie and forwards requests
- * with the x-relay-api-key header.
+ * with the Authorization: Bearer header.
  */
 
 import { cookies } from 'next/headers';
@@ -32,7 +32,7 @@ export async function relayFetch(
   }
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string>),
-    'x-relay-api-key': apiKey,
+    'Authorization': `Bearer ${apiKey}`,
   };
   // Only set Content-Type for requests with a body
   if (init?.body) {

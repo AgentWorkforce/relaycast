@@ -8,8 +8,8 @@ import { App } from '@agent-relay/dashboard/components/App';
 export default function CatchAllPage() {
   const router = useRouter();
 
-  function handleLogout() {
-    clearAuth();
+  async function handleLogout() {
+    await clearAuth();
     router.push('/login');
   }
 

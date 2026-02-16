@@ -9,11 +9,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated()) {
-      router.replace('/login');
-    } else {
-      setChecked(true);
-    }
+    isAuthenticated().then((authed) => {
+      if (!authed) {
+        router.replace('/login');
+      } else {
+        setChecked(true);
+      }
+    });
   }, [router]);
 
   if (!checked) {

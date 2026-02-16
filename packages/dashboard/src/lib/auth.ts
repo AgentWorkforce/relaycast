@@ -1,41 +1,48 @@
-const STORAGE_KEY = 'relaycast_api_key';
 const SERVER_URL_KEY = 'relaycast_server_url';
-const COOKIE_NAME = 'relaycast_key';
-
-export function getApiKey(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem(STORAGE_KEY);
-}
 
 export function getServerUrl(): string {
   if (typeof window === 'undefined') return '';
   return localStorage.getItem(SERVER_URL_KEY) || 'https://api.relaycast.dev';
 }
 
-export function setAuth(apiKey: string, serverUrl?: string): void {
-  localStorage.setItem(STORAGE_KEY, apiKey);
+/**
+ * Authenticate via server-side endpoint which sets an httpOnly cookie.
+ * Returns true on success.
+ */
+export async function setAuth(apiKey: string, serverUrl?: string): Promise<boolean> {
   if (serverUrl) localStorage.setItem(SERVER_URL_KEY, serverUrl);
-  // Also set a cookie so server-side API routes can read the key
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(apiKey)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax${secure}`;
-}
-
-export function clearAuth(): void {
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(SERVER_URL_KEY);
-  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`;
-}
-
-export function isAuthenticated(): boolean {
-  const key = getApiKey();
-  return !!key && key.startsWith('rk_live_');
-}
-
-export async function validateApiKey(apiKey: string, serverUrl: string): Promise<boolean> {
   try {
-    const res = await fetch(`${serverUrl}/v1/workspace`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, serverUrl }),
     });
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear auth by calling server-side logout (removes httpOnly cookie).
+ */
+export async function clearAuth(): Promise<void> {
+  localStorage.removeItem(SERVER_URL_KEY);
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch {
+    // Best effort
+  }
+}
+
+/**
+ * Check if user is authenticated by querying the server.
+ * The httpOnly cookie is sent automatically.
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/check');
     return res.ok;
   } catch {
     return false;

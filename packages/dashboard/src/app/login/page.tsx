@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { setAuth, validateApiKey } from '../../lib/auth';
+import { setAuth } from '../../lib/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,15 +21,14 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const valid = await validateApiKey(apiKey, serverUrl);
+    const success = await setAuth(apiKey, serverUrl);
     setLoading(false);
 
-    if (!valid) {
+    if (!success) {
       setError('Invalid API key or server unreachable');
       return;
     }
 
-    setAuth(apiKey, serverUrl);
     router.push('/');
   }
 
