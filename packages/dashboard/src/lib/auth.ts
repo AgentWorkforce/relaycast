@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'relaycast_api_key';
 const SERVER_URL_KEY = 'relaycast_server_url';
+const COOKIE_NAME = 'relaycast_key';
 
 export function getApiKey(): string | null {
   if (typeof window === 'undefined') return null;
@@ -14,11 +15,15 @@ export function getServerUrl(): string {
 export function setAuth(apiKey: string, serverUrl?: string): void {
   localStorage.setItem(STORAGE_KEY, apiKey);
   if (serverUrl) localStorage.setItem(SERVER_URL_KEY, serverUrl);
+  // Also set a cookie so server-side API routes can read the key
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(apiKey)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax${secure}`;
 }
 
 export function clearAuth(): void {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(SERVER_URL_KEY);
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`;
 }
 
 export function isAuthenticated(): boolean {
