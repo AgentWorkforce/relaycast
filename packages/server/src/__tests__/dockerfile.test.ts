@@ -1,14 +1,15 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 
 const ROOT = resolve(import.meta.dirname, '../../../../');
 const DOCKERFILE = readFileSync(resolve(ROOT, 'deploy/Dockerfile'), 'utf8');
 
-/** Get all workspace package directory names from packages/ */
+/** Get all npm workspace package directory names (must have a package.json) */
 function getWorkspacePackages(): string[] {
   return readdirSync(resolve(ROOT, 'packages'), { withFileTypes: true })
     .filter((d) => d.isDirectory())
+    .filter((d) => existsSync(resolve(ROOT, 'packages', d.name, 'package.json')))
     .map((d) => d.name);
 }
 

@@ -14,7 +14,6 @@ COPY packages/cli/package.json packages/cli/
 COPY packages/dashboard/package.json packages/dashboard/
 COPY packages/openclaw/package.json packages/openclaw/
 COPY packages/react/package.json packages/react/
-COPY packages/python-sdk/package.json packages/python-sdk/
 
 # Install all dependencies (including devDependencies for building)
 RUN npm install
@@ -50,7 +49,6 @@ COPY packages/cli/package.json packages/cli/
 COPY packages/dashboard/package.json packages/dashboard/
 COPY packages/openclaw/package.json packages/openclaw/
 COPY packages/react/package.json packages/react/
-COPY packages/python-sdk/package.json packages/python-sdk/
 
 # Install only production dependencies for the server and its workspace deps.
 # This is more robust than copying node_modules from the builder, because npm
