@@ -4,7 +4,7 @@ import { AuthGate } from '../../components/AuthGate';
 import { clearAuth } from '../../lib/auth';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { App } from '@agent-relay/dashboard/components/App';
+import { App } from '@agent-relay/dashboard';
 
 export default function CatchAllPage() {
   const router = useRouter();
