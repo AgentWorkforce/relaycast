@@ -1,5 +1,4 @@
-export const SDK_VERSION = '0.2.3' as const;
-
+export { SDK_VERSION } from './version.js';
 export { Relay } from './relay.js';
 export type { RelayOptions } from './relay.js';
 export { AgentClient } from './agent.js';

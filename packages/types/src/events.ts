@@ -139,6 +139,24 @@ export interface CommandInvokedEvent {
   parameters: Record<string, unknown> | null;
 }
 
+// WebSocket client events (emitted by WsClient, not from server)
+export interface WsOpenEvent {
+  type: 'open';
+}
+
+export interface WsErrorEvent {
+  type: 'error';
+}
+
+export interface WsReconnectingEvent {
+  type: 'reconnecting';
+  attempt: number;
+}
+
+export interface WsCloseEvent {
+  type: 'close';
+}
+
 export type ServerEvent =
   | MessageCreatedEvent
   | MessageUpdatedEvent
@@ -162,3 +180,8 @@ export type ServerEvent =
 
 export type ServerEventType = ServerEvent['type'];
 export type ClientEventType = ClientEvent['type'];
+
+// Union of all events that WsClient can emit (includes server events + client-only events)
+export type WsClientEvent = ServerEvent | WsOpenEvent | WsErrorEvent | WsReconnectingEvent | WsCloseEvent;
+export type WsClientEventType = WsClientEvent['type'];
+

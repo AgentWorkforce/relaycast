@@ -29,7 +29,7 @@ import type {
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
-import { SDK_VERSION } from './index.js';
+import { SDK_VERSION } from './version.js';
 
 export interface RelayOptions {
   apiKey: string;
@@ -58,15 +58,44 @@ export class Relay {
       },
       body: JSON.stringify({ name }),
     });
-    const parsed = await res.json();
-    if (!parsed.ok) {
+    
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch (err) {
       throw new RelayError(
-        parsed.error?.code ?? 'unknown_error',
-        parsed.error?.message ?? 'Unknown error',
+        'invalid_response',
+        `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
         res.status,
       );
     }
-    return parsed.data;
+
+    if (typeof parsed !== 'object' || parsed === null || !('ok' in parsed) || typeof parsed.ok !== 'boolean') {
+      throw new RelayError(
+        'invalid_response',
+        'Response is not a valid Relay API response object',
+        res.status,
+      );
+    }
+
+    if (!parsed.ok) {
+      const error = (parsed as { error?: { code?: string; message?: string } }).error;
+      throw new RelayError(
+        error?.code ?? 'unknown_error',
+        error?.message ?? 'Unknown error',
+        res.status,
+      );
+    }
+    
+    if (!('data' in parsed)) {
+      throw new RelayError(
+        'invalid_response',
+        'Response is missing required "data" field',
+        res.status,
+      );
+    }
+    
+    return (parsed as { data: CreateWorkspaceResponse }).data;
   }
 
   workspace = {
