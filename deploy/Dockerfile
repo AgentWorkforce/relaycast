@@ -14,6 +14,7 @@ COPY packages/cli/package.json packages/cli/
 COPY packages/dashboard/package.json packages/dashboard/
 COPY packages/openclaw/package.json packages/openclaw/
 COPY packages/react/package.json packages/react/
+COPY packages/python-sdk/package.json packages/python-sdk/
 
 # Install all dependencies (including devDependencies for building)
 RUN npm install
@@ -37,12 +38,19 @@ ENV NODE_ENV=production
 RUN addgroup -S -g 1001 relay && \
     adduser -S -u 1001 -G relay relay
 
-# Copy package files for production dependency install
+# Copy all workspace package.json files for production dependency install.
+# npm ci validates the lockfile against the full workspace graph, so all
+# packages referenced by "workspaces": ["packages/*"] must be present.
 COPY package.json package-lock.json* ./
 COPY packages/types/package.json packages/types/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/server/package.json packages/server/
+COPY packages/cli/package.json packages/cli/
+COPY packages/dashboard/package.json packages/dashboard/
+COPY packages/openclaw/package.json packages/openclaw/
+COPY packages/react/package.json packages/react/
+COPY packages/python-sdk/package.json packages/python-sdk/
 
 # Install only production dependencies for the server and its workspace deps.
 # This is more robust than copying node_modules from the builder, because npm
