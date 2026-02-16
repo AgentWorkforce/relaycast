@@ -143,7 +143,7 @@ jobs:
               -u https://api.relaycast.dev/mcp \
               -n "relaycast/relay" \
               -k "$SMITHERY_API_KEY" \
-              --config-schema packages/mcp/smithery-config-schema.json 2>&1)
+              --config-schema packages/mcp/smithery-config-schema.json 2>&1) || true
             echo "$OUTPUT"
             if echo "$OUTPUT" | grep -q "37 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
               echo "Full capabilities detected (37 tools + 1 prompt)!"
