@@ -12,12 +12,7 @@ const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
 export async function getRelayApiKey(): Promise<string | null> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get('relaycast_key');
-  if (!cookie?.value) return null;
-  try {
-    return decodeURIComponent(cookie.value);
-  } catch {
-    return null;
-  }
+  return cookie?.value || null;
 }
 
 /**
