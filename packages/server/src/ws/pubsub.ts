@@ -11,6 +11,8 @@ export const EVENT_TYPES = [
   'group_dm.received',
   'agent.online',
   'agent.offline',
+  'agent.spawn_requested',
+  'agent.release_requested',
   'channel.created',
   'channel.updated',
   'channel.archived',
