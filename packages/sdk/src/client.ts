@@ -47,7 +47,7 @@ export class HttpClient {
 
   constructor(options: ClientOptions) {
     this._apiKey = options.apiKey;
-    this._baseUrl = options.baseUrl ?? 'https://api.agentrelay.dev';
+    this._baseUrl = options.baseUrl ?? 'https://api.relaycast.dev';
   }
 
   get apiKey(): string {

@@ -25,7 +25,7 @@ export class WsClient {
   constructor(options: WsClientOptions) {
     this.token = options.token;
     this.debug = options.debug ?? false;
-    const base = options.baseUrl ?? 'https://api.agentrelay.dev';
+    const base = options.baseUrl ?? 'https://api.relaycast.dev';
     this.baseUrl = base.replace(/^http/, 'ws');
   }
 
