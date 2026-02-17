@@ -132,7 +132,7 @@ export class RelayCast {
     list: (channel: string, opts?: MessageListQuery): Promise<MessageWithMeta[]> => {
       const name = channel.startsWith('#') ? channel.slice(1) : channel;
       const query: Record<string, string> = {};
-      if (opts?.limit) query.limit = String(opts.limit);
+      if (opts?.limit != null) query.limit = String(opts.limit);
       if (opts?.before) query.before = opts.before;
       if (opts?.after) query.after = opts.after;
       return this.client.get(`/v1/channels/${encodeURIComponent(name)}/messages`, query);
@@ -141,7 +141,7 @@ export class RelayCast {
       this.client.get(`/v1/messages/${encodeURIComponent(id)}`),
     thread: (id: string, opts?: MessageListQuery): Promise<{ parent: MessageWithMeta; replies: MessageWithMeta[] }> => {
       const query: Record<string, string> = {};
-      if (opts?.limit) query.limit = String(opts.limit);
+      if (opts?.limit != null) query.limit = String(opts.limit);
       if (opts?.before) query.before = opts.before;
       if (opts?.after) query.after = opts.after;
       return this.client.get(`/v1/messages/${encodeURIComponent(id)}/replies`, query);

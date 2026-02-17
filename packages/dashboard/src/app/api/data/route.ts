@@ -67,10 +67,13 @@ export async function GET() {
     }
 
     const relay = getRelay(apiKey);
-    const [agentList, channelList] = await Promise.all([
+    const [agentResult, channelResult] = await Promise.allSettled([
       relay.agents.list(),
       relay.channels.list(),
     ]);
+
+    const agentList = agentResult.status === 'fulfilled' ? agentResult.value : [];
+    const channelList = channelResult.status === 'fulfilled' ? channelResult.value : [];
 
     const agents = agentList.map((a) => ({
       name: a.name,
