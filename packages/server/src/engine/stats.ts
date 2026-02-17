@@ -37,7 +37,7 @@ export async function getWorkspaceStats(db: Db, workspaceId: string) {
 
   // Messages: total + today
   const [msgTotalRow] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(messages)
     .where(eq(messages.workspaceId, workspaceId));
 
@@ -45,7 +45,7 @@ export async function getWorkspaceStats(db: Db, workspaceId: string) {
   todayStart.setHours(0, 0, 0, 0);
 
   const [msgTodayRow] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(messages)
     .where(
       and(
@@ -56,15 +56,15 @@ export async function getWorkspaceStats(db: Db, workspaceId: string) {
 
   // DM conversations
   const [dmRow] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(dmConversations)
     .where(eq(dmConversations.workspaceId, workspaceId));
 
   // Files: total + storage bytes
   const [fileRow] = await db
     .select({
-      count: sql<number>`count(*)::int`,
-      bytes: sql<number>`coalesce(sum(size_bytes), 0)::bigint`,
+      count: sql<number>`count(*)`,
+      bytes: sql<number>`coalesce(sum(size_bytes), 0)`,
     })
     .from(files)
     .where(eq(files.workspaceId, workspaceId));

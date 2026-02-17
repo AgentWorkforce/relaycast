@@ -162,7 +162,7 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
 
     // Get unread count (messages after last read - simplified as total for now)
     const [unreadCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.channelId, conv.channelId));
 

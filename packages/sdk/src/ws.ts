@@ -33,7 +33,7 @@ export class WsClient {
     if (this.ws) return;
     this.closed = false;
 
-    const url = `${this.baseUrl}/v1/stream?token=${encodeURIComponent(this.token)}`;
+    const url = `${this.baseUrl}/v1/ws?token=${encodeURIComponent(this.token)}`;
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {

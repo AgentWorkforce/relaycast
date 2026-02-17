@@ -1,6 +1,6 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels } from '../db/schema.js';
+import { messages, channels, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -43,11 +43,15 @@ export async function postReply(
     })
     .returning();
 
+  // Resolve agent name
+  const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
+
   return {
     id: reply.id,
     channel_id: reply.channelId,
     channel_name: ch?.name,
     agent_id: reply.agentId,
+    agent_name: agent?.name || 'unknown',
     thread_id: reply.threadId,
     text: reply.body,
     has_attachments: reply.hasAttachments,
@@ -63,10 +67,20 @@ export async function getThread(
 ) {
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
-  // Get the parent message
+  // Get the parent message with agent name
   const [parent] = await db
-    .select()
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      threadId: messages.threadId,
+      body: messages.body,
+      hasAttachments: messages.hasAttachments,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(eq(messages.id, parentId), eq(messages.workspaceId, workspaceId)));
 
   if (!parent) {
@@ -77,7 +91,7 @@ export async function getThread(
 
   // Get reply count
   const [replyCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(messages)
     .where(eq(messages.threadId, parentId));
 
@@ -95,8 +109,18 @@ export async function getThread(
   }
 
   const replies = await db
-    .select()
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      threadId: messages.threadId,
+      body: messages.body,
+      hasAttachments: messages.hasAttachments,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} ASC`)
     .limit(limit);
@@ -106,6 +130,7 @@ export async function getThread(
       id: parent.id,
       channel_id: parent.channelId,
       agent_id: parent.agentId,
+      agent_name: parent.agentName || 'unknown',
       text: parent.body,
       has_attachments: parent.hasAttachments,
       thread_id: parent.threadId,
@@ -116,6 +141,7 @@ export async function getThread(
       id: r.id,
       channel_id: r.channelId,
       agent_id: r.agentId,
+      agent_name: r.agentName || 'unknown',
       thread_id: r.threadId,
       text: r.body,
       has_attachments: r.hasAttachments,

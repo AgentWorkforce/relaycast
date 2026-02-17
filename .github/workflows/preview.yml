@@ -9,9 +9,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci:
+    name: Lint, Build & Test
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+      - run: npx turbo lint
+      - run: npx turbo test
+        env:
+          DO_NOT_TRACK: '1'
+
   deploy-preview:
     name: Deploy Preview
     if: github.event.action != 'closed'
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

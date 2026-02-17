@@ -55,7 +55,7 @@ describe('WsClient', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
     expect(MockWebSocket.instances[0]!.url).toBe(
-      'wss://api.relaycast.dev/v1/stream?token=at_live_test',
+      'wss://api.relaycast.dev/v1/ws?token=at_live_test',
     );
   });
 
@@ -67,7 +67,7 @@ describe('WsClient', () => {
     client.connect();
 
     expect(MockWebSocket.instances[0]!.url).toBe(
-      'ws://localhost:8080/v1/stream?token=at_live_test',
+      'ws://localhost:8080/v1/ws?token=at_live_test',
     );
   });
 

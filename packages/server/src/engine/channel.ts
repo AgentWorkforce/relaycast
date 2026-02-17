@@ -98,7 +98,7 @@ export async function listChannels(
   const result = [];
   for (const ch of rows) {
     const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(channelMembers)
       .where(eq(channelMembers.channelId, ch.id));
 

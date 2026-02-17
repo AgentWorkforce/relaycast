@@ -38,7 +38,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     }
 
     const [result] = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(and(...conditions));
 
@@ -122,7 +122,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     }
 
     const [result] = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(and(...conditions));
 

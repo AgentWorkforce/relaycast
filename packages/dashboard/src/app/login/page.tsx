@@ -34,39 +34,41 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Relaycast</h1>
-          <p className="text-gray-400">Enter your workspace API key to continue</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="apiKey" className="block text-sm font-medium text-gray-300 mb-1">
-              API Key
-            </label>
-            <input
-              id="apiKey"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              placeholder="rk_live_..."
-              autoFocus
-            />
+        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-card)] p-8">
+          <div className="text-center mb-6">
+            <h1 className="text-2xl font-bold text-[var(--color-text-primary)] mb-1">Relaycast</h1>
+            <p className="text-sm text-[var(--color-text-muted)]">Enter your workspace API key to continue</p>
           </div>
 
-          {error && (
-            <p className="text-red-400 text-sm">{error}</p>
-          )}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="apiKey" className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1.5">
+                API Key
+              </label>
+              <input
+                id="apiKey"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-accent-cyan)] focus:border-transparent"
+                placeholder="rk_live_..."
+                autoFocus
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={loading || !apiKey}
-            className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-          >
-            {loading ? 'Validating...' : 'Sign in'}
-          </button>
-        </form>
+            {error && (
+              <p className="text-sm text-[var(--color-error)]">{error}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !apiKey}
+              className="w-full py-2.5 px-4 rounded-lg font-medium text-sm cursor-pointer transition-colors bg-[var(--color-accent-cyan)] text-[var(--color-text-inverse)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Validating...' : 'Sign in'}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

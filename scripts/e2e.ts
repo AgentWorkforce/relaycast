@@ -12,7 +12,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient, HttpClient } from '../packages/sdk/src/index.js';
+import { RelayCast, AgentClient } from '../packages/sdk/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -71,17 +71,32 @@ function waitForEnter(prompt: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic conversation
+// Agent names & colors
 // ---------------------------------------------------------------------------
-const CHANNEL_MESSAGES: Array<{ from: 'alice' | 'bob'; text: string }> = [
-  { from: 'alice', text: 'Hey Bob, are you online?' },
-  { from: 'bob', text: 'Yes! Just connected. What are we working on today?' },
-  { from: 'alice', text: 'We need to review the deployment pipeline.' },
-  { from: 'bob', text: 'Good idea. I noticed the staging build was flaky yesterday.' },
-  { from: 'alice', text: 'Found it — the timeout was too short on the health check.' },
-  { from: 'bob', text: 'Nice catch. Should we bump it to 30s?' },
-  { from: 'alice', text: 'Yeah, 30s with a retry. Pushing the fix now.' },
-  { from: 'bob', text: 'Perfect. I will review it once it is up.' },
+const LEAD = 'LeadAgent';
+const INFRA = 'InfraAgent';
+const BACKEND = 'BackendAgent';
+
+const colors: Record<string, string> = {
+  [LEAD]: YELLOW,
+  [INFRA]: GREEN,
+  [BACKEND]: BLUE,
+};
+
+// ---------------------------------------------------------------------------
+// Deterministic conversation — Lead assigns tasks, agents report back
+// ---------------------------------------------------------------------------
+const CHANNEL_MESSAGES: Array<{ from: string; text: string }> = [
+  { from: LEAD, text: `@${INFRA} @${BACKEND} — standup time. What are you working on?` },
+  { from: INFRA, text: 'Looking into the flaky staging deploys. Health check timeouts are too aggressive.' },
+  { from: BACKEND, text: 'Wrapping up the test coverage report for the message pipeline.' },
+  { from: LEAD, text: `@${INFRA} Bump the health check timeout to 30s and add a retry. Priority 1.` },
+  { from: INFRA, text: 'On it. I will push the fix within the hour.' },
+  { from: LEAD, text: `@${BACKEND} Once InfraAgent's fix is up, run the full integration suite against staging.` },
+  { from: BACKEND, text: 'Will do. I will watch for the deploy and kick off the suite.' },
+  { from: INFRA, text: 'Fix is pushed. Staging deploy rolling out now.' },
+  { from: BACKEND, text: 'Integration suite passed — all 247 tests green.' },
+  { from: LEAD, text: 'Great work team. Merging to main.' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -98,8 +113,9 @@ ${B}${CYAN}╔══════════════════════
 
   let workspaceKey = '';
   let relay!: RelayCast;
-  let alice!: AgentClient;
-  let bob!: AgentClient;
+  let lead!: AgentClient;
+  let infra!: AgentClient;
+  let backend!: AgentClient;
   const passed: string[] = [];
   const failed: string[] = [];
   const channelName = 'engineering';
@@ -138,43 +154,60 @@ ${B}${CYAN}╔══════════════════════
 
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
-  let aliceToken = '';
-  let bobToken = '';
 
-  await run('Register alice', async () => {
+  await run(`Register ${LEAD}`, async () => {
     const res = await relay.agents.register({
-      name: 'alice',
+      name: LEAD,
       type: 'agent',
-      persona: 'Senior engineer — infrastructure',
+      persona: 'Engineering team lead. Coordinates InfraAgent and BackendAgent, assigns tasks, and unblocks the team.',
     });
-    aliceToken = res.token;
-    alice = relay.as(aliceToken);
-    log('🤖', `${GREEN}${B}alice${R} registered`);
+    lead = relay.as(res.token);
+    log('🤖', `${YELLOW}${B}${LEAD}${R} registered`);
   });
 
-  await run('Register bob', async () => {
+  await run(`Register ${INFRA}`, async () => {
     const res = await relay.agents.register({
-      name: 'bob',
+      name: INFRA,
       type: 'agent',
-      persona: 'Backend dev — testing & reliability',
+      persona: 'Senior infrastructure engineer. Owns CI/CD pipelines, deploys, health checks, and cloud resources.',
     });
-    bobToken = res.token;
-    bob = relay.as(bobToken);
-    log('🤖', `${BLUE}${B}bob${R} registered`);
+    infra = relay.as(res.token);
+    log('🤖', `${GREEN}${B}${INFRA}${R} registered`);
+  });
+
+  await run(`Register ${BACKEND}`, async () => {
+    const res = await relay.agents.register({
+      name: BACKEND,
+      type: 'agent',
+      persona: 'Backend developer focused on testing, reliability, and the message pipeline.',
+    });
+    backend = relay.as(res.token);
+    log('🤖', `${BLUE}${B}${BACKEND}${R} registered`);
   });
 
   await sleep(DELAY_MS);
 
+  const agentMap: Record<string, AgentClient> = {
+    [LEAD]: lead,
+    [INFRA]: infra,
+    [BACKEND]: backend,
+  };
+
   // ── 3. Create channel + join ─────────────────────────────────────────
   step('Create channel');
   await run('Create #engineering', async () => {
-    await alice.channels.create({ name: channelName, topic: 'Deployment pipeline review' });
-    log('📢', `Channel ${B}#${channelName}${R} created by alice`);
+    await lead.channels.create({ name: channelName, topic: 'Engineering coordination' });
+    log('📢', `Channel ${B}#${channelName}${R} created by ${LEAD}`);
   });
 
-  await run('Bob joins #engineering', async () => {
-    await bob.channels.join(channelName);
-    log('👋', `${BLUE}${B}bob${R} joined #${channelName}`);
+  await run(`${INFRA} joins #engineering`, async () => {
+    await infra.channels.join(channelName);
+    log('👋', `${GREEN}${B}${INFRA}${R} joined #${channelName}`);
+  });
+
+  await run(`${BACKEND} joins #engineering`, async () => {
+    await backend.channels.join(channelName);
+    log('👋', `${BLUE}${B}${BACKEND}${R} joined #${channelName}`);
   });
 
   await sleep(DELAY_MS);
@@ -182,140 +215,185 @@ ${B}${CYAN}╔══════════════════════
   // ── 4. Connect WebSockets ────────────────────────────────────────────
   step('Connect WebSockets');
 
-  // Track WS events for summary
   let wsEvents = 0;
 
   await run('WebSocket connect + subscribe', async () => {
-    alice.connect();
-    bob.connect();
+    lead.connect();
+    infra.connect();
+    backend.connect();
 
-    // Wait for both connections
     await Promise.all([
-      new Promise<void>((res) => { alice.on.connected(res); }),
-      new Promise<void>((res) => { bob.on.connected(res); }),
+      new Promise<void>((res) => { lead.on.connected(res); }),
+      new Promise<void>((res) => { infra.on.connected(res); }),
+      new Promise<void>((res) => { backend.on.connected(res); }),
     ]);
 
-    // Listen for events
-    alice.on.messageCreated((e) => { wsEvents++; ws('alice', 'message.created', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
-    bob.on.messageCreated((e) => { wsEvents++; ws('bob', 'message.created', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
-    alice.on.dmReceived((e) => { wsEvents++; ws('alice', 'dm.received', `from ${B}${e.message.from_name}${R}: "${e.message.text}"`); });
-    bob.on.dmReceived((e) => { wsEvents++; ws('bob', 'dm.received', `from ${B}${e.message.from_name}${R}: "${e.message.text}"`); });
-    alice.on.reactionAdded((e) => { wsEvents++; ws('alice', 'reaction.added', `${e.emoji}`); });
-    bob.on.reactionAdded((e) => { wsEvents++; ws('bob', 'reaction.added', `${e.emoji}`); });
-    alice.on.channelUpdated(() => { wsEvents++; ws('alice', 'channel.updated', ''); });
-    bob.on.channelUpdated(() => { wsEvents++; ws('bob', 'channel.updated', ''); });
+    // Listen for events on all agents
+    for (const [name, client] of Object.entries(agentMap)) {
+      client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
+      client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.from_name}${R}: "${e.message.text}"`); });
+      client.on.reactionAdded((e) => { wsEvents++; ws(name, 'reaction.added', `${e.emoji}`); });
+      client.on.channelUpdated(() => { wsEvents++; ws(name, 'channel.updated', ''); });
+    }
 
-    alice.subscribe([channelName]);
-    bob.subscribe([channelName]);
+    lead.subscribe(['general', channelName]);
+    infra.subscribe(['general', channelName]);
+    backend.subscribe(['general', channelName]);
 
-    log('🔌', `Both agents connected & subscribed to #${channelName}`);
+    log('🔌', `All agents connected & subscribed to #general and #${channelName}`);
   });
 
   await sleep(DELAY_MS);
 
-  // ── 5. Channel conversation ──────────────────────────────────────────
-  step('Channel messages');
-  const agents = { alice, bob };
-  const colors: Record<string, string> = { alice: GREEN, bob: BLUE };
+  // ── 5. Hello world in #general ─────────────────────────────────────
+  step('Post to #general');
+  await run(`${LEAD} says hello in #general`, async () => {
+    await lead.channels.join('general');
+    await infra.channels.join('general');
+    await backend.channels.join('general');
+    log('📤', `${YELLOW}${B}${LEAD}${R}: Hello, world! All agents online.`);
+    await lead.send('general', 'Hello, world! All agents online.');
+  });
+  await sleep(DELAY_MS);
+
+  // ── 6. Channel conversation ──────────────────────────────────────────
+  step('Channel messages in #engineering');
 
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
   for (const msg of CHANNEL_MESSAGES) {
+    const color = colors[msg.from] || CYAN;
     await run(`Send: ${msg.from} → #${channelName}`, async () => {
-      log('📤', `${colors[msg.from]}${B}${msg.from}${R}: ${msg.text}`);
-      await agents[msg.from].send(channelName, msg.text);
+      log('📤', `${color}${B}${msg.from}${R}: ${msg.text}`);
+      await agentMap[msg.from].send(channelName, msg.text);
     });
     await sleep(DELAY_MS);
   }
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
 
-  // ── 6. Direct messages ───────────────────────────────────────────────
+  // ── 7. Direct messages — Lead ↔ InfraAgent ─────────────────────────
   step('Direct messages');
-  await run('Alice DMs bob', async () => {
-    log('📤', `${GREEN}${B}alice${R} → ${BLUE}${B}bob${R}: Quick question about the deploy key`);
-    await alice.dm('bob', 'Quick question about the deploy key — is it rotated?');
+  console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  await run(`${LEAD} DMs ${INFRA}`, async () => {
+    log('📤', `${YELLOW}${B}${LEAD}${R} → ${GREEN}${B}${INFRA}${R}: Hey, is the deploy key rotated for staging?`);
+    await lead.dm(INFRA, 'Hey, is the deploy key rotated for staging?');
   });
   await sleep(DELAY_MS);
 
-  await run('Bob DMs alice', async () => {
-    log('📤', `${BLUE}${B}bob${R} → ${GREEN}${B}alice${R}: Yes, rotated it last week`);
-    await bob.dm('alice', 'Yes, I rotated it last week. All good.');
+  await run(`${INFRA} DMs ${LEAD}`, async () => {
+    log('📤', `${GREEN}${B}${INFRA}${R} → ${YELLOW}${B}${LEAD}${R}: Yes, rotated it last Tuesday. All environments are up to date.`);
+    await infra.dm(LEAD, 'Yes, rotated it last Tuesday. All environments are up to date.');
   });
   await sleep(DELAY_MS);
 
-  // ── 7. Reactions ─────────────────────────────────────────────────────
+  await run(`${LEAD} DMs ${INFRA} (follow-up)`, async () => {
+    log('📤', `${YELLOW}${B}${LEAD}${R} → ${GREEN}${B}${INFRA}${R}: Perfect. Can you share the new fingerprint with BackendAgent?`);
+    await lead.dm(INFRA, 'Perfect. Can you share the new fingerprint with BackendAgent?');
+  });
+  await sleep(DELAY_MS);
+
+  await run(`${INFRA} DMs ${LEAD} (follow-up)`, async () => {
+    log('📤', `${GREEN}${B}${INFRA}${R} → ${YELLOW}${B}${LEAD}${R}: Done — sent it over.`);
+    await infra.dm(LEAD, 'Done — sent it over.');
+  });
+  await sleep(DELAY_MS);
+
+  // InfraAgent → BackendAgent side conversation
+  await run(`${INFRA} DMs ${BACKEND}`, async () => {
+    log('📤', `${GREEN}${B}${INFRA}${R} → ${BLUE}${B}${BACKEND}${R}: Here is the new staging deploy key fingerprint: SHA256:abc123...`);
+    await infra.dm(BACKEND, 'Here is the new staging deploy key fingerprint: SHA256:abc123...');
+  });
+  await sleep(DELAY_MS);
+
+  await run(`${BACKEND} DMs ${INFRA}`, async () => {
+    log('📤', `${BLUE}${B}${BACKEND}${R} → ${GREEN}${B}${INFRA}${R}: Got it, updated my local config. Thanks!`);
+    await backend.dm(INFRA, 'Got it, updated my local config. Thanks!');
+  });
+  await sleep(DELAY_MS);
+  console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  // ── 8. Reactions ─────────────────────────────────────────────────────
   step('Reactions');
   await run('Add reactions', async () => {
-    const msgs = await alice.messages(channelName, { limit: 1 });
+    const msgs = await lead.messages(channelName, { limit: 1 });
     if (msgs.length === 0) throw new Error('No messages found');
     const lastId = msgs[0].id;
 
-    await alice.react(lastId, '🚀');
-    log('😀', `${GREEN}${B}alice${R} reacted 🚀`);
+    await lead.react(lastId, '🚀');
+    log('😀', `${YELLOW}${B}${LEAD}${R} reacted 🚀`);
     await sleep(500);
 
-    await bob.react(lastId, '👍');
-    log('😀', `${BLUE}${B}bob${R} reacted 👍`);
+    await infra.react(lastId, '👍');
+    log('😀', `${GREEN}${B}${INFRA}${R} reacted 👍`);
+    await sleep(500);
 
-    const reactions = await alice.reactions(lastId);
+    await backend.react(lastId, '✅');
+    log('😀', `${BLUE}${B}${BACKEND}${R} reacted ✅`);
+
+    const reactions = await lead.reactions(lastId);
     log('📊', `Reactions on message: ${JSON.stringify(reactions)}`);
   });
   await sleep(DELAY_MS);
 
-  // ── 8. Thread replies ────────────────────────────────────────────────
+  // ── 9. Thread replies ────────────────────────────────────────────────
   step('Threads');
   await run('Thread replies', async () => {
-    const msgs = await alice.messages(channelName, { limit: 1 });
+    const msgs = await lead.messages(channelName, { limit: 1 });
     if (msgs.length === 0) throw new Error('No messages found');
     const parentId = msgs[0].id;
 
-    await alice.reply(parentId, 'Let me add that to the PR description.');
-    log('🧵', `${GREEN}${B}alice${R} replied in thread`);
+    await infra.reply(parentId, 'Deploy logs look clean. No rollback needed.');
+    log('🧵', `${GREEN}${B}${INFRA}${R} replied in thread`);
     await sleep(DELAY_MS);
 
-    await bob.reply(parentId, 'LGTM once that is updated.');
-    log('🧵', `${BLUE}${B}bob${R} replied in thread`);
+    await backend.reply(parentId, 'Confirmed — no regressions in the test suite.');
+    log('🧵', `${BLUE}${B}${BACKEND}${R} replied in thread`);
+    await sleep(DELAY_MS);
 
-    const thread = await alice.thread(parentId);
+    await lead.reply(parentId, 'Excellent. Closing this out.');
+    log('🧵', `${YELLOW}${B}${LEAD}${R} replied in thread`);
+
+    const thread = await lead.thread(parentId);
     log('📊', `Thread has ${Array.isArray(thread) ? thread.length : 'unknown'} messages`);
   });
   await sleep(DELAY_MS);
 
-  // ── 9. Channel topic update ──────────────────────────────────────────
+  // ── 10. Channel topic update ──────────────────────────────────────────
   step('Channel topic');
   await run('Update topic', async () => {
-    await alice.channels.setTopic(channelName, 'Pipeline review — fix deployed ✓');
+    await lead.channels.setTopic(channelName, 'Pipeline fix deployed — all green ✓');
     log('📝', `Topic updated on #${channelName}`);
   });
   await sleep(DELAY_MS);
 
-  // ── 10. Read receipts ────────────────────────────────────────────────
+  // ── 11. Read receipts ────────────────────────────────────────────────
   step('Read receipts');
   await run('Mark read + check', async () => {
-    const msgs = await bob.messages(channelName, { limit: 1 });
+    const msgs = await backend.messages(channelName, { limit: 1 });
     if (msgs.length === 0) throw new Error('No messages found');
-    await bob.markRead(msgs[0].id);
-    log('👁️ ', `${BLUE}${B}bob${R} marked latest message as read`);
+    await backend.markRead(msgs[0].id);
+    log('👁️ ', `${BLUE}${B}${BACKEND}${R} marked latest message as read`);
   });
   await sleep(DELAY_MS);
 
-  // ── 11. Search ───────────────────────────────────────────────────────
+  // ── 12. Search ───────────────────────────────────────────────────────
   step('Search');
   await run('Full-text search', async () => {
-    const results = await alice.search('health check');
+    const results = await lead.search('health check');
     log('🔍', `Search "health check" → ${Array.isArray(results) ? results.length : 0} result(s)`);
   });
   await sleep(DELAY_MS);
 
-  // ── 12. List channels / agents ───────────────────────────────────────
+  // ── 13. List channels / agents ───────────────────────────────────────
   step('List resources');
   await run('List channels', async () => {
-    const channels = await alice.channels.list();
+    const channels = await lead.channels.list();
     log('📋', `Channels: ${channels.map((c) => `#${c.name}`).join(', ')}`);
   });
 
   await run('List agents', async () => {
-    const agents = await relay.agents.list();
-    log('📋', `Agents: ${agents.map((a) => a.name).join(', ')}`);
+    const agentList = await relay.agents.list();
+    log('📋', `Agents: ${agentList.map((a) => a.name).join(', ')}`);
   });
 
   await run('Agent presence', async () => {
@@ -324,19 +402,20 @@ ${B}${CYAN}╔══════════════════════
   });
   await sleep(DELAY_MS);
 
-  // ── 13. Inbox ────────────────────────────────────────────────────────
+  // ── 14. Inbox ────────────────────────────────────────────────────────
   step('Inbox');
   await run('Check inbox', async () => {
-    const inbox = await alice.inbox();
-    log('📬', `Alice inbox: ${JSON.stringify(inbox).slice(0, 120)}…`);
+    const inbox = await lead.inbox();
+    log('📬', `${LEAD} inbox: ${JSON.stringify(inbox).slice(0, 120)}…`);
   });
 
   // Let trailing WS events flush
   await sleep(1500);
 
   // ── Cleanup ──────────────────────────────────────────────────────────
-  alice.disconnect();
-  bob.disconnect();
+  lead.disconnect();
+  infra.disconnect();
+  backend.disconnect();
 
   // ── Summary ──────────────────────────────────────────────────────────
   console.log(`

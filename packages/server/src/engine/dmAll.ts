@@ -32,7 +32,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string) {
 
     // Get message count
     const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.channelId, convo.channelId));
 
@@ -51,6 +51,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string) {
 
     results.push({
       id: convo.id,
+      channel_id: convo.channelId,
       type: convo.dmType,
       participants: participants.map((p) => p.agentName),
       last_message: lastMsg

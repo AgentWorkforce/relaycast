@@ -69,7 +69,7 @@ describe('AgentClient WebSocket integration', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
     expect(MockWebSocket.instances[0]!.url).toBe(
-      'ws://localhost:8080/v1/stream?token=at_live_test',
+      'ws://localhost:8080/v1/ws?token=at_live_test',
     );
   });
 
