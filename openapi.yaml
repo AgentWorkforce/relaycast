@@ -503,6 +503,177 @@ paths:
         '204':
           description: Agent deleted
 
+  /agents/spawn:
+    post:
+      summary: Spawn agent
+      description: |
+        Spawn a new AI agent to work on a task. This is a built-in system operation for creating worker agents.
+        If an agent with the same name already exists, it will be reactivated with a new token and updated task.
+        The spawned agent is automatically set to online status and joined to the specified channel.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - cli
+                - task
+              properties:
+                name:
+                  type: string
+                  description: Unique name for the new agent
+                cli:
+                  type: string
+                  enum: [claude, codex, gemini, aider, goose]
+                  description: Which AI CLI tool to use
+                task:
+                  type: string
+                  description: The task description for the spawned agent
+                channel:
+                  type: string
+                  description: Optional channel to join the agent to
+                persona:
+                  type: string
+                  description: Optional persona description
+                metadata:
+                  type: object
+                  description: Optional metadata
+      responses:
+        '201':
+          description: Agent spawned (new agent created)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      token:
+                        type: string
+                        description: Agent token for authentication
+                      cli:
+                        type: string
+                      task:
+                        type: string
+                      channel:
+                        type: string
+                        nullable: true
+                      status:
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+                      already_existed:
+                        type: boolean
+        '200':
+          description: Agent spawned (existing agent reactivated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      token:
+                        type: string
+                      cli:
+                        type: string
+                      task:
+                        type: string
+                      channel:
+                        type: string
+                        nullable: true
+                      status:
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+                      already_existed:
+                        type: boolean
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/release:
+    post:
+      summary: Release agent
+      description: |
+        Release an agent from active duty, marking it as offline. This is a built-in system operation
+        for agent lifecycle management. Optionally delete the agent entirely from the workspace.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: Name of the agent to release
+                reason:
+                  type: string
+                  description: Optional reason for releasing
+                delete_agent:
+                  type: boolean
+                  description: If true, permanently delete the agent
+      responses:
+        '200':
+          description: Agent released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      released:
+                        type: boolean
+                      deleted:
+                        type: boolean
+                      reason:
+                        type: string
+                        nullable: true
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /channels:
     post:
       summary: Create channel

@@ -1,44 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { relayFetch } from '../../../../../lib/relay-api';
+import { RelayError } from '@relaycast/sdk';
+import { getRelayApiKey, getRelay } from '../../../../../lib/relay-api';
 
 /**
- * GET/POST /api/messages/:id/replies
- * Proxies to relaycast /v1/messages/:id/replies with auth.
+ * GET /api/messages/:id/replies
+ * Proxies to relaycast /v1/messages/:id/replies via SDK.
  */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const searchParams = request.nextUrl.searchParams.toString();
-    const qs = searchParams ? `?${searchParams}` : '';
-    const res = await relayFetch(
-      `/v1/messages/${encodeURIComponent(id)}/replies${qs}`
-    );
-    const data = await res.json().catch(() => ({}));
-    return NextResponse.json(data, { status: res.status });
-  } catch (error) {
-    console.error('[api/replies] GET error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
+    const apiKey = await getRelayApiKey();
+    if (!apiKey) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Not authenticated' } },
+        { status: 401 }
+      );
+    }
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
     const { id } = await params;
-    const body = await request.json();
-    const res = await relayFetch(
-      `/v1/messages/${encodeURIComponent(id)}/replies`,
-      { method: 'POST', body: JSON.stringify(body) }
-    );
-    const data = await res.json().catch(() => ({}));
-    return NextResponse.json(data, { status: res.status });
+    const relay = getRelay(apiKey);
+
+    const searchParams = request.nextUrl.searchParams;
+    const opts: { limit?: number; before?: string; after?: string } = {};
+    if (searchParams.get('limit')) opts.limit = Number(searchParams.get('limit'));
+    if (searchParams.get('before')) opts.before = searchParams.get('before')!;
+    if (searchParams.get('after')) opts.after = searchParams.get('after')!;
+
+    const result = await relay.messages.thread(id, opts);
+    return NextResponse.json({ ok: true, data: result });
   } catch (error) {
-    console.error('[api/replies] POST error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    if (error instanceof RelayError) {
+      return NextResponse.json(
+        { ok: false, error: { code: error.code, message: error.message } },
+        { status: error.status }
+      );
+    }
+    console.error('[api/replies] GET error:', error);
+    return NextResponse.json(
+      { ok: false, error: { code: 'internal_error', message: 'Internal server error' } },
+      { status: 500 }
+    );
   }
 }

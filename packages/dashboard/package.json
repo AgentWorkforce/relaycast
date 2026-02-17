@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/dashboard",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3100",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@agent-relay/dashboard": "^2.0.82",
+    "@relaycast/sdk": "0.2.5",
     "@agent-relay/pulse": "^1.1.1",
     "@nangohq/frontend": "^0.69.20",
     "@xterm/addon-fit": "^0.11.0",

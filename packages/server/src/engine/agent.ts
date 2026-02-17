@@ -208,3 +208,220 @@ export async function sweepStaleAgents(db: Db): Promise<number> {
 
   return result.length;
 }
+
+// === Spawn/Release (Agent Lifecycle) ===
+
+export interface SpawnAgentData {
+  name: string;
+  cli: string;
+  task: string;
+  channel?: string;
+  persona?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SpawnAgentResult {
+  id: string;
+  name: string;
+  token: string;
+  cli: string;
+  task: string;
+  channel: string | null;
+  status: string;
+  created_at: string;
+  already_existed: boolean;
+}
+
+export async function spawnAgent(
+  workspaceId: string,
+  data: SpawnAgentData,
+): Promise<SpawnAgentResult> {
+  const db = getDb();
+
+  // Check if agent already exists
+  const [existing] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
+
+  let agentId: string;
+  let token: string;
+  let createdAt: string;
+  let alreadyExisted = false;
+
+  if (existing) {
+    // Agent exists - rotate token and update metadata
+    alreadyExisted = true;
+    agentId = existing.id;
+    token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Update agent with new token, set online, store spawn metadata
+    const spawnMetadata = {
+      ...(existing.metadata as Record<string, unknown> || {}),
+      ...(data.metadata || {}),
+      spawn: {
+        cli: data.cli,
+        task: data.task,
+        spawned_at: new Date().toISOString(),
+      },
+    };
+
+    await db
+      .update(agents)
+      .set({
+        tokenHash,
+        status: 'online',
+        lastSeen: new Date(),
+        persona: data.persona ?? existing.persona,
+        metadata: spawnMetadata,
+      })
+      .where(eq(agents.id, agentId));
+
+    createdAt = existing.createdAt.toISOString();
+  } else {
+    // Create new agent
+    agentId = generateId();
+    token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const spawnMetadata = {
+      ...(data.metadata || {}),
+      spawn: {
+        cli: data.cli,
+        task: data.task,
+        spawned_at: new Date().toISOString(),
+      },
+    };
+
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        id: agentId,
+        workspaceId,
+        name: data.name,
+        type: 'agent',
+        tokenHash,
+        status: 'online',
+        persona: data.persona ?? null,
+        metadata: spawnMetadata,
+      })
+      .returning();
+
+    createdAt = agent.createdAt.toISOString();
+
+    // Auto-join #general
+    const [generalChannel] = await db
+      .select()
+      .from(channels)
+      .where(
+        and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general')),
+      );
+
+    if (generalChannel) {
+      await db.insert(channelMembers).values({
+        channelId: generalChannel.id,
+        agentId,
+        role: 'member',
+      }).onConflictDoNothing();
+    }
+  }
+
+  // Join specified channel if provided
+  let joinedChannel: string | null = null;
+  if (data.channel) {
+    const channelName = data.channel.startsWith('#') ? data.channel.slice(1) : data.channel;
+    const [channel] = await db
+      .select()
+      .from(channels)
+      .where(
+        and(eq(channels.workspaceId, workspaceId), eq(channels.name, channelName)),
+      );
+
+    if (channel && !channel.isArchived) {
+      await db.insert(channelMembers).values({
+        channelId: channel.id,
+        agentId,
+        role: 'member',
+      }).onConflictDoNothing();
+      joinedChannel = channel.name;
+    }
+  }
+
+  return {
+    id: agentId,
+    name: data.name,
+    token,
+    cli: data.cli,
+    task: data.task,
+    channel: joinedChannel,
+    status: 'online',
+    created_at: createdAt,
+    already_existed: alreadyExisted,
+  };
+}
+
+export interface ReleaseAgentData {
+  name: string;
+  reason?: string;
+  delete_agent?: boolean;
+}
+
+export interface ReleaseAgentResult {
+  name: string;
+  released: boolean;
+  deleted: boolean;
+  reason: string | null;
+}
+
+export async function releaseAgent(
+  workspaceId: string,
+  data: ReleaseAgentData,
+): Promise<ReleaseAgentResult | null> {
+  const db = getDb();
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
+
+  if (!agent) {
+    return null;
+  }
+
+  if (data.delete_agent) {
+    // Delete the agent entirely
+    await db.delete(agents).where(eq(agents.id, agent.id));
+    return {
+      name: data.name,
+      released: true,
+      deleted: true,
+      reason: data.reason ?? null,
+    };
+  }
+
+  // Mark as offline and clear spawn metadata
+  const existingMetadata = (agent.metadata as Record<string, unknown>) || {};
+  const { spawn: _spawn, ...restMetadata } = existingMetadata;
+
+  await db
+    .update(agents)
+    .set({
+      status: 'offline',
+      metadata: {
+        ...restMetadata,
+        release: {
+          reason: data.reason ?? null,
+          released_at: new Date().toISOString(),
+        },
+      },
+    })
+    .where(eq(agents.id, agent.id));
+
+  return {
+    name: data.name,
+    released: true,
+    deleted: false,
+    reason: data.reason ?? null,
+  };
+}

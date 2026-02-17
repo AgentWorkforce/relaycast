@@ -84,11 +84,12 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 37 tools', async () => {
+  it('lists all 39 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(37);
+    expect(tools.tools.length).toBe(39);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
+      'add_agent',
       'add_reaction',
       'archive_channel',
       'check_inbox',
@@ -117,6 +118,7 @@ describe('createRelayMcpServer', () => {
       'post_message',
       'register',
       'register_command',
+      'remove_agent',
       'remove_reaction',
       'reply_to_thread',
       'search_messages',

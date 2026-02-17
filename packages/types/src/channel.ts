@@ -9,6 +9,7 @@ export const ChannelSchema = z.object({
   created_by: z.string().nullable(),
   created_at: z.string(),
   is_archived: z.boolean(),
+  member_count: z.number().optional(),
 });
 export type Channel = z.infer<typeof ChannelSchema>;
 

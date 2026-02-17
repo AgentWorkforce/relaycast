@@ -28,7 +28,7 @@ describe('RelayCast', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspace');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBe('Bearer rk_live_test123');
       expect(init.headers['X-SDK-Version']).toBeDefined();
@@ -43,7 +43,7 @@ describe('RelayCast', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspace');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
       expect(init.method).toBe('PATCH');
       expect(init.headers['Content-Type']).toBe('application/json');
       expect(init.body).toBe(JSON.stringify({ name: 'new' }));
@@ -59,7 +59,7 @@ describe('RelayCast', () => {
       await relay.agents.register({ name: 'Worker' } as any);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'Worker' }));
     });
@@ -72,7 +72,7 @@ describe('RelayCast', () => {
       await relay.agents.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
       expect(init.method).toBe('GET');
     });
 
@@ -84,7 +84,7 @@ describe('RelayCast', () => {
       await relay.agents.list({ status: 'active' } as any);
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents?status=active');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents?status=active');
     });
 
     it('get() calls GET /v1/agents/:name with URL encoding', async () => {
@@ -95,7 +95,7 @@ describe('RelayCast', () => {
       await relay.agents.get('a/b');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents/a%2Fb');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents/a%2Fb');
     });
   });
 
@@ -150,7 +150,7 @@ describe('RelayCast', () => {
       await relay.workspace.delete();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspace');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
       expect(init.method).toBe('DELETE');
     });
   });
@@ -166,7 +166,7 @@ describe('RelayCast', () => {
       const result = await relay.systemPrompt.get();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspace/system-prompt');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace/system-prompt');
       expect(init.method).toBe('GET');
       expect(result).toEqual({ prompt: 'Be helpful', is_default: false });
     });
@@ -181,7 +181,7 @@ describe('RelayCast', () => {
       await relay.systemPrompt.set({ prompt: 'New prompt' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspace/system-prompt');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace/system-prompt');
       expect(init.method).toBe('PUT');
       expect(init.body).toBe(JSON.stringify({ prompt: 'New prompt' }));
     });
@@ -196,7 +196,7 @@ describe('RelayCast', () => {
       await relay.agents.update('Bot', { status: 'online' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents/Bot');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents/Bot');
       expect(init.method).toBe('PATCH');
       expect(init.body).toBe(JSON.stringify({ status: 'online' }));
     });
@@ -213,7 +213,7 @@ describe('RelayCast', () => {
       await relay.agents.delete('Bot');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents/Bot');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents/Bot');
       expect(init.method).toBe('DELETE');
     });
   });
@@ -228,7 +228,7 @@ describe('RelayCast', () => {
       const result = await relay.agents.presence();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/agents/presence');
+      expect(url).toBe('https://api.relaycast.dev/v1/agents/presence');
       expect(init.method).toBe('GET');
       expect(result).toEqual(data);
     });
@@ -253,7 +253,7 @@ describe('RelayCast', () => {
       const result = await RelayCast.createWorkspace('My Workspace');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/workspaces');
+      expect(url).toBe('https://api.relaycast.dev/v1/workspaces');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
       expect(init.headers.Authorization).toBeUndefined();
@@ -345,6 +345,126 @@ describe('RelayCast', () => {
       );
 
       await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+    });
+  });
+
+  describe('channels', () => {
+    it('list() calls GET /v1/channels', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.channels.list();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels');
+      expect(init.method).toBe('GET');
+    });
+
+    it('list() with include_archived adds query param', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.channels.list({ include_archived: true });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels?include_archived=true');
+    });
+
+    it('get() calls GET /v1/channels/:name', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ name: 'general', members: [] }));
+      await relay.channels.get('general');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general');
+      expect(init.method).toBe('GET');
+    });
+  });
+
+  describe('messages', () => {
+    it('list() calls GET /v1/channels/:name/messages', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('general');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
+      expect(init.method).toBe('GET');
+    });
+
+    it('list() with opts adds query params', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('general', { limit: 50 });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages?limit=50');
+    });
+
+    it('list() strips # prefix from channel name', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.list('#general');
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
+    });
+
+    it('get() calls GET /v1/messages/:id', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ id: 'msg_1' }));
+      await relay.messages.get('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1');
+      expect(init.method).toBe('GET');
+    });
+
+    it('thread() calls GET /v1/messages/:id/replies', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ parent: {}, replies: [] }));
+      await relay.messages.thread('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/replies');
+      expect(init.method).toBe('GET');
+    });
+
+    it('thread() with opts adds query params', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ parent: {}, replies: [] }));
+      await relay.messages.thread('msg_1', { limit: 20 });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/replies?limit=20');
+    });
+
+    it('reactions() calls GET /v1/messages/:id/reactions', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.reactions('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/reactions');
+      expect(init.method).toBe('GET');
     });
   });
 

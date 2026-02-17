@@ -130,14 +130,14 @@ jobs:
         run: |
           for attempt in 1 2 3 4 5; do
             echo "=== Attempt $attempt of 5 ==="
-            OUTPUT=$(npx @smithery/cli@latest publish \
+            OUTPUT=$(npx @smithery/cli@3 publish \
               -u https://api.relaycast.dev/mcp \
               -n "relaycast/relay" \
               -k "$SMITHERY_API_KEY" \
               --config-schema packages/mcp/smithery-config-schema.json 2>&1) || true
             echo "$OUTPUT"
-            if echo "$OUTPUT" | grep -q "37 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
-              echo "Full capabilities detected (37 tools + 1 prompt)!"
+            if echo "$OUTPUT" | grep -q "39 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
+              echo "Full capabilities detected (39 tools + 1 prompt)!"
               break
             fi
             if [ "$attempt" -lt 5 ]; then

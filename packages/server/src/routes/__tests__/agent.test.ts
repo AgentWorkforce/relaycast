@@ -226,3 +226,4 @@ describe('DELETE /v1/agents/:name', () => {
     expect(res.status).toBe(404);
   });
 });
+
