@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 
-// Mock ALL engines that app.ts imports
 vi.mock('../../engine/billing.js', () => ({
   subscribe: vi.fn(),
   getSubscription: vi.fn(),
@@ -10,186 +8,80 @@ vi.mock('../../engine/billing.js', () => ({
   createPortalSession: vi.fn(),
 }));
 
-vi.mock('../../engine/webhooks.js', () => ({
-  processWebhook: vi.fn(),
-}));
-
-vi.mock('../../engine/channel.js', () => ({
-  createChannel: vi.fn(),
-  listChannels: vi.fn(),
-  getChannel: vi.fn(),
-  updateChannel: vi.fn(),
-  archiveChannel: vi.fn(),
-  joinChannel: vi.fn(),
-  leaveChannel: vi.fn(),
-  getMembers: vi.fn(),
-  inviteAgent: vi.fn(),
-}));
-
 vi.mock('../../engine/agent.js', () => ({
-  registerAgent: vi.fn(),
-  listAgents: vi.fn(),
-  getAgentByName: vi.fn(),
-  updateAgent: vi.fn(),
-  deleteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/message.js', () => ({
-  postMessage: vi.fn(),
-  getMessages: vi.fn(),
-  getMessage: vi.fn(),
-}));
-
-vi.mock('../../engine/thread.js', () => ({
-  postReply: vi.fn(),
-  getReplies: vi.fn(),
-}));
-
-vi.mock('../../engine/dm.js', () => ({
-  sendDm: vi.fn(),
-  listConversations: vi.fn(),
-  getConversationMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/groupDm.js', () => ({
-  createGroupDm: vi.fn(),
-  postToGroupDm: vi.fn(),
-  addParticipant: vi.fn(),
-  removeParticipant: vi.fn(),
-}));
-
-vi.mock('../../engine/reaction.js', () => ({
-  addReaction: vi.fn(),
-  removeReaction: vi.fn(),
-  getReactions: vi.fn(),
-}));
-
-vi.mock('../../engine/search.js', () => ({
-  searchMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/inbox.js', () => ({
-  getInbox: vi.fn(),
-}));
-
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-}));
-
-vi.mock('../../engine/receipt.js', () => ({
-  markRead: vi.fn(),
-  getReaders: vi.fn(),
-  getReadStatus: vi.fn(),
-}));
-
-vi.mock('../../engine/file.js', () => ({
-  createUpload: vi.fn(),
-  completeUpload: vi.fn(),
-  getFile: vi.fn(),
-  deleteFile: vi.fn(),
-  listFiles: vi.fn(),
-}));
-
-vi.mock('../../engine/presence.js', () => ({
-  getPresence: vi.fn(),
-}));
-
-vi.mock('../../engine/systemPrompt.js', () => ({
-  getSystemPrompt: vi.fn(),
-  setSystemPrompt: vi.fn(),
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-  })),
-}));
-
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventQueue.js', () => ({
-  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
-}));
-
-import { app } from '../../app.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { dbMiddleware } from '../../middleware/db.js';
+import { billingRoutes } from '../../routes/billing.js';
 import * as billingEngine from '../../engine/billing.js';
 import { getDb } from '../../db/index.js';
-import { hashToken } from '../../middleware/auth.js';
-import crypto from 'node:crypto';
+import {
+  mockDbForWorkspaceAuth,
+  mockDbForAgentAuth,
+  wsAuthHeaders,
+  agentAuthHeaders,
+  createMockBindings,
+  FAKE_WORKSPACE,
+} from '../../__tests__/test-helpers.js';
 
-const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-const apiKeyHash = hashToken(apiKey);
-const agentToken = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-const agentTokenHash = hashToken(agentToken);
-
-const fakeWorkspace = {
-  id: 'ws_123',
-  name: 'test-workspace',
-  apiKeyHash,
-  systemPrompt: null,
-  plan: 'free',
+// Override FAKE_WORKSPACE to include stripeCustomerId for billing tests
+const billingWorkspace = {
+  ...FAKE_WORKSPACE,
   stripeCustomerId: 'cus_abc',
   stripeSubscriptionId: 'sub_abc',
-  createdAt: new Date(),
-  metadata: {},
 };
 
-const fakeAgent = {
-  id: 'agent_123',
-  workspaceId: 'ws_123',
-  name: 'TestBot',
-  type: 'agent',
-  tokenHash: agentTokenHash,
-  status: 'online',
-  persona: null,
-  metadata: {},
-  createdAt: new Date(),
-  lastSeen: new Date(),
-};
-
-function mockDbForWorkspaceAuth() {
-  vi.mocked(getDb).mockReturnValue({
+function mockDbForBillingWorkspaceAuth() {
+  return {
     select: () => ({
       from: () => ({
-        where: vi.fn().mockResolvedValue([fakeWorkspace]),
+        where: vi.fn().mockResolvedValue([billingWorkspace]),
       }),
     }),
-  } as ReturnType<typeof getDb>);
-}
-
-function mockDbForAgentAuth() {
-  let callCount = 0;
-  vi.mocked(getDb).mockReturnValue({
-    select: () => ({
-      from: () => ({
-        where: vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount % 2 === 1) return Promise.resolve([fakeAgent]);
-          return Promise.resolve([fakeWorkspace]);
+    insert: () => ({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([]),
         }),
       }),
     }),
-  } as ReturnType<typeof getDb>);
+    update: () => ({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    }),
+    delete: () => ({
+      where: vi.fn().mockResolvedValue([]),
+    }),
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
+  } as any;
 }
+
+const bindings = createMockBindings();
+const app = new Hono<AppEnv>();
+app.use('*', async (c, next) => {
+  (c as any).env = { ...bindings };
+  await next();
+});
+app.use('*', dbMiddleware);
+const v1 = new Hono<AppEnv>();
+v1.route('/', billingRoutes);
+app.route('/v1', v1);
 
 describe('POST /v1/billing/subscribe', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForBillingWorkspaceAuth());
   });
 
   it('creates subscription and returns 201', async () => {
@@ -200,51 +92,66 @@ describe('POST /v1/billing/subscribe', () => {
       current_period_end: '2025-02-01T00:00:00.000Z',
     });
 
-    const res = await request(app)
-      .post('/v1/billing/subscribe')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ plan: 'pro', payment_method: 'pm_123' });
+    const res = await app.request('/v1/billing/subscribe', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ plan: 'pro', payment_method: 'pm_123' }),
+    });
 
     expect(res.status).toBe(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.plan).toBe('pro');
-    expect(billingEngine.subscribe).toHaveBeenCalledWith('ws_123', 'pro', 'pm_123');
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.plan).toBe('pro');
+    expect(billingEngine.subscribe).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'pro',
+      'pm_123',
+    );
   });
 
   it('returns 400 for invalid plan', async () => {
-    const res = await request(app)
-      .post('/v1/billing/subscribe')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ plan: 'invalid', payment_method: 'pm_123' });
+    const res = await app.request('/v1/billing/subscribe', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ plan: 'invalid', payment_method: 'pm_123' }),
+    });
 
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json();
+    expect(body.error.code).toBe('invalid_request');
   });
 
   it('returns 400 for missing payment_method', async () => {
-    const res = await request(app)
-      .post('/v1/billing/subscribe')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ plan: 'pro' });
+    const res = await app.request('/v1/billing/subscribe', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ plan: 'pro' }),
+    });
 
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('payment_method');
+    const body = await res.json();
+    expect(body.error.message).toContain('payment_method');
   });
 
   it('returns 401 without auth', async () => {
-    const res = await request(app)
-      .post('/v1/billing/subscribe')
-      .send({ plan: 'pro', payment_method: 'pm_123' });
+    const res = await app.request('/v1/billing/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: 'pro', payment_method: 'pm_123' }),
+    });
 
     expect(res.status).toBe(401);
   });
 
   it('returns 401 with agent token', async () => {
-    mockDbForAgentAuth();
-    const res = await request(app)
-      .post('/v1/billing/subscribe')
-      .set('Authorization', `Bearer ${agentToken}`)
-      .send({ plan: 'pro', payment_method: 'pm_123' });
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
+
+    const res = await app.request('/v1/billing/subscribe', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ plan: 'pro', payment_method: 'pm_123' }),
+    });
 
     expect(res.status).toBe(401);
   });
@@ -253,7 +160,7 @@ describe('POST /v1/billing/subscribe', () => {
 describe('GET /v1/billing/subscription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForBillingWorkspaceAuth());
   });
 
   it('returns subscription data', async () => {
@@ -264,17 +171,19 @@ describe('GET /v1/billing/subscription', () => {
       usage_this_period: { messages_sent: 100, api_calls: 50, files_uploaded: 2, file_bytes: 1024, ws_minutes: 10 },
     });
 
-    const res = await request(app)
-      .get('/v1/billing/subscription')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/subscription', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.plan).toBe('pro');
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.plan).toBe('pro');
   });
 
   it('returns 401 without auth', async () => {
-    const res = await request(app).get('/v1/billing/subscription');
+    const res = await app.request('/v1/billing/subscription', { method: 'GET' });
     expect(res.status).toBe(401);
   });
 });
@@ -282,7 +191,7 @@ describe('GET /v1/billing/subscription', () => {
 describe('GET /v1/billing/usage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForBillingWorkspaceAuth());
   });
 
   it('returns usage for current period', async () => {
@@ -296,29 +205,33 @@ describe('GET /v1/billing/usage', () => {
       period_end: '2025-02-01T00:00:00.000Z',
     });
 
-    const res = await request(app)
-      .get('/v1/billing/usage')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/usage', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.messages_sent).toBe(500);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.messages_sent).toBe(500);
   });
 
   it('returns 400 for invalid period', async () => {
-    const res = await request(app)
-      .get('/v1/billing/usage?period=invalid')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/usage?period=invalid', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('period');
+    const body = await res.json();
+    expect(body.error.message).toContain('period');
   });
 });
 
 describe('GET /v1/billing/invoices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForBillingWorkspaceAuth());
   });
 
   it('lists invoices', async () => {
@@ -326,38 +239,43 @@ describe('GET /v1/billing/invoices', () => {
       { id: 'in_1', amount: 2999, currency: 'usd', status: 'paid', period_start: '2025-01-01', period_end: '2025-02-01', pdf_url: 'https://example.com/inv.pdf' },
     ]);
 
-    const res = await request(app)
-      .get('/v1/billing/invoices')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/invoices', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
+    const body = await res.json();
+    expect(body.data).toHaveLength(1);
   });
 
   it('defaults limit to 10', async () => {
     vi.mocked(billingEngine.getInvoices).mockResolvedValue([]);
 
-    await request(app)
-      .get('/v1/billing/invoices')
-      .set('Authorization', `Bearer ${apiKey}`);
+    await app.request('/v1/billing/invoices', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(billingEngine.getInvoices).toHaveBeenCalledWith('cus_abc', 10);
   });
 
   it('returns 400 for invalid limit', async () => {
-    const res = await request(app)
-      .get('/v1/billing/invoices?limit=-1')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/invoices?limit=-1', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('limit');
+    const body = await res.json();
+    expect(body.error.message).toContain('limit');
   });
 });
 
 describe('POST /v1/billing/portal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForBillingWorkspaceAuth());
   });
 
   it('creates portal session', async () => {
@@ -365,12 +283,14 @@ describe('POST /v1/billing/portal', () => {
       url: 'https://billing.example.com/session/123',
     });
 
-    const res = await request(app)
-      .post('/v1/billing/portal')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/billing/portal', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.url).toContain('billing.example.com');
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.url).toContain('billing.example.com');
   });
 });

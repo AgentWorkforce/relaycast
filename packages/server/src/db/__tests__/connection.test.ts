@@ -1,35 +1,30 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { getDb, closeDb, healthCheck } from '../index.js';
+import { describe, it, expect } from 'vitest';
+import { getDb, healthCheck } from '../index.js';
 
 describe('Database Connection', () => {
-  afterEach(async () => {
-    await closeDb();
+  it('getDb returns a drizzle instance', () => {
+    const db = getDb('postgresql://relay:relay@localhost:5433/relay');
+    expect(db).toBeDefined();
+    expect(typeof db.select).toBe('function');
   });
 
-  it('getDb returns a drizzle instance', () => {
+  it('getDb creates a new instance per call', () => {
+    const db1 = getDb('postgresql://relay:relay@localhost:5433/relay');
+    const db2 = getDb('postgresql://relay:relay@localhost:5433/relay');
+    // Per-request instances — not singleton
+    expect(db1).toBeDefined();
+    expect(db2).toBeDefined();
+  });
+
+  it('getDb falls back to default connection string', () => {
     const db = getDb();
     expect(db).toBeDefined();
     expect(typeof db.select).toBe('function');
   });
 
-  it('getDb returns same instance on multiple calls', () => {
-    const db1 = getDb();
-    const db2 = getDb();
-    expect(db1).toBe(db2);
-  });
-
-  it('closeDb resets the instance', async () => {
-    getDb();
-    await closeDb();
-    const db2 = getDb();
-    expect(db2).toBeDefined();
-  });
-
   it('healthCheck returns boolean', async () => {
     // Without a real database, this should return false
-    getDb({ url: 'postgresql://invalid:invalid@localhost:1/nonexistent' });
-    const result = await healthCheck();
+    const result = await healthCheck('postgresql://invalid:invalid@localhost:1/nonexistent');
     expect(typeof result).toBe('boolean');
   });
 });
-

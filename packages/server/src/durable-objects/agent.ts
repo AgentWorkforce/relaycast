@@ -1,6 +1,12 @@
 import type { CloudflareBindings } from '../env.js';
 
 /**
+ * Maximum number of recent events kept in DO storage for fast resync.
+ * Events beyond this window require a Postgres query.
+ */
+const RESYNC_BUFFER_SIZE = 500;
+
+/**
  * AgentDO — the single client-facing WebSocket actor per agent.
  *
  * All events destined for an agent (from ChannelDO, PresenceDO, or Edge
@@ -9,6 +15,11 @@ import type { CloudflareBindings } from '../env.js';
  *
  * Uses the hibernation API so the DO can be evicted between messages,
  * keeping costs low for idle agents.
+ *
+ * Resync: Recent events are stored in DO storage keyed as `evt:{seq}`.
+ * On reconnect the client sends `{ type: "resync", last_seen_seq: N }`
+ * and the DO replays all buffered events with seq > N.  For gaps larger
+ * than the buffer, a Postgres fallback query is used.
  */
 export class AgentDO implements DurableObject {
   private state: DurableObjectState;
@@ -56,6 +67,121 @@ export class AgentDO implements DurableObject {
     }
   }
 
+  /**
+   * Store an event in the ring buffer and evict old entries.
+   */
+  private async bufferEvent(seq: number, payload: Record<string, unknown>): Promise<void> {
+    await this.state.storage.put(`evt:${seq}`, payload);
+
+    // Evict the oldest event if we've exceeded the buffer size.
+    const evictSeq = seq - RESYNC_BUFFER_SIZE;
+    if (evictSeq > 0) {
+      await this.state.storage.delete(`evt:${evictSeq}`);
+    }
+  }
+
+  /**
+   * Replay buffered events with seq > lastSeenSeq to a single WebSocket.
+   */
+  private async replayBufferedEvents(
+    ws: WebSocket,
+    lastSeenSeq: number,
+  ): Promise<{ replayed: number; gapDetected: boolean }> {
+    const currentSeq = await this.getAgentSeq();
+
+    if (lastSeenSeq >= currentSeq) {
+      return { replayed: 0, gapDetected: false };
+    }
+
+    // Calculate the range we can serve from the buffer.
+    const oldestBuffered = Math.max(1, currentSeq - RESYNC_BUFFER_SIZE + 1);
+    const gapDetected = lastSeenSeq < oldestBuffered - 1;
+
+    const startSeq = Math.max(lastSeenSeq + 1, oldestBuffered);
+    const events: Record<string, unknown>[] = [];
+
+    // Batch-read from DO storage.
+    const keys: string[] = [];
+    for (let s = startSeq; s <= currentSeq; s++) {
+      keys.push(`evt:${s}`);
+    }
+
+    if (keys.length > 0) {
+      const entries = await this.state.storage.get<Record<string, unknown>>(keys);
+      for (let s = startSeq; s <= currentSeq; s++) {
+        const evt = entries.get(`evt:${s}`);
+        if (evt) {
+          events.push(evt);
+        }
+      }
+    }
+
+    // Send all buffered events to the socket.
+    for (const evt of events) {
+      try {
+        ws.send(JSON.stringify(evt));
+      } catch {
+        break; // Socket closed mid-replay.
+      }
+    }
+
+    return { replayed: events.length, gapDetected };
+  }
+
+  /**
+   * Replay missed events from Postgres for gaps larger than the DO buffer.
+   * Queries messages in channels the agent belongs to, plus DMs, that were
+   * created after the given timestamp.
+   */
+  private async replayFromPostgres(
+    ws: WebSocket,
+    agentId: string,
+    workspaceId: string,
+    since: string, // ISO timestamp
+  ): Promise<number> {
+    const { getDb } = await import('../db/index.js');
+    const { sql } = await import('drizzle-orm');
+
+    const db = getDb(this.env.HYPERDRIVE.connectionString);
+
+    // Query messages in agent's channels created after `since`.
+    const rows = await db.execute(sql`
+      SELECT m.id, m.channel_id, m.agent_id, m.body, m.thread_id,
+             m.created_at, c.name AS channel_name
+      FROM messages m
+      JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.agent_id = ${agentId}
+      JOIN channels c ON c.id = m.channel_id
+      WHERE m.workspace_id = ${workspaceId}
+        AND m.created_at > ${since}::timestamptz
+      ORDER BY m.created_at ASC
+      LIMIT 1000
+    `);
+
+    let count = 0;
+    for (const row of rows.rows) {
+      try {
+        ws.send(JSON.stringify({
+          type: 'message.created',
+          data: {
+            id: row.id,
+            channel_id: row.channel_id,
+            channel_name: row.channel_name,
+            agent_id: row.agent_id,
+            body: row.body,
+            thread_id: row.thread_id,
+            created_at: row.created_at,
+          },
+          replayed: true,
+        }));
+        count++;
+      } catch {
+        break;
+      }
+    }
+
+    return count;
+  }
+
   /* ------------------------------------------------------------------ */
   /*  HTTP handler                                                       */
   /* ------------------------------------------------------------------ */
@@ -96,9 +222,22 @@ export class AgentDO implements DurableObject {
   private async handleDeliver(request: Request): Promise<Response> {
     const event = (await request.json()) as Record<string, unknown>;
 
+    // Persist agent identity on first delivery for resync queries.
+    if (event.workspaceId && event.agentId) {
+      const existing = await this.state.storage.get('meta');
+      if (!existing) {
+        await this.state.storage.put('meta', {
+          workspaceId: event.workspaceId as string,
+          agentId: event.agentId as string,
+        });
+      }
+    }
+
     const seq = await this.incrementAgentSeq();
     const payload = { ...event, agent_seq: seq };
 
+    // Buffer for resync and broadcast to live sockets.
+    await this.bufferEvent(seq, payload);
     this.broadcastToSockets(payload);
 
     return Response.json({ ok: true, agent_seq: seq });
@@ -112,7 +251,11 @@ export class AgentDO implements DurableObject {
     if (typeof message !== 'string') return;
 
     try {
-      const parsed = JSON.parse(message) as { type?: string; last_seen_seq?: number };
+      const parsed = JSON.parse(message) as {
+        type?: string;
+        last_seen_seq?: number;
+        since?: string;
+      };
 
       if (parsed.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
@@ -120,12 +263,31 @@ export class AgentDO implements DurableObject {
       }
 
       if (parsed.type === 'resync' && typeof parsed.last_seen_seq === 'number') {
-        // TODO: Query Postgres for missed events since last_seen_seq and
-        // replay them to this socket. For now, acknowledge the request.
+        const { replayed, gapDetected } = await this.replayBufferedEvents(
+          ws,
+          parsed.last_seen_seq,
+        );
+
+        // If there's a gap beyond the buffer, try Postgres fallback.
+        let pgReplayed = 0;
+        if (gapDetected && parsed.since) {
+          const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
+          if (meta) {
+            pgReplayed = await this.replayFromPostgres(
+              ws,
+              meta.agentId,
+              meta.workspaceId,
+              parsed.since,
+            );
+          }
+        }
+
         ws.send(JSON.stringify({
           type: 'resync_ack',
           last_seen_seq: parsed.last_seen_seq,
-          events: [],
+          current_seq: await this.getAgentSeq(),
+          replayed: replayed + pgReplayed,
+          gap_detected: gapDetected,
         }));
         return;
       }

@@ -48,6 +48,10 @@ export class ChannelDO implements DurableObject {
 
   /**
    * Fan out an event payload to every member AgentDO via POST /deliver.
+   *
+   * Uses Promise.allSettled so one agent's failure doesn't block others.
+   * Failed deliveries are logged; the event is already persisted in Postgres
+   * and can be picked up by the agent on resync.
    */
   private async fanOut(
     workspaceId: string,
@@ -60,10 +64,24 @@ export class ChannelDO implements DurableObject {
       return stub.fetch(new Request('http://do/deliver', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, workspaceId, agentId }),
       }));
     });
-    await Promise.allSettled(promises);
+    const results = await Promise.allSettled(promises);
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'rejected') {
+        console.error(
+          `[ChannelDO] fanout failed for agent ${members[i]} in workspace ${workspaceId}:`,
+          result.reason,
+        );
+      } else if (!result.value.ok) {
+        console.error(
+          `[ChannelDO] fanout returned ${result.value.status} for agent ${members[i]} in workspace ${workspaceId}`,
+        );
+      }
+    }
   }
 
   /* ------------------------------------------------------------------ */

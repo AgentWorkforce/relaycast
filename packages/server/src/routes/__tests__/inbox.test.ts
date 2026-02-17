@@ -1,186 +1,48 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 
 vi.mock('../../engine/inbox.js', () => ({
   getInbox: vi.fn(),
 }));
 
-vi.mock('../../engine/channel.js', () => ({
-  createChannel: vi.fn(),
-  listChannels: vi.fn(),
-  getChannel: vi.fn(),
-  updateChannel: vi.fn(),
-  archiveChannel: vi.fn(),
-  joinChannel: vi.fn(),
-  leaveChannel: vi.fn(),
-  getMembers: vi.fn(),
-  inviteAgent: vi.fn(),
-}));
-
 vi.mock('../../engine/agent.js', () => ({
-  registerAgent: vi.fn(),
-  listAgents: vi.fn(),
-  getAgentByName: vi.fn(),
-  updateAgent: vi.fn(),
-  deleteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/message.js', () => ({
-  postMessage: vi.fn(),
-  getMessages: vi.fn(),
-  getMessage: vi.fn(),
-}));
-
-vi.mock('../../engine/reaction.js', () => ({
-  addReaction: vi.fn(),
-  removeReaction: vi.fn(),
-  getReactions: vi.fn(),
-}));
-
-vi.mock('../../engine/search.js', () => ({
-  searchMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/thread.js', () => ({
-  postReply: vi.fn(),
-  getReplies: vi.fn(),
-}));
-
-vi.mock('../../engine/dm.js', () => ({
-  sendDm: vi.fn(),
-  listConversations: vi.fn(),
-  getConversationMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/groupDm.js', () => ({
-  createGroupDm: vi.fn(),
-  postToGroupDm: vi.fn(),
-  addParticipant: vi.fn(),
-  removeParticipant: vi.fn(),
-}));
-
-vi.mock('../../engine/receipt.js', () => ({
-  markRead: vi.fn(),
-  getReaders: vi.fn(),
-  getReadStatus: vi.fn(),
-}));
-
-vi.mock('../../engine/file.js', () => ({
-  createUpload: vi.fn(),
-  completeUpload: vi.fn(),
-  getFile: vi.fn(),
-  deleteFile: vi.fn(),
-  listFiles: vi.fn(),
-}));
-
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-}));
-
-vi.mock('../../engine/presence.js', () => ({
-  getPresence: vi.fn(),
-}));
-
-vi.mock('../../engine/systemPrompt.js', () => ({
-  getSystemPrompt: vi.fn(),
-  setSystemPrompt: vi.fn(),
-}));
-
-vi.mock('../../engine/billing.js', () => ({
-  subscribe: vi.fn(),
-  getSubscription: vi.fn(),
-  getUsage: vi.fn(),
-  getInvoices: vi.fn(),
-  createPortalSession: vi.fn(),
-}));
-
-vi.mock('../../engine/webhooks.js', () => ({
-  processWebhook: vi.fn(),
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-  })),
-}));
-
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventQueue.js', () => ({
-  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
-}));
-
-import { app } from '../../app.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { dbMiddleware } from '../../middleware/db.js';
+import { inboxRoutes } from '../../routes/inbox.js';
 import * as inboxEngine from '../../engine/inbox.js';
 import { getDb } from '../../db/index.js';
-import { hashToken } from '../../middleware/auth.js';
-import crypto from 'node:crypto';
+import {
+  mockDbForAgentAuth,
+  mockDbForWorkspaceAuth,
+  agentAuthHeaders,
+  wsAuthHeaders,
+  createMockBindings,
+  FAKE_AGENT,
+  FAKE_WORKSPACE,
+} from '../../__tests__/test-helpers.js';
 
-const agentToken = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-const agentTokenHash = hashToken(agentToken);
-const workspaceKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-const workspaceKeyHash = hashToken(workspaceKey);
-
-const fakeWorkspace = {
-  id: 'ws_123',
-  name: 'test-workspace',
-  apiKeyHash: workspaceKeyHash,
-  systemPrompt: null,
-  plan: 'free',
-  stripeCustomerId: null,
-  stripeSubscriptionId: null,
-  createdAt: new Date(),
-  metadata: {},
-};
-
-const fakeAgent = {
-  id: 'agent_456',
-  workspaceId: 'ws_123',
-  name: 'TestBot',
-  type: 'agent',
-  tokenHash: agentTokenHash,
-  status: 'online',
-  persona: null,
-  metadata: {},
-  createdAt: new Date(),
-  lastSeen: new Date(),
-};
-
-function mockDbForAgentAuth() {
-  const mockSelect = vi.fn();
-  const mockFrom = vi.fn();
-  const mockWhere = vi.fn();
-  let callCount = 0;
-  mockWhere.mockImplementation(() => {
-    callCount++;
-    if (callCount === 1) return Promise.resolve([fakeAgent]);
-    return Promise.resolve([fakeWorkspace]);
-  });
-  mockFrom.mockReturnValue({ where: mockWhere });
-  mockSelect.mockReturnValue({ from: mockFrom });
-  vi.mocked(getDb).mockReturnValue({
-    select: mockSelect,
-  } as ReturnType<typeof getDb>);
-}
+const bindings = createMockBindings();
+const app = new Hono<AppEnv>();
+app.use('*', async (c, next) => {
+  (c as any).env = { ...bindings };
+  await next();
+});
+app.use('*', dbMiddleware);
+const v1 = new Hono<AppEnv>();
+v1.route('/', inboxRoutes);
+app.route('/v1', v1);
 
 describe('GET /v1/inbox', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAgentAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
   });
 
   it('returns inbox with unread channels, mentions, and DMs', async () => {
@@ -212,19 +74,21 @@ describe('GET /v1/inbox', () => {
       ],
     });
 
-    const res = await request(app)
-      .get('/v1/inbox')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/inbox', {
+      method: 'GET',
+      headers: agentAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.unread_channels).toHaveLength(2);
-    expect(res.body.data.unread_channels[0].channel_name).toBe('general');
-    expect(res.body.data.unread_channels[0].unread_count).toBe(5);
-    expect(res.body.data.mentions).toHaveLength(1);
-    expect(res.body.data.mentions[0].text).toContain('@TestBot');
-    expect(res.body.data.unread_dms).toHaveLength(1);
-    expect(res.body.data.unread_dms[0].from).toBe('Alice');
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.unread_channels).toHaveLength(2);
+    expect(body.data.unread_channels[0].channel_name).toBe('general');
+    expect(body.data.unread_channels[0].unread_count).toBe(5);
+    expect(body.data.mentions).toHaveLength(1);
+    expect(body.data.mentions[0].text).toContain('@TestBot');
+    expect(body.data.unread_dms).toHaveLength(1);
+    expect(body.data.unread_dms[0].from).toBe('Alice');
   });
 
   it('returns empty inbox when nothing unread', async () => {
@@ -234,36 +98,31 @@ describe('GET /v1/inbox', () => {
       unread_dms: [],
     });
 
-    const res = await request(app)
-      .get('/v1/inbox')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/inbox', {
+      method: 'GET',
+      headers: agentAuthHeaders(),
+    });
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.unread_channels).toEqual([]);
-    expect(res.body.data.mentions).toEqual([]);
-    expect(res.body.data.unread_dms).toEqual([]);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.data.unread_channels).toEqual([]);
+    expect(body.data.mentions).toEqual([]);
+    expect(body.data.unread_dms).toEqual([]);
   });
 
   it('returns 401 without auth', async () => {
-    const res = await request(app).get('/v1/inbox');
+    const res = await app.request('/v1/inbox', { method: 'GET' });
     expect(res.status).toBe(401);
   });
 
   it('returns 401 with workspace key (requires agent token)', async () => {
-    const mockSelect = vi.fn();
-    const mockFrom = vi.fn();
-    const mockWhere = vi.fn();
-    mockWhere.mockResolvedValue([fakeWorkspace]);
-    mockFrom.mockReturnValue({ where: mockWhere });
-    mockSelect.mockReturnValue({ from: mockFrom });
-    vi.mocked(getDb).mockReturnValue({
-      select: mockSelect,
-    } as ReturnType<typeof getDb>);
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
 
-    const res = await request(app)
-      .get('/v1/inbox')
-      .set('Authorization', `Bearer ${workspaceKey}`);
+    const res = await app.request('/v1/inbox', {
+      method: 'GET',
+      headers: wsAuthHeaders(),
+    });
 
     expect(res.status).toBe(401);
   });
@@ -275,22 +134,29 @@ describe('GET /v1/inbox', () => {
       unread_dms: [],
     });
 
-    await request(app)
-      .get('/v1/inbox')
-      .set('Authorization', `Bearer ${agentToken}`);
+    await app.request('/v1/inbox', {
+      method: 'GET',
+      headers: agentAuthHeaders(),
+    });
 
-    expect(inboxEngine.getInbox).toHaveBeenCalledWith('ws_123', 'agent_456');
+    expect(inboxEngine.getInbox).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      FAKE_AGENT.id,
+    );
   });
 
   it('handles engine errors gracefully', async () => {
     vi.mocked(inboxEngine.getInbox).mockRejectedValue(new Error('DB connection failed'));
 
-    const res = await request(app)
-      .get('/v1/inbox')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/inbox', {
+      method: 'GET',
+      headers: agentAuthHeaders(),
+    });
 
     expect(res.status).toBe(500);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error.code).toBe('internal_error');
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('internal_error');
   });
 });

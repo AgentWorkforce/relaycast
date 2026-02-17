@@ -1,52 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseIdempotencyKey, runIdempotent } from '../idempotency.js';
+import { createMockKV } from '../../__tests__/test-helpers.js';
 
-const store = new Map<string, string>();
-
-const mockRedis = {
-  get: vi.fn(async (key: string) => store.get(key) ?? null),
-  set: vi.fn(async (key: string, value: string, ...args: unknown[]) => {
-    const useNx = args.includes('NX');
-    if (useNx && store.has(key)) {
-      return null;
-    }
-    store.set(key, value);
-    return 'OK';
-  }),
-  del: vi.fn(async (key: string) => {
-    store.delete(key);
-    return 1;
-  }),
-};
-
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => mockRedis),
-}));
-
-describe('idempotency middleware helpers', () => {
-  beforeEach(() => {
-    store.clear();
-    vi.clearAllMocks();
-  });
-
+describe('idempotency helpers', () => {
   describe('parseIdempotencyKey()', () => {
-    it('returns undefined when header is absent', () => {
-      const req = { header: vi.fn(() => undefined) } as any;
-      expect(parseIdempotencyKey(req)).toEqual({});
+    it('returns empty object when header is undefined', () => {
+      expect(parseIdempotencyKey(undefined)).toEqual({});
     });
 
     it('rejects empty key', () => {
-      const req = { header: vi.fn(() => '   ') } as any;
-      expect(parseIdempotencyKey(req).error).toContain('cannot be empty');
+      expect(parseIdempotencyKey('   ').error).toContain('cannot be empty');
     });
 
     it('accepts visible ASCII key', () => {
-      const req = { header: vi.fn(() => 'abc-123:_KEY') } as any;
-      expect(parseIdempotencyKey(req)).toEqual({ key: 'abc-123:_KEY' });
+      expect(parseIdempotencyKey('abc-123:_KEY')).toEqual({ key: 'abc-123:_KEY' });
+    });
+
+    it('rejects key with whitespace', () => {
+      expect(parseIdempotencyKey('key with space').error).toContain('visible ASCII');
+    });
+
+    it('rejects key exceeding max length', () => {
+      const longKey = 'a'.repeat(256);
+      expect(parseIdempotencyKey(longKey).error).toContain('255 characters');
+    });
+
+    it('trims key before validation', () => {
+      // A key that is only whitespace after trim is empty
+      expect(parseIdempotencyKey('  ').error).toContain('cannot be empty');
     });
   });
 
   describe('runIdempotent()', () => {
+    let kv: KVNamespace;
+
+    beforeEach(() => {
+      kv = createMockKV();
+      vi.clearAllMocks();
+    });
+
     it('runs operation directly when no key is provided', async () => {
       const op = vi.fn(async () => ({ id: 'm1' }));
 
@@ -54,12 +46,14 @@ describe('idempotency middleware helpers', () => {
         workspaceId: 'ws1',
         actorId: 'a1',
         scope: 'dm:direct',
+        kv,
         operation: op,
       });
       const b = await runIdempotent({
         workspaceId: 'ws1',
         actorId: 'a1',
         scope: 'dm:direct',
+        kv,
         operation: op,
       });
 
@@ -77,6 +71,7 @@ describe('idempotency middleware helpers', () => {
         scope: 'channel:general',
         key: 'idem-1',
         fingerprint: '{"text":"hello"}',
+        kv,
         operation: op,
       });
 
@@ -86,6 +81,7 @@ describe('idempotency middleware helpers', () => {
         scope: 'channel:general',
         key: 'idem-1',
         fingerprint: '{"text":"hello"}',
+        kv,
         operation: op,
       });
 
@@ -104,6 +100,7 @@ describe('idempotency middleware helpers', () => {
         scope: 'channel:general',
         key: 'idem-1',
         fingerprint: '{"text":"hello"}',
+        kv,
         operation: op,
       });
 
@@ -114,15 +111,24 @@ describe('idempotency middleware helpers', () => {
           scope: 'channel:general',
           key: 'idem-1',
           fingerprint: '{"text":"different"}',
+          kv,
           operation: op,
         }),
       ).rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
     });
 
-    it('returns conflict when same key is currently processing', async () => {
-      const setSpy = vi.spyOn(mockRedis, 'set');
-      // First SET is lock acquisition, force lock miss (already in progress)
-      setSpy.mockResolvedValueOnce(null as any);
+    it('returns conflict when same key is currently processing (lock held)', async () => {
+      // Simulate a lock being held by pre-populating the lock key
+      // We need to intercept the KV calls to simulate the lock scenario
+      const lockKv = createMockKV();
+      let getCallCount = 0;
+      vi.mocked(lockKv.get).mockImplementation(async (key: string) => {
+        getCallCount++;
+        if (typeof key === 'string' && key.endsWith(':lock')) {
+          return '1'; // lock is held
+        }
+        return null; // no existing result
+      });
 
       await expect(
         runIdempotent({
@@ -131,9 +137,80 @@ describe('idempotency middleware helpers', () => {
           scope: 'channel:general',
           key: 'idem-1',
           fingerprint: '{"text":"hello"}',
+          kv: lockKv,
           operation: async () => ({ id: 'm1' }),
         }),
       ).rejects.toMatchObject({ code: 'idempotency_in_progress', status: 409 });
+    });
+
+    it('proceeds without idempotency when kv is not provided', async () => {
+      const op = vi.fn(async () => ({ id: 'm1' }));
+
+      const result = await runIdempotent({
+        workspaceId: 'ws1',
+        actorId: 'a1',
+        scope: 'channel:general',
+        key: 'idem-1',
+        operation: op,
+      });
+
+      expect(result.replayed).toBe(false);
+      expect(op).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves custom status code', async () => {
+      const op = vi.fn(async () => ({ id: 'm1' }));
+
+      const result = await runIdempotent({
+        workspaceId: 'ws1',
+        actorId: 'a1',
+        scope: 'channel:general',
+        key: 'idem-1',
+        status: 200,
+        kv,
+        operation: op,
+      });
+
+      expect(result.status).toBe(200);
+    });
+
+    it('cleans up lock on operation failure', async () => {
+      const op = vi.fn(async () => {
+        throw new Error('operation failed');
+      });
+
+      await expect(
+        runIdempotent({
+          workspaceId: 'ws1',
+          actorId: 'a1',
+          scope: 'channel:general',
+          key: 'idem-1',
+          kv,
+          operation: op,
+        }),
+      ).rejects.toThrow('operation failed');
+
+      // Lock should have been cleaned up via delete
+      expect(kv.delete).toHaveBeenCalled();
+    });
+
+    it('falls back to non-idempotent when KV fails during read', async () => {
+      const brokenKv = createMockKV();
+      vi.mocked(brokenKv.get).mockRejectedValue(new Error('KV down'));
+
+      const op = vi.fn(async () => ({ id: 'm1' }));
+
+      const result = await runIdempotent({
+        workspaceId: 'ws1',
+        actorId: 'a1',
+        scope: 'channel:general',
+        key: 'idem-1',
+        kv: brokenKv,
+        operation: op,
+      });
+
+      expect(result.replayed).toBe(false);
+      expect(op).toHaveBeenCalledTimes(1);
     });
   });
 });

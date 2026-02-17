@@ -32,6 +32,7 @@ import { dashboardRoutes } from './routes/dashboard.js';
 export { ChannelDO } from './durable-objects/channel.js';
 export { AgentDO } from './durable-objects/agent.js';
 export { PresenceDO } from './durable-objects/presence.js';
+export { McpSessionDO } from './durable-objects/mcpSession.js';
 
 const app = new Hono<AppEnv>();
 
@@ -103,8 +104,25 @@ app.get('/.well-known/mcp-config', (c) => {
   });
 });
 
-// TODO: MCP Streamable HTTP endpoint — needs McpSessionDO for stateful sessions on Workers
-// app.all('/mcp', ...);
+// MCP Streamable HTTP endpoint — stateful sessions via McpSessionDO
+app.all('/mcp', async (c) => {
+  const sessionId = c.req.header('mcp-session-id');
+
+  if (sessionId) {
+    // Route to existing session DO.
+    const doId = c.env.MCP_SESSION_DO.idFromName(sessionId);
+    const stub = c.env.MCP_SESSION_DO.get(doId);
+    return stub.fetch(c.req.raw);
+  }
+
+  // New session — create a DO with a fresh name.
+  const newSessionId = crypto.randomUUID();
+  const doId = c.env.MCP_SESSION_DO.idFromName(newSessionId);
+  const stub = c.env.MCP_SESSION_DO.get(doId);
+
+  // Forward the API key header if present.
+  return stub.fetch(c.req.raw);
+});
 
 // Secure headers for remaining routes
 app.use('*', secureHeaders());
