@@ -7,12 +7,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn(() => ({
-    as: vi.fn(() => ({
-      react: mocks.react,
-      unreact: mocks.unreact,
-    })),
-  })),
+  RelayCast: vi.fn(function () {
+    return {
+      as: vi.fn(() => ({
+        react: mocks.react,
+        unreact: mocks.unreact,
+      })),
+    };
+  }),
 }));
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ apiKey: 'rk_test', agentToken: 'at_test' })),

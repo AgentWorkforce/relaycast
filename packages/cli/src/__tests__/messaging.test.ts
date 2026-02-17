@@ -9,14 +9,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn(() => ({
-    as: vi.fn(() => ({
-      send: mocks.send,
-      dm: mocks.dm,
-      reply: mocks.reply,
-      dms: { createGroup: mocks.createGroup },
-    })),
-  })),
+  RelayCast: vi.fn(function () {
+    return {
+      as: vi.fn(() => ({
+        send: mocks.send,
+        dm: mocks.dm,
+        reply: mocks.reply,
+        dms: { createGroup: mocks.createGroup },
+      })),
+    };
+  }),
 }));
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ apiKey: 'rk_test', agentToken: 'at_test' })),
