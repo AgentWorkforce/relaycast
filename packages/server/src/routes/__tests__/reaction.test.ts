@@ -23,7 +23,7 @@ import * as reactionEngine from '../../engine/reaction.js';
 import {
   createMockBindings, mockDbForAgentAuth, mockDbForWorkspaceAuth,
   agentAuthHeaders, wsAuthHeaders,
-  TEST_AGENT_TOKEN, TEST_API_KEY,
+  TEST_AGENT_TOKEN, TEST_API_KEY, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -66,6 +66,11 @@ describe('POST /v1/messages/:id/reactions', () => {
     expect(body.data.emoji).toBe('eyes');
     expect(body.data.agent_name).toBe('TestBot');
     expect(reactionEngine.addReaction).toHaveBeenCalledWith(expect.anything(), 'ws_123', 'msg_001', 'agent_123', 'eyes');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'reaction.added',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ message_id: 'msg_001', emoji: 'eyes' }),
+    }));
   });
 
   it('is idempotent (same emoji twice returns 201)', async () => {
@@ -146,6 +151,11 @@ describe('DELETE /v1/messages/:id/reactions/:emoji', () => {
 
     expect(res.status).toBe(204);
     expect(reactionEngine.removeReaction).toHaveBeenCalledWith(expect.anything(), 'ws_123', 'msg_001', 'agent_123', 'eyes');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'reaction.removed',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ message_id: 'msg_001', emoji: 'eyes' }),
+    }));
   });
 
   it('returns 404 when message not found', async () => {

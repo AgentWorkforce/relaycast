@@ -142,12 +142,26 @@ app.get('/v1/ws', async (c) => {
     return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
   }
 
-  // TODO: validate short-lived token and extract workspaceId + agentId
-  // For now, expect token to encode workspace:agent
-  const [workspaceId, agentId] = token.split(':');
-  if (!workspaceId || !agentId) {
-    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
+  // Validate agent token (at_live_...) and extract workspaceId + agentId
+  if (!token.startsWith('at_live_')) {
+    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Agent token required (at_live_...)' } }, 401);
   }
+
+  const { hashToken } = await import('./middleware/auth.js');
+  const { getDb } = await import('./db/index.js');
+  const { agents } = await import('./db/schema.js');
+  const { eq } = await import('drizzle-orm');
+
+  const hash = hashToken(token);
+  const db = getDb(c.env.HYPERDRIVE.connectionString);
+  const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
+
+  if (!agent) {
+    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid agent token' } }, 401);
+  }
+
+  const workspaceId = agent.workspaceId;
+  const agentId = agent.id;
 
   const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
   const stub = c.env.AGENT_DO.get(doId);

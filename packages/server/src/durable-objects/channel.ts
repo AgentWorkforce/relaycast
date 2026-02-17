@@ -110,7 +110,32 @@ export class ChannelDO implements DurableObject {
     const body = (await request.json()) as {
       event: Record<string, unknown>;
       workspaceId: string;
+      channelId?: string;
+      members?: string[]; // Optional: caller can provide members for cache initialization
     };
+
+    // If members provided and cache is empty, initialize cache
+    // This handles cold-start scenarios where DO storage was cleared
+    const currentMembers = await this.getMembers();
+    if (body.members && body.members.length > 0 && currentMembers.length === 0) {
+      this.members = body.members;
+      await this.state.storage.put('members', body.members);
+      console.log(`[ChannelDO] Initialized members cache with ${body.members.length} members`);
+    }
+
+    // If still no members, try loading from Postgres as fallback
+    if ((await this.getMembers()).length === 0 && body.channelId && body.workspaceId) {
+      try {
+        const members = await this.loadMembersFromPostgres(body.workspaceId, body.channelId);
+        if (members.length > 0) {
+          this.members = members;
+          await this.state.storage.put('members', members);
+          console.log(`[ChannelDO] Loaded ${members.length} members from Postgres for channel ${body.channelId}`);
+        }
+      } catch (err) {
+        console.error(`[ChannelDO] Failed to load members from Postgres:`, err);
+      }
+    }
 
     const seq = await this.incrementChannelSeq();
     const payload = { ...body.event, channel_seq: seq };
@@ -118,6 +143,23 @@ export class ChannelDO implements DurableObject {
     await this.fanOut(body.workspaceId, payload);
 
     return Response.json({ ok: true, channel_seq: seq });
+  }
+
+  /**
+   * Load channel members from Postgres as a fallback when DO cache is empty.
+   */
+  private async loadMembersFromPostgres(workspaceId: string, channelId: string): Promise<string[]> {
+    const { getDb } = await import('../db/index.js');
+    const { sql } = await import('drizzle-orm');
+
+    const db = getDb(this.env.HYPERDRIVE.connectionString);
+    const result = await db.execute(sql`
+      SELECT agent_id FROM channel_members
+      WHERE channel_id = ${channelId}
+      AND left_at IS NULL
+    `);
+
+    return result.rows.map((row) => row.agent_id as string);
   }
 
   /* ------------------------------------------------------------------ */

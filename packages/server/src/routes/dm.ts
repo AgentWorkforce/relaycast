@@ -4,6 +4,9 @@ import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
+import { and, eq, isNull } from 'drizzle-orm';
+import { dmParticipants } from '../db/schema.js';
+import { fanoutToAgents } from './fanout.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -57,7 +60,29 @@ dmRoutes.post(
         c.header('Idempotency-Replayed', 'true');
       }
 
-      // TODO: DO fanout
+      if (!idempotent.replayed) {
+        try {
+          const rows = await db
+            .select({ agentId: dmParticipants.agentId })
+            .from(dmParticipants)
+            .where(
+              and(
+                eq(dmParticipants.conversationId, idempotent.data.conversation_id),
+                isNull(dmParticipants.leftAt),
+              ),
+            );
+          const eventData = { ...idempotent.data, from_name: agent!.name };
+          fanoutToAgents(c, rows.map((r) => r.agentId), 'dm.received', eventData).catch(() => {});
+        } catch {
+          // Ignore fanout failures
+        }
+
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'dm.received',
+          workspaceId: workspace.id,
+          data: { ...idempotent.data, from_name: agent!.name },
+        });
+      }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
     } catch (err: unknown) {

@@ -21,7 +21,7 @@ import { dmRoutes } from '../../routes/dm.js';
 import { getDb } from '../../db/index.js';
 import * as dmEngine from '../../engine/dm.js';
 import {
-  createMockBindings, mockDbForAgentAuth, agentAuthHeaders,
+  createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -63,6 +63,11 @@ describe('POST /v1/dm', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.conversation_id).toBe('conv_123');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dm.received',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ conversation_id: 'conv_123' }),
+    }));
   });
 
   it('returns 400 when to is missing', async () => {

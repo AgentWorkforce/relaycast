@@ -20,7 +20,7 @@ import { threadRoutes } from '../../routes/thread.js';
 import { getDb } from '../../db/index.js';
 import * as threadEngine from '../../engine/thread.js';
 import {
-  createMockBindings, mockDbForAgentAuth, agentAuthHeaders,
+  createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -63,6 +63,11 @@ describe('POST /v1/messages/:id/replies', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.thread_id).toBe('msg_001');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'thread.reply',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ thread_id: 'msg_001' }),
+    }));
   });
 
   it('returns 400 when text is missing', async () => {

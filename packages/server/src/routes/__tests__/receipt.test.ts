@@ -71,6 +71,11 @@ describe('POST /v1/messages/:id/read', () => {
       'msg_001',
       FAKE_AGENT.id,
     );
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'message.read',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ message_id: 'msg_001' }),
+    }));
   });
 
   it('is idempotent', async () => {

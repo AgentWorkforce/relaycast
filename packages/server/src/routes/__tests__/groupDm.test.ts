@@ -22,7 +22,7 @@ import { groupDmRoutes } from '../../routes/groupDm.js';
 import { getDb } from '../../db/index.js';
 import * as groupDmEngine from '../../engine/groupDm.js';
 import {
-  createMockBindings, mockDbForAgentAuth, agentAuthHeaders,
+  createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -109,6 +109,11 @@ describe('POST /v1/dm/:conversation_id/messages', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.text).toBe('Hello group');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'group_dm.received',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ conversation_id: 'conv_group_1' }),
+    }));
   });
 
   it('returns 400 when text missing', async () => {

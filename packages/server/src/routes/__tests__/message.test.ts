@@ -34,7 +34,7 @@ import { getDb } from '../../db/index.js';
 import * as messageEngine from '../../engine/message.js';
 import * as channelEngine from '../../engine/channel.js';
 import {
-  createMockBindings, mockDbForAgentAuth, agentAuthHeaders,
+  createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -90,6 +90,11 @@ describe('POST /v1/channels/:name/messages', () => {
     expect(body.ok).toBe(true);
     expect(body.data.text).toBe('Hello world');
     expect(body.data.id).toBe('msg_001');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'message.created',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ channel_name: 'general' }),
+    }));
   });
 
   it('returns 400 when text is missing', async () => {

@@ -1,4 +1,5 @@
 import type { CloudflareBindings } from '../env.js';
+import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 
 /**
  * Maximum number of recent events kept in DO storage for fast resync.
@@ -144,35 +145,126 @@ export class AgentDO implements DurableObject {
 
     const db = getDb(this.env.HYPERDRIVE.connectionString);
 
-    // Query messages in agent's channels created after `since`.
-    const rows = await db.execute(sql`
+    const events: Array<{ ts: number; payload: Record<string, unknown> }> = [];
+
+    const buildEvent = (
+      type: string,
+      data: Record<string, unknown>,
+      channelId?: string,
+    ): Record<string, unknown> => {
+      const event: WsEvent = {
+        type,
+        workspace_id: workspaceId,
+        channel_id: channelId,
+        data,
+        timestamp: new Date().toISOString(),
+      };
+      return transformForClient(event);
+    };
+
+    // Channel messages (including thread replies) after `since`.
+    const channelRows = await db.execute(sql`
       SELECT m.id, m.channel_id, m.agent_id, m.body, m.thread_id,
-             m.created_at, c.name AS channel_name
+             m.created_at, c.name AS channel_name, a.name AS agent_name
       FROM messages m
       JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.agent_id = ${agentId}
       JOIN channels c ON c.id = m.channel_id
+      LEFT JOIN agents a ON a.id = m.agent_id
       WHERE m.workspace_id = ${workspaceId}
         AND m.created_at > ${since}::timestamptz
       ORDER BY m.created_at ASC
       LIMIT 1000
     `);
 
+    for (const row of channelRows.rows) {
+      const data = {
+        id: row.id,
+        channel_id: row.channel_id,
+        channel_name: row.channel_name,
+        agent_id: row.agent_id,
+        from_name: row.agent_name,
+        text: row.body,
+        thread_id: row.thread_id,
+        created_at: row.created_at,
+      } as Record<string, unknown>;
+
+      const type = row.thread_id ? 'thread.reply' : 'message.created';
+      events.push({
+        ts: new Date(row.created_at as string).getTime(),
+        payload: { ...buildEvent(type, data, row.channel_id as string | undefined), replayed: true },
+      });
+    }
+
+    // DM + group DM messages after `since`.
+    const dmRows = await db.execute(sql`
+      SELECT m.id, m.channel_id, m.agent_id, m.body, m.created_at,
+             a.name AS agent_name, dc.id AS conversation_id, dc.dm_type
+      FROM dm_conversations dc
+      JOIN dm_participants dp ON dp.conversation_id = dc.id AND dp.agent_id = ${agentId} AND dp.left_at IS NULL
+      JOIN messages m ON m.channel_id = dc.channel_id
+      LEFT JOIN agents a ON a.id = m.agent_id
+      WHERE dc.workspace_id = ${workspaceId}
+        AND m.created_at > ${since}::timestamptz
+      ORDER BY m.created_at ASC
+      LIMIT 1000
+    `);
+
+    for (const row of dmRows.rows) {
+      const type = row.dm_type === 'group' ? 'group_dm.received' : 'dm.received';
+      const data = {
+        id: row.id,
+        conversation_id: row.conversation_id,
+        agent_id: row.agent_id,
+        from_agent_id: row.agent_id,
+        from_name: row.agent_name,
+        text: row.body,
+        created_at: row.created_at,
+      } as Record<string, unknown>;
+      events.push({
+        ts: new Date(row.created_at as string).getTime(),
+        payload: { ...buildEvent(type, data, row.channel_id as string | undefined), replayed: true },
+      });
+    }
+
+    // Reaction additions after `since` (scoped to channels or DMs the agent belongs to).
+    const reactionRows = await db.execute(sql`
+      SELECT r.message_id, r.emoji, r.created_at,
+             a.name AS agent_name,
+             m.channel_id, c.name AS channel_name, c.channel_type,
+             dc.dm_type, dc.id AS conversation_id
+      FROM reactions r
+      JOIN messages m ON m.id = r.message_id
+      JOIN channels c ON c.id = m.channel_id
+      LEFT JOIN dm_conversations dc ON dc.channel_id = m.channel_id
+      LEFT JOIN dm_participants dp ON dp.conversation_id = dc.id AND dp.agent_id = ${agentId} AND dp.left_at IS NULL
+      LEFT JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.agent_id = ${agentId}
+      LEFT JOIN agents a ON a.id = r.agent_id
+      WHERE m.workspace_id = ${workspaceId}
+        AND r.created_at > ${since}::timestamptz
+        AND (cm.agent_id IS NOT NULL OR dp.agent_id IS NOT NULL)
+      ORDER BY r.created_at ASC
+      LIMIT 1000
+    `);
+
+    for (const row of reactionRows.rows) {
+      const data = {
+        message_id: row.message_id,
+        emoji: row.emoji,
+        agent_name: row.agent_name,
+        channel_name: row.channel_name,
+      } as Record<string, unknown>;
+      events.push({
+        ts: new Date(row.created_at as string).getTime(),
+        payload: { ...buildEvent('reaction.added', data, row.channel_id as string | undefined), replayed: true },
+      });
+    }
+
+    // Send events in chronological order.
+    events.sort((a, b) => a.ts - b.ts);
     let count = 0;
-    for (const row of rows.rows) {
+    for (const event of events) {
       try {
-        ws.send(JSON.stringify({
-          type: 'message.created',
-          data: {
-            id: row.id,
-            channel_id: row.channel_id,
-            channel_name: row.channel_name,
-            agent_id: row.agent_id,
-            body: row.body,
-            thread_id: row.thread_id,
-            created_at: row.created_at,
-          },
-          replayed: true,
-        }));
+        ws.send(JSON.stringify(event.payload));
         count++;
       } catch {
         break;

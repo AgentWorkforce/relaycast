@@ -4,6 +4,7 @@ import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
 import { getS3Client } from '../engine/file.js';
+import { fanoutToWorkspace } from './fanout.js';
 
 export const fileRoutes = new Hono<AppEnv>();
 
@@ -75,7 +76,13 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
       }, 404);
     }
 
-    // TODO: DO fanout
+    const eventData = { ...result, agent_id: agent.id };
+    fanoutToWorkspace(c, 'file.uploaded', eventData).catch(() => {});
+    c.env.WEBHOOK_QUEUE.send({
+      type: 'file.uploaded',
+      workspaceId: workspace.id,
+      data: { ...result, uploaded_by_name: agent.name },
+    });
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {

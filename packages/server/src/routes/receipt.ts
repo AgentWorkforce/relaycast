@@ -3,6 +3,9 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
+import { and, eq } from 'drizzle-orm';
+import { messages } from '../db/schema.js';
+import { fanoutToChannel } from './fanout.js';
 
 export const receiptRoutes = new Hono<AppEnv>();
 
@@ -29,7 +32,24 @@ receiptRoutes.post(
         }, 404);
       }
 
-      // TODO: DO fanout
+      const eventData = { ...result, agent_name: agent!.name };
+      try {
+        const [row] = await db
+          .select({ channelId: messages.channelId })
+          .from(messages)
+          .where(and(eq(messages.id, c.req.param('id')), eq(messages.workspaceId, workspace.id)));
+        if (row?.channelId) {
+          fanoutToChannel(c, row.channelId, 'message.read', eventData).catch(() => {});
+        }
+      } catch {
+        // Ignore fanout failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'message.read',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
 
       return c.json({ ok: true, data: result }, 200);
     } catch (err: unknown) {

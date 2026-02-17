@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
+import { fanoutToChannel, updateChannelMembers } from './fanout.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -31,7 +32,22 @@ channelRoutes.post(
         agent?.id,
       );
 
-      // TODO: DO fanout
+      // Fire-and-forget fanout
+      const eventData = { ...result, channel_name: result.name };
+      fanoutToChannel(c, result.id, 'channel.created', eventData).catch(() => {});
+      // Update ChannelDO member cache (creator auto-joined)
+      try {
+        const members = await channelEngine.getMembers(db, workspace.id, result.name);
+        updateChannelMembers(c, result.id, members.map((m) => m.agent_id)).catch(() => {});
+      } catch {
+        // Ignore cache update failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'channel.created',
+        workspaceId: workspace.id,
+        data: { ...result, created_by_name: agent?.name },
+      });
 
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
@@ -129,7 +145,13 @@ channelRoutes.patch(
         }, 404);
       }
 
-      // TODO: DO fanout
+      const eventData = { ...updated, channel_name: updated.name };
+      fanoutToChannel(c, updated.id, 'channel.updated', eventData).catch(() => {});
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'channel.updated',
+        workspaceId: workspace.id,
+        data: { ...updated, channel_name: name },
+      });
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -178,7 +200,13 @@ channelRoutes.patch(
         }, 404);
       }
 
-      // TODO: DO fanout
+      const eventData = { ...updated, channel_name: name };
+      fanoutToChannel(c, updated.id, 'channel.updated', eventData).catch(() => {});
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'channel.updated',
+        workspaceId: workspace.id,
+        data: { ...updated, channel_name: name },
+      });
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -216,7 +244,16 @@ channelRoutes.delete(
         }, 404);
       }
 
-      // TODO: DO fanout
+      const channel = await channelEngine.getChannel(db, workspace.id, name);
+      if (channel) {
+        const eventData = { channel_name: name };
+        fanoutToChannel(c, channel.id, 'channel.archived', eventData).catch(() => {});
+      }
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'channel.archived',
+        workspaceId: workspace.id,
+        data: { channel_name: name },
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -247,7 +284,24 @@ channelRoutes.post(
         agent!.id,
       );
 
-      // TODO: DO fanout
+      // Update member cache before fanout so new member receives event
+      try {
+        const members = await channelEngine.getMembers(db, workspace.id, name);
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+          const eventData = { channel_name: name, agent_name: agent!.name };
+          fanoutToChannel(c, channel.id, 'member.joined', eventData).catch(() => {});
+        }
+      } catch {
+        // Ignore cache update failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'member.joined',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
@@ -278,7 +332,33 @@ channelRoutes.post(
         agent!.id,
       );
 
-      // TODO: DO fanout
+      // Fanout before removing member so leaver receives event
+      try {
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          const eventData = { channel_name: name, agent_name: agent!.name };
+          fanoutToChannel(c, channel.id, 'member.left', eventData).catch(() => {});
+        }
+      } catch {
+        // Ignore fanout failures
+      }
+
+      // Update member cache after leave
+      try {
+        const members = await channelEngine.getMembers(db, workspace.id, name);
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+        }
+      } catch {
+        // Ignore cache update failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'member.left',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -358,7 +438,24 @@ channelRoutes.post(
         agentName,
       );
 
-      // TODO: DO fanout
+      // Update member cache and fanout
+      try {
+        const members = await channelEngine.getMembers(db, workspace.id, name);
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+          const eventData = { channel_name: name, agent_name: agentName };
+          fanoutToChannel(c, channel.id, 'member.joined', eventData).catch(() => {});
+        }
+      } catch {
+        // Ignore cache update failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'member.joined',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
+      });
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {

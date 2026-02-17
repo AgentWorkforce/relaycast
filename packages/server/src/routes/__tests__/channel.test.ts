@@ -29,7 +29,7 @@ import * as channelEngine from '../../engine/channel.js';
 import {
   createMockBindings, mockDbForWorkspaceAuth, mockDbForAgentAuth,
   wsAuthHeaders, agentAuthHeaders,
-  TEST_API_KEY, TEST_AGENT_TOKEN,
+  TEST_API_KEY, TEST_AGENT_TOKEN, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -71,6 +71,11 @@ describe('POST /v1/channels', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.name).toBe('code-review');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'channel.created',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ name: 'code-review' }),
+    }));
   });
 
   it('returns 400 when name is missing', async () => {

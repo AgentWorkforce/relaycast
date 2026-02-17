@@ -3,6 +3,9 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
+import { and, eq } from 'drizzle-orm';
+import { channels, messages } from '../db/schema.js';
+import { fanoutToChannel } from './fanout.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -41,7 +44,15 @@ reactionRoutes.post(
       // Strip internal channel_id/channel_name before sending to client
       const { channel_id, channel_name, ...reactionData } = result;
 
-      // TODO: DO fanout
+      const eventData = { ...reactionData, channel_name, agent_name: agent!.name };
+      if (channel_id) {
+        fanoutToChannel(c, channel_id, 'reaction.added', eventData).catch(() => {});
+      }
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'reaction.added',
+        workspaceId: workspace.id,
+        data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name },
+      });
 
       return c.json({ ok: true, data: reactionData }, 201);
     } catch (err: unknown) {
@@ -78,7 +89,30 @@ reactionRoutes.delete(
         }, 404);
       }
 
-      // TODO: DO fanout
+      const eventData = {
+        message_id: c.req.param('id'),
+        emoji: c.req.param('emoji'),
+        agent_id: agent!.id,
+        agent_name: agent!.name,
+      };
+      try {
+        const [row] = await db
+          .select({ channelId: messages.channelId, channelName: channels.name })
+          .from(messages)
+          .innerJoin(channels, eq(messages.channelId, channels.id))
+          .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
+        if (row?.channelId) {
+          fanoutToChannel(c, row.channelId, 'reaction.removed', { ...eventData, channel_name: row.channelName }).catch(() => {});
+        }
+      } catch {
+        // Ignore fanout failures
+      }
+
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'reaction.removed',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {

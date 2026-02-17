@@ -143,15 +143,25 @@ export function mockDbForAgentAuth() {
  * Standard mock bindings for Cloudflare Worker env.
  */
 export function createMockBindings() {
+  const doStub = {
+    fetch: vi.fn().mockResolvedValue(new Response(null, { status: 200 })),
+  };
+  const presenceStub = {
+    fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ agents: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })),
+  };
+
   return {
     HYPERDRIVE: { connectionString: 'postgresql://test:test@localhost/test' },
     FILES_BUCKET: {} as R2Bucket,
     WEBHOOK_QUEUE: { send: vi.fn() } as unknown as Queue,
     NOTIFICATION_QUEUE: { send: vi.fn() } as unknown as Queue,
-    CHANNEL_DO: { idFromName: vi.fn(), get: vi.fn() } as unknown as DurableObjectNamespace,
-    AGENT_DO: { idFromName: vi.fn(), get: vi.fn() } as unknown as DurableObjectNamespace,
-    PRESENCE_DO: { idFromName: vi.fn(), get: vi.fn() } as unknown as DurableObjectNamespace,
-    MCP_SESSION_DO: { idFromName: vi.fn(), get: vi.fn() } as unknown as DurableObjectNamespace,
+    CHANNEL_DO: { idFromName: vi.fn(() => 'channel-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
+    AGENT_DO: { idFromName: vi.fn(() => 'agent-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
+    PRESENCE_DO: { idFromName: vi.fn(() => 'presence-do'), get: vi.fn(() => presenceStub) } as unknown as DurableObjectNamespace,
+    MCP_SESSION_DO: { idFromName: vi.fn(() => 'mcp-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     KV: createMockKV(),
     STRIPE_SECRET_KEY: 'sk_test_fake',
     STRIPE_WEBHOOK_SECRET: 'whsec_test_fake',

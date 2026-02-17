@@ -29,6 +29,7 @@ import {
   agentAuthHeaders,
   wsAuthHeaders,
   createMockBindings,
+  FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
@@ -136,6 +137,11 @@ describe('POST /v1/files/:id/complete', () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.data.download_url).toBe('https://minio.local/presigned-get');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'file.uploaded',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ id: 'file_001' }),
+    }));
   });
 
   it('returns 404 when file not found', async () => {
