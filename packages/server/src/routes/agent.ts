@@ -2,6 +2,8 @@ import { Router, Response } from 'express';
 import { requireWorkspaceKey, type AuthenticatedRequest } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
+import { publishEvent } from '../ws/pubsub.js';
+import { deliverEvent } from '../engine/eventDelivery.js';
 
 export const agentRouter = Router();
 
@@ -202,6 +204,23 @@ agentRouter.post(
         metadata,
       });
 
+      // Emit WS event so connected brokers can spawn local processes
+      const spawnEventData = {
+        agent_id: result.id,
+        agent_name: result.name,
+        cli: result.cli,
+        task: result.task,
+        channel: result.channel,
+        already_existed: result.already_existed,
+      };
+      publishEvent({
+        type: 'agent.spawn_requested',
+        workspace_id: req.workspace!.id,
+        data: spawnEventData,
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'agent.spawn_requested', spawnEventData).catch(() => {});
+
       res.status(result.already_existed ? 200 : 201).json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
@@ -243,6 +262,20 @@ agentRouter.post(
         });
         return;
       }
+
+      // Emit WS event so connected brokers can release local processes
+      const releaseEventData = {
+        agent_name: result.name,
+        reason: result.reason ?? null,
+        deleted: result.deleted,
+      };
+      publishEvent({
+        type: 'agent.release_requested',
+        workspace_id: req.workspace!.id,
+        data: releaseEventData,
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+      deliverEvent(req.workspace!.id, 'agent.release_requested', releaseEventData).catch(() => {});
 
       res.json({ ok: true, data: result });
     } catch (err: unknown) {
