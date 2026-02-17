@@ -33,7 +33,7 @@ describe('BillingClient', () => {
     await billing.subscribe({ plan: 'pro', payment_method: 'pm_test' });
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.agentrelay.dev/v1/billing/subscribe');
+    expect(url).toBe('https://api.relaycast.dev/v1/billing/subscribe');
     expect(init.method).toBe('POST');
     expect(init.body).toBe(
       JSON.stringify({ plan: 'pro', payment_method: 'pm_test' }),
@@ -48,7 +48,7 @@ describe('BillingClient', () => {
 
     expect(res).toEqual({ plan: 'pro', status: 'active' });
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.agentrelay.dev/v1/billing/subscription');
+    expect(url).toBe('https://api.relaycast.dev/v1/billing/subscription');
     expect(init.method).toBe('GET');
   });
 
@@ -59,7 +59,7 @@ describe('BillingClient', () => {
     await billing.usage();
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.agentrelay.dev/v1/billing/usage');
+    expect(url).toBe('https://api.relaycast.dev/v1/billing/usage');
   });
 
   it('usage() passes period param', async () => {
@@ -68,7 +68,7 @@ describe('BillingClient', () => {
 
     const [url] = mockFetch.mock.calls[0]!;
     expect(url).toBe(
-      'https://api.agentrelay.dev/v1/billing/usage?period=previous',
+      'https://api.relaycast.dev/v1/billing/usage?period=previous',
     );
   });
 
@@ -77,7 +77,7 @@ describe('BillingClient', () => {
     await billing.invoices();
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.agentrelay.dev/v1/billing/invoices');
+    expect(url).toBe('https://api.relaycast.dev/v1/billing/invoices');
   });
 
   it('invoices() passes limit param', async () => {
@@ -86,7 +86,7 @@ describe('BillingClient', () => {
 
     const [url] = mockFetch.mock.calls[0]!;
     expect(url).toBe(
-      'https://api.agentrelay.dev/v1/billing/invoices?limit=5',
+      'https://api.relaycast.dev/v1/billing/invoices?limit=5',
     );
   });
 
@@ -98,7 +98,7 @@ describe('BillingClient', () => {
 
     expect(res).toEqual({ url: 'https://billing.stripe.com/...' });
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.agentrelay.dev/v1/billing/portal');
+    expect(url).toBe('https://api.relaycast.dev/v1/billing/portal');
     expect(init.method).toBe('POST');
   });
 });

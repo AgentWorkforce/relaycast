@@ -30,6 +30,10 @@ import type {
   MessageListQuery,
   MessageWithMeta,
   ReactionGroup,
+  SpawnAgentRequest,
+  SpawnAgentResponse,
+  ReleaseAgentRequest,
+  ReleaseAgentResponse,
 } from '@relaycast/types';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
@@ -55,7 +59,7 @@ export class RelayCast {
     name: string,
     baseUrl?: string,
   ): Promise<CreateWorkspaceResponse> {
-    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.agentrelay.dev');
+    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.relaycast.dev');
     const res = await fetch(url.toString(), {
       method: 'POST',
       headers: {
@@ -186,6 +190,10 @@ export class RelayCast {
         throw err;
       }
     },
+    spawn: (data: SpawnAgentRequest): Promise<SpawnAgentResponse> =>
+      this.client.post('/v1/agents/spawn', data),
+    release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
+      this.client.post('/v1/agents/release', data),
   };
 
   webhooks = {
