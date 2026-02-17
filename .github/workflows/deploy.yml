@@ -139,8 +139,8 @@ jobs:
         run: |
           for attempt in 1 2 3 4 5; do
             echo "=== Attempt $attempt of 5 ==="
-            OUTPUT=$(npx @smithery/cli@latest mcp publish \
-              https://api.relaycast.dev/mcp \
+            OUTPUT=$(npx @smithery/cli@3 publish \
+              -u https://api.relaycast.dev/mcp \
               -n "relaycast/relay" \
               -k "$SMITHERY_API_KEY" \
               --config-schema packages/mcp/smithery-config-schema.json 2>&1) || true
