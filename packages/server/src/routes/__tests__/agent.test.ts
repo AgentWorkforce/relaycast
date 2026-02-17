@@ -7,6 +7,8 @@ vi.mock('../../engine/agent.js', () => ({
   getAgentByName: vi.fn(),
   updateAgent: vi.fn(),
   deleteAgent: vi.fn(),
+  spawnAgent: vi.fn(),
+  releaseAgent: vi.fn(),
 }));
 
 vi.mock('../../engine/message.js', () => ({
@@ -330,5 +332,173 @@ describe('DELETE /v1/agents/:name', () => {
       .delete('/v1/agents/Unknown')
       .set('Authorization', `Bearer ${apiKey}`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /v1/agents/spawn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbForAuth();
+  });
+
+  it('spawns a new agent and returns 201', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_tokenvalue123',
+      cli: 'claude',
+      task: 'Review the PR',
+      channel: 'dev-team',
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: false,
+    });
+
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', cli: 'claude', task: 'Review the PR', channel: 'dev-team' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.name).toBe('worker-1');
+    expect(res.body.data.cli).toBe('claude');
+    expect(res.body.data.task).toBe('Review the PR');
+    expect(res.body.data.token).toContain('at_live_');
+    expect(res.body.data.already_existed).toBe(false);
+  });
+
+  it('reactivates existing agent and returns 200', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_newtokenvalue',
+      cli: 'codex',
+      task: 'New task',
+      channel: null,
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: true,
+    });
+
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', cli: 'codex', task: 'New task' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.already_existed).toBe(true);
+  });
+
+  it('returns 400 when name is missing', async () => {
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ cli: 'claude', task: 'Do something' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('invalid_request');
+    expect(res.body.error.message).toBe('name is required');
+  });
+
+  it('returns 400 when cli is missing', async () => {
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', task: 'Do something' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('invalid_request');
+    expect(res.body.error.message).toBe('cli is required');
+  });
+
+  it('returns 400 when cli is invalid', async () => {
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', cli: 'invalid-cli', task: 'Do something' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('invalid_request');
+    expect(res.body.error.message).toContain('cli must be one of');
+  });
+
+  it('returns 400 when task is missing', async () => {
+    const res = await request(app)
+      .post('/v1/agents/spawn')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', cli: 'claude' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('invalid_request');
+    expect(res.body.error.message).toBe('task is required');
+  });
+});
+
+describe('POST /v1/agents/release', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbForAuth();
+  });
+
+  it('releases agent and returns 200', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue({
+      name: 'worker-1',
+      released: true,
+      deleted: false,
+      reason: 'task completed',
+    });
+
+    const res = await request(app)
+      .post('/v1/agents/release')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', reason: 'task completed' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.name).toBe('worker-1');
+    expect(res.body.data.released).toBe(true);
+    expect(res.body.data.deleted).toBe(false);
+    expect(res.body.data.reason).toBe('task completed');
+  });
+
+  it('releases and deletes agent when delete_agent is true', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue({
+      name: 'worker-1',
+      released: true,
+      deleted: true,
+      reason: null,
+    });
+
+    const res = await request(app)
+      .post('/v1/agents/release')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'worker-1', delete_agent: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.deleted).toBe(true);
+  });
+
+  it('returns 400 when name is missing', async () => {
+    const res = await request(app)
+      .post('/v1/agents/release')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('invalid_request');
+    expect(res.body.error.message).toBe('name is required');
+  });
+
+  it('returns 404 for unknown agent', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue(null);
+
+    const res = await request(app)
+      .post('/v1/agents/release')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ name: 'unknown-agent' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('agent_not_found');
   });
 });

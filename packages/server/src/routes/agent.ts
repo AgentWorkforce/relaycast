@@ -150,3 +150,107 @@ agentRouter.delete(
     }
   },
 );
+
+// POST /v1/agents/spawn - spawn agent (registers if new, rotates token if exists)
+agentRouter.post(
+  '/agents/spawn',
+  requireWorkspaceKey,
+  rateLimit,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { name, cli, task, channel, persona, metadata } = req.body;
+
+      if (!name || typeof name !== 'string') {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'name is required' },
+        });
+        return;
+      }
+
+      if (!cli || typeof cli !== 'string') {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'cli is required' },
+        });
+        return;
+      }
+
+      const validClis = ['claude', 'codex', 'gemini', 'aider', 'goose'];
+      if (!validClis.includes(cli)) {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: `cli must be one of: ${validClis.join(', ')}` },
+        });
+        return;
+      }
+
+      if (!task || typeof task !== 'string') {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'task is required' },
+        });
+        return;
+      }
+
+      const result = await agentEngine.spawnAgent(req.workspace!.id, {
+        name,
+        cli,
+        task,
+        channel,
+        persona,
+        metadata,
+      });
+
+      res.status(result.already_existed ? 200 : 201).json({ ok: true, data: result });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      res.status(error.status || 500).json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      });
+    }
+  },
+);
+
+// POST /v1/agents/release - release (mark offline) or delete an agent
+agentRouter.post(
+  '/agents/release',
+  requireWorkspaceKey,
+  rateLimit,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { name, reason, delete_agent } = req.body;
+
+      if (!name || typeof name !== 'string') {
+        res.status(400).json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'name is required' },
+        });
+        return;
+      }
+
+      const result = await agentEngine.releaseAgent(req.workspace!.id, {
+        name,
+        reason,
+        delete_agent,
+      });
+
+      if (!result) {
+        res.status(404).json({
+          ok: false,
+          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
+        });
+        return;
+      }
+
+      res.json({ ok: true, data: result });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      res.status(error.status || 500).json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      });
+    }
+  },
+);
