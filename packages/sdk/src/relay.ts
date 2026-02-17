@@ -59,7 +59,7 @@ export class RelayCast {
     name: string,
     baseUrl?: string,
   ): Promise<CreateWorkspaceResponse> {
-    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.agentrelay.dev');
+    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.relaycast.dev');
     const res = await fetch(url.toString(), {
       method: 'POST',
       headers: {
