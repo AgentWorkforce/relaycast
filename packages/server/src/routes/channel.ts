@@ -1,376 +1,372 @@
-import { Router, Response } from 'express';
-import {
-  requireAuth,
-  requireAgentToken,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
 
-export const channelRouter = Router();
-
-function paramName(req: AuthenticatedRequest): string {
-  return req.params.name as string;
-}
+export const channelRoutes = new Hono<AppEnv>();
 
 // POST /v1/channels - create channel
-channelRouter.post(
+channelRoutes.post(
   '/channels',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { name, topic } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { name, topic } = await c.req.json();
       if (!name || typeof name !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
-        });
-        return;
+        }, 400);
       }
 
       const result = await channelEngine.createChannel(
-        req.workspace!.id,
+        db,
+        workspace.id,
         { name, topic },
-        req.agent?.id,
+        agent?.id,
       );
-      res.status(201).json({ ok: true, data: result });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result, channel_name: result.name };
-      publishEvent({ type: 'channel.created', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'channel.created', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        const status = error.status || 500;
-        res.status(status).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      const status = error.status || 500;
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, status as any);
     }
   },
 );
 
 // GET /v1/channels - list channels
-channelRouter.get(
+channelRoutes.get(
   '/channels',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const includeArchived = req.query.include_archived === 'true';
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const includeArchived = c.req.query('include_archived') === 'true';
       const channels = await channelEngine.listChannels(
-        req.workspace!.id,
+        db,
+        workspace.id,
         includeArchived,
       );
-      res.json({ ok: true, data: channels });
+      return c.json({ ok: true, data: channels });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/channels/:name - get channel with members
-channelRouter.get(
+channelRoutes.get(
   '/channels/:name',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const channel = await channelEngine.getChannel(
-        req.workspace!.id,
-        paramName(req),
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const channel = await channelEngine.getChannel(db, workspace.id, name);
       if (!channel) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: {
             code: 'channel_not_found',
-            message: `Channel "${paramName(req)}" not found`,
+            message: `Channel "${name}" not found`,
           },
-        });
-        return;
+        }, 404);
       }
-      res.json({ ok: true, data: channel });
+      return c.json({ ok: true, data: channel });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // PATCH /v1/channels/:name - update channel
-channelRouter.patch(
+channelRoutes.patch(
   '/channels/:name',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const body = await c.req.json();
       const updated = await channelEngine.updateChannel(
-        req.workspace!.id,
-        paramName(req),
-        req.body,
+        db,
+        workspace.id,
+        name,
+        body,
       );
       if (!updated) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: {
             code: 'channel_not_found',
-            message: `Channel "${paramName(req)}" not found`,
+            message: `Channel "${name}" not found`,
           },
-        });
-        return;
+        }, 404);
       }
-      res.json({ ok: true, data: updated });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...updated, channel_name: updated.name };
-      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // PATCH /v1/channels/:name/topic - set channel topic
 // Alias for PATCH /v1/channels/:name with { topic }, kept for backwards compatibility.
-channelRouter.patch(
+channelRoutes.patch(
   '/channels/:name/topic',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { topic } = req.body ?? {};
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const body = await c.req.json();
+      const { topic } = body ?? {};
       if (topic === undefined || typeof topic !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'topic is required' },
-        });
-        return;
+        }, 400);
       }
 
       const updated = await channelEngine.updateChannel(
-        req.workspace!.id,
-        paramName(req),
+        db,
+        workspace.id,
+        name,
         { topic },
       );
       if (!updated) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: {
             code: 'channel_not_found',
-            message: `Channel "${paramName(req)}" not found`,
+            message: `Channel "${name}" not found`,
           },
-        });
-        return;
+        }, 404);
       }
-      res.json({ ok: true, data: updated });
 
-      // Fire-and-forget event publishing
-      const eventData = { ...updated, channel_name: updated.name };
-      publishEvent({ type: 'channel.updated', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'channel.updated', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // DELETE /v1/channels/:name - archive channel (soft delete)
-channelRouter.delete(
+channelRoutes.delete(
   '/channels/:name',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
       const archived = await channelEngine.archiveChannel(
-        req.workspace!.id,
-        paramName(req),
+        db,
+        workspace.id,
+        name,
       );
       if (!archived) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: {
             code: 'channel_not_found',
-            message: `Channel "${paramName(req)}" not found`,
+            message: `Channel "${name}" not found`,
           },
-        });
-        return;
+        }, 404);
       }
-      res.status(204).send();
 
-      // Fire-and-forget event publishing
-      const eventData = { channel_name: paramName(req) };
-      publishEvent({ type: 'channel.archived', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'channel.archived', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.body(null, 204);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/channels/:name/join - agent joins channel (agent token required)
-channelRouter.post(
+channelRoutes.post(
   '/channels/:name/join',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const name = c.req.param('name');
       const result = await channelEngine.joinChannel(
-        req.workspace!.id,
-        paramName(req),
-        req.agent!.id,
+        db,
+        workspace.id,
+        name,
+        agent!.id,
       );
-      res.json({ ok: true, data: result });
 
-      // Fire-and-forget event publishing
-      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
-      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/channels/:name/leave - agent leaves channel (agent token required)
-channelRouter.post(
+channelRoutes.post(
   '/channels/:name/leave',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const name = c.req.param('name');
       await channelEngine.leaveChannel(
-        req.workspace!.id,
-        paramName(req),
-        req.agent!.id,
+        db,
+        workspace.id,
+        name,
+        agent!.id,
       );
-      res.status(204).send();
 
-      // Fire-and-forget event publishing
-      const eventData = { channel_name: paramName(req), agent_name: req.agent!.name };
-      publishEvent({ type: 'member.left', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'member.left', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.body(null, 204);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/channels/:name/members - list channel members
-channelRouter.get(
+channelRoutes.get(
   '/channels/:name/members',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
       const members = await channelEngine.getMembers(
-        req.workspace!.id,
-        paramName(req),
+        db,
+        workspace.id,
+        name,
       );
-      res.json({ ok: true, data: members });
+      return c.json({ ok: true, data: members });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/channels/:name/invite - invite agent to channel
-channelRouter.post(
+channelRoutes.post(
   '/channels/:name/invite',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const agent =
-        req.body?.agent ?? req.body?.agent_name ?? req.body?.agentName;
-      if (!agent || typeof agent !== 'string') {
-        res.status(400).json({
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const name = c.req.param('name');
+      const body = await c.req.json();
+      const agentName =
+        body?.agent ?? body?.agent_name ?? body?.agentName;
+      if (!agentName || typeof agentName !== 'string') {
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'agent is required' },
-        });
-        return;
+        }, 400);
       }
 
       // For invite, we need to know who's doing the inviting
-      const inviterAgentId = req.agent?.id;
+      const inviterAgentId = agent?.id;
       if (!inviterAgentId) {
-        res.status(403).json({
+        return c.json({
           ok: false,
           error: {
             code: 'agent_token_required',
             message: 'Agent token required to invite others',
           },
-        });
-        return;
+        }, 403);
       }
 
       const result = await channelEngine.inviteAgent(
-        req.workspace!.id,
-        paramName(req),
+        db,
+        workspace.id,
+        name,
         inviterAgentId,
-        agent,
+        agentName,
       );
-      res.json({ ok: true, data: result });
 
-      // Fire-and-forget event publishing — invited agent joins the channel
-      const eventData = { channel_name: paramName(req), agent_name: agent };
-      publishEvent({ type: 'member.joined', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'member.joined', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );

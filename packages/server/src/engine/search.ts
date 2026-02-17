@@ -1,9 +1,12 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, agents, channels } from '../db/schema.js';
 import { buildTsquery } from './searchQuery.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function searchMessages(
+  db: Db,
   workspaceId: string,
   opts: {
     q: string;
@@ -14,7 +17,6 @@ export async function searchMessages(
     after?: string;
   },
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
 
   // Build a conservative tsquery from user input.

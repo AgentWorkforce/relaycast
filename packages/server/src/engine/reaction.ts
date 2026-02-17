@@ -1,16 +1,17 @@
 import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { reactions, messages, agents, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function addReaction(
+  db: Db,
   workspaceId: string,
   messageId: string,
   agentId: string,
   emoji: string,
 ) {
-  const db = getDb();
-
   // Verify message exists and belongs to workspace
   const [msg] = await db
     .select()
@@ -67,13 +68,12 @@ export async function addReaction(
 }
 
 export async function removeReaction(
+  db: Db,
   workspaceId: string,
   messageId: string,
   agentId: string,
   emoji: string,
 ) {
-  const db = getDb();
-
   const [msg] = await db
     .select()
     .from(messages)
@@ -92,9 +92,7 @@ export async function removeReaction(
   return true;
 }
 
-export async function getReactions(workspaceId: string, messageId: string) {
-  const db = getDb();
-
+export async function getReactions(db: Db, workspaceId: string, messageId: string) {
   const [msg] = await db
     .select()
     .from(messages)

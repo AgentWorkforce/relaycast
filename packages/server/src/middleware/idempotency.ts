@@ -1,6 +1,4 @@
-import type { Request } from 'express';
 import { createHash } from 'node:crypto';
-import { getRedis } from '../redis/index.js';
 
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 const IDEMPOTENCY_LOCK_TTL_SECONDS = 30;
@@ -26,6 +24,7 @@ interface RunIdempotentOptions<T> {
   status?: number;
   fingerprint?: string;
   ttlSeconds?: number;
+  kv?: KVNamespace;
   operation: () => Promise<T>;
 }
 
@@ -35,13 +34,12 @@ function buildKey(workspaceId: string, actorId: string, scope: string, key: stri
   return `idem:v1:${workspaceId}:${actorId}:${scopeDigest}:${digest}`;
 }
 
-export function parseIdempotencyKey(req: Request): { key?: string; error?: string } {
-  const raw = req.header('Idempotency-Key');
-  if (raw === undefined) {
+export function parseIdempotencyKey(headerValue: string | undefined): { key?: string; error?: string } {
+  if (headerValue === undefined) {
     return {};
   }
 
-  const key = raw.trim();
+  const key = headerValue.trim();
   if (!key) {
     return { error: 'Idempotency-Key cannot be empty' };
   }
@@ -74,6 +72,7 @@ export async function runIdempotent<T>(
     operation,
     status = 201,
     ttlSeconds = IDEMPOTENCY_TTL_SECONDS,
+    kv,
   } = options;
 
   if (!key) {
@@ -81,32 +80,17 @@ export async function runIdempotent<T>(
     return { status, data, replayed: false };
   }
 
-  let redis: ReturnType<typeof getRedis> | null = null;
-  let redisKey: string | null = null;
+  let kvStore: KVNamespace | null = kv ?? null;
+  let kvKey: string | null = null;
   let lockKey: string | null = null;
   let lockAcquired = false;
 
-  try {
-    redis = getRedis();
-    // In tests/mocks this can be a partial object. If core methods don't exist,
-    // degrade gracefully to non-idempotent behavior.
-    if (
-      typeof (redis as any).get !== 'function'
-      || typeof (redis as any).set !== 'function'
-      || typeof (redis as any).del !== 'function'
-    ) {
-      redis = null;
-    }
-  } catch {
-    redis = null;
-  }
-
-  if (redis) {
-    redisKey = buildKey(workspaceId, actorId, scope, key);
-    lockKey = `${redisKey}:lock`;
+  if (kvStore) {
+    kvKey = buildKey(workspaceId, actorId, scope, key);
+    lockKey = `${kvKey}:lock`;
 
     try {
-      const existingRaw = await redis.get(redisKey);
+      const existingRaw = await kvStore.get(kvKey);
       if (existingRaw) {
         const parsed = JSON.parse(existingRaw) as StoredIdempotencyRecord<T>;
         if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
@@ -122,16 +106,12 @@ export async function runIdempotent<T>(
         };
       }
 
-      const lockResult = await redis.set(
-        lockKey,
-        '1',
-        'EX',
-        IDEMPOTENCY_LOCK_TTL_SECONDS,
-        'NX',
-      );
-
-      if (!lockResult) {
-        const concurrentRaw = await redis.get(redisKey);
+      // KV doesn't support atomic NX-style set, so we do a read-then-write for the lock.
+      // This is best-effort; in rare race conditions, duplicate operations may run.
+      const existingLock = await kvStore.get(lockKey);
+      if (existingLock) {
+        // Another request may be processing. Check if result is now available.
+        const concurrentRaw = await kvStore.get(kvKey);
         if (concurrentRaw) {
           const parsed = JSON.parse(concurrentRaw) as StoredIdempotencyRecord<T>;
           if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
@@ -152,12 +132,14 @@ export async function runIdempotent<T>(
         throw err;
       }
 
+      // Acquire lock
+      await kvStore.put(lockKey, '1', { expirationTtl: IDEMPOTENCY_LOCK_TTL_SECONDS });
       lockAcquired = true;
 
       // Re-check record after acquiring lock to handle race with completed request
-      const recheckRaw = await redis.get(redisKey);
+      const recheckRaw = await kvStore.get(kvKey);
       if (recheckRaw) {
-        await redis.del(lockKey).catch(() => {});
+        await kvStore.delete(lockKey);
         const parsed = JSON.parse(recheckRaw) as StoredIdempotencyRecord<T>;
         if (fingerprint && parsed.fingerprint && parsed.fingerprint !== fingerprint) {
           const err = new Error('Idempotency-Key was reused with a different request payload');
@@ -174,9 +156,9 @@ export async function runIdempotent<T>(
       if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as any).code)) {
         throw err;
       }
-      // Redis unavailable or decode failure: proceed without idempotency.
-      redis = null;
-      redisKey = null;
+      // KV unavailable or decode failure: proceed without idempotency.
+      kvStore = null;
+      kvKey = null;
       lockKey = null;
       lockAcquired = false;
     }
@@ -185,27 +167,27 @@ export async function runIdempotent<T>(
   try {
     const data = await operation();
 
-    if (redis && redisKey && lockAcquired) {
+    if (kvStore && kvKey && lockAcquired) {
       const record: StoredIdempotencyRecord<T> = {
         status,
         data,
         fingerprint,
       };
       try {
-        await redis.set(redisKey, JSON.stringify(record), 'EX', ttlSeconds);
+        await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });
       } catch {
-        // Redis failure during record storage — proceed without idempotency record.
+        // KV failure during record storage — proceed without idempotency record.
       } finally {
         if (lockKey) {
-          await redis.del(lockKey).catch(() => {});
+          try { await kvStore.delete(lockKey); } catch { /* ignore */ }
         }
       }
     }
 
     return { status, data, replayed: false };
   } catch (err) {
-    if (redis && lockKey && lockAcquired) {
-      await redis.del(lockKey).catch(() => {});
+    if (kvStore && lockKey && lockAcquired) {
+      try { await kvStore.delete(lockKey); } catch { /* ignore */ }
     }
     throw err;
   }

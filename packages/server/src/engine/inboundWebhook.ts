@@ -1,15 +1,17 @@
 import { eq, and } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { webhooks, channels, messages } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function createWebhook(
+  db: Db,
   workspaceId: string,
   channelId: string,
   data: { name: string },
   createdBy?: string,
 ) {
-  const db = getDb();
   const id = `wh_${generateId()}`;
 
   const [webhook] = await db
@@ -39,8 +41,7 @@ export async function createWebhook(
   };
 }
 
-export async function listWebhooks(workspaceId: string) {
-  const db = getDb();
+export async function listWebhooks(db: Db, workspaceId: string) {
   const rows = await db
     .select({
       id: webhooks.id,
@@ -65,8 +66,7 @@ export async function listWebhooks(workspaceId: string) {
   }));
 }
 
-export async function getWebhook(workspaceId: string, webhookId: string) {
-  const db = getDb();
+export async function getWebhook(db: Db, workspaceId: string, webhookId: string) {
   const [row] = await db
     .select({
       id: webhooks.id,
@@ -93,8 +93,7 @@ export async function getWebhook(workspaceId: string, webhookId: string) {
   };
 }
 
-export async function deleteWebhook(workspaceId: string, webhookId: string) {
-  const db = getDb();
+export async function deleteWebhook(db: Db, workspaceId: string, webhookId: string) {
   const result = await db
     .delete(webhooks)
     .where(and(eq(webhooks.id, webhookId), eq(webhooks.workspaceId, workspaceId)))
@@ -104,11 +103,10 @@ export async function deleteWebhook(workspaceId: string, webhookId: string) {
 }
 
 export async function triggerWebhook(
+  db: Db,
   webhookId: string,
   data: { text?: string; source?: string; payload?: Record<string, unknown> },
 ) {
-  const db = getDb();
-
   // Look up webhook
   const [webhook] = await db
     .select()

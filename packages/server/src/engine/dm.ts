@@ -1,5 +1,5 @@
 import { eq, and, sql, lt, gt, isNull } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import {
   messages,
   channels,
@@ -9,13 +9,14 @@ import {
 } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function sendDm(
+  db: Db,
   workspaceId: string,
   fromAgentId: string,
   data: { to: string; text: string },
 ) {
-  const db = getDb();
-
   // Resolve the target agent by name
   const [toAgent] = await db
     .select()
@@ -124,9 +125,7 @@ export async function sendDm(
   };
 }
 
-export async function listConversations(workspaceId: string, agentId: string) {
-  const db = getDb();
-
+export async function listConversations(db: Db, workspaceId: string, agentId: string) {
   // Get all conversations this agent is a participant in
   const participantRows = await db
     .select({ conversationId: dmParticipants.conversationId })
@@ -192,12 +191,12 @@ export async function listConversations(workspaceId: string, agentId: string) {
 }
 
 export async function getDmMessages(
+  db: Db,
   workspaceId: string,
   conversationId: string,
   agentId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   // Verify agent is a participant
@@ -257,4 +256,3 @@ export async function getDmMessages(
     created_at: r.createdAt.toISOString(),
   }));
 }
-

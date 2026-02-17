@@ -1,5 +1,8 @@
 import { createHmac } from 'node:crypto';
+import type { getDb } from '../db/index.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export function signPayload(payload: string, secret: string): string {
   return createHmac('sha256', secret).update(payload).digest('hex');
@@ -66,13 +69,14 @@ async function attemptDelivery(
 }
 
 export async function deliverEvent(
+  db: Db,
   workspaceId: string,
   eventType: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   let subscriptions: DeliveryTarget[];
   try {
-    const rows = await getActiveSubscriptions(workspaceId, eventType);
+    const rows = await getActiveSubscriptions(db, workspaceId, eventType);
     subscriptions = rows.map((r) => ({
       url: r.url,
       secret: r.secret,

@@ -1,81 +1,63 @@
-import { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
+import { createMiddleware } from 'hono/factory';
 import { eq } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
 import { workspaces, agents } from '../db/schema.js';
 import { touchLastSeen } from '../engine/agent.js';
+import type { AppEnv } from '../env.js';
 
 const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
-
-export interface AuthenticatedRequest extends Request {
-  workspace?: typeof workspaces.$inferSelect;
-  agent?: typeof agents.$inferSelect;
-}
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function extractToken(req: Request): string | null {
-  const authHeader = req.headers.authorization;
+function extractToken(authHeader: string | undefined): string | null {
   if (!authHeader?.startsWith('Bearer ')) return null;
   return authHeader.slice(7);
 }
 
-export async function requireWorkspaceKey(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const token = extractToken(req);
+export const requireWorkspaceKey = createMiddleware<AppEnv>(async (c, next) => {
+  const token = extractToken(c.req.header('Authorization'));
   if (!token) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' } },
+      401,
+    );
   }
 
   if (!token.startsWith('rk_live_')) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Workspace key required (rk_live_...)' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Workspace key required (rk_live_...)' } },
+      401,
+    );
   }
 
   const hash = hashToken(token);
-  const db = getDb();
+  const db = c.get('db');
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
 
   if (!workspace) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Invalid API key' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Invalid API key' } },
+      401,
+    );
   }
 
-  req.workspace = workspace;
-  next();
-}
+  c.set('workspace', workspace);
+  await next();
+});
 
-export async function requireAuth(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const token = extractToken(req);
+export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const token = extractToken(c.req.header('Authorization'));
   if (!token) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' } },
+      401,
+    );
   }
 
   const hash = hashToken(token);
-  const db = getDb();
+  const db = c.get('db');
 
   if (token.startsWith('rk_live_')) {
     const [workspace] = await db
@@ -83,27 +65,25 @@ export async function requireAuth(
       .from(workspaces)
       .where(eq(workspaces.apiKeyHash, hash));
     if (!workspace) {
-      res.status(401).json({
-        ok: false,
-        error: { code: 'unauthorized', message: 'Invalid API key' },
-      });
-      return;
+      return c.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Invalid API key' } },
+        401,
+      );
     }
-    req.workspace = workspace;
+    c.set('workspace', workspace);
   } else if (token.startsWith('at_live_')) {
     const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
     if (!agent) {
-      res.status(401).json({
-        ok: false,
-        error: { code: 'unauthorized', message: 'Invalid agent token' },
-      });
-      return;
+      return c.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Invalid agent token' } },
+        401,
+      );
     }
-    req.agent = agent;
+    c.set('agent', agent);
 
     // Touch lastSeen (debounced, fire-and-forget)
     if (Date.now() - agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
-      touchLastSeen(agent.id).catch(() => {});
+      touchLastSeen(db, agent.id).catch(() => {});
     }
 
     const [workspace] = await db
@@ -111,63 +91,54 @@ export async function requireAuth(
       .from(workspaces)
       .where(eq(workspaces.id, agent.workspaceId));
     if (!workspace) {
-      res.status(401).json({
-        ok: false,
-        error: { code: 'unauthorized', message: 'Workspace not found' },
-      });
-      return;
+      return c.json(
+        { ok: false, error: { code: 'unauthorized', message: 'Workspace not found' } },
+        401,
+      );
     }
-    req.workspace = workspace;
+    c.set('workspace', workspace);
   } else {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Invalid token format' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Invalid token format' } },
+      401,
+    );
   }
 
-  next();
-}
+  await next();
+});
 
-export async function requireAgentToken(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const token = extractToken(req);
+export const requireAgentToken = createMiddleware<AppEnv>(async (c, next) => {
+  const token = extractToken(c.req.header('Authorization'));
   if (!token) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' } },
+      401,
+    );
   }
 
   if (!token.startsWith('at_live_')) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Agent token required (at_live_...)' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Agent token required (at_live_...)' } },
+      401,
+    );
   }
 
   const hash = hashToken(token);
-  const db = getDb();
+  const db = c.get('db');
   const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
 
   if (!agent) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Invalid agent token' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Invalid agent token' } },
+      401,
+    );
   }
 
-  req.agent = agent;
+  c.set('agent', agent);
 
   // Touch lastSeen (debounced, fire-and-forget)
   if (Date.now() - agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
-    touchLastSeen(agent.id).catch(() => {});
+    touchLastSeen(db, agent.id).catch(() => {});
   }
 
   const [workspace] = await db
@@ -175,12 +146,11 @@ export async function requireAgentToken(
     .from(workspaces)
     .where(eq(workspaces.id, agent.workspaceId));
   if (!workspace) {
-    res.status(401).json({
-      ok: false,
-      error: { code: 'unauthorized', message: 'Workspace not found' },
-    });
-    return;
+    return c.json(
+      { ok: false, error: { code: 'unauthorized', message: 'Workspace not found' } },
+      401,
+    );
   }
-  req.workspace = workspace;
-  next();
-}
+  c.set('workspace', workspace);
+  await next();
+});

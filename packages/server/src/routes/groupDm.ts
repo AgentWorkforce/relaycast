@@ -1,168 +1,170 @@
-import { Router, Response } from 'express';
-import {
-  requireAgentToken,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
 
-export const groupDmRouter = Router();
+export const groupDmRoutes = new Hono<AppEnv>();
 
 // POST /v1/dm/group - create a group DM
-groupDmRouter.post(
+groupDmRoutes.post(
   '/dm/group',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { participants, name } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { participants, name } = await c.req.json();
       if (!participants || !Array.isArray(participants) || participants.length < 1) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'participants array is required with at least 1 member' },
-        });
-        return;
+        }, 400);
       }
 
       const result = await groupDmEngine.createGroupDm(
-        req.workspace!.id,
-        req.agent!.id,
+        db,
+        workspace.id,
+        agent!.id,
         { participants, name },
       );
-      res.status(201).json({ ok: true, data: result });
+      return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/dm/:conversation_id/messages - post to group DM
-groupDmRouter.post(
+groupDmRoutes.post(
   '/dm/:conversation_id/messages',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { text } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { text } = await c.req.json();
       if (!text || typeof text !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        });
-        return;
+        }, 400);
       }
 
-      const conversationId = req.params.conversation_id as string;
+      const conversationId = c.req.param('conversation_id');
       const idempotent = await runIdempotent({
-        workspaceId: req.workspace!.id,
-        actorId: req.agent!.id,
+        workspaceId: workspace.id,
+        actorId: agent!.id,
         scope: `dm-group-message:${conversationId}`,
         key: idempotencyKey,
         status: 201,
         fingerprint: JSON.stringify({ conversationId, text }),
+        kv: c.env.KV,
         operation: () =>
           groupDmEngine.postGroupMessage(
-            req.workspace!.id,
+            db,
+            workspace.id,
             conversationId,
-            req.agent!.id,
+            agent!.id,
             { text },
           ),
       });
 
       if (idempotent.replayed) {
-        res.setHeader('Idempotency-Replayed', 'true');
+        c.header('Idempotency-Replayed', 'true');
       }
 
-      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
+      // TODO: DO fanout
 
-      // Fire-and-forget event publishing only for fresh writes.
-      if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, from_name: req.agent!.name };
-        publishEvent({ type: 'group_dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-        deliverEvent(req.workspace!.id, 'group_dm.received', eventData).catch(() => {});
-      }
+      return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/dm/:conversation_id/participants - add participant
-groupDmRouter.post(
+groupDmRoutes.post(
   '/dm/:conversation_id/participants',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { agent } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agentCtx = c.get('agent');
+      const { agent } = await c.req.json();
       if (!agent || typeof agent !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'agent name is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const conversationId = req.params.conversation_id as string;
+      const conversationId = c.req.param('conversation_id');
       const result = await groupDmEngine.addParticipant(
-        req.workspace!.id,
+        db,
+        workspace.id,
         conversationId,
-        req.agent!.id,
+        agentCtx!.id,
         agent,
       );
-      res.json({ ok: true, data: result });
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // DELETE /v1/dm/:conversation_id/participants/:agent_name - remove participant (leave)
-groupDmRouter.delete(
+groupDmRoutes.delete(
   '/dm/:conversation_id/participants/:agent_name',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const conversationId = req.params.conversation_id as string;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const conversationId = c.req.param('conversation_id');
       await groupDmEngine.removeParticipant(
-        req.workspace!.id,
+        db,
+        workspace.id,
         conversationId,
-        req.agent!.id,
+        agent!.id,
       );
-      res.status(204).send();
+      return c.body(null, 204);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

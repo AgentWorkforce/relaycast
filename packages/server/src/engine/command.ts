@@ -1,9 +1,12 @@
 import { eq, and } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { commands, agents, messages, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function registerCommand(
+  db: Db,
   workspaceId: string,
   data: {
     command: string;
@@ -17,8 +20,6 @@ export async function registerCommand(
     }>;
   },
 ) {
-  const db = getDb();
-
   // Look up handler agent by name
   const [agent] = await db
     .select()
@@ -62,8 +63,7 @@ export async function registerCommand(
   };
 }
 
-export async function listCommands(workspaceId: string) {
-  const db = getDb();
+export async function listCommands(db: Db, workspaceId: string) {
   const rows = await db
     .select({
       id: commands.id,
@@ -90,8 +90,7 @@ export async function listCommands(workspaceId: string) {
   }));
 }
 
-export async function getCommand(workspaceId: string, commandName: string) {
-  const db = getDb();
+export async function getCommand(db: Db, workspaceId: string, commandName: string) {
   const name = commandName.startsWith('/') ? commandName.slice(1) : commandName;
 
   const [row] = await db
@@ -124,8 +123,7 @@ export async function getCommand(workspaceId: string, commandName: string) {
   };
 }
 
-export async function deleteCommand(workspaceId: string, commandName: string) {
-  const db = getDb();
+export async function deleteCommand(db: Db, workspaceId: string, commandName: string) {
   const name = commandName.startsWith('/') ? commandName.slice(1) : commandName;
 
   const result = await db
@@ -139,6 +137,7 @@ export async function deleteCommand(workspaceId: string, commandName: string) {
 }
 
 export async function invokeCommand(
+  db: Db,
   workspaceId: string,
   commandName: string,
   data: {
@@ -148,7 +147,6 @@ export async function invokeCommand(
     parameters?: Record<string, unknown>;
   },
 ) {
-  const db = getDb();
   const name = commandName.startsWith('/') ? commandName.slice(1) : commandName;
 
   // Look up command

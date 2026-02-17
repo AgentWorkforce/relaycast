@@ -1,0 +1,67 @@
+name = "relaycast-api"
+main = "packages/server/src/worker.ts"
+compatibility_date = "2024-12-01"
+node_compat = true
+
+[vars]
+ENVIRONMENT = "production"
+
+# Hyperdrive (Neon Postgres)
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "PLACEHOLDER_HYPERDRIVE_ID"
+localConnectionString = "postgresql://relay:relay@localhost:5433/relay"
+
+# R2 bucket
+[[r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "relaycast-files"
+
+# Queues - producers
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "relaycast-webhooks"
+
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "relaycast-notifications"
+
+# Queues - consumers
+[[queues.consumers]]
+queue = "relaycast-webhooks"
+max_batch_size = 50
+max_retries = 5
+dead_letter_queue = "relaycast-webhooks-dlq"
+
+[[queues.consumers]]
+queue = "relaycast-notifications"
+max_batch_size = 50
+max_retries = 3
+
+# Durable Objects
+[durable_objects]
+bindings = [
+  { name = "CHANNEL_DO", class_name = "ChannelDO" },
+  { name = "AGENT_DO", class_name = "AgentDO" },
+  { name = "PRESENCE_DO", class_name = "PresenceDO" },
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
+
+# KV namespace (rate limiting, usage counters)
+[[kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_KV_ID"
+
+# Cron triggers
+[triggers]
+crons = ["0 * * * *"]
+
+# Secrets (set via `wrangler secret put`):
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+# R2_ACCESS_KEY_ID
+# R2_SECRET_ACCESS_KEY
+# CF_ACCOUNT_ID

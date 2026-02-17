@@ -1,16 +1,17 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function postReply(
+  db: Db,
   workspaceId: string,
   parentId: string,
   agentId: string,
   data: { text: string },
 ) {
-  const db = getDb();
-
   // Get the parent message
   const [parent] = await db
     .select()
@@ -55,11 +56,11 @@ export async function postReply(
 }
 
 export async function getThread(
+  db: Db,
   workspaceId: string,
   parentId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   // Get the parent message

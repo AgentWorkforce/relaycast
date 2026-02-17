@@ -1,131 +1,124 @@
-import { Router, Response } from 'express';
-import {
-  requireAuth,
-  requireAgentToken,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
 
-export const reactionRouter = Router();
+export const reactionRoutes = new Hono<AppEnv>();
 
-// POST /v1/messages/:id/reactions — add reaction (idempotent)
-reactionRouter.post(
+// POST /v1/messages/:id/reactions - add reaction (idempotent)
+reactionRoutes.post(
   '/messages/:id/reactions',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { emoji } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { emoji } = await c.req.json();
       if (!emoji || typeof emoji !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'emoji is required' },
-        });
-        return;
+        }, 400);
       }
 
       const result = await reactionEngine.addReaction(
-        req.workspace!.id,
-        req.params.id as string,
-        req.agent!.id,
+        db,
+        workspace.id,
+        c.req.param('id'),
+        agent!.id,
         emoji,
       );
       if (!result) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
 
       // Strip internal channel_id/channel_name before sending to client
       const { channel_id, channel_name, ...reactionData } = result;
-      res.status(201).json({ ok: true, data: reactionData });
 
-      // Fire-and-forget event publishing — scope to the message's channel
-      const eventData = { ...reactionData, channel_name };
-      publishEvent({ type: 'reaction.added', workspace_id: req.workspace!.id, channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'reaction.added', eventData).catch(() => {});
+      // TODO: DO fanout
+
+      return c.json({ ok: true, data: reactionData }, 201);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
-// DELETE /v1/messages/:id/reactions/:emoji — remove own reaction
-reactionRouter.delete(
+// DELETE /v1/messages/:id/reactions/:emoji - remove own reaction
+reactionRoutes.delete(
   '/messages/:id/reactions/:emoji',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
       const result = await reactionEngine.removeReaction(
-        req.workspace!.id,
-        req.params.id as string,
-        req.agent!.id,
-        req.params.emoji as string,
+        db,
+        workspace.id,
+        c.req.param('id'),
+        agent?.id ?? '',
+        c.req.param('emoji'),
       );
       if (result === null) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
 
-      res.status(204).send();
+      // TODO: DO fanout
 
-      // Fire-and-forget event publishing
-      const eventData = { message_id: req.params.id, agent_id: req.agent!.id, agent_name: req.agent!.name, emoji: req.params.emoji };
-      publishEvent({ type: 'reaction.removed', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'reaction.removed', eventData).catch(() => {});
+      return c.body(null, 204);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
-// GET /v1/messages/:id/reactions — aggregated reactions
-reactionRouter.get(
+// GET /v1/messages/:id/reactions - aggregated reactions
+reactionRoutes.get(
   '/messages/:id/reactions',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
       const result = await reactionEngine.getReactions(
-        req.workspace!.id,
-        req.params.id as string,
+        db,
+        workspace.id,
+        c.req.param('id'),
       );
       if (result === null) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
 
-      res.json({ ok: true, data: result });
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

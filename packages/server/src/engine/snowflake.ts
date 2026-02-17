@@ -7,6 +7,9 @@ const WORKER_ID_MASK = (1n << WORKER_ID_BITS) - 1n; // 0..1023
 const WORKER_ID_SHIFT = SEQUENCE_BITS;
 const TIMESTAMP_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS;
 
+// Stable per-isolate ID, generated once at startup.
+const ISOLATE_ID = crypto.randomUUID();
+
 function fnv1a10Bits(input: string): number {
   // Fast, stable hash -> 10 bits.
   let hash = 0x811c9dc5;
@@ -30,11 +33,7 @@ export class SnowflakeGenerator {
     if (typeof this.workerId === 'number') {
       return this.workerId & 0x3ff;
     }
-    const mid = process.env.FLY_MACHINE_ID;
-    if (mid && mid.length > 0) {
-      return fnv1a10Bits(mid);
-    }
-    return 0;
+    return fnv1a10Bits(ISOLATE_ID);
   }
 
   generate(): string {

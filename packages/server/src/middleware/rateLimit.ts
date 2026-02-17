@@ -1,6 +1,5 @@
-import { Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from './auth.js';
-import { getRedis } from '../redis/index.js';
+import { createMiddleware } from 'hono/factory';
+import type { AppEnv } from '../env.js';
 
 // Global rate limits per plan (requests per minute)
 const RATE_LIMITS: Record<string, number> = {
@@ -31,7 +30,7 @@ function getRouteKey(method: string, path: string): string | null {
   return ROUTE_MULTIPLIERS[key] !== undefined ? key : null;
 }
 
-// In-memory token bucket fallback when Redis is down
+// In-memory token bucket fallback when KV fails
 const inMemoryBuckets = new Map<string, { tokens: number; lastRefill: number }>();
 const BUCKET_CLEANUP_INTERVAL = 60_000;
 let lastCleanup = Date.now();
@@ -60,64 +59,64 @@ function inMemoryRateCheck(workspaceId: string, routeKey: string | null, limit: 
   return { allowed: bucket.tokens <= limit, count: bucket.tokens };
 }
 
-export async function rateLimit(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  if (!req.workspace) {
-    next();
+export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
+  const workspace = c.get('workspace');
+  if (!workspace) {
+    await next();
     return;
   }
 
-  const globalLimit = RATE_LIMITS[req.workspace.plan] || RATE_LIMITS.free;
+  const globalLimit = RATE_LIMITS[workspace.plan] || RATE_LIMITS.free;
 
   // Apply route-specific multiplier if applicable
-  const routeKey = getRouteKey(req.method, req.path);
+  const routeKey = getRouteKey(c.req.method, c.req.path);
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
   const window = Math.floor(Date.now() / 60000);
-  const redisKey = routeKey
-    ? `rate:${req.workspace.id}:${routeKey}:${window}`
-    : `rate:${req.workspace.id}:${window}`;
+  const kvKey = routeKey
+    ? `rate:${workspace.id}:${routeKey}:${window}`
+    : `rate:${workspace.id}:${window}`;
 
   try {
-    const redis = getRedis();
-    const count = await redis.incr(redisKey);
-    if (count === 1) {
-      await redis.expire(redisKey, 60);
-    }
+    const kv = c.env.KV;
+    const currentStr = await kv.get(kvKey);
+    const count = parseInt(currentStr || '0', 10) + 1;
+    await kv.put(kvKey, String(count), { expirationTtl: 60 });
 
-    res.setHeader('X-RateLimit-Limit', limit);
-    res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - count));
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(Math.max(0, limit - count)));
 
     if (count > limit) {
-      res.status(429).json({
-        ok: false,
-        error: {
-          code: 'rate_limit_exceeded',
-          message: `Rate limit exceeded. ${limit} requests per minute allowed for ${req.workspace.plan} plan.`,
+      return c.json(
+        {
+          ok: false,
+          error: {
+            code: 'rate_limit_exceeded',
+            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`,
+          },
         },
-      });
-      return;
+        429,
+      );
     }
   } catch {
-    // In-memory fallback when Redis is down — still respects route multipliers
-    const { allowed, count } = inMemoryRateCheck(req.workspace.id, routeKey, limit);
-    res.setHeader('X-RateLimit-Limit', limit);
-    res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - count));
+    // In-memory fallback when KV is down — still respects route multipliers
+    const { allowed, count } = inMemoryRateCheck(workspace.id, routeKey, limit);
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(Math.max(0, limit - count)));
 
     if (!allowed) {
-      res.status(429).json({
-        ok: false,
-        error: {
-          code: 'rate_limit_exceeded',
-          message: `Rate limit exceeded. ${limit} requests per minute allowed for ${req.workspace.plan} plan.`,
+      return c.json(
+        {
+          ok: false,
+          error: {
+            code: 'rate_limit_exceeded',
+            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`,
+          },
         },
-      });
-      return;
+        429,
+      );
     }
   }
 
-  next();
-}
+  await next();
+});

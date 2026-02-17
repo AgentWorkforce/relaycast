@@ -1,5 +1,5 @@
 import { eq, and, sql, gt, isNull, ne } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import {
   messages,
   channels,
@@ -9,9 +9,9 @@ import {
   dmParticipants,
 } from '../db/schema.js';
 
-export async function getInbox(workspaceId: string, agentId: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
+export async function getInbox(db: Db, workspaceId: string, agentId: string) {
   // 1. Unread channels: messages.id > channel_members.lastReadId, exclude own, top-level only
   const memberships = await db
     .select()

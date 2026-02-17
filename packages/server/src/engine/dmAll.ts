@@ -1,5 +1,5 @@
 import { eq, sql, desc } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import {
   dmConversations,
   dmParticipants,
@@ -8,9 +8,9 @@ import {
   agents,
 } from '../db/schema.js';
 
-export async function listAllDmConversations(workspaceId: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
+export async function listAllDmConversations(db: Db, workspaceId: string) {
   // Get all DM conversations for this workspace
   const convos = await db
     .select({

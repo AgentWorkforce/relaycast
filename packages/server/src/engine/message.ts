@@ -1,11 +1,13 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
-async function fetchAttachmentsBatch(db: ReturnType<typeof getDb>, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
 
@@ -35,12 +37,12 @@ async function fetchAttachmentsBatch(db: ReturnType<typeof getDb>, msgIds: strin
 }
 
 export async function postMessage(
+  db: Db,
   workspaceId: string,
   channelId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; attachments?: string[]; data?: Record<string, unknown> | null; content_type?: string },
 ) {
-  const db = getDb();
   const messageId = generateId();
 
   // Parse @mentions from text
@@ -91,11 +93,11 @@ export async function postMessage(
 }
 
 export async function getMessages(
+  db: Db,
   workspaceId: string,
   channelId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   const conditions = [
@@ -190,8 +192,7 @@ export async function getMessages(
   }));
 }
 
-export async function getMessage(workspaceId: string, messageId: string) {
-  const db = getDb();
+export async function getMessage(db: Db, workspaceId: string, messageId: string) {
   const [row] = await db
     .select()
     .from(messages)

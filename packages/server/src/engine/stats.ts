@@ -1,5 +1,5 @@
 import { eq, and, sql, gte } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import {
   agents,
   channels,
@@ -8,9 +8,9 @@ import {
   files,
 } from '../db/schema.js';
 
-export async function getWorkspaceStats(workspaceId: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
+export async function getWorkspaceStats(db: Db, workspaceId: string) {
   // Agents: total, online, offline
   const agentRows = await db
     .select({ status: agents.status })
