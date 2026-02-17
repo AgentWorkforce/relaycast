@@ -68,7 +68,7 @@ reactionRoutes.delete(
         db,
         workspace.id,
         c.req.param('id'),
-        agent?.id ?? '',
+        agent!.id,
         c.req.param('emoji'),
       );
       if (result === null) {

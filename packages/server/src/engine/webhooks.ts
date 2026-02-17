@@ -50,7 +50,7 @@ export async function handlePaymentFailed(db: Db, data: Record<string, unknown>)
   }).where(eq(workspaces.id, ws.id));
 }
 
-export async function processWebhook(db: Db, event: WebhookEvent, kv?: KVNamespace): Promise<{ received: boolean }> {
+export async function processWebhook(db: Db, event: WebhookEvent, kv: KVNamespace): Promise<{ received: boolean }> {
   switch (event.type) {
     case 'subscription.updated':
       await handleSubscriptionUpdated(db, event.data);
@@ -59,7 +59,7 @@ export async function processWebhook(db: Db, event: WebhookEvent, kv?: KVNamespa
       await handleSubscriptionDeleted(db, event.data);
       break;
     case 'invoice.paid':
-      await handleInvoicePaid(db, kv!, event.data);
+      await handleInvoicePaid(db, kv, event.data);
       break;
     case 'invoice.payment_failed':
       await handlePaymentFailed(db, event.data);

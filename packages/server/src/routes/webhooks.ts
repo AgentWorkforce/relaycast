@@ -52,7 +52,7 @@ webhookRoutes.post('/billing/webhooks', async (c) => {
     if (!type) {
       return c.json({ ok: false, error: { code: 'invalid_request', message: 'type is required' } }, 400);
     }
-    const result = await webhooksEngine.processWebhook(db, { type, data: data || {} });
+    const result = await webhooksEngine.processWebhook(db, { type, data: data || {} }, c.env.KV);
     return c.json({ ok: true, data: result });
   } catch (err) {
     // Return 500 so Stripe retries on processing failures

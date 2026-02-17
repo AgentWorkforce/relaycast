@@ -133,7 +133,10 @@ app.get('/v1/ws', async (c) => {
 
   const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
   const stub = c.env.AGENT_DO.get(doId);
-  return stub.fetch(c.req.raw);
+  // Rewrite path from /v1/ws to /ws for the AgentDO handler
+  const url = new URL(c.req.url);
+  url.pathname = '/ws';
+  return stub.fetch(new Request(url.toString(), c.req.raw));
 });
 
 // API v1 routes — specific routes before parameterized routes

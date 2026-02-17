@@ -116,7 +116,7 @@ export async function listChannels(
 }
 
 export async function getChannel(db: Db, workspaceId: string, name: string) {
-  // Check Redis cache first
+  // Check in-memory cache first
   const cached = await getCachedChannel(workspaceId, name);
   if (cached) return cached;
 
