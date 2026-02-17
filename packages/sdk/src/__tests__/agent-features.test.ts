@@ -30,7 +30,7 @@ describe('AgentClient features', () => {
       await me.channels.create({ name: 'dev', topic: 'Dev channel' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(
         JSON.stringify({ name: 'dev', topic: 'Dev channel' }),
@@ -42,7 +42,7 @@ describe('AgentClient features', () => {
       await me.channels.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels');
       expect(init.method).toBe('GET');
     });
 
@@ -52,7 +52,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/channels?include_archived=true',
+        'https://api.relaycast.dev/v1/channels?include_archived=true',
       );
     });
 
@@ -63,7 +63,7 @@ describe('AgentClient features', () => {
       await me.channels.get('dev');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev');
     });
 
     it('join() posts to /v1/channels/:name/join', async () => {
@@ -71,7 +71,7 @@ describe('AgentClient features', () => {
       await me.channels.join('dev');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/join');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/join');
       expect(init.method).toBe('POST');
     });
 
@@ -80,7 +80,7 @@ describe('AgentClient features', () => {
       await me.channels.leave('dev');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/leave');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/leave');
       expect(init.method).toBe('POST');
     });
 
@@ -89,7 +89,7 @@ describe('AgentClient features', () => {
       await me.channels.setTopic('dev', 'New');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/topic');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/topic');
       expect(init.method).toBe('PATCH');
       expect(init.body).toBe(JSON.stringify({ topic: 'New' }));
     });
@@ -99,7 +99,7 @@ describe('AgentClient features', () => {
       await me.channels.archive('dev');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev');
       expect(init.method).toBe('DELETE');
     });
 
@@ -108,7 +108,7 @@ describe('AgentClient features', () => {
       await me.channels.invite('dev', 'Bot');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/invite');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/invite');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ agent: 'Bot' }));
     });
@@ -120,7 +120,7 @@ describe('AgentClient features', () => {
       await me.channels.update('dev', { topic: 'Updated topic' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev');
       expect(init.method).toBe('PATCH');
       expect(init.body).toBe(JSON.stringify({ topic: 'Updated topic' }));
     });
@@ -130,7 +130,7 @@ describe('AgentClient features', () => {
       await me.channels.members('dev');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/dev/members');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/members');
       expect(init.method).toBe('GET');
     });
   });
@@ -142,7 +142,7 @@ describe('AgentClient features', () => {
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/messages/m_1/reactions',
+        'https://api.relaycast.dev/v1/messages/m_1/reactions',
       );
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ emoji: 'eyes' }));
@@ -154,7 +154,7 @@ describe('AgentClient features', () => {
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/messages/m_1/reactions/eyes',
+        'https://api.relaycast.dev/v1/messages/m_1/reactions/eyes',
       );
       expect(init.method).toBe('DELETE');
     });
@@ -165,7 +165,7 @@ describe('AgentClient features', () => {
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/messages/m_1/reactions',
+        'https://api.relaycast.dev/v1/messages/m_1/reactions',
       );
       expect(init.method).toBe('GET');
     });
@@ -178,7 +178,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/search?q=deploy+error',
+        'https://api.relaycast.dev/v1/search?q=deploy+error',
       );
     });
 
@@ -188,7 +188,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/search?q=err&channel=dev&from=Bot&limit=5',
+        'https://api.relaycast.dev/v1/search?q=err&channel=dev&from=Bot&limit=5',
       );
     });
   });
@@ -205,7 +205,7 @@ describe('AgentClient features', () => {
 
       expect(res).toEqual(data);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/inbox');
+      expect(url).toBe('https://api.relaycast.dev/v1/inbox');
       expect(init.method).toBe('GET');
     });
   });
@@ -216,7 +216,7 @@ describe('AgentClient features', () => {
       await me.markRead('m_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1/read');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/read');
       expect(init.method).toBe('POST');
     });
 
@@ -225,7 +225,7 @@ describe('AgentClient features', () => {
       await me.readers('m_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1/readers');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/readers');
       expect(init.method).toBe('GET');
     });
 
@@ -235,7 +235,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/channels/general/read-status',
+        'https://api.relaycast.dev/v1/channels/general/read-status',
       );
     });
 
@@ -245,7 +245,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/channels/general/read-status',
+        'https://api.relaycast.dev/v1/channels/general/read-status',
       );
     });
   });
@@ -262,7 +262,7 @@ describe('AgentClient features', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/files/upload');
+      expect(url).toBe('https://api.relaycast.dev/v1/files/upload');
       expect(init.method).toBe('POST');
     });
 
@@ -271,7 +271,7 @@ describe('AgentClient features', () => {
       await me.files.complete('f_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/files/f_1/complete');
+      expect(url).toBe('https://api.relaycast.dev/v1/files/f_1/complete');
       expect(init.method).toBe('POST');
     });
 
@@ -280,7 +280,7 @@ describe('AgentClient features', () => {
       await me.files.get('f_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/files/f_1');
+      expect(url).toBe('https://api.relaycast.dev/v1/files/f_1');
       expect(init.method).toBe('GET');
     });
 
@@ -289,7 +289,7 @@ describe('AgentClient features', () => {
       await me.files.delete('f_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/files/f_1');
+      expect(url).toBe('https://api.relaycast.dev/v1/files/f_1');
       expect(init.method).toBe('DELETE');
     });
 
@@ -298,7 +298,7 @@ describe('AgentClient features', () => {
       await me.files.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/files');
+      expect(url).toBe('https://api.relaycast.dev/v1/files');
       expect(init.method).toBe('GET');
     });
 
@@ -308,7 +308,7 @@ describe('AgentClient features', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/files?uploaded_by=Bot&limit=10',
+        'https://api.relaycast.dev/v1/files?uploaded_by=Bot&limit=10',
       );
     });
   });
