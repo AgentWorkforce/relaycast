@@ -21,9 +21,8 @@ export async function GET(
 
     const { id } = await params;
     const relay = getRelay(apiKey);
-    const agent = relay.as(apiKey);
 
-    const result = await agent.reactions(id);
+    const result = await relay.messages.reactions(id);
     return NextResponse.json({ ok: true, data: result });
   } catch (error) {
     if (error instanceof RelayError) {

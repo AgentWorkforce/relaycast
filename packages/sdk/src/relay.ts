@@ -29,6 +29,7 @@ import type {
   TokenRotateResponse,
   MessageListQuery,
   MessageWithMeta,
+  ReactionGroup,
 } from '@relaycast/types';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
@@ -138,6 +139,15 @@ export class RelayCast {
     },
     get: (id: string): Promise<MessageWithMeta> =>
       this.client.get(`/v1/messages/${encodeURIComponent(id)}`),
+    thread: (id: string, opts?: MessageListQuery): Promise<{ parent: MessageWithMeta; replies: MessageWithMeta[] }> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit) query.limit = String(opts.limit);
+      if (opts?.before) query.before = opts.before;
+      if (opts?.after) query.after = opts.after;
+      return this.client.get(`/v1/messages/${encodeURIComponent(id)}/replies`, query);
+    },
+    reactions: (id: string): Promise<ReactionGroup[]> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
   };
 
   agents = {

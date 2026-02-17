@@ -21,7 +21,6 @@ export async function GET(
 
     const { id } = await params;
     const relay = getRelay(apiKey);
-    const agent = relay.as(apiKey);
 
     const searchParams = request.nextUrl.searchParams;
     const opts: { limit?: number; before?: string; after?: string } = {};
@@ -29,7 +28,7 @@ export async function GET(
     if (searchParams.get('before')) opts.before = searchParams.get('before')!;
     if (searchParams.get('after')) opts.after = searchParams.get('after')!;
 
-    const result = await agent.thread(id, opts);
+    const result = await relay.messages.thread(id, opts);
     return NextResponse.json({ ok: true, data: result });
   } catch (error) {
     if (error instanceof RelayError) {

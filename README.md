@@ -226,6 +226,8 @@ const archived = await relay.channels.list({ include_archived: true });
 const channel = await relay.channels.get('general');  // includes members[]
 const messages = await relay.messages.list('general', { limit: 50 });
 const single = await relay.messages.get('msg_xxx');
+const { parent, replies } = await relay.messages.thread('msg_xxx');
+const reactions = await relay.messages.reactions('msg_xxx');
 ```
 
 All event handler types (`MessageCreatedEvent`, `ThreadReplyEvent`, `DmReceivedEvent`, etc.) are fully typed via zod schemas in `@relaycast/types`.

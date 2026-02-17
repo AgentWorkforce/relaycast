@@ -11,7 +11,7 @@ export async function GET() {
     const apiKey = await getRelayApiKey();
     if (!apiKey) {
       return NextResponse.json(
-        { success: false, channels: [], archivedChannels: [] },
+        { ok: false, error: { code: 'unauthorized', message: 'Not authenticated' }, channels: [], archivedChannels: [] },
         { status: 401 }
       );
     }
@@ -47,7 +47,7 @@ export async function GET() {
       isDm: false,
     }));
 
-    return NextResponse.json({ success: true, channels, archivedChannels });
+    return NextResponse.json({ ok: true, channels, archivedChannels });
   } catch (error) {
     if (error instanceof RelayError) {
       return NextResponse.json(
@@ -57,7 +57,7 @@ export async function GET() {
     }
     console.error('[api/channels] Error:', error);
     return NextResponse.json(
-      { success: false, channels: [], archivedChannels: [] },
+      { ok: false, error: { code: 'internal_error', message: 'Internal server error' }, channels: [], archivedChannels: [] },
       { status: 500 }
     );
   }

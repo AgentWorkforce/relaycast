@@ -431,6 +431,41 @@ describe('RelayCast', () => {
       expect(url).toBe('https://api.agentrelay.dev/v1/messages/msg_1');
       expect(init.method).toBe('GET');
     });
+
+    it('thread() calls GET /v1/messages/:id/replies', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ parent: {}, replies: [] }));
+      await relay.messages.thread('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/messages/msg_1/replies');
+      expect(init.method).toBe('GET');
+    });
+
+    it('thread() with opts adds query params', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ parent: {}, replies: [] }));
+      await relay.messages.thread('msg_1', { limit: 20 });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/messages/msg_1/replies?limit=20');
+    });
+
+    it('reactions() calls GET /v1/messages/:id/reactions', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.messages.reactions('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.agentrelay.dev/v1/messages/msg_1/reactions');
+      expect(init.method).toBe('GET');
+    });
   });
 
   describe('as()', () => {
