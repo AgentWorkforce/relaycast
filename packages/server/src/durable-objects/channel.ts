@@ -126,11 +126,11 @@ export class ChannelDO implements DurableObject {
     // If still no members, try loading from Postgres as fallback
     if ((await this.getMembers()).length === 0 && body.channelId && body.workspaceId) {
       try {
-        const members = await this.loadMembersFromPostgres(body.workspaceId, body.channelId);
+        const members = await this.loadMembersFromDb(body.workspaceId, body.channelId);
         if (members.length > 0) {
           this.members = members;
           await this.state.storage.put('members', members);
-          console.log(`[ChannelDO] Loaded ${members.length} members from Postgres for channel ${body.channelId}`);
+          console.log(`[ChannelDO] Loaded ${members.length} members from D1 for channel ${body.channelId}`);
         }
       } catch (err) {
         console.error(`[ChannelDO] Failed to load members from Postgres:`, err);
@@ -148,18 +148,17 @@ export class ChannelDO implements DurableObject {
   /**
    * Load channel members from Postgres as a fallback when DO cache is empty.
    */
-  private async loadMembersFromPostgres(workspaceId: string, channelId: string): Promise<string[]> {
+  private async loadMembersFromDb(workspaceId: string, channelId: string): Promise<string[]> {
     const { getDb } = await import('../db/index.js');
     const { sql } = await import('drizzle-orm');
 
-    const db = getDb(this.env.HYPERDRIVE.connectionString);
-    const result = await db.execute(sql`
+    const db = getDb(this.env.DB);
+    const result = await db.all<{ agent_id: string }>(sql`
       SELECT agent_id FROM channel_members
       WHERE channel_id = ${channelId}
-      AND left_at IS NULL
     `);
 
-    return result.rows.map((row) => row.agent_id as string);
+    return result.map((row) => row.agent_id);
   }
 
   /* ------------------------------------------------------------------ */

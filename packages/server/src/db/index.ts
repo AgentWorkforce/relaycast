@@ -1,35 +1,22 @@
-import { drizzle } from 'drizzle-orm/neon-http';
-import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/d1';
 import * as schema from './schema.js';
 
-type NeonDb = ReturnType<typeof drizzle>;
+type D1Db = ReturnType<typeof drizzle>;
 
 /**
- * Create a per-request database instance using the Neon HTTP driver.
- * On Cloudflare Workers, pass `c.env.HYPERDRIVE.connectionString`.
- * For local dev / tests, falls back to DATABASE_URL env var.
+ * Create a per-request database instance using the D1 driver.
+ * On Cloudflare Workers, pass `c.env.DB` (the D1 binding).
  */
-export function getDb(connectionString?: string): NeonDb {
-  const url =
-    connectionString ||
-    (typeof process !== 'undefined' ? process.env?.DATABASE_URL : undefined) ||
-    'postgresql://relay:relay@localhost:5433/relay';
-
-  const sql = neon(url);
-  return drizzle(sql, { schema });
+export function getDb(d1: D1Database): D1Db {
+  return drizzle(d1, { schema });
 }
 
 /**
  * Health check — run a simple query to verify DB connectivity.
  */
-export async function healthCheck(connectionString?: string): Promise<boolean> {
+export async function healthCheck(d1: D1Database): Promise<boolean> {
   try {
-    const sql = neon(
-      connectionString ||
-      (typeof process !== 'undefined' ? process.env?.DATABASE_URL : undefined) ||
-      'postgresql://relay:relay@localhost:5433/relay',
-    );
-    await sql`SELECT 1`;
+    await d1.prepare('SELECT 1').first();
     return true;
   } catch {
     return false;

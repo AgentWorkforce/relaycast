@@ -153,7 +153,7 @@ app.get('/v1/ws', async (c) => {
   const { eq } = await import('drizzle-orm');
 
   const hash = hashToken(token);
-  const db = getDb(c.env.HYPERDRIVE.connectionString);
+  const db = getDb(c.env.DB);
   const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
 
   if (!agent) {
@@ -221,7 +221,7 @@ app.onError((err, c) => {
 async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const { deliverEvent } = await import('./engine/eventDelivery.js');
-  const db = getDb(env.HYPERDRIVE.connectionString);
+  const db = getDb(env.DB);
 
   for (const msg of batch.messages) {
     try {
@@ -237,12 +237,12 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
 // Scheduled handler for cleanup tasks
 async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
-  const db = getDb(env.HYPERDRIVE.connectionString);
+  const db = getDb(env.DB);
 
   // Clean up expired idempotency keys
   try {
     const { sql } = await import('drizzle-orm');
-    await db.execute(sql`DELETE FROM idempotency_keys WHERE expires_at < NOW()`);
+    await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
   } catch {
     // Table may not exist yet
   }

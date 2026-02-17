@@ -1,0 +1,143 @@
+name: Deploy Worker
+description: Generate wrangler config and deploy a Cloudflare Worker
+
+inputs:
+  worker-name:
+    description: Worker name (e.g. relaycast-api-staging, relaycast-pr-5)
+    required: true
+  environment:
+    description: Environment label (production, staging, preview)
+    required: true
+  route:
+    description: 'Route pattern (e.g. staging.api.relaycast.dev/*)'
+    required: false
+  d1-database-id:
+    description: Cloudflare D1 database ID
+    required: true
+  kv-id:
+    description: Cloudflare KV namespace ID
+    required: true
+  r2-bucket:
+    description: R2 bucket name
+    default: relaycast-files-staging
+  queue-prefix:
+    description: Webhook queue name
+    default: relaycast-webhooks-staging
+  notification-queue:
+    description: Notification queue name
+    default: relaycast-notifications-staging
+  include-consumers:
+    description: Include queue consumers (disable for preview workers)
+    default: 'true'
+  crons:
+    description: Cron triggers (JSON array, e.g. '["0 * * *"]')
+    default: '[]'
+  extra-vars:
+    description: Extra TOML [vars] lines to inject
+    default: ''
+  cloudflare-api-token:
+    description: Cloudflare API token
+    required: true
+  cloudflare-account-id:
+    description: Cloudflare account ID
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Generate wrangler config
+      shell: bash
+      run: |
+        CONFIG="wrangler-${{ inputs.environment }}.toml"
+
+        cat > "$CONFIG" << 'TOML_HEADER'
+        name = "${{ inputs.worker-name }}"
+        main = "packages/server/src/worker.ts"
+        compatibility_date = "2024-12-01"
+        node_compat = true
+        TOML_HEADER
+
+        # Route (optional — production uses wrangler.toml directly)
+        if [ -n "${{ inputs.route }}" ]; then
+          echo 'route = { pattern = "${{ inputs.route }}", zone_name = "relaycast.dev" }' >> "$CONFIG"
+        fi
+
+        cat >> "$CONFIG" << TOML_BINDINGS
+
+        [vars]
+        ENVIRONMENT = "${{ inputs.environment }}"
+        ${{ inputs.extra-vars }}
+
+        [[d1_databases]]
+        binding = "DB"
+        database_name = "${{ inputs.worker-name }}"
+        database_id = "${{ inputs.d1-database-id }}"
+
+        [[r2_buckets]]
+        binding = "FILES_BUCKET"
+        bucket_name = "${{ inputs.r2-bucket }}"
+
+        [[queues.producers]]
+        binding = "WEBHOOK_QUEUE"
+        queue = "${{ inputs.queue-prefix }}"
+
+        [[queues.producers]]
+        binding = "NOTIFICATION_QUEUE"
+        queue = "${{ inputs.notification-queue }}"
+        TOML_BINDINGS
+
+        # Queue consumers (staging yes, preview no)
+        if [ "${{ inputs.include-consumers }}" = "true" ]; then
+          cat >> "$CONFIG" << TOML_CONSUMERS
+
+        [[queues.consumers]]
+        queue = "${{ inputs.queue-prefix }}"
+        max_batch_size = 50
+        max_retries = 5
+        dead_letter_queue = "${{ inputs.queue-prefix }}-dlq"
+
+        [[queues.consumers]]
+        queue = "${{ inputs.notification-queue }}"
+        max_batch_size = 50
+        max_retries = 3
+        TOML_CONSUMERS
+        fi
+
+        cat >> "$CONFIG" << 'TOML_DO'
+
+        [durable_objects]
+        bindings = [
+          { name = "CHANNEL_DO", class_name = "ChannelDO" },
+          { name = "AGENT_DO", class_name = "AgentDO" },
+          { name = "PRESENCE_DO", class_name = "PresenceDO" },
+          { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+        ]
+
+        [[migrations]]
+        tag = "v1"
+        new_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
+
+        [[migrations]]
+        tag = "v2"
+        new_classes = ["McpSessionDO"]
+        TOML_DO
+
+        cat >> "$CONFIG" << TOML_FOOTER
+
+        [[kv_namespaces]]
+        binding = "KV"
+        id = "${{ inputs.kv-id }}"
+
+        [triggers]
+        crons = ${{ inputs.crons }}
+        TOML_FOOTER
+
+        echo "Generated $CONFIG:"
+        cat "$CONFIG"
+
+    - name: Deploy
+      shell: bash
+      run: npx wrangler deploy --config "wrangler-${{ inputs.environment }}.toml"
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}

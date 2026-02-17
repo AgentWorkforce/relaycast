@@ -13,7 +13,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.985.0",
     "@aws-sdk/s3-request-presigner": "^3.985.0",
-    "@neondatabase/serverless": "^1.0.2",
     "@relaycast/mcp": "0.2.4",
     "@relaycast/types": "0.2.4",
     "drizzle-orm": "^0.45.1",
@@ -31,10 +30,10 @@
     "@cloudflare/workers-types": "^4.20260217.0",
     "@types/node": "^25.2.1",
     "@types/supertest": "^6.0.3",
-    "drizzle-kit": "^0.31.8",
+    "drizzle-kit": "^0.31.9",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "vitest": "^4.0.18",
-    "wrangler": "^4.65.0"
+    "wrangler": "^4.66.0"
   }
 }

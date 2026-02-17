@@ -3,7 +3,7 @@ import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 
 /**
  * Maximum number of recent events kept in DO storage for fast resync.
- * Events beyond this window require a Postgres query.
+ * Events beyond this window require a D1 query.
  */
 const RESYNC_BUFFER_SIZE = 500;
 
@@ -20,7 +20,7 @@ const RESYNC_BUFFER_SIZE = 500;
  * Resync: Recent events are stored in DO storage keyed as `evt:{seq}`.
  * On reconnect the client sends `{ type: "resync", last_seen_seq: N }`
  * and the DO replays all buffered events with seq > N.  For gaps larger
- * than the buffer, a Postgres fallback query is used.
+ * than the buffer, a D1 fallback query is used.
  */
 export class AgentDO implements DurableObject {
   private state: DurableObjectState;
@@ -130,11 +130,11 @@ export class AgentDO implements DurableObject {
   }
 
   /**
-   * Replay missed events from Postgres for gaps larger than the DO buffer.
+   * Replay missed events from D1 for gaps larger than the DO buffer.
    * Queries messages in channels the agent belongs to, plus DMs, that were
    * created after the given timestamp.
    */
-  private async replayFromPostgres(
+  private async replayFromDb(
     ws: WebSocket,
     agentId: string,
     workspaceId: string,
@@ -143,7 +143,8 @@ export class AgentDO implements DurableObject {
     const { getDb } = await import('../db/index.js');
     const { sql } = await import('drizzle-orm');
 
-    const db = getDb(this.env.HYPERDRIVE.connectionString);
+    const db = getDb(this.env.DB);
+    const sinceUnix = Math.floor(new Date(since).getTime() / 1000);
 
     const events: Array<{ ts: number; payload: Record<string, unknown> }> = [];
 
@@ -163,7 +164,7 @@ export class AgentDO implements DurableObject {
     };
 
     // Channel messages (including thread replies) after `since`.
-    const channelRows = await db.execute(sql`
+    const channelRows = await db.all<Record<string, unknown>>(sql`
       SELECT m.id, m.channel_id, m.agent_id, m.body, m.thread_id,
              m.created_at, c.name AS channel_name, a.name AS agent_name
       FROM messages m
@@ -171,12 +172,12 @@ export class AgentDO implements DurableObject {
       JOIN channels c ON c.id = m.channel_id
       LEFT JOIN agents a ON a.id = m.agent_id
       WHERE m.workspace_id = ${workspaceId}
-        AND m.created_at > ${since}::timestamptz
+        AND m.created_at > ${sinceUnix}
       ORDER BY m.created_at ASC
       LIMIT 1000
     `);
 
-    for (const row of channelRows.rows) {
+    for (const row of channelRows) {
       const data = {
         id: row.id,
         channel_id: row.channel_id,
@@ -185,18 +186,18 @@ export class AgentDO implements DurableObject {
         from_name: row.agent_name,
         text: row.body,
         thread_id: row.thread_id,
-        created_at: row.created_at,
+        created_at: new Date((row.created_at as number) * 1000).toISOString(),
       } as Record<string, unknown>;
 
       const type = row.thread_id ? 'thread.reply' : 'message.created';
       events.push({
-        ts: new Date(row.created_at as string).getTime(),
+        ts: (row.created_at as number) * 1000,
         payload: { ...buildEvent(type, data, row.channel_id as string | undefined), replayed: true },
       });
     }
 
     // DM + group DM messages after `since`.
-    const dmRows = await db.execute(sql`
+    const dmRows = await db.all<Record<string, unknown>>(sql`
       SELECT m.id, m.channel_id, m.agent_id, m.body, m.created_at,
              a.name AS agent_name, dc.id AS conversation_id, dc.dm_type
       FROM dm_conversations dc
@@ -204,12 +205,12 @@ export class AgentDO implements DurableObject {
       JOIN messages m ON m.channel_id = dc.channel_id
       LEFT JOIN agents a ON a.id = m.agent_id
       WHERE dc.workspace_id = ${workspaceId}
-        AND m.created_at > ${since}::timestamptz
+        AND m.created_at > ${sinceUnix}
       ORDER BY m.created_at ASC
       LIMIT 1000
     `);
 
-    for (const row of dmRows.rows) {
+    for (const row of dmRows) {
       const type = row.dm_type === 'group' ? 'group_dm.received' : 'dm.received';
       const data = {
         id: row.id,
@@ -218,16 +219,16 @@ export class AgentDO implements DurableObject {
         from_agent_id: row.agent_id,
         from_name: row.agent_name,
         text: row.body,
-        created_at: row.created_at,
+        created_at: new Date((row.created_at as number) * 1000).toISOString(),
       } as Record<string, unknown>;
       events.push({
-        ts: new Date(row.created_at as string).getTime(),
+        ts: (row.created_at as number) * 1000,
         payload: { ...buildEvent(type, data, row.channel_id as string | undefined), replayed: true },
       });
     }
 
-    // Reaction additions after `since` (scoped to channels or DMs the agent belongs to).
-    const reactionRows = await db.execute(sql`
+    // Reaction additions after `since`.
+    const reactionRows = await db.all<Record<string, unknown>>(sql`
       SELECT r.message_id, r.emoji, r.created_at,
              a.name AS agent_name,
              m.channel_id, c.name AS channel_name, c.channel_type,
@@ -240,13 +241,13 @@ export class AgentDO implements DurableObject {
       LEFT JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.agent_id = ${agentId}
       LEFT JOIN agents a ON a.id = r.agent_id
       WHERE m.workspace_id = ${workspaceId}
-        AND r.created_at > ${since}::timestamptz
+        AND r.created_at > ${sinceUnix}
         AND (cm.agent_id IS NOT NULL OR dp.agent_id IS NOT NULL)
       ORDER BY r.created_at ASC
       LIMIT 1000
     `);
 
-    for (const row of reactionRows.rows) {
+    for (const row of reactionRows) {
       const data = {
         message_id: row.message_id,
         emoji: row.emoji,
@@ -254,7 +255,7 @@ export class AgentDO implements DurableObject {
         channel_name: row.channel_name,
       } as Record<string, unknown>;
       events.push({
-        ts: new Date(row.created_at as string).getTime(),
+        ts: (row.created_at as number) * 1000,
         payload: { ...buildEvent('reaction.added', data, row.channel_id as string | undefined), replayed: true },
       });
     }
@@ -360,12 +361,12 @@ export class AgentDO implements DurableObject {
           parsed.last_seen_seq,
         );
 
-        // If there's a gap beyond the buffer, try Postgres fallback.
+        // If there's a gap beyond the buffer, try D1 fallback.
         let pgReplayed = 0;
         if (gapDetected && parsed.since) {
           const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
           if (meta) {
-            pgReplayed = await this.replayFromPostgres(
+            pgReplayed = await this.replayFromDb(
               ws,
               meta.agentId,
               meta.workspaceId,

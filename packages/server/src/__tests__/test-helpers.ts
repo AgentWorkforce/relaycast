@@ -154,7 +154,7 @@ export function createMockBindings() {
   };
 
   return {
-    HYPERDRIVE: { connectionString: 'postgresql://test:test@localhost/test' },
+    DB: {} as D1Database,
     FILES_BUCKET: {} as R2Bucket,
     WEBHOOK_QUEUE: { send: vi.fn() } as unknown as Queue,
     NOTIFICATION_QUEUE: { send: vi.fn() } as unknown as Queue,

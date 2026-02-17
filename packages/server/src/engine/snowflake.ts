@@ -7,8 +7,12 @@ const WORKER_ID_MASK = (1n << WORKER_ID_BITS) - 1n; // 0..1023
 const WORKER_ID_SHIFT = SEQUENCE_BITS;
 const TIMESTAMP_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS;
 
-// Stable per-isolate ID, generated once at startup.
-const ISOLATE_ID = crypto.randomUUID();
+// Stable per-isolate ID, generated lazily on first use.
+let _isolateId: string | undefined;
+function getIsolateId(): string {
+  if (!_isolateId) _isolateId = crypto.randomUUID();
+  return _isolateId;
+}
 
 function fnv1a10Bits(input: string): number {
   // Fast, stable hash -> 10 bits.
@@ -33,7 +37,7 @@ export class SnowflakeGenerator {
     if (typeof this.workerId === 'number') {
       return this.workerId & 0x3ff;
     }
-    return fnv1a10Bits(ISOLATE_ID);
+    return fnv1a10Bits(getIsolateId());
   }
 
   generate(): string {

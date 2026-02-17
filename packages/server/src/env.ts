@@ -2,7 +2,7 @@ import type { workspaces, agents } from './db/schema.js';
 
 /** Cloudflare Worker bindings */
 export interface CloudflareBindings {
-  HYPERDRIVE: Hyperdrive;
+  DB: D1Database;
   FILES_BUCKET: R2Bucket;
   WEBHOOK_QUEUE: Queue;
   NOTIFICATION_QUEUE: Queue;
