@@ -2,6 +2,8 @@ import type {
   Agent,
   AgentListQuery,
   AgentPresenceInfo,
+  Channel,
+  ChannelMemberInfo,
   CreateAgentRequest,
   CreateAgentResponse,
   UpdateAgentRequest,
@@ -25,6 +27,9 @@ import type {
   ActivityItem,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  MessageListQuery,
+  MessageWithMeta,
+  ReactionGroup,
 } from '@relaycast/types';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
@@ -111,6 +116,38 @@ export class RelayCast {
     get: (): Promise<SystemPrompt> => this.client.get('/v1/workspace/system-prompt'),
     set: (data: SetSystemPromptRequest): Promise<SystemPrompt> =>
       this.client.put('/v1/workspace/system-prompt', data),
+  };
+
+  channels = {
+    list: (opts?: { include_archived?: boolean }): Promise<Channel[]> => {
+      const query: Record<string, string> = {};
+      if (opts?.include_archived) query.include_archived = 'true';
+      return this.client.get('/v1/channels', query);
+    },
+    get: (name: string): Promise<Channel & { members: ChannelMemberInfo[] }> =>
+      this.client.get(`/v1/channels/${encodeURIComponent(name)}`),
+  };
+
+  messages = {
+    list: (channel: string, opts?: MessageListQuery): Promise<MessageWithMeta[]> => {
+      const name = channel.startsWith('#') ? channel.slice(1) : channel;
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.before) query.before = opts.before;
+      if (opts?.after) query.after = opts.after;
+      return this.client.get(`/v1/channels/${encodeURIComponent(name)}/messages`, query);
+    },
+    get: (id: string): Promise<MessageWithMeta> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}`),
+    thread: (id: string, opts?: MessageListQuery): Promise<{ parent: MessageWithMeta; replies: MessageWithMeta[] }> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.before) query.before = opts.before;
+      if (opts?.after) query.after = opts.after;
+      return this.client.get(`/v1/messages/${encodeURIComponent(id)}/replies`, query);
+    },
+    reactions: (id: string): Promise<ReactionGroup[]> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
   };
 
   agents = {
