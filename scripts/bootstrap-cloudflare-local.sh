@@ -177,7 +177,7 @@ fi
 if [ -n "${MANAGE_WILDCARD_DNS:-}" ]; then
   MANAGE_WILDCARD_DNS="${MANAGE_WILDCARD_DNS}"
 else
-  MANAGE_WILDCARD_DNS="$(prompt_yes_no "Ensure wildcard DNS (*.api.${ZONE_NAME}) for staging/preview" "true")"
+  MANAGE_WILDCARD_DNS="$(prompt_yes_no "Ensure wildcard DNS (*.api.${ZONE_NAME} for staging and *.${ZONE_NAME} for prNN-api previews)" "true")"
 fi
 
 if [ -n "${APPLY_MIGRATIONS:-}" ]; then
@@ -284,6 +284,7 @@ ensure_wildcard_dns() {
   local dns_api=""
   local existing=""
   local result=""
+  local payload=""
 
   zone_id="$(curl -sS \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
@@ -297,18 +298,45 @@ ensure_wildcard_dns() {
   fi
 
   dns_api="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
+
+  # Staging host (staging.api.<zone>) relies on this wildcard.
   existing="$(curl -sS \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
     "${dns_api}?type=AAAA&name=*.api.${zone_name}" \
     | jq -r '.result | length')"
 
   if [ "$existing" -eq 0 ]; then
+    payload="$(jq -nc \
+      --arg name "*.api" \
+      --arg comment "Wildcard for staging workers" \
+      '{type:"AAAA",name:$name,content:"100::",proxied:true,comment:$comment}')"
     result="$(curl -sS -X POST "$dns_api" \
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H "Content-Type: application/json" \
-      --data '{"type":"AAAA","name":"*.api","content":"100::","proxied":true,"comment":"Wildcard for preview and staging workers"}')"
+      --data "$payload")"
     if ! echo "$result" | jq -e '.success' >/dev/null 2>&1; then
-      echo "Failed creating wildcard DNS record: $(echo "$result" | jq -r '.errors[0].message // "unknown error"')"
+      echo "Failed creating *.api wildcard DNS record: $(echo "$result" | jq -r '.errors[0].message // "unknown error"')"
+      exit 1
+    fi
+  fi
+
+  # Preview hosts (prNN-api.<zone>) rely on this wildcard.
+  existing="$(curl -sS \
+    -H "Authorization: Bearer ${CF_API_TOKEN}" \
+    "${dns_api}?type=AAAA&name=*.${zone_name}" \
+    | jq -r '.result | length')"
+
+  if [ "$existing" -eq 0 ]; then
+    payload="$(jq -nc \
+      --arg name "*" \
+      --arg comment "Wildcard for preview workers (prNN-api hosts)" \
+      '{type:"AAAA",name:$name,content:"100::",proxied:true,comment:$comment}')"
+    result="$(curl -sS -X POST "$dns_api" \
+      -H "Authorization: Bearer ${CF_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data "$payload")"
+    if ! echo "$result" | jq -e '.success' >/dev/null 2>&1; then
+      echo "Failed creating root wildcard DNS record: $(echo "$result" | jq -r '.errors[0].message // "unknown error"')"
       exit 1
     fi
   fi

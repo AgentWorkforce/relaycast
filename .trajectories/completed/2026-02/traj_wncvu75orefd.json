@@ -1,0 +1,65 @@
+{
+  "id": "traj_wncvu75orefd",
+  "version": 1,
+  "task": {
+    "title": "Switch preview host pattern to pr<PR>-api.relaycast.dev and align bootstrap DNS"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T18:22:18.710Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T18:24:47.869Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_7xpuxk8cw9gb",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T18:24:47.869Z",
+      "events": [
+        {
+          "ts": 1771439087871,
+          "type": "decision",
+          "content": "Switched preview host pattern to pr<PR>-api.relaycast.dev: Switched preview host pattern to pr<PR>-api.relaycast.dev",
+          "raw": {
+            "question": "Switched preview host pattern to pr<PR>-api.relaycast.dev",
+            "chosen": "Switched preview host pattern to pr<PR>-api.relaycast.dev",
+            "alternatives": [],
+            "reasoning": "Avoid TLS/cert mismatch seen on pr-<PR>.api host and use single-label wildcard DNS under relaycast.dev"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771439087917,
+          "type": "decision",
+          "content": "Updated bootstrap DNS provisioning to manage *.relaycast.dev wildcard: Updated bootstrap DNS provisioning to manage *.relaycast.dev wildcard",
+          "raw": {
+            "question": "Updated bootstrap DNS provisioning to manage *.relaycast.dev wildcard",
+            "chosen": "Updated bootstrap DNS provisioning to manage *.relaycast.dev wildcard",
+            "alternatives": [],
+            "reasoning": "Preview hosts now require wildcard at zone root for on-the-fly PR subdomains"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T18:24:47.964Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "53f8b3b82858a7835e437eb9ec779ea32f52f14b",
+    "endRef": "53f8b3b82858a7835e437eb9ec779ea32f52f14b"
+  },
+  "completedAt": "2026-02-18T18:24:47.964Z",
+  "retrospective": {
+    "summary": "Updated preview deploy workflow and bootstrap scripts for prNN-api host routing; validated scripts parse and confirmed current DNS gap for *.relaycast.dev",
+    "approach": "Standard approach",
+    "confidence": 0.89
+  }
+}

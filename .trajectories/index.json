@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-18T17:51:22.027Z",
+  "lastUpdated": "2026-02-18T18:29:31.674Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -204,6 +204,20 @@
       "startedAt": "2026-02-18T17:51:21.804Z",
       "completedAt": "2026-02-18T17:51:21.927Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_u78g1an1f16d.json"
+    },
+    "traj_wncvu75orefd": {
+      "title": "Switch preview host pattern to pr<PR>-api.relaycast.dev and align bootstrap DNS",
+      "status": "completed",
+      "startedAt": "2026-02-18T18:22:18.710Z",
+      "completedAt": "2026-02-18T18:24:47.964Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wncvu75orefd.json"
+    },
+    "traj_o7ab6q0xj934": {
+      "title": "Remove unused setup-staging-resources helper script",
+      "status": "completed",
+      "startedAt": "2026-02-18T18:29:07.313Z",
+      "completedAt": "2026-02-18T18:29:31.600Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_o7ab6q0xj934.json"
     }
   }
 }
