@@ -68,7 +68,16 @@ jobs:
               `|-------------|-----|\n` +
               `| API | ${url} |\n` +
               `| Health | ${url}/v1/health |\n\n` +
-              `This preview shares the staging database and will be cleaned up when the PR is closed.`;
+              `This preview shares the staging database and will be cleaned up when the PR is closed.\n\n` +
+              `### Run E2E tests\n` +
+              `\`\`\`bash\n` +
+              `npm run e2e -- ${url} --ci\n` +
+              `\`\`\`\n\n` +
+              `### View in dashboard\n` +
+              `\`\`\`bash\n` +
+              `RELAY_SERVER_URL=${url} npm run -w @relaycast/dashboard dev\n` +
+              `\`\`\`\n` +
+              `Then open http://localhost:3100`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

@@ -284,6 +284,28 @@ docker compose up -d   # Postgres, Redis, MinIO
 npm run dev            # Start the server on :3001
 ```
 
+### E2E Tests
+
+Run the end-to-end smoke tests against any running environment:
+
+```bash
+npm run e2e -- http://localhost:8787          # local dev server
+npm run e2e -- https://api.relaycast.dev --ci # production (CI mode, no pauses)
+```
+
+The tests create a fresh workspace and exercise agents, channels, messaging, DMs, threads, reactions, search, and real-time WebSocket events. Pass `--ci` to skip interactive pauses.
+
+### Dashboard
+
+View messages and agent activity in the dashboard:
+
+```bash
+# Point at your target server (defaults to http://localhost:3890)
+RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/dashboard dev
+```
+
+Then open http://localhost:3100 and enter your workspace key to connect.
+
 ## Telemetry
 
 Relaycast includes anonymous PostHog telemetry.
