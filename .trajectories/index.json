@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-18T19:21:21.807Z",
+  "lastUpdated": "2026-02-18T20:39:24.438Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -225,6 +225,20 @@
       "startedAt": "2026-02-18T19:20:00.139Z",
       "completedAt": "2026-02-18T19:21:21.729Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7a7oxz8ohrvh.json"
+    },
+    "traj_ykop9o21xkx0": {
+      "title": "Fix CI health checks to use /health endpoint",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:37:24.867Z",
+      "completedAt": "2026-02-18T20:37:24.994Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ykop9o21xkx0.json"
+    },
+    "traj_iw14fib9dcqm": {
+      "title": "Fix PR comment preview URL format for E2E command",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:39:09.270Z",
+      "completedAt": "2026-02-18T20:39:24.364Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_iw14fib9dcqm.json"
     }
   }
 }

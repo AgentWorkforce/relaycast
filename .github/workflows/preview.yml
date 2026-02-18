@@ -75,9 +75,9 @@ jobs:
           getent hosts "$HOST" || nslookup "$HOST" || true
           echo ""
 
-          echo "Checking ${URL}/v1/health"
+          echo "Checking ${URL}/health"
           for i in $(seq 1 20); do
-            code="$(curl -s -o /tmp/preview-health.out -w "%{http_code}" "${URL}/v1/health" || true)"
+            code="$(curl -s -o /tmp/preview-health.out -w "%{http_code}" "${URL}/health" || true)"
             if [ "$code" = "200" ]; then
               echo "Preview is healthy."
               exit 0
@@ -88,8 +88,8 @@ jobs:
 
           echo "Preview URL did not become healthy in time."
           echo ""
-          echo "Response headers for ${URL}/v1/health:"
-          curl -sS -D - -o /tmp/preview-health.out "${URL}/v1/health" || true
+          echo "Response headers for ${URL}/health:"
+          curl -sS -D - -o /tmp/preview-health.out "${URL}/health" || true
           echo "Last response body:"
           cat /tmp/preview-health.out || true
           echo ""
@@ -128,7 +128,7 @@ jobs:
               `| Environment | URL |\n` +
               `|-------------|-----|\n` +
               `| API | ${url} |\n` +
-              `| Health | ${url}/v1/health |\n\n` +
+              `| Health | ${url}/health |\n\n` +
               `This preview shares the staging database and will be cleaned up when the PR is closed.\n\n` +
               `### Run E2E tests\n` +
               `\`\`\`bash\n` +

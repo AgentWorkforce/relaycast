@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         for i in $(seq 1 ${{ inputs.retries }}); do
-          STATUS=$(curl -s -o /dev/null -w '%{http_code}' ${{ inputs.base-url }}/v1/health)
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' ${{ inputs.base-url }}/health)
           if [ "$STATUS" = "200" ]; then
             echo "Health check passed on attempt $i"
             exit 0
@@ -37,7 +37,7 @@ runs:
     - name: API smoke test
       shell: bash
       run: |
-        RESP=$(curl -s ${{ inputs.base-url }}/v1/health)
+        RESP=$(curl -s ${{ inputs.base-url }}/health)
         echo "Response: $RESP"
         if echo "$RESP" | grep -q '"ok"'; then
           echo "Smoke test passed"
