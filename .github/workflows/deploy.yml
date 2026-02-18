@@ -39,8 +39,6 @@ jobs:
           route: 'staging.api.relaycast.dev/*'
           d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
           kv-id: ${{ vars.STAGING_KV_ID }}
-          include-consumers: 'true'
-          crons: '["0 * * * *"]'
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
@@ -61,10 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - uses: ./.github/actions/deploy-worker
+        with:
+          worker-name: relaycast-api
+          environment: production
+          d1-database-id: ${{ vars.PRODUCTION_D1_DATABASE_ID }}
+          kv-id: ${{ vars.PRODUCTION_KV_ID }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy-pages:
     name: Deploy to Cloudflare Pages

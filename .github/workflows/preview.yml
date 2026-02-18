@@ -41,7 +41,6 @@ jobs:
           route: 'pr-${{ github.event.pull_request.number }}.api.relaycast.dev/*'
           d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
           kv-id: ${{ vars.STAGING_KV_ID }}
-          include-consumers: 'false'
           extra-vars: 'PR_NUMBER = "${{ github.event.pull_request.number }}"'
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -1,5 +1,5 @@
 name: Deploy Worker
-description: Generate wrangler config and deploy a Cloudflare Worker
+description: Deploy Cloudflare Worker using wrangler.toml environment configuration
 
 inputs:
   worker-name:
@@ -9,31 +9,31 @@ inputs:
     description: Environment label (production, staging, preview)
     required: true
   route:
-    description: 'Route pattern (e.g. staging.api.relaycast.dev/*)'
+    description: Route pattern (e.g. staging.api.relaycast.dev/*)
     required: false
   d1-database-id:
-    description: Cloudflare D1 database ID
+    description: Cloudflare D1 database ID for the target environment
     required: true
   kv-id:
-    description: Cloudflare KV namespace ID
+    description: Cloudflare KV namespace ID for the target environment
     required: true
   r2-bucket:
-    description: R2 bucket name
-    default: relaycast-files-staging
+    description: Deprecated (kept for backward compatibility)
+    default: ''
   queue-prefix:
-    description: Webhook queue name
-    default: relaycast-webhooks-staging
+    description: Deprecated (kept for backward compatibility)
+    default: ''
   notification-queue:
-    description: Notification queue name
-    default: relaycast-notifications-staging
+    description: Deprecated (kept for backward compatibility)
+    default: ''
   include-consumers:
-    description: Include queue consumers (disable for preview workers)
-    default: 'true'
+    description: Deprecated (kept for backward compatibility)
+    default: ''
   crons:
-    description: Cron triggers (JSON array, e.g. '["0 * * *"]')
-    default: '[]'
+    description: Deprecated (kept for backward compatibility)
+    default: ''
   extra-vars:
-    description: Extra TOML [vars] lines to inject
+    description: Extra TOML-style vars lines, e.g. KEY = "value" (one per line)
     default: ''
   cloudflare-api-token:
     description: Cloudflare API token
@@ -45,99 +45,76 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Generate wrangler config
+    - name: Prepare CI config from wrangler.toml
+      id: config
       shell: bash
       run: |
-        CONFIG="wrangler-${{ inputs.environment }}.toml"
+        set -euo pipefail
 
-        cat > "$CONFIG" << 'TOML_HEADER'
-        name = "${{ inputs.worker-name }}"
-        main = "packages/server/src/worker.ts"
-        compatibility_date = "2024-12-01"
-        node_compat = true
-        TOML_HEADER
+        ENV_NAME="${{ inputs.environment }}"
+        CONFIG=".wrangler-ci-${ENV_NAME}.toml"
+        cp wrangler.toml "$CONFIG"
 
-        # Route (optional — production uses wrangler.toml directly)
-        if [ -n "${{ inputs.route }}" ]; then
-          echo 'route = { pattern = "${{ inputs.route }}", zone_name = "relaycast.dev" }' >> "$CONFIG"
-        fi
+        case "$ENV_NAME" in
+          staging)
+            DB_PLACEHOLDER="PLACEHOLDER_STAGING_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_STAGING_KV_ID"
+            ;;
+          preview)
+            DB_PLACEHOLDER="PLACEHOLDER_PREVIEW_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_PREVIEW_KV_ID"
+            ;;
+          production)
+            DB_PLACEHOLDER="PLACEHOLDER_PROD_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_KV_ID"
+            ;;
+          *)
+            echo "Unsupported environment: $ENV_NAME"
+            exit 1
+            ;;
+        esac
 
-        cat >> "$CONFIG" << TOML_BINDINGS
+        sed -i.bak "s/${DB_PLACEHOLDER}/${{ inputs.d1-database-id }}/g" "$CONFIG"
+        sed -i.bak "s/${KV_PLACEHOLDER}/${{ inputs.kv-id }}/g" "$CONFIG"
+        rm -f "${CONFIG}.bak"
 
-        [vars]
-        ENVIRONMENT = "${{ inputs.environment }}"
-        ${{ inputs.extra-vars }}
-
-        [[d1_databases]]
-        binding = "DB"
-        database_name = "${{ inputs.worker-name }}"
-        database_id = "${{ inputs.d1-database-id }}"
-
-        [[r2_buckets]]
-        binding = "FILES_BUCKET"
-        bucket_name = "${{ inputs.r2-bucket }}"
-
-        [[queues.producers]]
-        binding = "WEBHOOK_QUEUE"
-        queue = "${{ inputs.queue-prefix }}"
-
-        [[queues.producers]]
-        binding = "NOTIFICATION_QUEUE"
-        queue = "${{ inputs.notification-queue }}"
-        TOML_BINDINGS
-
-        # Queue consumers (staging yes, preview no)
-        if [ "${{ inputs.include-consumers }}" = "true" ]; then
-          cat >> "$CONFIG" << TOML_CONSUMERS
-
-        [[queues.consumers]]
-        queue = "${{ inputs.queue-prefix }}"
-        max_batch_size = 50
-        max_retries = 5
-        dead_letter_queue = "${{ inputs.queue-prefix }}-dlq"
-
-        [[queues.consumers]]
-        queue = "${{ inputs.notification-queue }}"
-        max_batch_size = 50
-        max_retries = 3
-        TOML_CONSUMERS
-        fi
-
-        cat >> "$CONFIG" << 'TOML_DO'
-
-        [durable_objects]
-        bindings = [
-          { name = "CHANNEL_DO", class_name = "ChannelDO" },
-          { name = "AGENT_DO", class_name = "AgentDO" },
-          { name = "PRESENCE_DO", class_name = "PresenceDO" },
-          { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
-        ]
-
-        [[migrations]]
-        tag = "v1"
-        new_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
-
-        [[migrations]]
-        tag = "v2"
-        new_classes = ["McpSessionDO"]
-        TOML_DO
-
-        cat >> "$CONFIG" << TOML_FOOTER
-
-        [[kv_namespaces]]
-        binding = "KV"
-        id = "${{ inputs.kv-id }}"
-
-        [triggers]
-        crons = ${{ inputs.crons }}
-        TOML_FOOTER
-
-        echo "Generated $CONFIG:"
-        cat "$CONFIG"
+        echo "wrangler_config=$CONFIG" >> "$GITHUB_OUTPUT"
 
     - name: Deploy
       shell: bash
-      run: npx wrangler deploy --config "wrangler-${{ inputs.environment }}.toml"
+      run: |
+        set -euo pipefail
+
+        DEPLOY_ENV="${{ inputs.environment }}"
+        if [ "$DEPLOY_ENV" = "production" ]; then
+          DEPLOY_ENV=""
+        fi
+
+        CMD=(npx wrangler deploy --config "${{ steps.config.outputs.wrangler_config }}" --env "$DEPLOY_ENV" --name "${{ inputs.worker-name }}")
+
+        if [ -n "${{ inputs.route }}" ]; then
+          CMD+=(--routes "${{ inputs.route }}")
+        fi
+
+        EXTRA_VARS="${{ inputs.extra-vars }}"
+        if [ -n "$EXTRA_VARS" ]; then
+          while IFS= read -r line; do
+            line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            if [ -z "$line" ]; then
+              continue
+            fi
+            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
+              CMD+=(--var "${BASH_REMATCH[1]}:${BASH_REMATCH[2]}")
+            else
+              echo "Invalid extra-vars line: $line"
+              echo "Expected format: KEY = \"value\""
+              exit 1
+            fi
+          done <<< "$EXTRA_VARS"
+        fi
+
+        "${CMD[@]}"
+        rm -f "${{ steps.config.outputs.wrangler_config }}"
       env:
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
