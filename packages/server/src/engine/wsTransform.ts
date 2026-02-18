@@ -104,6 +104,26 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         agent: { name: d.agent_name as string },
       };
 
+    case 'agent.spawn_requested':
+      return {
+        type: 'agent.spawn_requested',
+        agent: {
+          name: d.agent_name as string,
+          cli: d.cli as string,
+          task: d.task as string,
+          channel: (d.channel as string | null) ?? null,
+          already_existed: d.already_existed as boolean,
+        },
+      };
+
+    case 'agent.release_requested':
+      return {
+        type: 'agent.release_requested',
+        agent: { name: d.agent_name as string },
+        reason: (d.reason as string | null) ?? null,
+        deleted: d.deleted as boolean,
+      };
+
     case 'channel.created':
       return {
         type: 'channel.created',

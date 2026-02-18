@@ -6,6 +6,8 @@ vi.mock('../../engine/agent.js', () => ({
   getAgentByName: vi.fn(),
   updateAgent: vi.fn(),
   deleteAgent: vi.fn(),
+  spawnAgent: vi.fn(),
+  releaseAgent: vi.fn(),
   touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -227,3 +229,116 @@ describe('DELETE /v1/agents/:name', () => {
   });
 });
 
+describe('POST /v1/agents/spawn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+  });
+
+  it('spawns a new agent and returns 201', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_tokenvalue123',
+      cli: 'claude',
+      task: 'Review the PR',
+      channel: 'dev-team',
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: false,
+    });
+
+    const res = await app.request('/v1/agents/spawn', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', cli: 'claude', task: 'Review the PR', channel: 'dev-team' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.name).toBe('worker-1');
+    expect(body.data.already_existed).toBe(false);
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent.spawn_requested',
+      workspaceId: 'ws_123',
+      data: expect.objectContaining({
+        agent_name: 'worker-1',
+        cli: 'claude',
+      }),
+    }));
+  });
+
+  it('reactivates existing agent and returns 200', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_newtokenvalue',
+      cli: 'codex',
+      task: 'New task',
+      channel: null,
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: true,
+    });
+
+    const res = await app.request('/v1/agents/spawn', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', cli: 'codex', task: 'New task' }),
+    }, bindings);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.data.already_existed).toBe(true);
+  });
+});
+
+describe('POST /v1/agents/release', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+  });
+
+  it('releases an agent and returns 200', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue({
+      name: 'worker-1',
+      released: true,
+      deleted: false,
+      reason: 'task completed',
+    });
+
+    const res = await app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', reason: 'task completed' }),
+    }, bindings);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.deleted).toBe(false);
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent.release_requested',
+      workspaceId: 'ws_123',
+      data: expect.objectContaining({
+        agent_name: 'worker-1',
+        reason: 'task completed',
+      }),
+    }));
+  });
+
+  it('returns 404 when agent does not exist', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue(null);
+
+    const res = await app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'missing-agent' }),
+    }, bindings);
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('agent_not_found');
+  });
+});

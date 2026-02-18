@@ -147,7 +147,7 @@ export function createMockBindings() {
     fetch: vi.fn().mockResolvedValue(new Response(null, { status: 200 })),
   };
   const presenceStub = {
-    fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ agents: [] }), {
+    fetch: vi.fn().mockImplementation(async () => new Response(JSON.stringify({ agents: [] }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })),
