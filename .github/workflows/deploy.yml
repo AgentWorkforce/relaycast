@@ -36,7 +36,7 @@ jobs:
         with:
           worker-name: relaycast-api-staging
           environment: staging
-          route: 'staging.api.relaycast.dev/*'
+          route: 'staging-api.relaycast.dev/*'
           d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
           kv-id: ${{ vars.STAGING_KV_ID }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/smoke-test
         with:
-          base-url: https://staging.api.relaycast.dev
+          base-url: https://staging-api.relaycast.dev
 
   deploy-production:
     name: Deploy to Production

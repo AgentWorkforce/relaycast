@@ -3,7 +3,7 @@ description: Health check and basic API verification against a deployed environm
 
 inputs:
   base-url:
-    description: 'Base URL to test (e.g. https://staging.api.relaycast.dev)'
+    description: 'Base URL to test (e.g. https://staging-api.relaycast.dev)'
     required: true
   retries:
     description: Number of health check retries

@@ -68,7 +68,7 @@ crons = ["0 * * * *"]
 # Staging environment overrides
 [env.staging]
 name = "relaycast-api-staging"
-route = { pattern = "staging.api.relaycast.dev/*", zone_name = "relaycast.dev" }
+route = { pattern = "staging-api.relaycast.dev/*", zone_name = "relaycast.dev" }
 
 [env.staging.vars]
 ENVIRONMENT = "staging"

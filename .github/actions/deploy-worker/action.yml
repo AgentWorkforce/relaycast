@@ -9,7 +9,7 @@ inputs:
     description: Environment label (production, staging, preview)
     required: true
   route:
-    description: Route pattern (e.g. staging.api.relaycast.dev/*)
+    description: Route pattern (e.g. staging-api.relaycast.dev/*)
     required: false
   d1-database-id:
     description: Cloudflare D1 database ID for the target environment
