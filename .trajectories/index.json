@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-18T20:39:24.438Z",
+  "lastUpdated": "2026-02-18T20:42:33.877Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -239,6 +239,13 @@
       "startedAt": "2026-02-18T20:39:09.270Z",
       "completedAt": "2026-02-18T20:39:24.364Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_iw14fib9dcqm.json"
+    },
+    "traj_pxuw34etn6ly": {
+      "title": "Automate D1 migrations in deploy workflow",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:42:33.680Z",
+      "completedAt": "2026-02-18T20:42:33.798Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_pxuw34etn6ly.json"
     }
   }
 }
