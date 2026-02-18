@@ -26,7 +26,6 @@ import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
-import { dashboardRoutes } from './routes/dashboard.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -173,7 +172,6 @@ app.get('/v1/ws', async (c) => {
 
 // API v1 routes — specific routes before parameterized routes
 const v1 = new Hono<AppEnv>();
-v1.route('/', dashboardRoutes);
 v1.route('/', presenceRoutes);
 v1.route('/', systemPromptRoutes);
 v1.route('/', workspaceRoutes);

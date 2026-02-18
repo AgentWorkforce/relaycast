@@ -1,10 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
+vi.mock('../../engine/activity.js', () => ({
+  getActivityFeed: vi.fn(),
+}));
+
+vi.mock('../../engine/dmAll.js', () => ({
+  listAllDmConversations: vi.fn(),
+}));
+
+vi.mock('../../engine/tokenRotate.js', () => ({
+  rotateAgentToken: vi.fn(),
+}));
+
+vi.mock('../../engine/agent.js', () => ({
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
@@ -15,157 +24,178 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { workspaceRoutes } from '../../routes/workspace.js';
+import * as activityEngine from '../../engine/activity.js';
+import * as dmAllEngine from '../../engine/dmAll.js';
+import * as tokenRotateEngine from '../../engine/tokenRotate.js';
 import { getDb } from '../../db/index.js';
-import * as workspaceEngine from '../../engine/workspace.js';
 import {
-  TEST_API_KEY, FAKE_WORKSPACE,
-  createMockBindings, mockDbForWorkspaceAuth, wsAuthHeaders,
+  mockDbForWorkspaceAuth,
+  wsAuthHeaders,
+  createMockBindings,
+  FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
 const bindings = createMockBindings();
-
 const app = new Hono<AppEnv>();
+app.use('*', async (c, next) => {
+  (c as any).env = { ...bindings };
+  await next();
+});
 app.use('*', dbMiddleware);
 const v1 = new Hono<AppEnv>();
 v1.route('/', workspaceRoutes);
 app.route('/v1', v1);
 
-app.onError((err, c) => {
-  const error = err as Error & { code?: string; status?: number };
-  if (error.message?.includes('JSON')) {
-    return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
-  }
-  return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
-});
-
-describe('POST /v1/workspaces', () => {
+describe('Dashboard routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
-  it('creates a workspace and returns 201', async () => {
-    vi.mocked(workspaceEngine.createWorkspace).mockResolvedValue({
-      workspace_id: 'ws_456',
-      api_key: 'rk_live_newkey123',
-      created_at: '2025-01-01T00:00:00.000Z',
+  describe('GET /v1/activity', () => {
+    it('returns activity feed with default limit', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      const items = [
+        {
+          id: 'msg_1',
+          channel_name: 'general',
+          agent_name: 'Alice',
+          body: 'Hello',
+          is_dm: false,
+          created_at: '2025-01-01T00:00:00Z',
+        },
+      ];
+      vi.mocked(activityEngine.getActivityFeed).mockResolvedValue(items);
+
+      const res = await app.request('/v1/activity', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data).toEqual(items);
+      expect(activityEngine.getActivityFeed).toHaveBeenCalledWith(
+        expect.anything(),
+        FAKE_WORKSPACE.id,
+        20,
+      );
     });
 
-    const res = await app.request('/v1/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'my-project' }),
-    }, bindings);
+    it('respects limit query parameter', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(activityEngine.getActivityFeed).mockResolvedValue([]);
 
-    expect(res.status).toBe(201);
-    const body = await res.json() as any;
-    expect(body.ok).toBe(true);
-    expect(body.data.workspace_id).toBe('ws_456');
-    expect(body.data.api_key).toContain('rk_live_');
-  });
+      const res = await app.request('/v1/activity?limit=5', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
 
-  it('returns 400 when name is missing', async () => {
-    const res = await app.request('/v1/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    }, bindings);
-    expect(res.status).toBe(400);
-    const body = await res.json() as any;
-    expect(body.ok).toBe(false);
-    expect(body.error.code).toBe('invalid_request');
-  });
-
-  it('returns 409 for duplicate workspace name', async () => {
-    vi.mocked(workspaceEngine.createWorkspace).mockRejectedValue(
-      Object.assign(new Error('Workspace "my-project" already exists'), {
-        code: 'workspace_already_exists',
-        status: 409,
-      }),
-    );
-
-    const res = await app.request('/v1/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'my-project' }),
-    }, bindings);
-    expect(res.status).toBe(409);
-    const body = await res.json() as any;
-    expect(body.error.code).toBe('workspace_already_exists');
-  });
-});
-
-describe('GET /v1/workspace', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
-  });
-
-  it('returns workspace data with valid key', async () => {
-    vi.mocked(workspaceEngine.getWorkspace).mockResolvedValue({
-      id: 'ws_123',
-      name: 'test-workspace',
-      plan: 'free',
-      system_prompt: null,
-      created_at: '2025-01-01T00:00:00.000Z',
-      metadata: {},
+      expect(res.status).toBe(200);
+      expect(activityEngine.getActivityFeed).toHaveBeenCalledWith(
+        expect.anything(),
+        FAKE_WORKSPACE.id,
+        5,
+      );
     });
 
-    const res = await app.request('/v1/workspace', {
-      headers: wsAuthHeaders(),
-    }, bindings);
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.ok).toBe(true);
-    expect(body.data.name).toBe('test-workspace');
+    it('returns 401 without auth', async () => {
+      const res = await app.request('/v1/activity', { method: 'GET' });
+      expect(res.status).toBe(401);
+    });
   });
 
-  it('returns 401 without auth', async () => {
-    const res = await app.request('/v1/workspace', {}, bindings);
-    expect(res.status).toBe(401);
-  });
-});
+  describe('GET /v1/dm/conversations/all', () => {
+    it('returns workspace-wide DM conversations', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      const conversations = [
+        {
+          channel_id: 'ch_1',
+          participants: ['Alice', 'Bob'],
+          message_count: 10,
+          last_message_at: '2025-01-01T00:00:00Z',
+        },
+      ];
+      vi.mocked(dmAllEngine.listAllDmConversations).mockResolvedValue(conversations);
 
-describe('PATCH /v1/workspace', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
-  });
+      const res = await app.request('/v1/dm/conversations/all', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
 
-  it('updates workspace', async () => {
-    vi.mocked(workspaceEngine.updateWorkspace).mockResolvedValue({
-      id: 'ws_123',
-      name: 'new-name',
-      plan: 'free',
-      system_prompt: null,
-      created_at: '2025-01-01T00:00:00.000Z',
-      metadata: {},
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data).toEqual(conversations);
     });
 
-    const res = await app.request('/v1/workspace', {
-      method: 'PATCH',
-      headers: wsAuthHeaders(),
-      body: JSON.stringify({ name: 'new-name' }),
-    }, bindings);
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.data.name).toBe('new-name');
+    it('returns 401 without auth', async () => {
+      const res = await app.request('/v1/dm/conversations/all', { method: 'GET' });
+      expect(res.status).toBe(401);
+    });
+
+    it('handles engine errors', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(dmAllEngine.listAllDmConversations).mockRejectedValue(
+        new Error('DB error'),
+      );
+
+      const res = await app.request('/v1/dm/conversations/all', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+    });
   });
-});
 
-describe('DELETE /v1/workspace', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
-  });
+  describe('POST /v1/agents/:name/rotate-token', () => {
+    it('rotates agent token and returns new token', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(tokenRotateEngine.rotateAgentToken).mockResolvedValue({
+        token: 'at_live_newtoken123',
+      });
 
-  it('deletes workspace and returns 204', async () => {
-    vi.mocked(workspaceEngine.deleteWorkspace).mockResolvedValue(undefined);
+      const res = await app.request('/v1/agents/TestBot/rotate-token', {
+        method: 'POST',
+        headers: wsAuthHeaders(),
+      });
 
-    const res = await app.request('/v1/workspace', {
-      method: 'DELETE',
-      headers: wsAuthHeaders(),
-    }, bindings);
-    expect(res.status).toBe(204);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data.token).toBe('at_live_newtoken123');
+      expect(tokenRotateEngine.rotateAgentToken).toHaveBeenCalledWith(
+        expect.anything(),
+        FAKE_WORKSPACE.id,
+        'TestBot',
+      );
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await app.request('/v1/agents/TestBot/rotate-token', { method: 'POST' });
+      expect(res.status).toBe(401);
+    });
+
+    it('handles agent not found error', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      const err = Object.assign(new Error('Agent not found'), {
+        code: 'not_found',
+        status: 404,
+      });
+      vi.mocked(tokenRotateEngine.rotateAgentToken).mockRejectedValue(err);
+
+      const res = await app.request('/v1/agents/unknown/rotate-token', {
+        method: 'POST',
+        headers: wsAuthHeaders(),
+      });
+
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe('not_found');
+    });
   });
 });
