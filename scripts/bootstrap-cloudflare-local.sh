@@ -16,6 +16,76 @@ wrangler() {
   npx --yes wrangler "$@"
 }
 
+get_existing_d1_id() {
+  local db_name="$1"
+  local list_out=""
+  local id=""
+  local name_lc=""
+
+  list_out="$(wrangler d1 list --json 2>/dev/null || wrangler d1 list 2>/dev/null || true)"
+  id="$(printf '%s' "$list_out" | jq -r --arg name "$db_name" '
+    (if type == "array" then . else (.result // []) end)
+    | map(select(.name == $name))
+    | (.[0].uuid // .[0].id // .[0].database_id // empty)
+  ' 2>/dev/null || true)"
+
+  if [ -z "$id" ] || [ "$id" = "null" ]; then
+    name_lc="$(printf '%s' "$db_name" | tr '[:upper:]' '[:lower:]')"
+    # Fallback for non-JSON/multiline output: remember last UUID and match when name appears.
+    id="$(printf '%s\n' "$list_out" | awk -v name="$name_lc" '
+      {
+        line=tolower($0)
+        if (match($0, /[a-f0-9-]{36}/)) {
+          last=substr($0, RSTART, RLENGTH)
+        }
+        if (index(line, name) > 0 && last != "") {
+          print last
+          exit
+        }
+      }
+    ' | head -1 || true)"
+  fi
+
+  if [ -n "$id" ] && [ "$id" != "null" ]; then
+    printf '%s' "$id"
+  fi
+}
+
+get_existing_kv_id() {
+  local title="$1"
+  local list_out=""
+  local id=""
+  local title_lc=""
+
+  list_out="$(wrangler kv namespace list --json 2>/dev/null || wrangler kv namespace list 2>/dev/null || true)"
+  id="$(printf '%s' "$list_out" | jq -r --arg title "$title" '
+    (if type == "array" then . else (.result // []) end)
+    | map(select(.title == $title))
+    | (.[0].id // empty)
+  ' 2>/dev/null || true)"
+
+  if [ -z "$id" ] || [ "$id" = "null" ]; then
+    title_lc="$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]')"
+    # Fallback for non-JSON/multiline output: remember last namespace id and match when title appears.
+    id="$(printf '%s\n' "$list_out" | awk -v title="$title_lc" '
+      {
+        line=tolower($0)
+        if (match($0, /[a-f0-9]{32}/)) {
+          last=substr($0, RSTART, RLENGTH)
+        }
+        if (index(line, title) > 0 && last != "") {
+          print last
+          exit
+        }
+      }
+    ' | head -1 || true)"
+  fi
+
+  if [ -n "$id" ] && [ "$id" != "null" ]; then
+    printf '%s' "$id"
+  fi
+}
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -132,16 +202,19 @@ ensure_d1() {
   local out=""
   local list_out=""
 
+  # Idempotent: reuse existing DB if present.
+  id="$(get_existing_d1_id "$db_name" || true)"
+  if [ -n "$id" ]; then
+    printf '%s' "$id"
+    return 0
+  fi
+
   out="$(wrangler d1 create "$db_name" 2>&1 || true)"
   id="$(printf '%s' "$out" | grep -oE '[a-f0-9-]{36}' | head -1 || true)"
 
   if [ -z "$id" ]; then
-    if list_out="$(wrangler d1 list --json 2>/dev/null)"; then
-      id="$(printf '%s' "$list_out" | jq -r '.[] | select(.name == "'"$db_name"'") | .uuid // .id // .database_id' | head -1)"
-    else
-      list_out="$(wrangler d1 list 2>/dev/null || true)"
-      id="$(printf '%s' "$list_out" | grep -i "$db_name" | grep -oE '[a-f0-9-]{36}' | head -1 || true)"
-    fi
+    id="$(get_existing_d1_id "$db_name" || true)"
+    list_out="$(wrangler d1 list 2>/dev/null || true)"
   fi
 
   if [ -z "$id" ] || [ "$id" = "null" ]; then
@@ -165,16 +238,19 @@ ensure_kv() {
   local out=""
   local list_out=""
 
+  # Idempotent: reuse existing namespace if present.
+  id="$(get_existing_kv_id "$title" || true)"
+  if [ -n "$id" ]; then
+    printf '%s' "$id"
+    return 0
+  fi
+
   out="$(wrangler kv namespace create "$title" 2>&1 || true)"
   id="$(printf '%s' "$out" | grep -oE '[a-f0-9]{32}' | head -1 || true)"
 
   if [ -z "$id" ]; then
-    if list_out="$(wrangler kv namespace list --json 2>/dev/null)"; then
-      id="$(printf '%s' "$list_out" | jq -r '.[] | select(.title == "'"$title"'") | .id' | head -1)"
-    else
-      list_out="$(wrangler kv namespace list 2>/dev/null || true)"
-      id="$(printf '%s' "$list_out" | grep -i "$title" | grep -oE '[a-f0-9]{32}' | head -1 || true)"
-    fi
+    id="$(get_existing_kv_id "$title" || true)"
+    list_out="$(wrangler kv namespace list 2>/dev/null || true)"
   fi
 
   if [ -z "$id" ] || [ "$id" = "null" ]; then
