@@ -44,6 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           DB_ID="${{ vars.STAGING_D1_DATABASE_ID }}"
+          WS="${GITHUB_WORKSPACE:-$PWD}"
           if [ -z "$DB_ID" ]; then
             echo "Missing STAGING_D1_DATABASE_ID GitHub variable."
             exit 1
@@ -51,14 +52,14 @@ jobs:
           CFG="$(mktemp /tmp/wrangler-d1-preview-XXXX.toml)"
           cat > "$CFG" <<EOF
           name = "relaycast-d1-migrate-preview"
-          main = "packages/server/src/worker.ts"
+          main = "${WS}/packages/server/src/worker.ts"
           compatibility_date = "2024-12-01"
 
           [[d1_databases]]
           binding = "DB"
           database_name = "relaycast-staging"
           database_id = "${DB_ID}"
-          migrations_dir = "packages/server/src/db/migrations"
+          migrations_dir = "${WS}/packages/server/src/db/migrations"
           EOF
           npx wrangler d1 migrations apply DB --remote --config "$CFG"
           rm -f "$CFG"
