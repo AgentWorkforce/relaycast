@@ -52,8 +52,21 @@ runs:
         set -euo pipefail
 
         ENV_NAME="${{ inputs.environment }}"
+        D1_ID="${{ inputs.d1-database-id }}"
+        KV_ID="${{ inputs.kv-id }}"
         CONFIG=".wrangler-ci-${ENV_NAME}.toml"
         cp wrangler.toml "$CONFIG"
+
+        if [ -z "$D1_ID" ]; then
+          echo "Missing d1-database-id input for environment: $ENV_NAME"
+          echo "Set the corresponding GitHub variable (e.g. STAGING_D1_DATABASE_ID / PRODUCTION_D1_DATABASE_ID)."
+          exit 1
+        fi
+        if [ -z "$KV_ID" ]; then
+          echo "Missing kv-id input for environment: $ENV_NAME"
+          echo "Set the corresponding GitHub variable (e.g. STAGING_KV_ID / PRODUCTION_KV_ID)."
+          exit 1
+        fi
 
         case "$ENV_NAME" in
           staging)
@@ -74,8 +87,8 @@ runs:
             ;;
         esac
 
-        sed -i.bak "s/${DB_PLACEHOLDER}/${{ inputs.d1-database-id }}/g" "$CONFIG"
-        sed -i.bak "s/${KV_PLACEHOLDER}/${{ inputs.kv-id }}/g" "$CONFIG"
+        sed -i.bak "s/${DB_PLACEHOLDER}/${D1_ID}/g" "$CONFIG"
+        sed -i.bak "s/${KV_PLACEHOLDER}/${KV_ID}/g" "$CONFIG"
         rm -f "${CONFIG}.bak"
 
         echo "wrangler_config=$CONFIG" >> "$GITHUB_OUTPUT"
