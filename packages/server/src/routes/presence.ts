@@ -21,7 +21,7 @@ presenceRoutes.get('/agents/presence', requireAuth, rateLimit, async (c) => {
   }
 });
 
-// POST /agents/disconnect — explicit disconnect (works around local DO hibernation issues)
+// POST /agents/disconnect — explicitly mark agent offline
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {
     const agent = c.get('agent')!;

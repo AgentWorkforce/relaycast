@@ -11,7 +11,7 @@ function mockResponse(data: unknown, apiOk = true, status = 200) {
   });
 }
 
-describe('Relay dashboard methods', () => {
+describe('Relay workspace methods', () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });

@@ -59,9 +59,11 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-/** Random delay between 1–4 seconds to make the run feel more realistic. */
+/** Random delay to make the run feel more realistic. */
 function pause() {
-  const ms = 1000 + Math.random() * 3000;
+  const ms = CI
+    ? 200 + Math.random() * 300   // 200–500ms in CI
+    : 1000 + Math.random() * 3000; // 1–4s interactive
   return sleep(ms);
 }
 
@@ -422,9 +424,7 @@ ${B}${CYAN}╔══════════════════════
 
   // ── 15. Disconnect + verify presence ──────────────────────────────────
   step('Disconnect agents & verify status');
-  lead.disconnect();
-  infra.disconnect();
-  backend.disconnect();
+  await Promise.all([lead.disconnect(), infra.disconnect(), backend.disconnect()]);
   log('🔌', `All agents disconnected`);
 
   await run('Agents show offline after disconnect', async () => {
