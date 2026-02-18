@@ -61,6 +61,62 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
 
+      - name: Verify preview URL is reachable
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          URL="https://pr-${{ github.event.pull_request.number }}.api.relaycast.dev"
+          HOST="pr-${{ github.event.pull_request.number }}.api.relaycast.dev"
+
+          echo "DNS lookup for ${HOST}:"
+          getent hosts "$HOST" || nslookup "$HOST" || true
+          echo ""
+
+          echo "Checking ${URL}/v1/health"
+          for i in $(seq 1 20); do
+            code="$(curl -s -o /tmp/preview-health.out -w "%{http_code}" "${URL}/v1/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Preview is healthy."
+              exit 0
+            fi
+            echo "Attempt $i/20: health returned HTTP ${code}. Retrying in 6s..."
+            sleep 6
+          done
+
+          echo "Preview URL did not become healthy in time."
+          echo ""
+          echo "Response headers for ${URL}/v1/health:"
+          curl -sS -D - -o /tmp/preview-health.out "${URL}/v1/health" || true
+          echo "Last response body:"
+          cat /tmp/preview-health.out || true
+          echo ""
+
+          echo "Wrangler deployments for worker relaycast-pr-${PR_NUM}:"
+          npx wrangler deployments list --name "relaycast-pr-${PR_NUM}" || true
+          echo ""
+
+          ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
+          if [ -z "$ZONE_ID" ]; then
+            ZONE_ID="$(curl -sS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/zones?name=relaycast.dev&status=active&page=1&per_page=1" \
+              | jq -r '.result[0].id // empty')"
+          fi
+
+          if [ -n "$ZONE_ID" ]; then
+            echo "Matching workers route for ${HOST}:"
+            curl -sS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/workers/routes" \
+              | jq -r --arg p "pr-${PR_NUM}.api.relaycast.dev/*" '.result[] | select(.pattern == $p) | @json' || true
+          fi
+
+          exit 1
+
       - name: Comment on PR
         continue-on-error: true
         uses: actions/github-script@v7
