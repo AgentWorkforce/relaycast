@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
@@ -9,11 +9,10 @@ import { fanoutToChannel } from './fanout.js';
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
 // POST /v1/webhooks - create an inbound webhook
-inboundWebhookRoutes.post('/webhooks', requireAuth, rateLimit, async (c) => {
+inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const agent = c.get('agent');
     const { name, channel } = await c.req.json();
 
     if (!name || typeof name !== 'string') {
@@ -43,7 +42,6 @@ inboundWebhookRoutes.post('/webhooks', requireAuth, rateLimit, async (c) => {
       workspace.id,
       ch.id,
       { name },
-      agent?.id,
     );
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
@@ -56,7 +54,7 @@ inboundWebhookRoutes.post('/webhooks', requireAuth, rateLimit, async (c) => {
 });
 
 // GET /v1/webhooks - list webhooks
-inboundWebhookRoutes.get('/webhooks', requireAuth, rateLimit, async (c) => {
+inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
@@ -72,7 +70,7 @@ inboundWebhookRoutes.get('/webhooks', requireAuth, rateLimit, async (c) => {
 });
 
 // DELETE /v1/webhooks/:id - delete a webhook
-inboundWebhookRoutes.delete('/webhooks/:id', requireAuth, rateLimit, async (c) => {
+inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');

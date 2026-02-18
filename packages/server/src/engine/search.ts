@@ -47,15 +47,19 @@ export async function searchMessages(
   const rows = await db.all<{
     id: string;
     channel_id: string;
+    channel_name: string;
     agent_id: string;
+    agent_name: string | null;
     body: string;
     created_at: number;
     rank: number;
   }>(sql`
-    SELECT m.id, m.channel_id, m.agent_id, m.body, m.created_at,
+    SELECT m.id, m.channel_id, c.name AS channel_name, m.agent_id, a.name AS agent_name, m.body, m.created_at,
            bm25(messages_fts) AS rank
     FROM messages_fts fts
     JOIN messages m ON m.id = fts.id
+    JOIN channels c ON c.id = m.channel_id
+    LEFT JOIN agents a ON a.id = m.agent_id
     WHERE messages_fts MATCH ${ftsQuery}
       AND m.workspace_id = ${workspaceId}
       ${channelId ? sql`AND m.channel_id = ${channelId}` : sql``}
@@ -66,21 +70,12 @@ export async function searchMessages(
     LIMIT ${limit}
   `);
 
-  // Enrich with channel name and agent name
-  const enriched = [];
-  for (const row of rows) {
-    const [ch] = await db.select().from(channels).where(eq(channels.id, row.channel_id));
-    const [agent] = await db.select().from(agents).where(eq(agents.id, row.agent_id));
-
-    enriched.push({
-      id: row.id,
-      channel_name: ch?.name ?? 'unknown',
-      agent_name: agent?.name ?? 'unknown',
-      text: row.body,
-      created_at: new Date(row.created_at * 1000).toISOString(),
-      relevance_score: row.rank,
-    });
-  }
-
-  return enriched;
+  return rows.map((row) => ({
+    id: row.id,
+    channel_name: row.channel_name || 'unknown',
+    agent_name: row.agent_name || 'unknown',
+    text: row.body,
+    created_at: new Date(row.created_at * 1000).toISOString(),
+    relevance_score: row.rank,
+  }));
 }

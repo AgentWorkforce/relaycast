@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-18T02:39:28.978Z",
+  "lastUpdated": "2026-02-18T02:58:19.319Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -141,6 +141,27 @@
       "startedAt": "2026-02-18T02:38:51.035Z",
       "completedAt": "2026-02-18T02:39:28.904Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wepzl2fo72sy.json"
+    },
+    "traj_c773fz3z2siw": {
+      "title": "Fix server reliability and performance issues from review",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:44:11.668Z",
+      "completedAt": "2026-02-18T02:49:12.931Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_c773fz3z2siw.json"
+    },
+    "traj_8sayb5myluu5": {
+      "title": "Remove searchQuery legacy alias and update callers",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:54:05.544Z",
+      "completedAt": "2026-02-18T02:54:28.695Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8sayb5myluu5.json"
+    },
+    "traj_zpeiij64dghj": {
+      "title": "Remove Postgres references from server package",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:57:12.920Z",
+      "completedAt": "2026-02-18T02:58:19.247Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zpeiij64dghj.json"
     }
   }
 }

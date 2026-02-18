@@ -233,11 +233,10 @@ export interface SpawnAgentResult {
 }
 
 export async function spawnAgent(
+  db: Db,
   workspaceId: string,
   data: SpawnAgentData,
 ): Promise<SpawnAgentResult> {
-  const db = getDb();
-
   // Check if agent already exists
   const [existing] = await db
     .select()
@@ -375,11 +374,10 @@ export interface ReleaseAgentResult {
 }
 
 export async function releaseAgent(
+  db: Db,
   workspaceId: string,
   data: ReleaseAgentData,
 ): Promise<ReleaseAgentResult | null> {
-  const db = getDb();
-
   const [agent] = await db
     .select()
     .from(agents)

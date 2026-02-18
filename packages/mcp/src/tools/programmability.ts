@@ -22,8 +22,8 @@ export function registerProgrammabilityTools(
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ name, channel }) => {
-    const client = getAgentClient();
-    const result = await client.client.post('/v1/webhooks', { name, channel });
+    const relay = getRelay();
+    const result = await relay.webhooks.create({ name, channel });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,

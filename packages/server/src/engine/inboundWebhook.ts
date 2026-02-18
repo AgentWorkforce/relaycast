@@ -1,9 +1,51 @@
+import crypto from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { webhooks, channels, messages } from '../db/schema.js';
+import { webhooks, channels, messages, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
+const WEBHOOK_AGENT_NAME = '__relay_webhook__';
+
+async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> {
+  const [existing] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, WEBHOOK_AGENT_NAME)));
+
+  if (existing) return existing.id;
+
+  const token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const agentId = generateId();
+
+  await db
+    .insert(agents)
+    .values({
+      id: agentId,
+      workspaceId,
+      name: WEBHOOK_AGENT_NAME,
+      type: 'system',
+      tokenHash,
+      status: 'offline',
+      persona: 'System identity for inbound webhook messages',
+      metadata: { system: true, purpose: 'inbound_webhook' },
+    })
+    .onConflictDoNothing();
+
+  const [created] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, WEBHOOK_AGENT_NAME)));
+
+  if (!created) {
+    const err = new Error('Failed to provision inbound webhook agent identity');
+    Object.assign(err, { code: 'webhook_agent_provision_failed', status: 500 });
+    throw err;
+  }
+
+  return created.id;
+}
 
 export async function createWebhook(
   db: Db,
@@ -13,6 +55,7 @@ export async function createWebhook(
   createdBy?: string,
 ) {
   const id = `wh_${generateId()}`;
+  const postingAgentId = createdBy ?? await ensureWebhookAgent(db, workspaceId);
 
   const [webhook] = await db
     .insert(webhooks)
@@ -21,7 +64,7 @@ export async function createWebhook(
       workspaceId,
       channelId,
       name: data.name,
-      createdBy: createdBy || null,
+      createdBy: postingAgentId,
     })
     .returning();
 

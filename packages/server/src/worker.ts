@@ -233,7 +233,12 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   for (const msg of batch.messages) {
     try {
       const event = msg.body as { type: string; workspaceId: string; data: Record<string, unknown> };
-      await deliverEvent(db, event.workspaceId, event.type, event.data);
+      const result = await deliverEvent(db, event.workspaceId, event.type, event.data);
+      if (result.failed > 0) {
+        console.warn(
+          `[queue] Non-retryable webhook delivery failures for event ${event.type}: ${result.failed}/${result.attempted}`,
+        );
+      }
       msg.ack();
     } catch {
       msg.retry();

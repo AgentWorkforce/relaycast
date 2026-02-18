@@ -110,10 +110,10 @@ describe('Database Schema', () => {
     expect(cols.agentId).toBeDefined();
     expect(cols.threadId).toBeDefined();
     expect(cols.body).toBeDefined();
+    expect(cols.blocks).toBeDefined();
     expect(cols.hasAttachments).toBeDefined();
     expect(cols.createdAt).toBeDefined();
     expect(cols.updatedAt).toBeDefined();
-    expect(cols.searchVector).toBeDefined();
   });
 
   // ============================================

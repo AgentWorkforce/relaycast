@@ -50,7 +50,7 @@ export class ChannelDO implements DurableObject {
    * Fan out an event payload to every member AgentDO via POST /deliver.
    *
    * Uses Promise.allSettled so one agent's failure doesn't block others.
-   * Failed deliveries are logged; the event is already persisted in Postgres
+   * Failed deliveries are logged; the event is already persisted in D1
    * and can be picked up by the agent on resync.
    */
   private async fanOut(
@@ -123,7 +123,7 @@ export class ChannelDO implements DurableObject {
       console.log(`[ChannelDO] Initialized members cache with ${body.members.length} members`);
     }
 
-    // If still no members, try loading from Postgres as fallback
+    // If still no members, try loading from D1 as fallback
     if ((await this.getMembers()).length === 0 && body.channelId && body.workspaceId) {
       try {
         const members = await this.loadMembersFromDb(body.workspaceId, body.channelId);
@@ -133,7 +133,7 @@ export class ChannelDO implements DurableObject {
           console.log(`[ChannelDO] Loaded ${members.length} members from D1 for channel ${body.channelId}`);
         }
       } catch (err) {
-        console.error(`[ChannelDO] Failed to load members from Postgres:`, err);
+        console.error(`[ChannelDO] Failed to load members from D1:`, err);
       }
     }
 
@@ -146,7 +146,7 @@ export class ChannelDO implements DurableObject {
   }
 
   /**
-   * Load channel members from Postgres as a fallback when DO cache is empty.
+   * Load channel members from D1 as a fallback when DO cache is empty.
    */
   private async loadMembersFromDb(workspaceId: string, channelId: string): Promise<string[]> {
     const { getDb } = await import('../db/index.js');
