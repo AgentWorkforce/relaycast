@@ -125,3 +125,31 @@ describe('GET /v1/agents/presence', () => {
     expect(body.error.code).toBe('internal_error');
   });
 });
+
+describe('POST /v1/agents/disconnect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('forwards disconnect to PresenceDO with agent name', async () => {
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
+
+    const res = await app.request('/v1/agents/disconnect', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const presenceGet = (bindings.PRESENCE_DO as any).get as any;
+    expect(presenceGet).toHaveBeenCalledWith('presence-do');
+
+    const presenceStub = presenceGet.mock.results[0].value as { fetch: any };
+    const req = presenceStub.fetch.mock.calls[0][0] as Request;
+    await expect(req.clone().json()).resolves.toEqual({
+      agentId: 'agent_123',
+      workspaceId: 'ws_123',
+      agentName: 'TestBot',
+    });
+  });
+});

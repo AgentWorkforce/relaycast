@@ -4,6 +4,7 @@ import type { CloudflareBindings } from '../env.js';
 const PRESENCE_TTL_MS = 60_000;
 /** How often the alarm fires to sweep stale agents (ms). */
 const ALARM_INTERVAL_MS = 60_000;
+const AGENT_NAME_PREFIX = 'agentName:';
 
 /**
  * PresenceDO — per-workspace presence tracking backed by DO Alarms.
@@ -49,6 +50,34 @@ export class PresenceDO implements DurableObject {
     return result;
   }
 
+  private async getAgentName(agentId: string): Promise<string | null> {
+    const name = await this.state.storage.get<string>(`${AGENT_NAME_PREFIX}${agentId}`);
+    return name ?? null;
+  }
+
+  private async storeAgentName(agentId: string, agentName?: string): Promise<void> {
+    if (!agentName) return;
+    const trimmed = agentName.trim();
+    if (!trimmed) return;
+    await this.state.storage.put(`${AGENT_NAME_PREFIX}${agentId}`, trimmed);
+  }
+
+  private async buildPresenceEvent(
+    type: 'agent.online' | 'agent.offline',
+    agentId: string,
+    agentName?: string,
+  ): Promise<Record<string, unknown>> {
+    const resolvedName = agentName ?? (await this.getAgentName(agentId)) ?? agentId;
+    return {
+      type,
+      agent: { name: resolvedName },
+      // Keep extras for debugging/compatibility; clients use `agent.name`.
+      agent_name: resolvedName,
+      subject_agent_id: agentId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   /**
    * Return the set of agent IDs that are currently online.
    */
@@ -69,15 +98,16 @@ export class PresenceDO implements DurableObject {
    */
   private async deliverToAgent(
     workspaceId: string,
-    agentId: string,
+    recipientAgentId: string,
     event: Record<string, unknown>,
   ): Promise<void> {
-    const id = this.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
+    const id = this.env.AGENT_DO.idFromName(`${workspaceId}:${recipientAgentId}`);
     const stub = this.env.AGENT_DO.get(id);
     await stub.fetch(new Request('http://do/deliver', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(event),
+      // `agentId` here must be the recipient for AgentDO metadata bookkeeping.
+      body: JSON.stringify({ ...event, workspaceId, agentId: recipientAgentId }),
     }));
   }
 
@@ -135,15 +165,18 @@ export class PresenceDO implements DurableObject {
     const body = (await request.json()) as {
       agentId: string;
       workspaceId: string;
+      agentName?: string;
     };
 
-    const { agentId, workspaceId } = body;
+    const { agentId, workspaceId, agentName } = body;
 
     // Persist workspace ID on first call.
     if ((await this.getWorkspaceId()) === null) {
       this.workspaceId = workspaceId;
       await this.state.storage.put('workspaceId', workspaceId);
     }
+
+    await this.storeAgentName(agentId, agentName);
 
     // Check whether this agent was previously offline (no key or stale).
     const previousTs = await this.state.storage.get<number>(`agent:${agentId}`);
@@ -159,12 +192,8 @@ export class PresenceDO implements DurableObject {
     // If newly online, broadcast an agent.online event.
     if (wasOffline) {
       const onlineAgents = await this.getOnlineAgentIds();
-      await this.broadcastPresenceEvent(workspaceId, onlineAgents, {
-        type: 'agent.online',
-        agentId,
-        workspaceId,
-        timestamp: new Date().toISOString(),
-      });
+      const event = await this.buildPresenceEvent('agent.online', agentId, agentName);
+      await this.broadcastPresenceEvent(workspaceId, onlineAgents, event);
     }
 
     return Response.json({ ok: true });
@@ -178,9 +207,11 @@ export class PresenceDO implements DurableObject {
     const body = (await request.json()) as {
       agentId: string;
       workspaceId: string;
+      agentName?: string;
     };
 
-    const { agentId, workspaceId } = body;
+    const { agentId, workspaceId, agentName } = body;
+    await this.storeAgentName(agentId, agentName);
 
     // Only remove if the agent actually has a presence entry.
     const existing = await this.state.storage.get<number>(`agent:${agentId}`);
@@ -192,12 +223,8 @@ export class PresenceDO implements DurableObject {
 
     // Broadcast agent.offline to remaining online agents.
     const onlineAgents = await this.getOnlineAgentIds();
-    await this.broadcastPresenceEvent(workspaceId, onlineAgents, {
-      type: 'agent.offline',
-      agentId,
-      workspaceId,
-      timestamp: new Date().toISOString(),
-    });
+    const event = await this.buildPresenceEvent('agent.offline', agentId, agentName);
+    await this.broadcastPresenceEvent(workspaceId, onlineAgents, event);
 
     return Response.json({ ok: true });
   }
@@ -237,12 +264,8 @@ export class PresenceDO implements DurableObject {
       await this.state.storage.delete(stale.map((id) => `agent:${id}`));
 
       for (const agentId of stale) {
-        await this.broadcastPresenceEvent(workspaceId, stillOnline, {
-          type: 'agent.offline',
-          agentId,
-          workspaceId,
-          timestamp: new Date().toISOString(),
-        });
+        const event = await this.buildPresenceEvent('agent.offline', agentId);
+        await this.broadcastPresenceEvent(workspaceId, stillOnline, event);
       }
     }
 

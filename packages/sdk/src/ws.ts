@@ -90,6 +90,12 @@ export class WsClient {
       this.reconnectTimer = null;
     }
     if (this.ws) {
+      // Null out handlers before closing to prevent the stale onclose
+      // callback from clobbering a new connection (e.g. React strict mode).
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
       this.ws.close();
       this.ws = null;
     }

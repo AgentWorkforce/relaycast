@@ -220,6 +220,30 @@ ${B}${CYAN}╔══════════════════════
     log('👋', `${BLUE}${B}${BACKEND}${R} joined #${channelName}`);
   });
 
+  // Invite the dashboard observer to channels so it receives WS events.
+  // Uses lead.channels.invite() instead of registering/joining the observer
+  // directly, which would rotate its token and break the dashboard's WS.
+  await run('Invite dashboard observer to channels', async () => {
+    const agents = await relay.agents.list();
+    const observer = agents.find((a) => a.name === '_dashboard_observer');
+    if (!observer) {
+      log('⏭️ ', `${DIM}No dashboard observer found — skipping invite${R}`);
+      return;
+    }
+    // Invite to both channels (invite is idempotent if already a member)
+    await Promise.allSettled([
+      lead.channels.invite(channelName, '_dashboard_observer'),
+      lead.channels.invite('general', '_dashboard_observer'),
+    ]);
+    // Verify membership
+    const ch = await lead.channels.get(channelName);
+    const isMember = ch.members?.some((m: { agent_name?: string }) => m.agent_name === '_dashboard_observer');
+    if (!isMember) {
+      throw new Error(`_dashboard_observer not found in #${channelName} members`);
+    }
+    log('👋', `${DIM}_dashboard_observer${R} invited to #${channelName} and #general (verified)`);
+  });
+
   await pause();
 
   // ── 4. Connect WebSockets ────────────────────────────────────────────

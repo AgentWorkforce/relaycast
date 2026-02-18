@@ -81,20 +81,20 @@ describe('AgentClient WebSocket integration', () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it('disconnect() closes WebSocket', () => {
+  it('disconnect() closes WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    agent.disconnect();
+    await agent.disconnect();
     expect(ws.close).toHaveBeenCalled();
   });
 
-  it('disconnect() allows reconnect with a fresh WebSocket', () => {
+  it('disconnect() allows reconnect with a fresh WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
-    agent.disconnect();
+    await agent.disconnect();
 
     agent.connect();
     expect(MockWebSocket.instances).toHaveLength(2);

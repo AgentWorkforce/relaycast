@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { RelayError } from '@relaycast/sdk';
-import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
+import { cookies } from 'next/headers';
+import { RelayCast, RelayError } from '@relaycast/sdk';
+
+const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
 
 /**
  * GET /api/bridge
@@ -8,7 +10,8 @@ import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
  */
 export async function GET() {
   try {
-    const apiKey = await getRelayApiKey();
+    const cookieStore = await cookies();
+    const apiKey = cookieStore.get('relaycast_key')?.value;
     if (!apiKey) {
       return NextResponse.json(
         { projects: [], messages: [], connected: false },
@@ -16,7 +19,7 @@ export async function GET() {
       );
     }
 
-    const relay = getRelay(apiKey);
+    const relay = new RelayCast({ apiKey, baseUrl: RELAY_SERVER });
     const [agentList, channelList] = await Promise.allSettled([
       relay.agents.list(),
       relay.channels.list(),

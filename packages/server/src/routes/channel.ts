@@ -3,7 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
-import { fanoutToChannel, updateChannelMembers } from './fanout.js';
+import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers } from './fanout.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -32,9 +32,9 @@ channelRoutes.post(
         agent?.id,
       );
 
-      // Fire-and-forget fanout
+      // Fire-and-forget fanout — workspace-wide so all online agents learn about the new channel
       const eventData = { ...result, channel_name: result.name };
-      fanoutToChannel(c, result.id, 'channel.created', eventData).catch(() => {});
+      fanoutToWorkspace(c, 'channel.created', eventData).catch(() => {});
       // Update ChannelDO member cache (creator auto-joined)
       try {
         const members = await channelEngine.getMembers(db, workspace.id, result.name);

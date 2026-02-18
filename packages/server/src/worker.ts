@@ -162,6 +162,15 @@ app.get('/v1/ws', async (c) => {
   const workspaceId = agent.workspaceId;
   const agentId = agent.id;
 
+  // Register the agent as online in PresenceDO (fire-and-forget)
+  const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
+  const presenceStub = c.env.PRESENCE_DO.get(presenceDoId);
+  presenceStub.fetch(new Request('http://do/heartbeat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, workspaceId, agentName: agent.name }),
+  })).catch(() => {});
+
   const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
   const stub = c.env.AGENT_DO.get(doId);
   // Rewrite path from /v1/ws to /ws for the AgentDO handler

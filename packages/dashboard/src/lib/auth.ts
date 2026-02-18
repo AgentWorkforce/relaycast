@@ -1,5 +1,5 @@
 /**
- * Authenticate via server-side endpoint which sets an httpOnly cookie.
+ * Authenticate via server-side endpoint which sets httpOnly cookies.
  * Returns true on success.
  */
 export async function setAuth(apiKey: string): Promise<boolean> {
@@ -17,8 +17,7 @@ export async function setAuth(apiKey: string): Promise<boolean> {
 }
 
 /**
- * Clear auth by calling server-side logout (removes httpOnly cookie)
- * and wiping all client-side cached data.
+ * Clear auth by calling server-side logout (removes httpOnly cookies).
  */
 export async function clearAuth(): Promise<void> {
   try {
@@ -26,19 +25,15 @@ export async function clearAuth(): Promise<void> {
   } catch {
     // Best effort
   }
-
-  // Clear SWR cache so stale data doesn't persist across sessions
-  const { mutate } = await import('swr');
-  await mutate(() => true, undefined, { revalidate: false });
 }
 
 /**
- * Check if user is authenticated by querying the server.
- * The httpOnly cookie is sent automatically.
+ * Check if user is authenticated by querying the session endpoint.
+ * The httpOnly cookies are sent automatically.
  */
 export async function isAuthenticated(): Promise<boolean> {
   try {
-    const res = await fetch('/api/auth/check');
+    const res = await fetch('/api/auth/session');
     return res.ok;
   } catch {
     return false;

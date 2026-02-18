@@ -31,7 +31,7 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
     await stub.fetch(new Request('http://do/disconnect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id }),
+      body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
     return c.json({ ok: true });
   } catch (err: unknown) {

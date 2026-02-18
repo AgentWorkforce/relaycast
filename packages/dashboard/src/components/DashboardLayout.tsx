@@ -1,29 +1,46 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Activity } from 'lucide-react';
+import { usePresence, useChannels, useEvent, useAgent, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { useDashboardData, useChannels } from '../hooks/use-dashboard-data';
-import { synthesizeActivityEvents } from '../lib/activity';
 import { cn } from '../lib/utils';
+import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
+import type { Agent as ApiAgent, ChannelCreatedEvent } from '@relaycast/types';
 
 export function DashboardLayout() {
-  const { agents, messages } = useDashboardData();
+  const { agents: rawAgents } = usePresence();
   const { channels } = useChannels();
+  const { conversations } = useWorkspaceDMs();
+  const agentClient = useAgent();
+  const { status: wsStatus } = useWebSocket();
+
+  // Auto-join observer to newly created channels so we receive WS events
+  useEvent('channel.created', (evt) => {
+    const e = evt as ChannelCreatedEvent;
+    agentClient.channels.join(e.channel.name).catch(() => {});
+  });
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(true);
+
+  // Default to first channel if none selected
+  useEffect(() => {
+    if (!selectedChannel && channels.length > 0) {
+      setSelectedChannel(channels[0].name);
+    }
+  }, [selectedChannel, channels]);
   const [threadMessageId, setThreadMessageId] = useState<string | null>(null);
 
-  const activityEvents = synthesizeActivityEvents(agents, messages);
+  // Filter out the dashboard observer agent
+  const agents = rawAgents.filter((a) => !a.name.startsWith('_dashboard_'));
 
   function handleSelectAgent(name: string | null) {
     setSelectedAgent(name);
-    // Close thread when switching agents
     if (name) setThreadMessageId(null);
   }
 
@@ -34,20 +51,15 @@ export function DashboardLayout() {
   }
 
   // Determine right panel priority: agent panel > thread > activity
-  const selectedAgentData = selectedAgent
+  const selectedAgentData: ApiAgent | null = selectedAgent
     ? agents.find((a) => a.name === selectedAgent) ?? null
     : null;
-
-  const agentMessageCount = selectedAgent
-    ? messages.filter((m) => m.from === selectedAgent).length
-    : 0;
 
   let rightPanel: React.ReactNode = null;
   if (selectedAgentData) {
     rightPanel = (
       <AgentPanel
         agent={selectedAgentData}
-        messageCount={agentMessageCount}
         onClose={() => setSelectedAgent(null)}
       />
     );
@@ -59,7 +71,7 @@ export function DashboardLayout() {
       />
     );
   } else if (activityOpen) {
-    rightPanel = <ActivityLog events={activityEvents} />;
+    rightPanel = <ActivityLog />;
   }
 
   const showActivityToggle = !selectedAgentData && !threadMessageId;
@@ -69,17 +81,17 @@ export function DashboardLayout() {
       <AgentSidebar
         channels={channels}
         agents={agents}
-        messages={messages}
+        conversations={conversations}
         selectedChannel={selectedChannel}
         selectedAgent={selectedAgent}
+        wsStatus={wsStatus}
         onSelectChannel={handleSelectChannel}
         onSelectAgent={handleSelectAgent}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Toggle bar */}
         {showActivityToggle && (
-          <div className="absolute top-3 right-4 z-10">
+          <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
             <button
               onClick={() => setActivityOpen(!activityOpen)}
               className={cn(
@@ -97,9 +109,12 @@ export function DashboardLayout() {
 
         <div className="flex flex-1 min-h-0">
           <ChatFeed
-            messages={messages}
             selectedChannel={selectedChannel}
-            selectedAgent={null}
+            dmLabel={
+              selectedChannel?.startsWith('dm:')
+                ? conversations.find((dm) => `dm:${dm.id}` === selectedChannel)?.name ?? undefined
+                : undefined
+            }
             onOpenThread={(id) => setThreadMessageId(id)}
           />
           {rightPanel}

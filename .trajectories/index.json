@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-17T03:04:15.385Z",
+  "lastUpdated": "2026-02-18T02:39:28.978Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -102,9 +102,45 @@
     },
     "traj_dht6j7qg1k4b": {
       "title": "Fix rate limiter fallback keying, event queue recovery/guard, remove dead cache code",
-      "status": "active",
+      "status": "completed",
       "startedAt": "2026-02-09T09:38:24.102Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_dht6j7qg1k4b.json"
+      "completedAt": "2026-02-18T01:40:56.945Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dht6j7qg1k4b.json"
+    },
+    "traj_2pct5202h0s3": {
+      "title": "Investigate e2e agent disconnect status not showing grey",
+      "status": "completed",
+      "startedAt": "2026-02-18T01:59:30.094Z",
+      "completedAt": "2026-02-18T02:05:09.762Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2pct5202h0s3.json"
+    },
+    "traj_2oo0sn6nipt4": {
+      "title": "Fix stale online status in dashboard activity feed after disconnect",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:22:06.916Z",
+      "completedAt": "2026-02-18T02:22:12.963Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2oo0sn6nipt4.json"
+    },
+    "traj_tgbx19bcb7y8": {
+      "title": "Fix agent metadata loss and online flip on dashboard refresh",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:25:38.596Z",
+      "completedAt": "2026-02-18T02:25:48.571Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_tgbx19bcb7y8.json"
+    },
+    "traj_bjdj94bonf2h": {
+      "title": "Review packages/server/src architecture and performance",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:30:02.204Z",
+      "completedAt": "2026-02-18T02:33:49.941Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_bjdj94bonf2h.json"
+    },
+    "traj_wepzl2fo72sy": {
+      "title": "Compare inbound webhook auth behavior with main branch",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:38:51.035Z",
+      "completedAt": "2026-02-18T02:39:28.904Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wepzl2fo72sy.json"
     }
   }
 }

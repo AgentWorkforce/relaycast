@@ -1,7 +1,7 @@
 'use client';
 
 import { AgentAvatar } from './AgentAvatar';
-import type { Message } from '../types/dashboard';
+import type { MessageWithMeta } from '@relaycast/types';
 
 function relativeTime(timestamp: string): string {
   const diff = Date.now() - new Date(timestamp).getTime();
@@ -16,7 +16,7 @@ function relativeTime(timestamp: string): string {
 }
 
 interface MessageCardProps {
-  message: Message;
+  message: MessageWithMeta;
   compact?: boolean;
   onOpenThread?: (messageId: string) => void;
 }
@@ -27,26 +27,23 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
       {compact ? (
         <div className="w-8 shrink-0" />
       ) : (
-        <AgentAvatar name={message.from} />
+        <AgentAvatar name={message.agent_name} />
       )}
       <div className="min-w-0 flex-1">
         {!compact && (
           <div className="flex items-baseline gap-2 mb-0.5">
             <span className="font-semibold text-sm text-[var(--color-text-primary)]">
-              {message.from}
-            </span>
-            <span className="text-xs text-[var(--color-text-muted)]">
-              &rarr; {message.to}
+              {message.agent_name}
             </span>
             <span className="text-xs text-[var(--color-text-dim)] ml-auto shrink-0">
-              {relativeTime(message.timestamp)}
+              {relativeTime(message.created_at)}
             </span>
           </div>
         )}
         <p className="text-sm text-[var(--color-text-secondary)] break-words whitespace-pre-wrap">
-          {message.content}
+          {message.text}
         </p>
-        {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
+        {((message.reactions?.length ?? 0) > 0 || message.reply_count > 0) && (
           <div className="flex items-center gap-2 mt-1">
             {(message.reactions ?? []).map((r) => (
               <span
@@ -56,12 +53,12 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
                 {r.emoji} {r.count}
               </span>
             ))}
-            {message.replyCount > 0 && (
+            {message.reply_count > 0 && (
               <button
                 onClick={() => onOpenThread?.(message.id)}
                 className="text-xs text-[var(--color-accent-cyan)] cursor-pointer hover:underline"
               >
-                {message.replyCount} {message.replyCount === 1 ? 'reply' : 'replies'}
+                {message.reply_count} {message.reply_count === 1 ? 'reply' : 'replies'}
               </button>
             )}
           </div>

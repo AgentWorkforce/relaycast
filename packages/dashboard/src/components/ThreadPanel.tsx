@@ -1,21 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { X, MessageSquare } from 'lucide-react';
+import { useThread } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
-
-interface ThreadMessage {
-  id: string;
-  agent_id: string;
-  agent_name: string;
-  text: string;
-  created_at: string;
-}
-
-interface ThreadData {
-  parent: ThreadMessage & { reply_count: number };
-  replies: ThreadMessage[];
-}
+import type { MessageWithMeta } from '@relaycast/types';
 
 function relativeTime(timestamp: string): string {
   const diff = Date.now() - new Date(timestamp).getTime();
@@ -29,7 +17,7 @@ function relativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
-function ThreadMessageRow({ msg }: { msg: ThreadMessage }) {
+function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
   return (
     <div className="flex gap-3 px-4 py-2">
       <AgentAvatar name={msg.agent_name} />
@@ -56,21 +44,7 @@ interface ThreadPanelProps {
 }
 
 export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
-  const [thread, setThread] = useState<ThreadData | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/messages/${messageId}/replies`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.ok) {
-          setThread(json.data);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [messageId]);
+  const { parent, replies, loading } = useThread(messageId);
 
   return (
     <div className="w-[360px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
@@ -79,9 +53,9 @@ export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
           <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Thread</h2>
-          {thread && (
+          {parent && (
             <span className="text-xs text-[var(--color-text-dim)]">
-              {thread.parent.reply_count} {thread.parent.reply_count === 1 ? 'reply' : 'replies'}
+              {parent.reply_count} {parent.reply_count === 1 ? 'reply' : 'replies'}
             </span>
           )}
         </div>
@@ -99,7 +73,7 @@ export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
           <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
             <p className="text-sm">Loading thread...</p>
           </div>
-        ) : !thread ? (
+        ) : !parent ? (
           <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
             <p className="text-sm">Thread not found</p>
           </div>
@@ -107,17 +81,17 @@ export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
           <div>
             {/* Parent message */}
             <div className="border-b border-[var(--color-border-subtle)] pb-2 mb-1">
-              <ThreadMessageRow msg={thread.parent} />
+              <ThreadMessageRow msg={parent} />
             </div>
 
             {/* Replies */}
-            {thread.replies.length === 0 ? (
+            {replies.length === 0 ? (
               <div className="px-4 py-6 text-center text-xs text-[var(--color-text-dim)]">
                 No replies yet
               </div>
             ) : (
               <div className="py-1">
-                {thread.replies.map((reply) => (
+                {replies.map((reply) => (
                   <ThreadMessageRow key={reply.id} msg={reply} />
                 ))}
               </div>

@@ -2,7 +2,7 @@
 
 import { X, Bot, User, Clock, Cpu, CircleDot } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
-import type { Agent } from '../types/dashboard';
+import type { Agent } from '@relaycast/types';
 
 function relativeTime(timestamp: string): string {
   const diff = Date.now() - new Date(timestamp).getTime();
@@ -39,15 +39,16 @@ function statusLabel(status: string) {
 
 interface AgentPanelProps {
   agent: Agent;
-  messageCount: number;
   onClose: () => void;
 }
 
-export function AgentPanel({ agent, messageCount, onClose }: AgentPanelProps) {
+export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const status = statusLabel(agent.status);
+  const cli = (agent.metadata?.cli as string) || 'unknown';
+  const currentTask = (agent.metadata?.current_task as string) || '';
 
   // Collect metadata entries to display (excluding known fields)
-  const extraMeta = Object.entries(agent.metadata).filter(
+  const extraMeta = Object.entries(agent.metadata || {}).filter(
     ([key]) => !['cli', 'current_task'].includes(key)
   );
 
@@ -93,32 +94,27 @@ export function AgentPanel({ agent, messageCount, onClose }: AgentPanelProps) {
 
         {/* Info rows */}
         <div className="px-4 py-4 space-y-3">
-          {agent.currentTask && (
+          {currentTask && (
             <InfoRow
               icon={<CircleDot className="h-3.5 w-3.5" />}
               label="Current task"
-              value={agent.currentTask}
+              value={currentTask}
             />
           )}
           <InfoRow
             icon={<Cpu className="h-3.5 w-3.5" />}
             label="CLI"
-            value={agent.cli}
+            value={cli}
           />
           <InfoRow
             icon={<Clock className="h-3.5 w-3.5" />}
             label="Last seen"
-            value={relativeTime(agent.lastSeen)}
+            value={relativeTime(agent.last_seen)}
           />
           <InfoRow
             icon={agent.type === 'human' ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
             label="Created"
-            value={formatDate(agent.createdAt)}
-          />
-          <InfoRow
-            icon={<CircleDot className="h-3.5 w-3.5" />}
-            label="Messages"
-            value={String(messageCount)}
+            value={formatDate(agent.created_at)}
           />
         </div>
 

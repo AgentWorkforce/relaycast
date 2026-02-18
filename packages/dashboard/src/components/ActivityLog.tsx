@@ -1,6 +1,7 @@
 'use client';
 
 import { Send, Wifi, Clock, SmilePlus, Reply } from 'lucide-react';
+import { useActivityFeed } from '../hooks/use-activity-feed';
 import type { ActivityEvent } from '../types/dashboard';
 
 function relativeTime(timestamp: string): string {
@@ -23,11 +24,9 @@ const EVENT_ICONS: Record<string, typeof Send> = {
   thread_reply: Reply,
 };
 
-interface ActivityLogProps {
-  events: ActivityEvent[];
-}
+export function ActivityLog() {
+  const events = useActivityFeed();
 
-export function ActivityLog({ events }: ActivityLogProps) {
   return (
     <div className="w-[320px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] shrink-0">
@@ -40,7 +39,7 @@ export function ActivityLog({ events }: ActivityLogProps) {
           </div>
         ) : (
           <div className="py-1">
-            {events.map((event) => {
+            {events.map((event: ActivityEvent) => {
               const Icon = EVENT_ICONS[event.type] || Send;
               return (
                 <div

@@ -11,7 +11,7 @@ export const presenceRefresh = createMiddleware<AppEnv>(async (c, next) => {
       // Fire-and-forget heartbeat
       stub.fetch(new Request('http://do/heartbeat', {
         method: 'POST',
-        body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id }),
+        body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
       })).catch(() => {});
     }
   } catch {

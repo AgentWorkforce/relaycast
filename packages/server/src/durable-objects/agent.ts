@@ -315,15 +315,13 @@ export class AgentDO implements DurableObject {
   private async handleDeliver(request: Request): Promise<Response> {
     const event = (await request.json()) as Record<string, unknown>;
 
-    // Persist agent identity on first delivery for resync queries.
+    // Persist agent identity for ping/disconnect presence updates.
+    // This can arrive before message traffic (e.g. presence fanout), so keep it current.
     if (event.workspaceId && event.agentId) {
-      const existing = await this.state.storage.get('meta');
-      if (!existing) {
-        await this.state.storage.put('meta', {
-          workspaceId: event.workspaceId as string,
-          agentId: event.agentId as string,
-        });
-      }
+      await this.state.storage.put('meta', {
+        workspaceId: event.workspaceId as string,
+        agentId: event.agentId as string,
+      });
     }
 
     const seq = await this.incrementAgentSeq();
@@ -352,6 +350,17 @@ export class AgentDO implements DurableObject {
 
       if (parsed.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
+        // Refresh presence so the agent stays "online" in PresenceDO
+        const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
+        if (meta) {
+          const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
+          const stub = this.env.PRESENCE_DO.get(doId);
+          stub.fetch(new Request('http://do/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
+          })).catch(() => {});
+        }
         return;
       }
 

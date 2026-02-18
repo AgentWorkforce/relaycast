@@ -50,6 +50,13 @@ describe('presenceRefresh middleware', () => {
         method: 'POST',
       }),
     );
+
+    const req = presenceDO._stub.fetch.mock.calls[0][0] as Request;
+    await expect(req.clone().json()).resolves.toEqual({
+      agentId: 'agent_1',
+      workspaceId: 'ws_1',
+      agentName: 'TestBot',
+    });
   });
 
   it('skips presence for non-agent requests (workspace key auth)', async () => {

@@ -10,16 +10,17 @@ export interface RelayProviderProps {
   agentToken: string;
   baseUrl?: string;
   channels?: string[];
+  debug?: boolean;
   children: React.ReactNode;
 }
 
-export function RelayProvider({ apiKey, agentToken, baseUrl, channels, children }: RelayProviderProps) {
+export function RelayProvider({ apiKey, agentToken, baseUrl, channels, debug, children }: RelayProviderProps) {
   const clients = useMemo(() => {
     const relay = new RelayCast({ apiKey, baseUrl });
     const agent = relay.as(agentToken);
-    const ws = new WsClient({ token: agentToken, baseUrl });
+    const ws = new WsClient({ token: agentToken, baseUrl, debug });
     return { relay, agent, ws };
-  }, [apiKey, agentToken, baseUrl]);
+  }, [apiKey, agentToken, baseUrl, debug]);
 
   const store = useMemo(() => createStore(), []);
 

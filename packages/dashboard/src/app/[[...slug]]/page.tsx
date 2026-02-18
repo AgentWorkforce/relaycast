@@ -1,12 +1,12 @@
 'use client';
 
-import { AuthGate } from '../../components/AuthGate';
+import { RelaySessionProvider } from '../../components/RelaySessionProvider';
 import { DashboardLayout } from '../../components/DashboardLayout';
 
 export default function CatchAllPage() {
   return (
-    <AuthGate>
+    <RelaySessionProvider>
       <DashboardLayout />
-    </AuthGate>
+    </RelaySessionProvider>
   );
 }

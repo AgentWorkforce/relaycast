@@ -4,16 +4,19 @@ import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { AgentAvatar } from './AgentAvatar';
-import type { Agent, Channel, Message } from '../types/dashboard';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
+import type { Agent, Channel, DmConversationSummary } from '@relaycast/types';
+
+type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 interface AgentSidebarProps {
   channels: Channel[];
   agents: Agent[];
-  messages: Message[];
+  conversations: DmConversationSummary[];
   selectedChannel: string | null;
   selectedAgent: string | null;
+  wsStatus: ConnectionStatus;
   onSelectChannel: (name: string | null) => void;
   onSelectAgent: (name: string | null) => void;
 }
@@ -37,24 +40,17 @@ function getTheme(): 'dark' | 'light' {
 export function AgentSidebar({
   channels,
   agents,
-  messages,
+  conversations,
   selectedChannel,
   selectedAgent,
+  wsStatus,
   onSelectChannel,
   onSelectAgent,
 }: AgentSidebarProps) {
   const router = useRouter();
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  const regularChannels = channels.filter((ch) => !ch.isDm);
-  const dmChannels = channels.filter((ch) => ch.isDm);
-
-  // Compute per-channel message counts from fetched messages
-  const channelMessageCounts = new Map<string, number>();
-  for (const m of messages) {
-    const ch = m.to.startsWith('#') ? m.to.slice(1) : m.to;
-    channelMessageCounts.set(ch, (channelMessageCounts.get(ch) || 0) + 1);
-  }
+  const regularChannels = channels.filter((ch) => !ch.is_archived);
 
   useEffect(() => {
     setTheme(getTheme());
@@ -78,8 +74,16 @@ export function AgentSidebar({
   return (
     <div className="w-[260px] shrink-0 flex flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)]">
-        <h1 className="text-base font-bold text-[var(--color-text-primary)]">Relaycast</h1>
+      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
+        <h1 className="text-base text-[var(--color-text-primary)]"><span className="font-bold">Relaycast</span> <em className="font-normal">Observer</em></h1>
+        <span
+          className={cn('h-2 w-2 rounded-full shrink-0', {
+            'bg-green-500': wsStatus === 'connected',
+            'bg-yellow-500 animate-pulse': wsStatus === 'connecting' || wsStatus === 'reconnecting',
+            'bg-red-500': wsStatus === 'disconnected',
+          })}
+          title={`WebSocket: ${wsStatus}`}
+        />
       </div>
 
       {/* Scrollable body */}
@@ -105,9 +109,9 @@ export function AgentSidebar({
             >
               <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
               <span className="truncate flex-1 text-left">{ch.name}</span>
-              {(channelMessageCounts.get(ch.name) || 0) > 0 && (
+              {(ch.member_count ?? 0) > 0 && (
                 <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
-                  {channelMessageCounts.get(ch.name)}
+                  {ch.member_count}
                 </span>
               )}
             </button>
@@ -118,19 +122,19 @@ export function AgentSidebar({
         </div>
 
         {/* Direct Messages */}
-        {dmChannels.length > 0 && (
+        {conversations.length > 0 && (
           <>
             <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
             <div className="px-3 pt-3 pb-2">
               <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                 Direct Messages
               </h2>
-              {dmChannels.map((ch) => {
-                const dmKey = `dm:${ch.name}`;
-                const msgCount = channelMessageCounts.get(dmKey) || 0;
+              {conversations.map((dm) => {
+                const dmKey = `dm:${dm.id}`;
+                const dmLabel = dm.name || dm.participants.join(', ');
                 return (
                   <button
-                    key={ch.id}
+                    key={dm.id}
                     onClick={() => {
                       onSelectAgent(null);
                       onSelectChannel(selectedChannel === dmKey ? null : dmKey);
@@ -143,10 +147,10 @@ export function AgentSidebar({
                     )}
                   >
                     <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                    <span className="truncate flex-1 text-left">{ch.name}</span>
-                    {msgCount > 0 && (
+                    <span className="truncate flex-1 text-left">{dmLabel}</span>
+                    {dm.unread_count > 0 && (
                       <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
-                        {msgCount}
+                        {dm.unread_count}
                       </span>
                     )}
                   </button>
@@ -181,7 +185,7 @@ export function AgentSidebar({
               <span className="truncate flex-1 text-left">{agent.name}</span>
               <span className={cn('h-2 w-2 rounded-full shrink-0', statusColor(agent.status))} />
               <span className="text-[10px] text-[var(--color-text-dim)] shrink-0">
-                {agent.cli}
+                {(agent.metadata?.cli as string) || agent.type}
               </span>
             </button>
           ))}
