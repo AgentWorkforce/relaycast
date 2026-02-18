@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../engine/stats.js', () => ({
-  getWorkspaceStats: vi.fn(),
-}));
-
 vi.mock('../../engine/activity.js', () => ({
   getActivityFeed: vi.fn(),
 }));
@@ -28,7 +24,6 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { dashboardRoutes } from '../../routes/dashboard.js';
-import * as statsEngine from '../../engine/stats.js';
 import * as activityEngine from '../../engine/activity.js';
 import * as dmAllEngine from '../../engine/dmAll.js';
 import * as tokenRotateEngine from '../../engine/tokenRotate.js';
@@ -54,59 +49,6 @@ app.route('/v1', v1);
 describe('Dashboard routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('GET /v1/workspace/stats', () => {
-    it('returns aggregated workspace stats', async () => {
-      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
-      vi.mocked(statsEngine.getWorkspaceStats).mockResolvedValue({
-        agents: 5,
-        channels: 3,
-        messages: 120,
-        dm_conversations: 8,
-        files: 2,
-      });
-
-      const res = await app.request('/v1/workspace/stats', {
-        method: 'GET',
-        headers: wsAuthHeaders(),
-      });
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.ok).toBe(true);
-      expect(body.data).toEqual({
-        agents: 5,
-        channels: 3,
-        messages: 120,
-        dm_conversations: 8,
-        files: 2,
-      });
-    });
-
-    it('returns 401 without auth', async () => {
-      const res = await app.request('/v1/workspace/stats', { method: 'GET' });
-      expect(res.status).toBe(401);
-      const body = await res.json();
-      expect(body.ok).toBe(false);
-    });
-
-    it('handles engine errors', async () => {
-      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
-      vi.mocked(statsEngine.getWorkspaceStats).mockRejectedValue(
-        new Error('DB connection failed'),
-      );
-
-      const res = await app.request('/v1/workspace/stats', {
-        method: 'GET',
-        headers: wsAuthHeaders(),
-      });
-
-      expect(res.status).toBe(500);
-      const body = await res.json();
-      expect(body.ok).toBe(false);
-      expect(body.error.code).toBe('internal_error');
-    });
   });
 
   describe('GET /v1/activity', () => {

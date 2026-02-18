@@ -1,4 +1,4 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -94,25 +94,27 @@ export async function listChannels(
       );
   }
 
-  // Get member counts
-  const result = [];
-  for (const ch of rows) {
-    const [countRow] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(channelMembers)
-      .where(eq(channelMembers.channelId, ch.id));
+  if (rows.length === 0) return [];
 
-    result.push({
-      id: ch.id,
-      name: ch.name,
-      topic: ch.topic,
-      member_count: countRow?.count ?? 0,
-      created_at: ch.createdAt.toISOString(),
-      is_archived: ch.isArchived,
-    });
-  }
+  const channelIds = rows.map((ch) => ch.id);
 
-  return result;
+  // Batch: member counts
+  const memberCounts = await db
+    .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
+    .from(channelMembers)
+    .where(inArray(channelMembers.channelId, channelIds))
+    .groupBy(channelMembers.channelId);
+
+  const memberCountMap = new Map(memberCounts.map((r) => [r.channelId, r.count]));
+
+  return rows.map((ch) => ({
+    id: ch.id,
+    name: ch.name,
+    topic: ch.topic,
+    member_count: memberCountMap.get(ch.id) ?? 0,
+    created_at: ch.createdAt.toISOString(),
+    is_archived: ch.isArchived,
+  }));
 }
 
 export async function getChannel(db: Db, workspaceId: string, name: string) {

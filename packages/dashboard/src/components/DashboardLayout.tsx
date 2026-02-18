@@ -69,6 +69,7 @@ export function DashboardLayout() {
       <AgentSidebar
         channels={channels}
         agents={agents}
+        messages={messages}
         selectedChannel={selectedChannel}
         selectedAgent={selectedAgent}
         onSelectChannel={handleSelectChannel}

@@ -156,21 +156,27 @@ export async function getMessages(
     if (r.threadId) replyCountMap.set(r.threadId, r.count);
   }
 
-  // Batch: reaction groups (single query for all messages)
+  // Batch: reaction rows with agent names (single query for all messages)
   const reactionRows = await db
     .select({
       messageId: reactions.messageId,
       emoji: reactions.emoji,
-      count: sql<number>`count(*)`,
+      agentName: agents.name,
     })
     .from(reactions)
-    .where(inArray(reactions.messageId, msgIds))
-    .groupBy(reactions.messageId, reactions.emoji);
+    .innerJoin(agents, eq(reactions.agentId, agents.id))
+    .where(inArray(reactions.messageId, msgIds));
 
-  const reactionMap = new Map<string, Array<{ emoji: string; count: number }>>();
+  const reactionMap = new Map<string, Array<{ emoji: string; count: number; agents: string[] }>>();
   for (const r of reactionRows) {
     const list = reactionMap.get(r.messageId) || [];
-    list.push({ emoji: r.emoji, count: r.count });
+    const existing = list.find((e) => e.emoji === r.emoji);
+    if (existing) {
+      existing.count++;
+      existing.agents.push(r.agentName);
+    } else {
+      list.push({ emoji: r.emoji, count: 1, agents: [r.agentName] });
+    }
     reactionMap.set(r.messageId, list);
   }
 
@@ -240,11 +246,11 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     db
       .select({
         emoji: reactions.emoji,
-        count: sql<number>`count(*)`,
+        agentName: agents.name,
       })
       .from(reactions)
-      .where(eq(reactions.messageId, row.id))
-      .groupBy(reactions.emoji),
+      .innerJoin(agents, eq(reactions.agentId, agents.id))
+      .where(eq(reactions.messageId, row.id)),
     db
       .select({ count: sql<number>`count(*)` })
       .from(readReceipts)
@@ -263,7 +269,12 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
     reply_count: replyCounts[0]?.count ?? 0,
-    reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
+    reactions: Object.values(reactionRows.reduce<Record<string, { emoji: string; count: number; agents: string[] }>>((acc, r) => {
+      if (!acc[r.emoji]) acc[r.emoji] = { emoji: r.emoji, count: 0, agents: [] };
+      acc[r.emoji].count++;
+      acc[r.emoji].agents.push(r.agentName);
+      return acc;
+    }, {})),
     read_by_count: readCounts[0]?.count ?? 0,
     attachments: attachmentMap.get(row.id) || [],
   };

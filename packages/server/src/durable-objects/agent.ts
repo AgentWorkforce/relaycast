@@ -395,8 +395,21 @@ export class AgentDO implements DurableObject {
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
-    // No explicit cleanup needed — the hibernation API removes the socket
-    // from getWebSockets() automatically.
+    // Hibernation API removes the socket from getWebSockets() automatically.
+    // If no sockets remain, notify PresenceDO so the agent goes offline immediately.
+    const remaining = this.state.getWebSockets();
+    if (remaining.length === 0) {
+      const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
+      if (meta) {
+        const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
+        const stub = this.env.PRESENCE_DO.get(doId);
+        stub.fetch(new Request('http://do/disconnect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
+        })).catch(() => {});
+      }
+    }
   }
 
   async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {

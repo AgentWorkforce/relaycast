@@ -21,7 +21,6 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 const BASE_URL = args[0] ?? 'http://localhost:8787';
 const CI = flags.has('--ci') || !!process.env.CI;
-const DELAY_MS = CI ? 300 : 1200;
 
 // ---------------------------------------------------------------------------
 // Terminal colors
@@ -58,6 +57,12 @@ function ws(agent: string, event: string, detail: string) {
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+/** Random delay between 1–4 seconds to make the run feel more realistic. */
+function pause() {
+  const ms = 1000 + Math.random() * 3000;
+  return sleep(ms);
 }
 
 function waitForEnter(prompt: string): Promise<void> {
@@ -149,7 +154,7 @@ ${B}${CYAN}╔══════════════════════
     console.log();
     await waitForEnter(`${YELLOW}${B}  Press Enter to start the test run...${R} `);
   } else {
-    await sleep(DELAY_MS);
+    await pause();
   }
 
   // ── 2. Register agents ───────────────────────────────────────────────
@@ -160,6 +165,7 @@ ${B}${CYAN}╔══════════════════════
       name: LEAD,
       type: 'agent',
       persona: 'Engineering team lead. Coordinates InfraAgent and BackendAgent, assigns tasks, and unblocks the team.',
+      metadata: { cli: 'claude' },
     });
     lead = relay.as(res.token);
     log('🤖', `${YELLOW}${B}${LEAD}${R} registered`);
@@ -170,6 +176,7 @@ ${B}${CYAN}╔══════════════════════
       name: INFRA,
       type: 'agent',
       persona: 'Senior infrastructure engineer. Owns CI/CD pipelines, deploys, health checks, and cloud resources.',
+      metadata: { cli: 'claude' },
     });
     infra = relay.as(res.token);
     log('🤖', `${GREEN}${B}${INFRA}${R} registered`);
@@ -180,12 +187,13 @@ ${B}${CYAN}╔══════════════════════
       name: BACKEND,
       type: 'agent',
       persona: 'Backend developer focused on testing, reliability, and the message pipeline.',
+      metadata: { cli: 'claude' },
     });
     backend = relay.as(res.token);
     log('🤖', `${BLUE}${B}${BACKEND}${R} registered`);
   });
 
-  await sleep(DELAY_MS);
+  await pause();
 
   const agentMap: Record<string, AgentClient> = {
     [LEAD]: lead,
@@ -210,7 +218,7 @@ ${B}${CYAN}╔══════════════════════
     log('👋', `${BLUE}${B}${BACKEND}${R} joined #${channelName}`);
   });
 
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 4. Connect WebSockets ────────────────────────────────────────────
   step('Connect WebSockets');
@@ -231,7 +239,7 @@ ${B}${CYAN}╔══════════════════════
     // Listen for events on all agents
     for (const [name, client] of Object.entries(agentMap)) {
       client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
-      client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.from_name}${R}: "${e.message.text}"`); });
+      client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
       client.on.reactionAdded((e) => { wsEvents++; ws(name, 'reaction.added', `${e.emoji}`); });
       client.on.channelUpdated(() => { wsEvents++; ws(name, 'channel.updated', ''); });
     }
@@ -243,7 +251,7 @@ ${B}${CYAN}╔══════════════════════
     log('🔌', `All agents connected & subscribed to #general and #${channelName}`);
   });
 
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 5. Hello world in #general ─────────────────────────────────────
   step('Post to #general');
@@ -254,7 +262,7 @@ ${B}${CYAN}╔══════════════════════
     log('📤', `${YELLOW}${B}${LEAD}${R}: Hello, world! All agents online.`);
     await lead.send('general', 'Hello, world! All agents online.');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 6. Channel conversation ──────────────────────────────────────────
   step('Channel messages in #engineering');
@@ -266,7 +274,7 @@ ${B}${CYAN}╔══════════════════════
       log('📤', `${color}${B}${msg.from}${R}: ${msg.text}`);
       await agentMap[msg.from].send(channelName, msg.text);
     });
-    await sleep(DELAY_MS);
+    await pause();
   }
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
 
@@ -278,38 +286,38 @@ ${B}${CYAN}╔══════════════════════
     log('📤', `${YELLOW}${B}${LEAD}${R} → ${GREEN}${B}${INFRA}${R}: Hey, is the deploy key rotated for staging?`);
     await lead.dm(INFRA, 'Hey, is the deploy key rotated for staging?');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   await run(`${INFRA} DMs ${LEAD}`, async () => {
     log('📤', `${GREEN}${B}${INFRA}${R} → ${YELLOW}${B}${LEAD}${R}: Yes, rotated it last Tuesday. All environments are up to date.`);
     await infra.dm(LEAD, 'Yes, rotated it last Tuesday. All environments are up to date.');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   await run(`${LEAD} DMs ${INFRA} (follow-up)`, async () => {
     log('📤', `${YELLOW}${B}${LEAD}${R} → ${GREEN}${B}${INFRA}${R}: Perfect. Can you share the new fingerprint with BackendAgent?`);
     await lead.dm(INFRA, 'Perfect. Can you share the new fingerprint with BackendAgent?');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   await run(`${INFRA} DMs ${LEAD} (follow-up)`, async () => {
     log('📤', `${GREEN}${B}${INFRA}${R} → ${YELLOW}${B}${LEAD}${R}: Done — sent it over.`);
     await infra.dm(LEAD, 'Done — sent it over.');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // InfraAgent → BackendAgent side conversation
   await run(`${INFRA} DMs ${BACKEND}`, async () => {
     log('📤', `${GREEN}${B}${INFRA}${R} → ${BLUE}${B}${BACKEND}${R}: Here is the new staging deploy key fingerprint: SHA256:abc123...`);
     await infra.dm(BACKEND, 'Here is the new staging deploy key fingerprint: SHA256:abc123...');
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   await run(`${BACKEND} DMs ${INFRA}`, async () => {
     log('📤', `${BLUE}${B}${BACKEND}${R} → ${GREEN}${B}${INFRA}${R}: Got it, updated my local config. Thanks!`);
     await backend.dm(INFRA, 'Got it, updated my local config. Thanks!');
   });
-  await sleep(DELAY_MS);
+  await pause();
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
 
   // ── 8. Reactions ─────────────────────────────────────────────────────
@@ -321,11 +329,11 @@ ${B}${CYAN}╔══════════════════════
 
     await lead.react(lastId, '🚀');
     log('😀', `${YELLOW}${B}${LEAD}${R} reacted 🚀`);
-    await sleep(500);
+    await pause();
 
     await infra.react(lastId, '👍');
     log('😀', `${GREEN}${B}${INFRA}${R} reacted 👍`);
-    await sleep(500);
+    await pause();
 
     await backend.react(lastId, '✅');
     log('😀', `${BLUE}${B}${BACKEND}${R} reacted ✅`);
@@ -333,7 +341,7 @@ ${B}${CYAN}╔══════════════════════
     const reactions = await lead.reactions(lastId);
     log('📊', `Reactions on message: ${JSON.stringify(reactions)}`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 9. Thread replies ────────────────────────────────────────────────
   step('Threads');
@@ -344,11 +352,11 @@ ${B}${CYAN}╔══════════════════════
 
     await infra.reply(parentId, 'Deploy logs look clean. No rollback needed.');
     log('🧵', `${GREEN}${B}${INFRA}${R} replied in thread`);
-    await sleep(DELAY_MS);
+    await pause();
 
     await backend.reply(parentId, 'Confirmed — no regressions in the test suite.');
     log('🧵', `${BLUE}${B}${BACKEND}${R} replied in thread`);
-    await sleep(DELAY_MS);
+    await pause();
 
     await lead.reply(parentId, 'Excellent. Closing this out.');
     log('🧵', `${YELLOW}${B}${LEAD}${R} replied in thread`);
@@ -356,7 +364,7 @@ ${B}${CYAN}╔══════════════════════
     const thread = await lead.thread(parentId);
     log('📊', `Thread has ${Array.isArray(thread) ? thread.length : 'unknown'} messages`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 10. Channel topic update ──────────────────────────────────────────
   step('Channel topic');
@@ -364,7 +372,7 @@ ${B}${CYAN}╔══════════════════════
     await lead.channels.setTopic(channelName, 'Pipeline fix deployed — all green ✓');
     log('📝', `Topic updated on #${channelName}`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 11. Read receipts ────────────────────────────────────────────────
   step('Read receipts');
@@ -374,7 +382,7 @@ ${B}${CYAN}╔══════════════════════
     await backend.markRead(msgs[0].id);
     log('👁️ ', `${BLUE}${B}${BACKEND}${R} marked latest message as read`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 12. Search ───────────────────────────────────────────────────────
   step('Search');
@@ -382,7 +390,7 @@ ${B}${CYAN}╔══════════════════════
     const results = await lead.search('health check');
     log('🔍', `Search "health check" → ${Array.isArray(results) ? results.length : 0} result(s)`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 13. List channels / agents ───────────────────────────────────────
   step('List resources');
@@ -398,9 +406,9 @@ ${B}${CYAN}╔══════════════════════
 
   await run('Agent presence', async () => {
     const presence = await relay.agents.presence();
-    log('📋', `Presence: ${presence.map((p) => `${p.name}=${p.status}`).join(', ')}`);
+    log('📋', `Presence: ${presence.map((p) => `${p.agent_name}=${p.status}`).join(', ')}`);
   });
-  await sleep(DELAY_MS);
+  await pause();
 
   // ── 14. Inbox ────────────────────────────────────────────────────────
   step('Inbox');
@@ -410,12 +418,29 @@ ${B}${CYAN}╔══════════════════════
   });
 
   // Let trailing WS events flush
-  await sleep(1500);
+  await pause();
 
-  // ── Cleanup ──────────────────────────────────────────────────────────
+  // ── 15. Disconnect + verify presence ──────────────────────────────────
+  step('Disconnect agents & verify status');
   lead.disconnect();
   infra.disconnect();
   backend.disconnect();
+  log('🔌', `All agents disconnected`);
+
+  await run('Agents show offline after disconnect', async () => {
+    // Poll presence — the DO hibernation close callback is async
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(1000);
+      const presence = await relay.agents.presence();
+      const statuses = Object.fromEntries(presence.map((p) => [p.agent_name, p.status]));
+      const allOffline = [LEAD, INFRA, BACKEND].every((name) => statuses[name] === 'offline');
+      log('📋', `Presence: ${presence.map((p) => `${p.agent_name}=${p.status}`).join(', ')}`);
+      if (allOffline) return;
+      if (attempt === 9) {
+        throw new Error(`Expected all agents offline, got: ${JSON.stringify(statuses)}`);
+      }
+    }
+  });
 
   // ── Summary ──────────────────────────────────────────────────────────
   console.log(`

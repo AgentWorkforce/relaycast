@@ -1,14 +1,5 @@
 import { z } from 'zod';
 
-export const WorkspaceStatsSchema = z.object({
-  agents: z.object({ total: z.number(), online: z.number(), offline: z.number() }),
-  channels: z.object({ total: z.number(), archived: z.number() }),
-  messages: z.object({ total: z.number(), today: z.number() }),
-  dms: z.object({ total_conversations: z.number() }),
-  files: z.object({ total: z.number(), storage_bytes: z.number() }),
-});
-export type WorkspaceStats = z.infer<typeof WorkspaceStatsSchema>;
-
 export const ActivityItemSchema = z.object({
   type: z.enum(['message', 'dm']),
   id: z.string(),

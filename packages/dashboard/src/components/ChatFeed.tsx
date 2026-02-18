@@ -16,7 +16,10 @@ export function ChatFeed({ messages, selectedChannel, selectedAgent, onOpenThrea
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const filtered = messages.filter((msg) => {
-    if (selectedChannel) return msg.to === `#${selectedChannel}`;
+    if (selectedChannel) {
+      if (selectedChannel.startsWith('dm:')) return msg.to === selectedChannel;
+      return msg.to === `#${selectedChannel}`;
+    }
     if (selectedAgent) return msg.from === selectedAgent || msg.to === selectedAgent;
     return true;
   });
@@ -29,8 +32,11 @@ export function ChatFeed({ messages, selectedChannel, selectedAgent, onOpenThrea
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [sorted.length]);
 
+  const isDm = selectedChannel?.startsWith('dm:');
   const title = selectedChannel
-    ? `#${selectedChannel}`
+    ? isDm
+      ? selectedChannel.slice(3)
+      : `#${selectedChannel}`
     : selectedAgent
       ? selectedAgent
       : 'All messages';
@@ -39,7 +45,7 @@ export function ChatFeed({ messages, selectedChannel, selectedAgent, onOpenThrea
     <div className="flex-1 flex flex-col min-w-0">
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2 shrink-0">
-        {selectedChannel ? (
+        {selectedChannel && !isDm ? (
           <Hash className="h-4 w-4 text-[var(--color-text-muted)]" />
         ) : (
           <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />

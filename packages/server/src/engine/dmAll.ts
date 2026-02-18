@@ -1,4 +1,4 @@
-import { eq, sql, desc } from 'drizzle-orm';
+import { eq, and, sql, desc, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import {
   dmConversations,
@@ -66,4 +66,55 @@ export async function listAllDmConversations(db: Db, workspaceId: string) {
   }
 
   return results;
+}
+
+export async function getDmMessagesForWorkspace(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  opts: { limit?: number; before?: string; after?: string } = {},
+) {
+  const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
+
+  const [conv] = await db
+    .select()
+    .from(dmConversations)
+    .where(
+      and(
+        eq(dmConversations.id, conversationId),
+        eq(dmConversations.workspaceId, workspaceId),
+      ),
+    );
+
+  if (!conv) {
+    const err = new Error('Conversation not found');
+    Object.assign(err, { code: 'not_found', status: 404 });
+    throw err;
+  }
+
+  const conditions = [eq(messages.channelId, conv.channelId)];
+  if (opts.before) conditions.push(lt(messages.id, opts.before));
+  if (opts.after) conditions.push(gt(messages.id, opts.after));
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      body: messages.body,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
+    .where(and(...conditions))
+    .orderBy(sql`${messages.id} DESC`)
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    agent_id: r.agentId,
+    agent_name: r.agentName || 'unknown',
+    text: r.body,
+    created_at: r.createdAt.toISOString(),
+  }));
 }

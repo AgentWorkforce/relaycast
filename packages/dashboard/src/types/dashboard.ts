@@ -16,6 +16,11 @@ export interface Reaction {
   count: number;
 }
 
+export interface ThreadReply {
+  from: string;
+  timestamp: string;
+}
+
 export interface Message {
   id: string;
   from: string;
@@ -25,6 +30,7 @@ export interface Message {
   thread?: string;
   reactions: Reaction[];
   replyCount: number;
+  replies?: ThreadReply[];
 }
 
 export interface Channel {
@@ -36,6 +42,7 @@ export interface Channel {
   createdAt: string;
   createdBy: string;
   memberCount: number;
+  messageCount: number;
   unreadCount: number;
   hasMentions: boolean;
   isDm: boolean;

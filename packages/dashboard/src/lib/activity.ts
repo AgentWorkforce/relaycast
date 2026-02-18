@@ -41,12 +41,22 @@ export function synthesizeActivityEvents(
       }
     }
 
-    // Thread replies
-    if (msg.replyCount > 0) {
+    // Thread replies — show individual reply events when we have reply data
+    if (msg.replyCount > 0 && msg.replies && msg.replies.length > 0) {
+      for (const reply of msg.replies) {
+        events.push({
+          id: `reply-${msg.id}-${reply.from}`,
+          type: 'thread_reply',
+          summary: `${reply.from} replied in ${msg.from}'s thread`,
+          timestamp: reply.timestamp || msg.timestamp,
+          agent: reply.from,
+        });
+      }
+    } else if (msg.replyCount > 0) {
       events.push({
         id: `reply-${msg.id}`,
         type: 'thread_reply',
-        summary: `${msg.replyCount} ${msg.replyCount === 1 ? 'reply' : 'replies'} in thread by ${msg.from}`,
+        summary: `${msg.replyCount} ${msg.replyCount === 1 ? 'reply' : 'replies'} in ${msg.from}'s thread`,
         timestamp: msg.timestamp,
         agent: msg.from,
       });
@@ -74,7 +84,7 @@ export function synthesizeActivityEvents(
     }
   }
 
-  // Sort by timestamp descending, cap at 200
-  events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  // Sort by timestamp ascending (chronological), cap at 200
+  events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   return events.slice(0, 200);
 }

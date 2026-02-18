@@ -17,7 +17,8 @@ export async function setAuth(apiKey: string): Promise<boolean> {
 }
 
 /**
- * Clear auth by calling server-side logout (removes httpOnly cookie).
+ * Clear auth by calling server-side logout (removes httpOnly cookie)
+ * and wiping all client-side cached data.
  */
 export async function clearAuth(): Promise<void> {
   try {
@@ -25,6 +26,10 @@ export async function clearAuth(): Promise<void> {
   } catch {
     // Best effort
   }
+
+  // Clear SWR cache so stale data doesn't persist across sessions
+  const { mutate } = await import('swr');
+  await mutate(() => true, undefined, { revalidate: false });
 }
 
 /**

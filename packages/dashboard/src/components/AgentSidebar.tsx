@@ -1,16 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Hash, LogOut, Sun, Moon } from 'lucide-react';
+import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { AgentAvatar } from './AgentAvatar';
-import type { Agent, Channel } from '../types/dashboard';
+import type { Agent, Channel, Message } from '../types/dashboard';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
 
 interface AgentSidebarProps {
   channels: Channel[];
   agents: Agent[];
+  messages: Message[];
   selectedChannel: string | null;
   selectedAgent: string | null;
   onSelectChannel: (name: string | null) => void;
@@ -36,6 +37,7 @@ function getTheme(): 'dark' | 'light' {
 export function AgentSidebar({
   channels,
   agents,
+  messages,
   selectedChannel,
   selectedAgent,
   onSelectChannel,
@@ -43,6 +45,16 @@ export function AgentSidebar({
 }: AgentSidebarProps) {
   const router = useRouter();
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+  const regularChannels = channels.filter((ch) => !ch.isDm);
+  const dmChannels = channels.filter((ch) => ch.isDm);
+
+  // Compute per-channel message counts from fetched messages
+  const channelMessageCounts = new Map<string, number>();
+  for (const m of messages) {
+    const ch = m.to.startsWith('#') ? m.to.slice(1) : m.to;
+    channelMessageCounts.set(ch, (channelMessageCounts.get(ch) || 0) + 1);
+  }
 
   useEffect(() => {
     setTheme(getTheme());
@@ -77,7 +89,7 @@ export function AgentSidebar({
           <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
             Channels
           </h2>
-          {channels.map((ch) => (
+          {regularChannels.map((ch) => (
             <button
               key={ch.id}
               onClick={() => {
@@ -92,13 +104,57 @@ export function AgentSidebar({
               )}
             >
               <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              {ch.name}
+              <span className="truncate flex-1 text-left">{ch.name}</span>
+              {(channelMessageCounts.get(ch.name) || 0) > 0 && (
+                <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
+                  {channelMessageCounts.get(ch.name)}
+                </span>
+              )}
             </button>
           ))}
-          {channels.length === 0 && (
+          {regularChannels.length === 0 && (
             <p className="px-2 text-xs text-[var(--color-text-dim)]">No channels</p>
           )}
         </div>
+
+        {/* Direct Messages */}
+        {dmChannels.length > 0 && (
+          <>
+            <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
+            <div className="px-3 pt-3 pb-2">
+              <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+                Direct Messages
+              </h2>
+              {dmChannels.map((ch) => {
+                const dmKey = `dm:${ch.name}`;
+                const msgCount = channelMessageCounts.get(dmKey) || 0;
+                return (
+                  <button
+                    key={ch.id}
+                    onClick={() => {
+                      onSelectAgent(null);
+                      onSelectChannel(selectedChannel === dmKey ? null : dmKey);
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
+                      selectedChannel === dmKey
+                        ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
+                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
+                    )}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    <span className="truncate flex-1 text-left">{ch.name}</span>
+                    {msgCount > 0 && (
+                      <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
+                        {msgCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
 

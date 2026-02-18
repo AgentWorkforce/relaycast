@@ -23,7 +23,6 @@ import type {
   CreateCommandRequest,
   CreateCommandResponse,
   AgentCommand,
-  WorkspaceStats,
   ActivityItem,
   WorkspaceDmConversation,
   TokenRotateResponse,
@@ -235,9 +234,6 @@ export class RelayCast {
       this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
   };
 
-  stats = (): Promise<WorkspaceStats> =>
-    this.client.get('/v1/workspace/stats');
-
   activity = (limit?: number): Promise<ActivityItem[]> => {
     const params: Record<string, string> = {};
     if (limit !== undefined) params.limit = String(limit);
@@ -246,6 +242,14 @@ export class RelayCast {
 
   allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
     this.client.get('/v1/dm/conversations/all');
+
+  dmMessages = (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<Array<{ id: string; agent_id: string; agent_name: string; text: string; created_at: string }>> => {
+    const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
 
   as(agentToken: string): AgentClient {
     const agentHttpClient = new HttpClient({

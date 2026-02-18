@@ -16,23 +16,6 @@ describe('Relay dashboard methods', () => {
     mockFetch.mockReset();
   });
 
-  it('stats() calls GET /v1/workspace/stats', async () => {
-    const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-    mockFetch.mockImplementation(() =>
-      mockResponse({ agents: 5, channels: 3, messages: 100, dm_conversations: 2, files: 1 }),
-    );
-    const result = await relay.stats();
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/workspace/stats');
-    expect(init.method).toBe('GET');
-    expect(init.headers.Authorization).toBe('Bearer rk_live_test123');
-    expect(result).toEqual({ agents: 5, channels: 3, messages: 100, dm_conversations: 2, files: 1 });
-  });
-
   it('activity() calls GET /v1/activity without params', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

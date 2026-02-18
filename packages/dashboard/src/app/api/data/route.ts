@@ -14,13 +14,15 @@ export async function GET() {
     }
 
     const relay = getRelay(apiKey);
-    const [agentResult, channelResult] = await Promise.allSettled([
+    const [agentResult, channelResult, dmResult] = await Promise.allSettled([
       relay.agents.list(),
       relay.channels.list(),
+      relay.allDmConversations(),
     ]);
 
     const agentList = agentResult.status === 'fulfilled' ? agentResult.value : [];
     const channelList = channelResult.status === 'fulfilled' ? channelResult.value : [];
+    const dmList = dmResult.status === 'fulfilled' ? dmResult.value : [];
 
     const agents = agentList.map((a) => ({
       name: a.name,
@@ -66,8 +68,63 @@ export async function GET() {
       }
     });
 
-    const channelMessages = await Promise.all(messagePromises);
-    const messages = channelMessages.flat();
+    // Fetch DM messages for each conversation
+    const dmPromises = dmList.slice(0, 10).map(async (dm) => {
+      try {
+        const dmName = dm.participants.join(', ');
+        const msgs = await relay.dmMessages(dm.id, { limit: 50 });
+        return msgs.map((m) => ({
+          id: m.id,
+          from: m.agent_name || agentNameById.get(m.agent_id) || 'unknown',
+          to: `dm:${dmName}`,
+          content: m.text || '',
+          timestamp: m.created_at || new Date().toISOString(),
+          thread: undefined,
+          reactions: [] as Array<{ emoji: string; count: number; agents: string[] }>,
+          replyCount: 0,
+        }));
+      } catch {
+        return [];
+      }
+    });
+
+    const [channelMessages, ...dmMessages] = await Promise.all([
+      Promise.all(messagePromises),
+      ...dmPromises,
+    ]);
+    let messages = [...channelMessages.flat(), ...dmMessages.flat()];
+
+    // Fetch thread replies for messages that have them, so activity feed can show individual repliers
+    const threaded = messages.filter((m) => m.replyCount > 0);
+    if (threaded.length > 0) {
+      const replyResults = await Promise.allSettled(
+        threaded.slice(0, 20).map(async (m) => {
+          const thread = await relay.messages.thread(m.id, { limit: 10 });
+          return {
+            id: m.id,
+            replies: (thread.replies || []).map((r) => ({
+              from:
+                (r as Record<string, unknown>).agent_name as string ||
+                agentNameById.get((r as Record<string, unknown>).agent_id as string) ||
+                'unknown',
+              timestamp: r.created_at || m.timestamp,
+            })),
+          };
+        })
+      );
+
+      const replyMap = new Map<string, { from: string; timestamp: string }[]>();
+      for (const result of replyResults) {
+        if (result.status === 'fulfilled') {
+          replyMap.set(result.value.id, result.value.replies);
+        }
+      }
+
+      messages = messages.map((m) => {
+        const replies = replyMap.get(m.id);
+        return replies ? { ...m, replies } : m;
+      });
+    }
 
     return NextResponse.json({ agents, messages, sessions: [] });
   } catch (error) {

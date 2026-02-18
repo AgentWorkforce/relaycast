@@ -116,6 +116,10 @@ export class PresenceDO implements DurableObject {
       return this.handleHeartbeat(request);
     }
 
+    if (request.method === 'POST' && url.pathname === '/disconnect') {
+      return this.handleDisconnect(request);
+    }
+
     if (request.method === 'GET' && url.pathname === '/status') {
       return this.handleStatus();
     }
@@ -162,6 +166,38 @@ export class PresenceDO implements DurableObject {
         timestamp: new Date().toISOString(),
       });
     }
+
+    return Response.json({ ok: true });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  POST /disconnect — immediately mark agent offline                  */
+  /* ------------------------------------------------------------------ */
+
+  private async handleDisconnect(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      agentId: string;
+      workspaceId: string;
+    };
+
+    const { agentId, workspaceId } = body;
+
+    // Only remove if the agent actually has a presence entry.
+    const existing = await this.state.storage.get<number>(`agent:${agentId}`);
+    if (existing === undefined) {
+      return Response.json({ ok: true });
+    }
+
+    await this.state.storage.delete(`agent:${agentId}`);
+
+    // Broadcast agent.offline to remaining online agents.
+    const onlineAgents = await this.getOnlineAgentIds();
+    await this.broadcastPresenceEvent(workspaceId, onlineAgents, {
+      type: 'agent.offline',
+      agentId,
+      workspaceId,
+      timestamp: new Date().toISOString(),
+    });
 
     return Response.json({ ok: true });
   }
