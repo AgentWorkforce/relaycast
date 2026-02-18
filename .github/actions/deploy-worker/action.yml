@@ -99,17 +99,30 @@ runs:
         EXTRA_VARS="${{ inputs.extra-vars }}"
         if [ -n "$EXTRA_VARS" ]; then
           while IFS= read -r line; do
+            key=""
+            value=""
             line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
             if [ -z "$line" ]; then
               continue
             fi
+
+            # Accept KEY = "value", KEY = 'value', or KEY = bare_value.
             if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
-              CMD+=(--var "${BASH_REMATCH[1]}:${BASH_REMATCH[2]}")
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\'(.*)\'$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*([A-Za-z0-9._:/+-]+)$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
             else
               echo "Invalid extra-vars line: $line"
-              echo "Expected format: KEY = \"value\""
+              echo "Expected format: KEY = \"value\", KEY = 'value', or KEY = bare_value"
               exit 1
             fi
+
+            CMD+=(--var "${key}:${value}")
           done <<< "$EXTRA_VARS"
         fi
 
