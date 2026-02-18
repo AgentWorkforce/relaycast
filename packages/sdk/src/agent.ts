@@ -80,7 +80,7 @@ export class AgentClient {
     if (this.ws) {
       // Notify the server before closing the WebSocket so presence
       // updates immediately (works around local DO hibernation issues).
-      await this.client.post('/agents/disconnect', {}).catch(() => {});
+      await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
       this.ws.disconnect();
       this.ws = null;
     }
