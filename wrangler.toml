@@ -50,11 +50,11 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
+new_sqlite_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
 
 [[migrations]]
 tag = "v2"
-new_classes = ["McpSessionDO"]
+new_sqlite_classes = ["McpSessionDO"]
 
 # KV namespace (rate limiting, usage counters)
 [[kv_namespaces]]
