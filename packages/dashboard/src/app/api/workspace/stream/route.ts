@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { RelayCast } from '@relaycast/sdk';
+import { RelayCast, RelayError } from '@relaycast/sdk';
 import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
 
 export const runtime = 'edge';
@@ -13,15 +13,18 @@ type StreamResponse = {
   defaultEnabled?: boolean;
   override?: boolean | null;
   error?: string;
+  detail?: string;
+  status?: number;
+  baseUrl?: string;
 };
 
-async function getRelay(request: NextRequest): Promise<RelayCast | null> {
+async function getRelay(request: NextRequest): Promise<{ relay: RelayCast; baseUrl: string } | null> {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get(COOKIE_NAME)?.value;
   if (!apiKey?.startsWith('rk_live_')) return null;
 
   const baseUrl = resolveRelayServerUrlFromRequest(request);
-  return new RelayCast({ apiKey, baseUrl });
+  return { relay: new RelayCast({ apiKey, baseUrl }), baseUrl };
 }
 
 function toPayload(data: { enabled: boolean; default_enabled: boolean; override: boolean | null }): StreamResponse {
@@ -34,8 +37,8 @@ function toPayload(data: { enabled: boolean; default_enabled: boolean; override:
 }
 
 export async function GET(request: NextRequest) {
-  const relay = await getRelay(request);
-  if (!relay) {
+  const relayCtx = await getRelay(request);
+  if (!relayCtx) {
     return NextResponse.json(
       { success: false, error: 'Not authenticated' } satisfies StreamResponse,
       { status: 401 }
@@ -43,20 +46,44 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const data = await relay.workspace.stream.get();
+    const data = await relayCtx.relay.workspace.stream.get();
     return NextResponse.json(toPayload(data));
   } catch (error) {
-    console.error('[api/workspace/stream] Failed to fetch stream config:', error);
+    const relayError = error instanceof RelayError ? error : null;
+    const detail = relayError
+      ? `${relayError.code} (${relayError.status}): ${relayError.message}`
+      : error instanceof Error
+        ? error.message
+        : 'unknown error';
+    const status = relayError?.status ?? 500;
+    const host = request.headers.get('host');
+    const observerHost = request.headers.get('x-relaycast-observer-host');
+    const forwardedHost = request.headers.get('x-forwarded-host');
+
+    console.error('[api/workspace/stream] Failed to fetch stream config', {
+      status,
+      detail,
+      baseUrl: relayCtx.baseUrl,
+      host,
+      observerHost,
+      forwardedHost,
+    });
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch stream status' } satisfies StreamResponse,
-      { status: 500 }
+      {
+        success: false,
+        error: 'Failed to fetch stream status',
+        detail,
+        status,
+        baseUrl: relayCtx.baseUrl,
+      } satisfies StreamResponse,
+      { status }
     );
   }
 }
 
 export async function PUT(request: NextRequest) {
-  const relay = await getRelay(request);
-  if (!relay) {
+  const relayCtx = await getRelay(request);
+  if (!relayCtx) {
     return NextResponse.json(
       { success: false, error: 'Not authenticated' } satisfies StreamResponse,
       { status: 401 }
@@ -74,13 +101,38 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const data = await relay.workspace.stream.set(enabled);
+    const data = await relayCtx.relay.workspace.stream.set(enabled);
     return NextResponse.json(toPayload(data));
   } catch (error) {
-    console.error('[api/workspace/stream] Failed to update stream config:', error);
+    const relayError = error instanceof RelayError ? error : null;
+    const detail = relayError
+      ? `${relayError.code} (${relayError.status}): ${relayError.message}`
+      : error instanceof Error
+        ? error.message
+        : 'unknown error';
+    const status = relayError?.status ?? 500;
+    const host = request.headers.get('host');
+    const observerHost = request.headers.get('x-relaycast-observer-host');
+    const forwardedHost = request.headers.get('x-forwarded-host');
+
+    console.error('[api/workspace/stream] Failed to update stream config', {
+      enabled,
+      status,
+      detail,
+      baseUrl: relayCtx.baseUrl,
+      host,
+      observerHost,
+      forwardedHost,
+    });
     return NextResponse.json(
-      { success: false, error: 'Failed to update stream status' } satisfies StreamResponse,
-      { status: 500 }
+      {
+        success: false,
+        error: 'Failed to update stream status',
+        detail,
+        status,
+        baseUrl: relayCtx.baseUrl,
+      } satisfies StreamResponse,
+      { status }
     );
   }
 }

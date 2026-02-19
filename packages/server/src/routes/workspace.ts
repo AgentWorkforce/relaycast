@@ -153,8 +153,8 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
 
 // GET /workspace/stream - get workspace stream effective config
 workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const workspaceId = c.get('workspace').id;
   try {
-    const workspaceId = c.get('workspace').id;
     const config = await getWorkspaceStreamConfig(c.env, workspaceId);
     return c.json({
       ok: true,
@@ -166,6 +166,12 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
+    console.error('[workspace/stream] Failed to get stream config', {
+      workspaceId,
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    });
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -175,8 +181,8 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
 
 // PUT /workspace/stream - set workspace stream override
 workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const workspaceId = c.get('workspace').id;
   try {
-    const workspaceId = c.get('workspace').id;
     const body = await c.req.json() as { enabled?: unknown; mode?: unknown };
 
     let override: boolean | null;
@@ -204,6 +210,12 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
+    console.error('[workspace/stream] Failed to update stream config', {
+      workspaceId,
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    });
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },

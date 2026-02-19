@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T03:22:41.761Z",
+  "lastUpdated": "2026-02-19T03:40:04.575Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -435,6 +435,13 @@
       "startedAt": "2026-02-19T03:20:52.022Z",
       "completedAt": "2026-02-19T03:22:41.685Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_d4knd6y3ep2h.json"
+    },
+    "traj_g6jvzwvbg32k": {
+      "title": "Add stream toggle diagnostics for preview dashboard failures",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:39:57.025Z",
+      "completedAt": "2026-02-19T03:40:04.497Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_g6jvzwvbg32k.json"
     }
   }
 }

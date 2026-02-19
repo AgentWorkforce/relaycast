@@ -69,13 +69,22 @@ export function DashboardLayout() {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || data?.success !== true || data.enabled !== true) {
-        throw new Error('Failed to enable workspace stream');
+        const detail = typeof data?.detail === 'string' && data.detail.length > 0
+          ? data.detail
+          : 'Failed to enable workspace stream';
+        const baseUrl = typeof data?.baseUrl === 'string' && data.baseUrl.length > 0
+          ? ` (base: ${data.baseUrl})`
+          : '';
+        throw new Error(`${detail}${baseUrl}`);
       }
       setStreamEnabled(true);
       setStreamMessage('');
-    } catch {
+    } catch (error) {
       setStreamEnabled(false);
-      setStreamMessage('Failed to enable workspace stream. Please try again.');
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to enable workspace stream. Please try again.';
+      setStreamMessage(detail);
     } finally {
       setStreamPending(false);
     }
