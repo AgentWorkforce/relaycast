@@ -19,60 +19,13 @@ function getExecutionCtx(c: unknown): WaitUntilContext['executionCtx'] | undefin
   return undefined;
 }
 
-const EXPECTED_NOISE_WINDOW_MS = 60_000;
-const MAX_NOISE_BUCKETS = 500;
-
 type ErrorInfo = {
   error_code?: string;
   error_reason?: string;
 };
 
-type NoiseBucket = {
-  window_start_ms: number;
-  suppressed_count: number;
-  exemplar_fields: Record<string, unknown>;
-};
-
-const expectedClientNoiseBuckets = new Map<string, NoiseBucket>();
-
 function sanitizeReason(reason: string): string {
   return reason.replace(/\s+/g, ' ').trim().slice(0, 200);
-}
-
-function pruneNoiseBuckets(): void {
-  if (expectedClientNoiseBuckets.size <= MAX_NOISE_BUCKETS) return;
-  const oldestKey = expectedClientNoiseBuckets.keys().next().value as string | undefined;
-  if (oldestKey) expectedClientNoiseBuckets.delete(oldestKey);
-}
-
-function recordExpectedClientNoise(
-  logger: ReturnType<typeof createRequestLogger>,
-  key: string,
-  fields: Record<string, unknown>,
-): void {
-  const now = Date.now();
-  let bucket = expectedClientNoiseBuckets.get(key);
-
-  if (!bucket) {
-    bucket = {
-      window_start_ms: now,
-      suppressed_count: 0,
-      exemplar_fields: fields,
-    };
-    expectedClientNoiseBuckets.set(key, bucket);
-    pruneNoiseBuckets();
-  } else if (now - bucket.window_start_ms >= EXPECTED_NOISE_WINDOW_MS) {
-    logger.info('Expected client errors suppressed (summary)', {
-      ...bucket.exemplar_fields,
-      noise_window_ms: EXPECTED_NOISE_WINDOW_MS,
-      suppressed_count: bucket.suppressed_count,
-    });
-    bucket.window_start_ms = now;
-    bucket.suppressed_count = 0;
-    bucket.exemplar_fields = fields;
-  }
-
-  bucket.suppressed_count += 1;
 }
 
 function parseBearerToken(authorization: string | undefined): string | undefined {
@@ -159,26 +112,6 @@ function statusClass(statusCode: number): string {
   return '1xx';
 }
 
-export function isExpectedClientNoise(route: string, statusCode: number, errorCode?: string): boolean {
-  if (
-    route === '/v1/ws'
-    && statusCode === 401
-    && (errorCode === undefined || errorCode === 'unauthorized' || errorCode === 'invalid_token')
-  ) {
-    return true;
-  }
-
-  if (route === '/mcp' && (statusCode === 400 || statusCode === 406)) {
-    return true;
-  }
-
-  return false;
-}
-
-export function resetExpectedClientNoiseBucketsForTest(): void {
-  expectedClientNoiseBuckets.clear();
-}
-
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestId = crypto.randomUUID();
   c.set('requestId', requestId);
@@ -222,25 +155,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (statusCode >= 500) {
     logger.error('Request failed', metadata);
   } else if (statusCode >= 400) {
-    const expectedNoise = isExpectedClientNoise(
-      c.req.path,
-      statusCode,
-      typeof errorInfo.error_code === 'string' ? errorInfo.error_code : undefined,
-    );
-
-    if (expectedNoise) {
-      const noiseKey = [
-        c.req.method,
-        c.req.path,
-        statusCode,
-        errorInfo.error_code ?? 'none',
-        authScheme,
-      ].join('|');
-
-      recordExpectedClientNoise(logger, noiseKey, metadata);
-    } else {
-      logger.warn('Request client error', metadata);
-    }
+    logger.warn('Request client error', metadata);
   }
 
   const flushPromise = logger.flush();

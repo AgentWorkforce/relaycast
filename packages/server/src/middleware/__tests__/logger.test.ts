@@ -22,11 +22,7 @@ vi.mock('../../lib/logger.js', () => ({
   createRequestLogger: createRequestLoggerMock,
 }));
 
-import {
-  isExpectedClientNoise,
-  loggerMiddleware,
-  resetExpectedClientNoiseBucketsForTest,
-} from '../logger.js';
+import { loggerMiddleware } from '../logger.js';
 
 function makeApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -39,25 +35,12 @@ function makeApp(): Hono<AppEnv> {
   return app;
 }
 
-describe('isExpectedClientNoise', () => {
-  it('identifies expected noisy client failures', () => {
-    expect(isExpectedClientNoise('/v1/ws', 401, 'invalid_token')).toBe(true);
-    expect(isExpectedClientNoise('/mcp', 406, 'bad_request')).toBe(true);
-  });
-
-  it('does not classify unrelated client failures as expected noise', () => {
-    expect(isExpectedClientNoise('/v1/channels', 400, 'invalid_channel')).toBe(false);
-    expect(isExpectedClientNoise('/v1/ws', 404, 'not_found')).toBe(false);
-  });
-});
-
 describe('loggerMiddleware', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetExpectedClientNoiseBucketsForTest();
   });
 
-  it('suppresses warn logs for expected websocket auth noise', async () => {
+  it('logs websocket auth client errors as warn', async () => {
     const app = makeApp();
 
     const res = await app.request('/v1/ws?token=at_live_badtoken', {
@@ -68,12 +51,23 @@ describe('loggerMiddleware', () => {
     });
 
     expect(res.status).toBe(401);
-    expect(mockLogger.warn).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    const [message, fields] = mockLogger.warn.mock.calls[0];
+    expect(message).toBe('Request client error');
+    expect(fields).toMatchObject({
+      status_code: 401,
+      status_class: '4xx',
+      route_group: 'ws',
+      auth_scheme: 'query_agent_token',
+      error_code: 'invalid_token',
+      error_reason: 'Invalid token',
+      client_name: 'relay-sdk-js',
+    });
     expect(mockLogger.error).not.toHaveBeenCalled();
     expect(mockLogger.flush).toHaveBeenCalledTimes(1);
   });
 
-  it('suppresses warn logs for expected /mcp protocol noise', async () => {
+  it('logs /mcp client errors as warn', async () => {
     const app = makeApp();
 
     const res = await app.request('/mcp', {
@@ -85,7 +79,18 @@ describe('loggerMiddleware', () => {
     });
 
     expect(res.status).toBe(406);
-    expect(mockLogger.warn).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    const [message, fields] = mockLogger.warn.mock.calls[0];
+    expect(message).toBe('Request client error');
+    expect(fields).toMatchObject({
+      status_code: 406,
+      status_class: '4xx',
+      route_group: 'mcp',
+      auth_scheme: 'none',
+      error_code: 'bad_request',
+      error_reason: 'Invalid MCP payload',
+      accept: 'application/json',
+    });
     expect(mockLogger.error).not.toHaveBeenCalled();
     expect(mockLogger.flush).toHaveBeenCalledTimes(1);
   });
