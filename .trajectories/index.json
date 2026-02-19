@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T02:52:25.682Z",
+  "lastUpdated": "2026-02-19T03:01:00.745Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -393,6 +393,20 @@
       "startedAt": "2026-02-19T02:49:20.669Z",
       "completedAt": "2026-02-19T02:52:25.607Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ki0jk1s5rw9o.json"
+    },
+    "traj_dqnql7lvslb7": {
+      "title": "Silence wrangler secret env warning in preview workflow",
+      "status": "completed",
+      "startedAt": "2026-02-19T02:57:40.140Z",
+      "completedAt": "2026-02-19T02:57:48.591Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dqnql7lvslb7.json"
+    },
+    "traj_37osqjvdyph7": {
+      "title": "Fix PR observer 404 by targeting PR Pages branch and setting nodejs_compat flags",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:00:31.809Z",
+      "completedAt": "2026-02-19T03:01:00.672Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_37osqjvdyph7.json"
     }
   }
 }

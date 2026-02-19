@@ -1,0 +1,25 @@
+{
+  "id": "traj_dqnql7lvslb7",
+  "version": 1,
+  "task": {
+    "title": "Silence wrangler secret env warning in preview workflow"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T02:57:40.140Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "2b14a74c1796089b77339f278ddd8c52c1089e47",
+    "endRef": "2b14a74c1796089b77339f278ddd8c52c1089e47"
+  },
+  "completedAt": "2026-02-19T02:57:48.591Z",
+  "retrospective": {
+    "summary": "Updated preview secret put commands to explicitly target top-level env and remove Wrangler multi-environment warnings in CI logs.",
+    "approach": "Standard approach",
+    "confidence": 0.97
+  }
+}

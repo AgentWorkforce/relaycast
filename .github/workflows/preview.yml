@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! npx wrangler pages project create relaycast-observer --production-branch main 2>/tmp/observer-pages-create.err; then
+          if ! npx wrangler pages project create relaycast-observer --production-branch main --compatibility-flags nodejs_compat --compatibility-date 2024-12-01 2>/tmp/observer-pages-create.err; then
             if grep -qi "already exists" /tmp/observer-pages-create.err; then
               echo "Pages project relaycast-observer already exists."
             else
@@ -90,6 +90,23 @@ jobs:
               exit 1
             fi
           fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Ensure observer Pages compatibility flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/relaycast-observer"
+          PROJECT_JSON="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API")"
+          PREVIEW_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.preview.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
+          PROD_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.production.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
+          PATCH_BODY="$(jq -n --argjson prev "$PREVIEW_FLAGS" --argjson prod "$PROD_FLAGS" '{deployment_configs: {preview: {compatibility_flags: $prev}, production: {compatibility_flags: $prod}}}')"
+          curl -fsS -X PATCH "$API" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "$PATCH_BODY" >/dev/null
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -123,7 +140,7 @@ jobs:
           ]
 
           [vars]
-          OBSERVER_ORIGIN = "https://relaycast-observer.pages.dev"
+          OBSERVER_ORIGIN = "https://pr-${PR_NUM}.relaycast-observer.pages.dev"
           EOF
           npx wrangler deploy --config "$CFG"
           rm -f "$CFG"
@@ -134,8 +151,8 @@ jobs:
       - name: Set staging secrets on preview worker
         run: |
           PR_NUM=${{ github.event.pull_request.number }}
-          echo "$STRIPE_SECRET_KEY" | npx wrangler secret put STRIPE_SECRET_KEY --name "relaycast-pr-${PR_NUM}"
-          echo "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET --name "relaycast-pr-${PR_NUM}"
+          echo "$STRIPE_SECRET_KEY" | npx wrangler secret put STRIPE_SECRET_KEY --name "relaycast-pr-${PR_NUM}" --env=""
+          echo "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET --name "relaycast-pr-${PR_NUM}" --env=""
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
