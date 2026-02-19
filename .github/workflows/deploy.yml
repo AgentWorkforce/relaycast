@@ -47,7 +47,8 @@ jobs:
       - name: Resolve server version
         id: server_version
         shell: bash
-        run: echo "semver=$(node -p \"require('./packages/server/package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api-staging
@@ -98,7 +99,8 @@ jobs:
       - name: Resolve server version
         id: server_version
         shell: bash
-        run: echo "semver=$(node -p \"require('./packages/server/package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api
