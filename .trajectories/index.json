@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T03:01:00.745Z",
+  "lastUpdated": "2026-02-19T03:15:05.257Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -407,6 +407,20 @@
       "startedAt": "2026-02-19T03:00:31.809Z",
       "completedAt": "2026-02-19T03:01:00.672Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_37osqjvdyph7.json"
+    },
+    "traj_yqdd9ygzpe4c": {
+      "title": "Review and simplify CI actions for robust PR and production deployments",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:07:19.236Z",
+      "completedAt": "2026-02-19T03:10:28.326Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yqdd9ygzpe4c.json"
+    },
+    "traj_5s3bval2x69h": {
+      "title": "Disable D1 migrations in PR preview deployments",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:14:39.688Z",
+      "completedAt": "2026-02-19T03:15:05.181Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_5s3bval2x69h.json"
     }
   }
 }

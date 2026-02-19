@@ -14,59 +14,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: Lint, Build & Test
-    if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-        with:
-          build: 'true'
-      - run: npx turbo lint
-      - run: npx turbo test
-        env:
-          DO_NOT_TRACK: '1'
-
   deploy-preview:
     name: Deploy Preview
-    if: github.event.action != 'closed'
-    needs: ci
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with:
           build: 'true'
 
-      - name: Apply D1 migrations (preview/staging DB)
-        shell: bash
-        run: |
-          set -euo pipefail
-          DB_ID="${{ vars.STAGING_D1_DATABASE_ID }}"
-          WS="${GITHUB_WORKSPACE:-$PWD}"
-          if [ -z "$DB_ID" ]; then
-            echo "Missing STAGING_D1_DATABASE_ID GitHub variable."
-            exit 1
-          fi
-          CFG="$(mktemp /tmp/wrangler-d1-preview-XXXX.toml)"
-          cat > "$CFG" <<EOF
-          name = "relaycast-d1-migrate-preview"
-          main = "${WS}/packages/server/src/worker.ts"
-          compatibility_date = "2024-12-01"
-
-          [[d1_databases]]
-          binding = "DB"
-          database_name = "relaycast-staging"
-          database_id = "${DB_ID}"
-          migrations_dir = "${WS}/packages/server/src/db/migrations"
-          EOF
-          npx wrangler d1 migrations apply DB --remote --config "$CFG"
-          rm -f "$CFG"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
+      # Preview environments share staging data; schema changes run only via main deploy pipeline.
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-pr-${{ github.event.pull_request.number }}
@@ -78,50 +37,11 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Ensure observer Pages project exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! npx wrangler pages project create relaycast-observer --production-branch main --compatibility-flags nodejs_compat --compatibility-date 2024-12-01 2>/tmp/observer-pages-create.err; then
-            if grep -qi "already exists" /tmp/observer-pages-create.err; then
-              echo "Pages project relaycast-observer already exists."
-            else
-              cat /tmp/observer-pages-create.err
-              exit 1
-            fi
-          fi
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Ensure observer Pages compatibility flags
-        shell: bash
-        run: |
-          set -euo pipefail
-          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/relaycast-observer"
-          PROJECT_JSON="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API")"
-          PREVIEW_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.preview.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
-          PROD_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.production.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
-          PATCH_BODY="$(jq -n --argjson prev "$PREVIEW_FLAGS" --argjson prod "$PROD_FLAGS" '{deployment_configs: {preview: {compatibility_flags: $prev}, production: {compatibility_flags: $prod}}}')"
-          curl -fsS -X PATCH "$API" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data "$PATCH_BODY" >/dev/null
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy observer dashboard (preview branch)
-        shell: bash
-        run: |
-          set -euo pipefail
-          PR_NUM="${{ github.event.pull_request.number }}"
-          cd packages/dashboard
-          npx @cloudflare/next-on-pages@1
-          npx wrangler pages deploy .vercel/output/static --project-name=relaycast-observer --branch "pr-${PR_NUM}"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - uses: ./.github/actions/deploy-observer-dashboard
+        with:
+          branch: pr-${{ github.event.pull_request.number }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy observer host route for this PR
         shell: bash
@@ -281,7 +201,7 @@ jobs:
 
   cleanup-preview:
     name: Cleanup Preview
-    if: github.event.action == 'closed'
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

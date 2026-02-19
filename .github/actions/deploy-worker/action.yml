@@ -98,12 +98,12 @@ runs:
       run: |
         set -euo pipefail
 
-        DEPLOY_ENV="${{ inputs.environment }}"
-        if [ "$DEPLOY_ENV" = "production" ]; then
-          DEPLOY_ENV=""
+        DEPLOY_ENV_ARG=()
+        if [ "${{ inputs.environment }}" != "production" ]; then
+          DEPLOY_ENV_ARG=(--env "${{ inputs.environment }}")
         fi
 
-        CMD=(npx wrangler deploy --config "${{ steps.config.outputs.wrangler_config }}" --env "$DEPLOY_ENV" --name "${{ inputs.worker-name }}")
+        CMD=(npx wrangler deploy --config "${{ steps.config.outputs.wrangler_config }}" --name "${{ inputs.worker-name }}" "${DEPLOY_ENV_ARG[@]}")
 
         if [ -n "${{ inputs.route }}" ]; then
           CMD+=(--routes "${{ inputs.route }}")
