@@ -402,7 +402,7 @@ export async function releaseAgent(
 
   // Mark as offline and clear spawn metadata
   const existingMetadata = (agent.metadata as Record<string, unknown>) || {};
-  const { spawn: _spawn, ...restMetadata } = existingMetadata;
+  const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
 
   await db
     .update(agents)
