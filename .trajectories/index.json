@@ -1,7 +1,14 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T07:04:27.853Z",
+  "lastUpdated": "2026-02-19T17:15:00.000Z",
   "trajectories": {
+    "traj_mcpcredfallback": {
+      "title": "Add credential file fallback to MCP stdio entry point",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:00:00.000Z",
+      "completedAt": "2026-02-19T17:15:00.000Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/completed/2026-02/traj_mcpcredfallback.json"
+    },
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
       "status": "completed",
