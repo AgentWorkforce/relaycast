@@ -79,7 +79,7 @@ function summarizeEvent(event: WsClientEvent): string {
     case 'member.joined':
     case 'member.left': {
       const agent = getString(record.agent_name) ?? 'unknown';
-      const channel = getString(record.channel_name) ?? '?';
+      const channel = getString(record.channel) ?? getString(record.channel_name) ?? '?';
       return `${agent} ${type === 'member.joined' ? 'joined' : 'left'} #${channel}`;
     }
     default: {
