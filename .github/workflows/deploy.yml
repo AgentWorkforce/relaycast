@@ -104,6 +104,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+        with:
+          build: 'true'
       - uses: ./.github/actions/deploy-observer-dashboard
         with:
           branch: main
