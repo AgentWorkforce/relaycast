@@ -95,17 +95,21 @@ export class ChannelDO implements DurableObject {
   /* ------------------------------------------------------------------ */
 
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
 
-    if (request.method === 'POST' && url.pathname === '/broadcast') {
-      return this.handleBroadcast(request);
+      if (request.method === 'POST' && url.pathname === '/broadcast') {
+        return this.handleBroadcast(request);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/update-members') {
+        return this.handleUpdateMembers(request);
+      }
+
+      return new Response('Not Found', { status: 404 });
+    } finally {
+      await this.logger.flush();
     }
-
-    if (request.method === 'POST' && url.pathname === '/update-members') {
-      return this.handleUpdateMembers(request);
-    }
-
-    return new Response('Not Found', { status: 404 });
   }
 
   /* ------------------------------------------------------------------ */

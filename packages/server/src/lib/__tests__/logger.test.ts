@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createLogger } from '../logger.js';
+import { createLogger, toErrorDetails } from '../logger.js';
 
 function getAttribute(
   attrs: Array<{ key: string; value: Record<string, unknown> }>,
@@ -134,5 +134,48 @@ describe('logger', () => {
     resolveFetch?.(new Response(null, { status: 200 }));
     await flushPromise;
     expect(flushSettled).toBe(true);
+  });
+
+  it('toErrorDetails returns name, message, and stack for Error instances', () => {
+    const err = new Error('boom');
+    err.name = 'BoomError';
+
+    const details = toErrorDetails(err);
+    expect(details.error_name).toBe('BoomError');
+    expect(details.error_message).toBe('boom');
+    expect(details.error_stack).toContain('Error');
+  });
+
+  it('toErrorDetails omits stack when not present on Error', () => {
+    const err = new Error('no stack');
+    Object.defineProperty(err, 'stack', { value: undefined, configurable: true });
+
+    const details = toErrorDetails(err);
+    expect(details).toEqual({
+      error_name: 'Error',
+      error_message: 'no stack',
+    });
+  });
+
+  it('toErrorDetails handles non-Error values', () => {
+    expect(toErrorDetails('string failure')).toEqual({
+      error_name: 'NonError',
+      error_message: 'string failure',
+    });
+
+    expect(toErrorDetails({ code: 42 })).toEqual({
+      error_name: 'NonError',
+      error_message: '[object Object]',
+    });
+
+    expect(toErrorDetails(null)).toEqual({
+      error_name: 'NonError',
+      error_message: 'null',
+    });
+
+    expect(toErrorDetails(undefined)).toEqual({
+      error_name: 'NonError',
+      error_message: 'undefined',
+    });
   });
 });

@@ -23,10 +23,11 @@ export function runInBackground(
   label: string,
 ): void {
   const logger = getRequestLogger(c, 'background.task');
-  const wrapped = Promise.resolve(task).catch((error) => {
+  const wrapped = Promise.resolve(task).catch(async (error) => {
     logger.error(`${label} failed`, {
       ...toErrorDetails(error),
     });
+    await logger.flush();
   });
 
   let executionCtx: WaitUntilContext['executionCtx'];
