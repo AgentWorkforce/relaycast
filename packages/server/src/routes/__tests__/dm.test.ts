@@ -105,7 +105,7 @@ describe('GET /v1/dm/conversations', () => {
     vi.mocked(dmEngine.listConversations).mockResolvedValue([
       {
         id: 'conv_123',
-        dm_type: '1:1',
+        type: '1:1',
         name: null,
         participants: [
           { agent_id: 'agent_456', agent_name: 'TestBot' },

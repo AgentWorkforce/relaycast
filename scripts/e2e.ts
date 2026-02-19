@@ -496,7 +496,168 @@ ${B}${CYAN}╔══════════════════════
   // Let trailing WS events flush
   await pause();
 
-  // ── 15. Disconnect + verify presence ──────────────────────────────────
+  // ── 15. Commands ──────────────────────────────────────────────────────
+  step('Commands');
+
+  await run('Register /deploy command', async () => {
+    await relay.commands.register({
+      command: 'deploy',
+      description: 'Deploy the application to staging or production',
+      handler_agent: LEAD,
+      parameters: [
+        { name: 'env', type: 'string' as const, required: true, description: 'Target environment' },
+      ],
+    });
+    log('⚙️ ', `Registered ${B}/deploy${R} command handled by ${YELLOW}${B}${LEAD}${R}`);
+  });
+  await pause();
+
+  await run('List commands', async () => {
+    const cmds = await relay.commands.list();
+    if (cmds.length === 0) throw new Error('Expected at least one command');
+    log('📋', `Commands: ${cmds.map((c) => `/${c.command}`).join(', ')}`);
+  });
+
+  await run(`${BACKEND} invokes /deploy`, async () => {
+    const result = await backend.commands.invoke('deploy', {
+      channel: channelName,
+      args: '--env staging',
+    });
+    log('🚀', `${BLUE}${B}${BACKEND}${R} invoked /deploy → invocation ${JSON.stringify(result).slice(0, 80)}`);
+  });
+  await pause();
+
+  await run('Delete /deploy command', async () => {
+    await relay.commands.delete('deploy');
+    log('🗑️ ', `Deleted /deploy command`);
+  });
+  await pause();
+
+  // ── 16. Inbound Webhooks ──────────────────────────────────────────────
+  step('Inbound Webhooks');
+
+  let webhookId = '';
+  await run('Create inbound webhook', async () => {
+    const wh = await relay.webhooks.create({
+      name: 'CI Pipeline',
+      channel: channelName,
+    });
+    webhookId = wh.webhook_id;
+    log('🔗', `Created webhook ${B}${wh.webhook_id}${R} → #${channelName}`);
+  });
+  await pause();
+
+  await run('List webhooks', async () => {
+    const whs = await relay.webhooks.list();
+    if (whs.length === 0) throw new Error('Expected at least one webhook');
+    log('📋', `Webhooks: ${whs.map((w) => w.name).join(', ')}`);
+  });
+
+  await run('Trigger webhook', async () => {
+    await relay.webhooks.trigger(webhookId, {
+      text: 'Build #142 passed — all tests green',
+      source: 'github-actions',
+    });
+    log('📥', `Triggered webhook with CI notification`);
+  });
+  await pause();
+
+  await run('Delete webhook', async () => {
+    await relay.webhooks.delete(webhookId);
+    log('🗑️ ', `Deleted webhook ${webhookId}`);
+  });
+  await pause();
+
+  // ── 17. Event Subscriptions ───────────────────────────────────────────
+  step('Event Subscriptions');
+
+  let subId = '';
+  await run('Create subscription', async () => {
+    const sub = await relay.subscriptions.create({
+      events: ['message.created', 'reaction.added'],
+      url: 'https://httpbin.org/post',
+    });
+    subId = sub.id;
+    log('📡', `Created subscription ${B}${sub.id}${R} for message.created, reaction.added`);
+  });
+  await pause();
+
+  await run('List subscriptions', async () => {
+    const subs = await relay.subscriptions.list();
+    if (subs.length === 0) throw new Error('Expected at least one subscription');
+    log('📋', `Subscriptions: ${subs.length}`);
+  });
+
+  await run('Get subscription by ID', async () => {
+    const sub = await relay.subscriptions.get(subId);
+    if (sub.id !== subId) throw new Error(`Expected sub ID ${subId}, got ${sub.id}`);
+    log('📋', `Subscription ${B}${sub.id}${R}: events=${JSON.stringify(sub.events)}`);
+  });
+
+  await run('Delete subscription', async () => {
+    await relay.subscriptions.delete(subId);
+    log('🗑️ ', `Deleted subscription ${subId}`);
+  });
+  await pause();
+
+  // ── 18. Group DMs ─────────────────────────────────────────────────────
+  step('Group DMs');
+  console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  await run(`${LEAD} creates group DM`, async () => {
+    log('📤', `${YELLOW}${B}${LEAD}${R} → group(${INFRA}, ${BACKEND}): Let's sync on the deploy pipeline offline.`);
+    await lead.dms.createGroup({
+      participants: [INFRA, BACKEND],
+      text: 'Let\'s sync on the deploy pipeline offline.',
+      name: 'Deploy Sync',
+    });
+  });
+  await pause();
+
+  // Retrieve the group conversation and send follow-up messages
+  await run(`${INFRA} replies in group DM`, async () => {
+    const convos = await infra.dms.conversations();
+    const group = convos.find((c) => c.type === 'group');
+    if (!group) throw new Error('Group DM conversation not found');
+    await infra.dms.sendMessage(group.id, 'Sounds good. I have the runbook ready.');
+    log('📤', `${GREEN}${B}${INFRA}${R} → group: Sounds good. I have the runbook ready.`);
+  });
+  await pause();
+
+  await run(`${BACKEND} replies in group DM`, async () => {
+    const convos = await backend.dms.conversations();
+    const group = convos.find((c) => c.type === 'group');
+    if (!group) throw new Error('Group DM conversation not found');
+    await backend.dms.sendMessage(group.id, 'I can run the integration tests after. Ready when you are.');
+    log('📤', `${BLUE}${B}${BACKEND}${R} → group: I can run the integration tests after. Ready when you are.`);
+  });
+  await pause();
+  console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  // ── 19. Channel archive ───────────────────────────────────────────────
+  step('Channel archive');
+
+  await run(`Archive #${channelName}`, async () => {
+    await lead.channels.archive(channelName);
+    log('📦', `${YELLOW}${B}${LEAD}${R} archived #${channelName}`);
+  });
+
+  await run('Archived channel not in active list', async () => {
+    const channels = await lead.channels.list();
+    const found = channels.find((c) => c.name === channelName);
+    if (found) throw new Error(`Expected #${channelName} to be absent from active list`);
+    log('📋', `#${channelName} is not in active channel list (correct)`);
+  });
+
+  await run('Archived channel visible with include_archived', async () => {
+    const channels = await lead.channels.list({ include_archived: true });
+    const found = channels.find((c) => c.name === channelName);
+    if (!found) throw new Error(`Expected #${channelName} in archived list`);
+    log('📋', `#${channelName} found with include_archived=true`);
+  });
+  await pause();
+
+  // ── 20. Disconnect + verify presence ──────────────────────────────────
   step('Disconnect agents & verify status');
   await Promise.all([lead.disconnect(), infra.disconnect(), backend.disconnect()]);
   log('🔌', `All agents disconnected`);
