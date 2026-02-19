@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T06:27:45.177Z",
+  "lastUpdated": "2026-02-19T06:46:08.519Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -512,6 +512,19 @@
       "startedAt": "2026-02-19T06:26:35.308Z",
       "completedAt": "2026-02-19T06:27:45.099Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_rfjrtd752ohm.json"
+    },
+    "traj_b6dydm9igd7q": {
+      "title": "Debug observer websocket stream status 404 on production",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:36:41.779Z",
+      "completedAt": "2026-02-19T06:37:58.269Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_b6dydm9igd7q.json"
+    },
+    "traj_3jjknhkwxa7z": {
+      "title": "Add semantic version and build SHA to /health",
+      "status": "active",
+      "startedAt": "2026-02-19T06:40:55.489Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_3jjknhkwxa7z.json"
     }
   }
 }

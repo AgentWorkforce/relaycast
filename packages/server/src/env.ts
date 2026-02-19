@@ -19,6 +19,8 @@ export interface CloudflareBindings {
   R2_SECRET_ACCESS_KEY: string;
   CF_ACCOUNT_ID: string;
   ENVIRONMENT: string;
+  APP_SEMVER?: string;
+  APP_VERSION?: string;
 }
 
 /** Hono context variables set by middleware */

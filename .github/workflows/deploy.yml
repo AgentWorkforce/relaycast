@@ -44,11 +44,18 @@ jobs:
           database-name: relaycast-staging
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: echo "semver=$(node -p \"require('./packages/server/package.json').version\")" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api-staging
           environment: staging
           route: 'staging-api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
           d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
           kv-id: ${{ vars.STAGING_KV_ID }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -88,10 +95,18 @@ jobs:
           database-name: relaycast
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: echo "semver=$(node -p \"require('./packages/server/package.json').version\")" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api
           environment: production
+          route: 'api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
           d1-database-id: ${{ vars.PRODUCTION_D1_DATABASE_ID }}
           kv-id: ${{ vars.PRODUCTION_KV_ID }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
