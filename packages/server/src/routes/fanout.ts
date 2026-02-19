@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
+import { createRequestLogger, toErrorDetails } from '../lib/logger.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -25,6 +26,7 @@ async function deliverToAgent(
   agentId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
+  const logger = createRequestLogger(c, 'fanout.deliver_to_agent');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
@@ -35,10 +37,18 @@ async function deliverToAgent(
       body: JSON.stringify({ ...payload, workspaceId, agentId }),
     }));
     if (!res.ok) {
-      console.error(`[fanout] AgentDO deliver failed: ${res.status} for agent ${agentId}`);
+      logger.error(`AgentDO deliver failed: ${res.status} for agent ${agentId}`, {
+        workspace_id: workspaceId,
+        agent_id: agentId,
+        status: res.status,
+      });
     }
   } catch (err) {
-    console.error(`[fanout] AgentDO deliver error for agent ${agentId}:`, err);
+    logger.error(`AgentDO deliver error for agent ${agentId}`, {
+      workspace_id: workspaceId,
+      agent_id: agentId,
+      ...toErrorDetails(err),
+    });
     throw err;
   }
 }
@@ -47,6 +57,7 @@ async function publishToWorkspaceStream(
   c: HonoContext,
   payload: Record<string, unknown>,
 ): Promise<void> {
+  const logger = createRequestLogger(c, 'fanout.workspace_stream');
   const workspaceId = c.get('workspace').id;
   if (!(await isWorkspaceStreamEnabled(c.env, workspaceId))) return;
   try {
@@ -58,10 +69,16 @@ async function publishToWorkspaceStream(
       body: JSON.stringify(payload),
     }));
     if (!res.ok) {
-      console.error(`[fanout] WorkspaceStreamDO deliver failed: ${res.status} for workspace ${workspaceId}`);
+      logger.error(`WorkspaceStreamDO deliver failed: ${res.status} for workspace ${workspaceId}`, {
+        workspace_id: workspaceId,
+        status: res.status,
+      });
     }
   } catch (err) {
-    console.error(`[fanout] WorkspaceStreamDO deliver error for workspace ${workspaceId}:`, err);
+    logger.error(`WorkspaceStreamDO deliver error for workspace ${workspaceId}`, {
+      workspace_id: workspaceId,
+      ...toErrorDetails(err),
+    });
   }
 }
 
@@ -72,6 +89,7 @@ export async function fanoutToChannel(
   data: Record<string, unknown>,
   members?: string[], // Optional: provide members for DO cache initialization
 ): Promise<void> {
+  const logger = createRequestLogger(c, 'fanout.channel');
   const workspaceId = c.get('workspace').id;
   const event = buildEvent(type, workspaceId, data, channelId);
   const payload = transformForClient(event);
@@ -87,10 +105,20 @@ export async function fanoutToChannel(
         body: JSON.stringify({ workspaceId, channelId, event: payload, members }),
       }));
       if (!res.ok) {
-        console.error(`[fanout] ChannelDO broadcast failed: ${res.status} for channel ${channelId}, event ${type}`);
+        logger.error(`ChannelDO broadcast failed: ${res.status} for channel ${channelId}, event ${type}`, {
+          workspace_id: workspaceId,
+          channel_id: channelId,
+          event_type: type,
+          status: res.status,
+        });
       }
     } catch (err) {
-      console.error(`[fanout] ChannelDO broadcast error for channel ${channelId}, event ${type}:`, err);
+      logger.error(`ChannelDO broadcast error for channel ${channelId}, event ${type}`, {
+        workspace_id: workspaceId,
+        channel_id: channelId,
+        event_type: type,
+        ...toErrorDetails(err),
+      });
     }
   })());
   tasks.push(publishToWorkspaceStream(c, payload));
@@ -120,20 +148,29 @@ export async function fanoutToWorkspace(
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
+  const logger = createRequestLogger(c, 'fanout.workspace');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.PRESENCE_DO.idFromName(workspaceId);
     const stub = c.env.PRESENCE_DO.get(doId);
     const res = await stub.fetch(new Request('http://do/status'));
     if (!res.ok) {
-      console.error(`[fanout] PresenceDO status failed: ${res.status} for workspace ${workspaceId}`);
+      logger.error(`PresenceDO status failed: ${res.status} for workspace ${workspaceId}`, {
+        workspace_id: workspaceId,
+        event_type: type,
+        status: res.status,
+      });
       return;
     }
     const body = await res.json() as { agents?: string[] };
     const agentIds = body.agents ?? [];
     await fanoutToAgents(c, agentIds, type, data);
   } catch (err) {
-    console.error(`[fanout] fanoutToWorkspace error for workspace ${workspaceId}, event ${type}:`, err);
+    logger.error(`fanoutToWorkspace error for workspace ${workspaceId}, event ${type}`, {
+      workspace_id: workspaceId,
+      event_type: type,
+      ...toErrorDetails(err),
+    });
     throw err;
   }
 }
@@ -143,6 +180,7 @@ export async function updateChannelMembers(
   channelId: string,
   memberIds: string[],
 ): Promise<void> {
+  const logger = createRequestLogger(c, 'fanout.update_channel_members');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.CHANNEL_DO.idFromName(`${workspaceId}:${channelId}`);
@@ -153,10 +191,18 @@ export async function updateChannelMembers(
       body: JSON.stringify({ members: memberIds }),
     }));
     if (!res.ok) {
-      console.error(`[fanout] ChannelDO update-members failed: ${res.status} for channel ${channelId}`);
+      logger.error(`ChannelDO update-members failed: ${res.status} for channel ${channelId}`, {
+        workspace_id: workspaceId,
+        channel_id: channelId,
+        status: res.status,
+      });
     }
   } catch (err) {
-    console.error(`[fanout] ChannelDO update-members error for channel ${channelId}:`, err);
+    logger.error(`ChannelDO update-members error for channel ${channelId}`, {
+      workspace_id: workspaceId,
+      channel_id: channelId,
+      ...toErrorDetails(err),
+    });
     throw err;
   }
 }

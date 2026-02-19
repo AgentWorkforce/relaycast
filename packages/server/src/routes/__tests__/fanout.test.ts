@@ -146,7 +146,11 @@ describe('fanout helpers', () => {
     await fanoutToChannel(c, 'ch_1', 'message.created', { text: 'hi' });
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO broadcast failed: 500 for channel ch_1'),
+      expect.stringContaining('ChannelDO broadcast failed: 500 for channel ch_1'),
+      expect.objectContaining({
+        app_version: expect.any(String),
+        sdk_version: expect.any(String),
+      }),
     );
     consoleError.mockRestore();
   });
@@ -165,8 +169,10 @@ describe('fanout helpers', () => {
       .resolves.toBeUndefined();
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO broadcast error for channel ch_1'),
-      expect.any(Error),
+      expect.stringContaining('ChannelDO broadcast error for channel ch_1'),
+      expect.objectContaining({
+        error_message: 'Network failure',
+      }),
     );
     consoleError.mockRestore();
   });
@@ -184,7 +190,10 @@ describe('fanout helpers', () => {
     await fanoutToWorkspace(c, 'agent.online', { agent_name: 'Bot' });
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] PresenceDO status failed: 500 for workspace ws_123'),
+      expect.stringContaining('PresenceDO status failed: 500 for workspace ws_123'),
+      expect.objectContaining({
+        event_type: 'agent.online',
+      }),
     );
     consoleError.mockRestore();
   });
@@ -202,7 +211,10 @@ describe('fanout helpers', () => {
     await updateChannelMembers(c, 'ch_2', ['a1']);
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO update-members failed: 500 for channel ch_2'),
+      expect.stringContaining('ChannelDO update-members failed: 500 for channel ch_2'),
+      expect.objectContaining({
+        channel_id: 'ch_2',
+      }),
     );
     consoleError.mockRestore();
   });

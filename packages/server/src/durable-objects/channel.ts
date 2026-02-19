@@ -1,4 +1,5 @@
 import type { CloudflareBindings } from '../env.js';
+import { createLogger, toErrorDetails } from '../lib/logger.js';
 
 /**
  * ChannelDO — internal-only actor for sequencing and fanout.
@@ -10,6 +11,7 @@ import type { CloudflareBindings } from '../env.js';
 export class ChannelDO implements DurableObject {
   private state: DurableObjectState;
   private env: CloudflareBindings;
+  private logger: ReturnType<typeof createLogger>;
 
   /** Monotonic sequence counter for message ordering within this channel. */
   private channelSeq: number | null = null;
@@ -19,6 +21,7 @@ export class ChannelDO implements DurableObject {
   constructor(state: DurableObjectState, env: CloudflareBindings) {
     this.state = state;
     this.env = env;
+    this.logger = createLogger(env, { source: 'channel_do' });
   }
 
   /* ------------------------------------------------------------------ */
@@ -72,14 +75,17 @@ export class ChannelDO implements DurableObject {
     for (let i = 0; i < results.length; i++) {
       const result = results[i];
       if (result.status === 'rejected') {
-        console.error(
-          `[ChannelDO] fanout failed for agent ${members[i]} in workspace ${workspaceId}:`,
-          result.reason,
-        );
+        this.logger.error(`fanout failed for agent ${members[i]} in workspace ${workspaceId}`, {
+          workspace_id: workspaceId,
+          agent_id: members[i],
+          ...toErrorDetails(result.reason),
+        });
       } else if (!result.value.ok) {
-        console.error(
-          `[ChannelDO] fanout returned ${result.value.status} for agent ${members[i]} in workspace ${workspaceId}`,
-        );
+        this.logger.error(`fanout returned ${result.value.status} for agent ${members[i]} in workspace ${workspaceId}`, {
+          workspace_id: workspaceId,
+          agent_id: members[i],
+          status: result.value.status,
+        });
       }
     }
   }
@@ -120,7 +126,11 @@ export class ChannelDO implements DurableObject {
     if (body.members && body.members.length > 0 && currentMembers.length === 0) {
       this.members = body.members;
       await this.state.storage.put('members', body.members);
-      console.log(`[ChannelDO] Initialized members cache with ${body.members.length} members`);
+      this.logger.info(`Initialized members cache with ${body.members.length} members`, {
+        workspace_id: body.workspaceId,
+        channel_id: body.channelId ?? 'unknown',
+        member_count: body.members.length,
+      });
     }
 
     // If still no members, try loading from D1 as fallback
@@ -130,10 +140,18 @@ export class ChannelDO implements DurableObject {
         if (members.length > 0) {
           this.members = members;
           await this.state.storage.put('members', members);
-          console.log(`[ChannelDO] Loaded ${members.length} members from D1 for channel ${body.channelId}`);
+          this.logger.info(`Loaded ${members.length} members from D1 for channel ${body.channelId}`, {
+            workspace_id: body.workspaceId,
+            channel_id: body.channelId,
+            member_count: members.length,
+          });
         }
       } catch (err) {
-        console.error(`[ChannelDO] Failed to load members from D1:`, err);
+        this.logger.error('Failed to load members from D1', {
+          workspace_id: body.workspaceId,
+          channel_id: body.channelId,
+          ...toErrorDetails(err),
+        });
       }
     }
 

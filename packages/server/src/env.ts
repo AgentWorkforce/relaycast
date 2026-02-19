@@ -21,6 +21,9 @@ export interface CloudflareBindings {
   ENVIRONMENT: string;
   APP_SEMVER?: string;
   APP_VERSION?: string;
+  SDK_SEMVER?: string;
+  POSTHOG_API_KEY?: string;
+  POSTHOG_HOST?: string;
 }
 
 /** Hono context variables set by middleware */

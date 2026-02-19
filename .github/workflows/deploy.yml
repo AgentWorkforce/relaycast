@@ -101,6 +101,19 @@ jobs:
         shell: bash
         run: |
           echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Sync PostHog API key secret (production)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTHOG_API_KEY:-}" ]; then
+            echo "POSTHOG_API_KEY GitHub secret is not set."
+            exit 1
+          fi
+          echo "$POSTHOG_API_KEY" | npx wrangler secret put POSTHOG_API_KEY --name relaycast-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api
