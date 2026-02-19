@@ -55,10 +55,10 @@ async function deliverToAgent(
 
 async function publishToWorkspaceStream(
   c: HonoContext,
+  workspaceId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.workspace_stream');
-  const workspaceId = c.get('workspace').id;
   if (!(await isWorkspaceStreamEnabled(c.env, workspaceId))) return;
   try {
     const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspaceId);
@@ -88,9 +88,22 @@ export async function fanoutToChannel(
   type: string,
   data: Record<string, unknown>,
   members?: string[], // Optional: provide members for DO cache initialization
+  workspaceIdOverride?: string,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.channel');
-  const workspaceId = c.get('workspace').id;
+  let workspaceId = workspaceIdOverride;
+  if (!workspaceId) {
+    const workspace = c.get('workspace');
+    workspaceId = workspace?.id;
+  }
+  if (!workspaceId) {
+    logger.error('fanoutToChannel missing workspace context', {
+      channel_id: channelId,
+      event_type: type,
+    });
+    return;
+  }
+
   const event = buildEvent(type, workspaceId, data, channelId);
   const payload = transformForClient(event);
 
@@ -121,7 +134,7 @@ export async function fanoutToChannel(
       });
     }
   })());
-  tasks.push(publishToWorkspaceStream(c, payload));
+  tasks.push(publishToWorkspaceStream(c, workspaceId, payload));
 
   await Promise.allSettled(tasks);
 }
@@ -139,7 +152,7 @@ export async function fanoutToAgents(
   const unique = [...new Set(agentIds)];
   await Promise.allSettled([
     ...unique.map((agentId) => deliverToAgent(c, agentId, payload)),
-    publishToWorkspaceStream(c, payload),
+    publishToWorkspaceStream(c, workspaceId, payload),
   ]);
 }
 

@@ -19,6 +19,13 @@ function createContext(bindings: AppEnv['Bindings']): Context<AppEnv> {
   } as Context<AppEnv>;
 }
 
+function createContextWithoutWorkspace(bindings: AppEnv['Bindings']): Context<AppEnv> {
+  return {
+    env: bindings,
+    get: (() => undefined) as any,
+  } as Context<AppEnv>;
+}
+
 describe('fanout helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -233,5 +240,27 @@ describe('fanout helpers', () => {
     const req = channelFetch.mock.calls[0][0] as Request;
     const body = await req.json();
     expect(body.members).toEqual(['agent_1', 'agent_2']);
+  });
+
+  it('fanoutToChannel supports workspace override when context workspace is missing', async () => {
+    const channelFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const bindings = createMockBindings() as AppEnv['Bindings'];
+    bindings.CHANNEL_DO = {
+      idFromName: vi.fn(() => 'channel-id'),
+      get: vi.fn(() => ({ fetch: channelFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const c = createContextWithoutWorkspace(bindings);
+    await fanoutToChannel(c, 'ch_1', 'webhook.received', {
+      webhook_id: 'wh_1',
+      channel: 'general',
+      message_id: 'msg_1',
+      text: 'hello',
+      source: 'webhook',
+    }, undefined, 'ws_999');
+
+    const req = channelFetch.mock.calls[0][0] as Request;
+    const body = await req.json();
+    expect(body.workspaceId).toBe('ws_999');
   });
 });
