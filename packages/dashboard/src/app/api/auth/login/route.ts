@@ -43,11 +43,9 @@ export async function POST(request: NextRequest) {
     // receives full realtime event fanout.
     try {
       await relay.workspace.stream.set(true);
-    } catch {
-      return NextResponse.json(
-        { success: false, error: 'Failed to enable workspace stream' },
-        { status: 500 }
-      );
+    } catch (error) {
+      // Best-effort: older backends or partial preview rollouts may not support this yet.
+      console.warn('[api/auth/login] Failed to enable workspace stream:', error);
     }
 
     const cookieStore = await cookies();

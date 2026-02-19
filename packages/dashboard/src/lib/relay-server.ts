@@ -49,7 +49,8 @@ export function resolveRelayServerUrlFromHost(host: string | null | undefined): 
 }
 
 export function resolveRelayServerUrlFromRequest(request: NextRequest | Request): string {
+  const observerHost = request.headers.get('x-relaycast-observer-host');
   const forwardedHost = request.headers.get('x-forwarded-host');
   const host = request.headers.get('host');
-  return resolveRelayServerUrlFromHost(forwardedHost ?? host);
+  return resolveRelayServerUrlFromHost(observerHost ?? forwardedHost ?? host);
 }

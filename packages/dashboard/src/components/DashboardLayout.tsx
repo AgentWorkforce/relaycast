@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Activity, AlertTriangle } from 'lucide-react';
 import { usePresence, useChannels, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
@@ -20,6 +20,9 @@ export function DashboardLayout() {
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(true);
+  const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
+  const [streamMessage, setStreamMessage] = useState<string>('');
+  const [streamPending, setStreamPending] = useState(false);
 
   // Default to first channel if none selected
   useEffect(() => {
@@ -31,6 +34,52 @@ export function DashboardLayout() {
 
   // Filter out the dashboard observer agent
   const agents = rawAgents.filter((a) => !a.name.startsWith('_dashboard_'));
+
+  const refreshStreamStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/workspace/stream', { cache: 'no-store' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.success !== true || typeof data.enabled !== 'boolean') {
+        throw new Error('Unable to verify workspace stream status');
+      }
+      setStreamEnabled(data.enabled);
+      if (data.enabled) {
+        setStreamMessage('');
+      } else {
+        setStreamMessage('Workspace stream is disabled. Realtime updates will be incomplete.');
+      }
+    } catch {
+      setStreamEnabled(null);
+      setStreamMessage('');
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStreamStatus();
+  }, [refreshStreamStatus]);
+
+  async function handleEnableStream() {
+    setStreamPending(true);
+    setStreamMessage('');
+    try {
+      const res = await fetch('/api/workspace/stream', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.success !== true || data.enabled !== true) {
+        throw new Error('Failed to enable workspace stream');
+      }
+      setStreamEnabled(true);
+      setStreamMessage('');
+    } catch {
+      setStreamEnabled(false);
+      setStreamMessage('Failed to enable workspace stream. Please try again.');
+    } finally {
+      setStreamPending(false);
+    }
+  }
 
   function handleSelectAgent(name: string | null) {
     setSelectedAgent(name);
@@ -83,6 +132,29 @@ export function DashboardLayout() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
+        {streamEnabled === false && (
+          <div className="mx-3 mt-3 rounded-lg border border-[var(--color-warning)] bg-[var(--color-warning-light)] p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--color-warning)]" />
+                <div className="text-sm text-[var(--color-text-primary)]">
+                  <div className="font-medium">Workspace stream is disabled</div>
+                  <div className="text-[var(--color-text-secondary)]">
+                    {streamMessage || 'Enable stream to restore full realtime dashboard updates.'}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={handleEnableStream}
+                disabled={streamPending}
+                className="shrink-0 rounded-md border border-[var(--color-warning)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {streamPending ? 'Enabling...' : 'Enable Stream'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {showActivityToggle && (
           <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
             <button

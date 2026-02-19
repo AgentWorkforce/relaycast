@@ -23,7 +23,9 @@ export default {
 
     // Preserve original observer host so dashboard API routes can map:
     // prNN-observer.relaycast.dev -> prNN-api.relaycast.dev
+    // Use both a custom header and x-forwarded-host for compatibility.
     const headers = new Headers(request.headers);
+    headers.set('x-relaycast-observer-host', incoming.host);
     headers.set('x-forwarded-host', incoming.host);
     headers.set('x-forwarded-proto', incoming.protocol.replace(':', ''));
     headers.delete('host');
