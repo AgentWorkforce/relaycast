@@ -184,7 +184,7 @@ export const CommandInvokedEventSchema = z.object({
   channel: z.string(),
   invoked_by: z.string(),
   args: z.string().nullable(),
-  parameters: z.record(z.unknown()).nullable(),
+  parameters: z.record(z.string(), z.unknown()).nullable(),
 });
 export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
 
