@@ -79,6 +79,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+        with:
+          build: 'true'
       - uses: ./.github/actions/apply-d1-migrations
         with:
           migration-worker-name: relaycast-d1-migrate-production
