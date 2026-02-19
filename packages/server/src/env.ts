@@ -1,4 +1,5 @@
 import type { workspaces, agents } from './db/schema.js';
+import type { Logger } from './lib/logger.js';
 
 /** Cloudflare Worker bindings */
 export interface CloudflareBindings {
@@ -31,6 +32,8 @@ export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
   db: ReturnType<typeof import('./db/index.js').getDb>;
+  logger: Logger;
+  requestId: string;
 }
 
 /** The Hono Env type used throughout the app */

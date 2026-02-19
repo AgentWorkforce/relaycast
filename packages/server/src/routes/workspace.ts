@@ -10,7 +10,7 @@ import {
   getWorkspaceStreamConfig,
   setWorkspaceStreamOverride,
 } from '../lib/workspaceStream.js';
-import { createRequestLogger, toErrorDetails } from '../lib/logger.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -154,7 +154,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
 
 // GET /workspace/stream - get workspace stream effective config
 workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = createRequestLogger(c, 'workspace.stream.get');
+  const logger = getRequestLogger(c, 'workspace.stream.get');
   const workspaceId = c.get('workspace').id;
   try {
     const config = await getWorkspaceStreamConfig(c.env, workspaceId);
@@ -183,7 +183,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
 
 // PUT /workspace/stream - set workspace stream override
 workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = createRequestLogger(c, 'workspace.stream.put');
+  const logger = getRequestLogger(c, 'workspace.stream.put');
   const workspaceId = c.get('workspace').id;
   try {
     const body = await c.req.json() as { enabled?: unknown; mode?: unknown };

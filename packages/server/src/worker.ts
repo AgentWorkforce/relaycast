@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env.js';
 import { dbMiddleware } from './middleware/db.js';
+import { loggerMiddleware } from './middleware/logger.js';
 import { MCP_VERSION } from '@relaycast/mcp';
 
 // Route imports
@@ -27,7 +28,7 @@ import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
-import { createLogger, createRequestLogger, toErrorDetails } from './lib/logger.js';
+import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -41,6 +42,7 @@ const app = new Hono<AppEnv>();
 
 // Global middleware
 app.use('*', cors());
+app.use('*', loggerMiddleware);
 app.use('*', dbMiddleware);
 
 // MCP server card — before secureHeaders to avoid cross-origin policy issues
@@ -242,7 +244,7 @@ app.notFound((c) => {
 // Global error handler
 app.onError((err, c) => {
   const error = err as Error & { code?: string; status?: number };
-  const logger = createRequestLogger(c, 'worker.on_error');
+  const logger = getRequestLogger(c, 'worker.on_error');
   logger.error('Unhandled request error', {
     error_code: error.code ?? 'internal_error',
     error_status: error.status ?? 500,
@@ -291,6 +293,7 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
       msg.retry();
     }
   }
+  await logger.flush();
 }
 
 // Scheduled handler for cleanup tasks
@@ -309,6 +312,7 @@ async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
       schedule: event.cron ?? 'unknown',
     });
   }
+  await logger.flush();
 }
 
 export default {

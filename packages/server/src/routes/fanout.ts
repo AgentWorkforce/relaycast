@@ -2,7 +2,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
-import { createRequestLogger, toErrorDetails } from '../lib/logger.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -26,7 +26,7 @@ async function deliverToAgent(
   agentId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const logger = createRequestLogger(c, 'fanout.deliver_to_agent');
+  const logger = getRequestLogger(c, 'fanout.deliver_to_agent');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
@@ -57,7 +57,7 @@ async function publishToWorkspaceStream(
   c: HonoContext,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const logger = createRequestLogger(c, 'fanout.workspace_stream');
+  const logger = getRequestLogger(c, 'fanout.workspace_stream');
   const workspaceId = c.get('workspace').id;
   if (!(await isWorkspaceStreamEnabled(c.env, workspaceId))) return;
   try {
@@ -89,7 +89,7 @@ export async function fanoutToChannel(
   data: Record<string, unknown>,
   members?: string[], // Optional: provide members for DO cache initialization
 ): Promise<void> {
-  const logger = createRequestLogger(c, 'fanout.channel');
+  const logger = getRequestLogger(c, 'fanout.channel');
   const workspaceId = c.get('workspace').id;
   const event = buildEvent(type, workspaceId, data, channelId);
   const payload = transformForClient(event);
@@ -148,7 +148,7 @@ export async function fanoutToWorkspace(
   type: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const logger = createRequestLogger(c, 'fanout.workspace');
+  const logger = getRequestLogger(c, 'fanout.workspace');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.PRESENCE_DO.idFromName(workspaceId);
@@ -180,7 +180,7 @@ export async function updateChannelMembers(
   channelId: string,
   memberIds: string[],
 ): Promise<void> {
-  const logger = createRequestLogger(c, 'fanout.update_channel_members');
+  const logger = getRequestLogger(c, 'fanout.update_channel_members');
   const workspaceId = c.get('workspace').id;
   try {
     const doId = c.env.CHANNEL_DO.idFromName(`${workspaceId}:${channelId}`);

@@ -104,4 +104,35 @@ describe('logger', () => {
 
     expect(getAttribute(attrs, 'sdk_version')?.stringValue).toBe('header-sdk-version');
   });
+
+  it('shares pending sends across child loggers and flush waits for completion', async () => {
+    let resolveFetch: ((value: Response) => void) | null = null;
+    const fetchMock = vi.fn().mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const logger = createLogger({
+      ENVIRONMENT: 'production',
+      APP_SEMVER: '2.0.0',
+      POSTHOG_API_KEY: 'phc_test_project_key',
+    } as any, {
+      source: 'request',
+      fields: { request_id: 'req_123' },
+    });
+    const child = logger.child('fanout.channel', { workspace_id: 'ws_123' });
+
+    child.error('child failure');
+    const flushPromise = logger.flush();
+    let flushSettled = false;
+    void flushPromise.then(() => { flushSettled = true; });
+    await Promise.resolve();
+
+    expect(flushSettled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFetch?.(new Response(null, { status: 200 }));
+    await flushPromise;
+    expect(flushSettled).toBe(true);
+  });
 });

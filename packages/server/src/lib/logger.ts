@@ -22,6 +22,8 @@ export interface Logger {
   info: (message: string, fields?: LogFields) => void;
   warn: (message: string, fields?: LogFields) => void;
   error: (message: string, fields?: LogFields) => void;
+  flush: () => Promise<void>;
+  child: (source: string, fields?: LogFields) => Logger;
 }
 
 interface CreateLoggerOptions {
@@ -29,6 +31,11 @@ interface CreateLoggerOptions {
   request?: Request;
   sdkVersion?: string;
   fields?: LogFields;
+  state?: LoggerState;
+}
+
+interface LoggerState {
+  pending: Set<Promise<void>>;
 }
 
 function isProduction(env: CloudflareBindings): boolean {
@@ -110,7 +117,7 @@ async function sendToPostHog(
   };
 
   try {
-    await fetch(`${getPostHogHost(env)}/i/v1/logs`, {
+    const response = await fetch(`${getPostHogHost(env)}/i/v1/logs`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -118,6 +125,9 @@ async function sendToPostHog(
       },
       body: JSON.stringify(payload),
     });
+    if (!response.ok) {
+      // Best effort: ignore non-2xx response from logging backend.
+    }
   } catch {
     // Best effort: do not fail request handling if log export fails.
   }
@@ -145,6 +155,7 @@ export function createLogger(env: CloudflareBindings, options: CreateLoggerOptio
   const sdkVersion = getSdkVersion(env, options.request, options.sdkVersion);
   const production = isProduction(env);
   const baseFields = options.fields ?? {};
+  const state = options.state ?? { pending: new Set<Promise<void>>() };
 
   const log = (level: LogLevel, message: string, fields: LogFields = {}) => {
     const metadata: LogFields = {
@@ -161,7 +172,9 @@ export function createLogger(env: CloudflareBindings, options: CreateLoggerOptio
       return;
     }
 
-    void sendToPostHog(env, level, message, metadata, appVersion);
+    const promise = sendToPostHog(env, level, message, metadata, appVersion);
+    state.pending.add(promise);
+    void promise.finally(() => state.pending.delete(promise));
   };
 
   return {
@@ -169,6 +182,17 @@ export function createLogger(env: CloudflareBindings, options: CreateLoggerOptio
     info: (message, fields) => log('info', message, fields),
     warn: (message, fields) => log('warn', message, fields),
     error: (message, fields) => log('error', message, fields),
+    flush: async () => {
+      if (state.pending.size === 0) return;
+      await Promise.allSettled(Array.from(state.pending));
+    },
+    child: (source, fields = {}) => createLogger(env, {
+      source,
+      request: options.request,
+      sdkVersion: options.sdkVersion,
+      fields: { ...baseFields, ...fields },
+      state,
+    }),
   };
 }
 
@@ -182,11 +206,36 @@ export function createRequestLogger(
     return maybeReq instanceof Request ? maybeReq : undefined;
   })();
 
+  const contextReq = (c as unknown as { req?: { path?: string; method?: string } }).req;
+  const maybeRequestId = (c as unknown as { get?: (key: string) => unknown }).get?.('requestId');
+  const requestId = typeof maybeRequestId === 'string' ? maybeRequestId : undefined;
+
   return createLogger(c.env, {
     source,
     request,
-    fields,
+    fields: {
+      ...(requestId ? { request_id: requestId } : {}),
+      ...(contextReq?.path ? { route: contextReq.path } : {}),
+      ...(contextReq?.method ? { method: contextReq.method } : {}),
+      ...(fields ?? {}),
+    },
   });
+}
+
+export function getRequestLogger(
+  c: Context<AppEnv>,
+  source: string,
+  fields?: LogFields,
+): Logger {
+  const maybeLogger = (c as unknown as { get?: (key: string) => unknown }).get?.('logger');
+  if (
+    maybeLogger &&
+    typeof maybeLogger === 'object' &&
+    typeof (maybeLogger as Logger).child === 'function'
+  ) {
+    return (maybeLogger as Logger).child(source, fields);
+  }
+  return createRequestLogger(c, source, fields);
 }
 
 export function toErrorDetails(error: unknown): { error_name: string; error_message: string; error_stack?: string } {
