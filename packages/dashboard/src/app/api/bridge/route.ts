@@ -1,14 +1,18 @@
-import { NextResponse } from 'next/server';
-import { RelayError } from '@relaycast/sdk';
-import { getRelayApiKey, getRelay } from '../../../lib/relay-api';
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { RelayCast, RelayError } from '@relaycast/sdk';
+import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
+
+export const runtime = 'edge';
 
 /**
  * GET /api/bridge
  * Constructs the multi-project view from relaycast agents and channels.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const apiKey = await getRelayApiKey();
+    const cookieStore = await cookies();
+    const apiKey = cookieStore.get('relaycast_key')?.value;
     if (!apiKey) {
       return NextResponse.json(
         { projects: [], messages: [], connected: false },
@@ -16,7 +20,10 @@ export async function GET() {
       );
     }
 
-    const relay = getRelay(apiKey);
+    const relay = new RelayCast({
+      apiKey,
+      baseUrl: resolveRelayServerUrlFromRequest(request),
+    });
     const [agentList, channelList] = await Promise.allSettled([
       relay.agents.list(),
       relay.channels.list(),

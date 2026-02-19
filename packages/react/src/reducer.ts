@@ -242,10 +242,29 @@ function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): 
 function handlePresenceChange(store: RelayStore, event: AgentOnlineEvent | AgentOfflineEvent): void {
   const state = store.getState();
   const newStatus = event.type === 'agent.online' ? 'online' : 'offline';
-  const updated = state.agents.data.map((a) =>
-    a.name === event.agent.name ? { ...a, status: newStatus as typeof a.status } : a,
-  );
-  store.setState({ agents: { ...state.agents, data: updated } });
+  const exists = state.agents.data.some((a) => a.name === event.agent.name);
+
+  if (exists) {
+    const updated = state.agents.data.map((a) =>
+      a.name === event.agent.name ? { ...a, status: newStatus as typeof a.status } : a,
+    );
+    store.setState({ agents: { ...state.agents, data: updated } });
+  } else if (event.type === 'agent.online') {
+    // Agent came online but wasn't in the initial fetch — add a stub entry
+    const stub = {
+      id: '',
+      workspace_id: '',
+      name: event.agent.name,
+      type: 'agent' as const,
+      token_hash: '',
+      status: 'online' as const,
+      persona: null,
+      metadata: {},
+      created_at: new Date().toISOString(),
+      last_seen: new Date().toISOString(),
+    };
+    store.setState({ agents: { ...state.agents, data: [...state.agents.data, stub] } });
+  }
 }
 
 function handleChannelCreated(store: RelayStore, event: ChannelCreatedEvent): void {
@@ -261,6 +280,7 @@ function handleChannelCreated(store: RelayStore, event: ChannelCreatedEvent): vo
     created_by: null,
     created_at: new Date().toISOString(),
     is_archived: false,
+    member_count: 1,
   };
   store.setState({
     channels: { ...state.channels, data: [...state.channels.data, newChannel] },
@@ -294,6 +314,12 @@ function handleMemberJoined(store: RelayStore, event: MemberJoinedEvent): void {
     };
     return { ...prev, members: [...prev.members, newMember] };
   });
+  // Increment member_count on the channel list entry
+  const state = store.getState();
+  const updated = state.channels.data.map((c) =>
+    c.name === event.channel ? { ...c, member_count: (c.member_count ?? 0) + 1 } : c,
+  );
+  store.setState({ channels: { ...state.channels, data: updated } });
 }
 
 function handleMemberLeft(store: RelayStore, event: MemberLeftEvent): void {
@@ -301,6 +327,12 @@ function handleMemberLeft(store: RelayStore, event: MemberLeftEvent): void {
     ...prev,
     members: prev.members.filter((m) => m.agent_name !== event.agent_name),
   }));
+  // Decrement member_count on the channel list entry
+  const state = store.getState();
+  const updated = state.channels.data.map((c) =>
+    c.name === event.channel ? { ...c, member_count: Math.max(0, (c.member_count ?? 1) - 1) } : c,
+  );
+  store.setState({ channels: { ...state.channels, data: updated } });
 }
 
 function handleDmReceived(store: RelayStore): void {

@@ -17,13 +17,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn(() => ({
-    billing: {
-      usage: mocks.usage,
-      subscription: mocks.subscription,
-      portal: mocks.portal,
-    },
-  })),
+  RelayCast: vi.fn(function () {
+    return {
+      billing: {
+        usage: mocks.usage,
+        subscription: mocks.subscription,
+        portal: mocks.portal,
+      },
+    };
+  }),
 }));
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ apiKey: 'rk_test' })),

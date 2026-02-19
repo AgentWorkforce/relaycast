@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 
 vi.mock('../../engine/dm.js', () => ({
   sendDm: vi.fn(),
@@ -7,179 +6,41 @@ vi.mock('../../engine/dm.js', () => ({
   getDmMessages: vi.fn(),
 }));
 
-vi.mock('../../engine/thread.js', () => ({
-  postReply: vi.fn(),
-  getThread: vi.fn(),
-}));
-
-vi.mock('../../engine/message.js', () => ({
-  postMessage: vi.fn(),
-  getMessages: vi.fn(),
-  getMessage: vi.fn(),
-}));
-
-vi.mock('../../engine/channel.js', () => ({
-  createChannel: vi.fn(),
-  listChannels: vi.fn(),
-  getChannel: vi.fn(),
-  updateChannel: vi.fn(),
-  archiveChannel: vi.fn(),
-  joinChannel: vi.fn(),
-  leaveChannel: vi.fn(),
-  getMembers: vi.fn(),
-  inviteAgent: vi.fn(),
-}));
-
 vi.mock('../../engine/agent.js', () => ({
-  registerAgent: vi.fn(),
-  listAgents: vi.fn(),
-  getAgentByName: vi.fn(),
-  updateAgent: vi.fn(),
-  deleteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/groupDm.js', () => ({
-  createGroupDm: vi.fn(),
-  postToGroupDm: vi.fn(),
-  addParticipant: vi.fn(),
-  removeParticipant: vi.fn(),
-}));
-
-vi.mock('../../engine/reaction.js', () => ({
-  addReaction: vi.fn(),
-  removeReaction: vi.fn(),
-  getReactions: vi.fn(),
-}));
-
-vi.mock('../../engine/search.js', () => ({
-  searchMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/inbox.js', () => ({
-  getInbox: vi.fn(),
-}));
-
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-}));
-
-vi.mock('../../engine/receipt.js', () => ({
-  markRead: vi.fn(),
-  getReaders: vi.fn(),
-  getReadStatus: vi.fn(),
-}));
-
-vi.mock('../../engine/file.js', () => ({
-  createUpload: vi.fn(),
-  completeUpload: vi.fn(),
-  getFile: vi.fn(),
-  deleteFile: vi.fn(),
-  listFiles: vi.fn(),
-}));
-
-vi.mock('../../engine/presence.js', () => ({
-  getPresence: vi.fn(),
-}));
-
-vi.mock('../../engine/systemPrompt.js', () => ({
-  getSystemPrompt: vi.fn(),
-  setSystemPrompt: vi.fn(),
-}));
-
-vi.mock('../../engine/billing.js', () => ({
-  subscribe: vi.fn(),
-  getSubscription: vi.fn(),
-  getUsage: vi.fn(),
-  getInvoices: vi.fn(),
-  createPortalSession: vi.fn(),
-}));
-
-vi.mock('../../engine/webhooks.js', () => ({
-  processWebhook: vi.fn(),
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-  })),
-}));
-
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventQueue.js', () => ({
-  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
-}));
-
-import { app } from '../../app.js';
-import * as dmEngine from '../../engine/dm.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { dbMiddleware } from '../../middleware/db.js';
+import { dmRoutes } from '../../routes/dm.js';
 import { getDb } from '../../db/index.js';
-import { hashToken } from '../../middleware/auth.js';
-import crypto from 'node:crypto';
+import * as dmEngine from '../../engine/dm.js';
+import {
+  createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
+} from '../../__tests__/test-helpers.js';
 
-const agentToken = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-const agentTokenHash = hashToken(agentToken);
+const bindings = createMockBindings();
 
-const fakeWorkspace = {
-  id: 'ws_123',
-  name: 'test-workspace',
-  apiKeyHash: hashToken('rk_live_dummy'),
-  systemPrompt: null,
-  plan: 'free',
-  stripeCustomerId: null,
-  stripeSubscriptionId: null,
-  createdAt: new Date(),
-  metadata: {},
-};
+const app = new Hono<AppEnv>();
+app.use('*', dbMiddleware);
+const v1 = new Hono<AppEnv>();
+v1.route('/', dmRoutes);
+app.route('/v1', v1);
 
-const fakeAgent = {
-  id: 'agent_456',
-  workspaceId: 'ws_123',
-  name: 'TestBot',
-  type: 'agent',
-  tokenHash: agentTokenHash,
-  status: 'online',
-  persona: null,
-  metadata: {},
-  createdAt: new Date(),
-  lastSeen: new Date(),
-};
-
-function mockDbForAgentAuth() {
-  const mockWhere = vi.fn();
-  let callCount = 0;
-  mockWhere.mockImplementation(() => {
-    callCount++;
-    if (callCount === 1) return Promise.resolve([fakeAgent]);
-    return Promise.resolve([fakeWorkspace]);
-  });
-
-  vi.mocked(getDb).mockReturnValue({
-    select: () => ({
-      from: () => ({
-        where: mockWhere,
-      }),
-    }),
-  } as ReturnType<typeof getDb>);
-}
+app.onError((err, c) => {
+  const error = err as Error & { code?: string; status?: number };
+  return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+});
 
 describe('POST /v1/dm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAgentAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
   });
 
   it('sends a DM and returns 201', async () => {
@@ -192,41 +53,52 @@ describe('POST /v1/dm', () => {
       created_at: '2025-01-01T00:00:00.000Z',
     });
 
-    const res = await request(app)
-      .post('/v1/dm')
-      .set('Authorization', `Bearer ${agentToken}`)
-      .send({ to: 'OtherBot', text: 'Hello DM' });
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ to: 'OtherBot', text: 'Hello DM' }),
+    }, bindings);
 
     expect(res.status).toBe(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.conversation_id).toBe('conv_123');
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.conversation_id).toBe('conv_123');
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dm.received',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ conversation_id: 'conv_123' }),
+    }));
   });
 
   it('returns 400 when to is missing', async () => {
-    const res = await request(app)
-      .post('/v1/dm')
-      .set('Authorization', `Bearer ${agentToken}`)
-      .send({ text: 'Hello' });
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ text: 'Hello' }),
+    }, bindings);
 
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
   });
 
   it('returns 400 when text is missing', async () => {
-    const res = await request(app)
-      .post('/v1/dm')
-      .set('Authorization', `Bearer ${agentToken}`)
-      .send({ to: 'OtherBot' });
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ to: 'OtherBot' }),
+    }, bindings);
 
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
   });
 });
 
 describe('GET /v1/dm/conversations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAgentAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
   });
 
   it('lists conversations', async () => {
@@ -250,21 +122,22 @@ describe('GET /v1/dm/conversations', () => {
       },
     ]);
 
-    const res = await request(app)
-      .get('/v1/dm/conversations')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/dm/conversations', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].participants).toHaveLength(2);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].participants).toHaveLength(2);
   });
 });
 
 describe('GET /v1/dm/:conversation_id/messages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAgentAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
   });
 
   it('returns paginated messages', async () => {
@@ -277,13 +150,14 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
       },
     ]);
 
-    const res = await request(app)
-      .get('/v1/dm/conv_123/messages')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/dm/conv_123/messages', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data).toHaveLength(1);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toHaveLength(1);
   });
 
   it('returns 403 for non-participant', async () => {
@@ -294,12 +168,12 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
       }),
     );
 
-    const res = await request(app)
-      .get('/v1/dm/conv_123/messages')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/dm/conv_123/messages', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('forbidden');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('forbidden');
   });
 });
-

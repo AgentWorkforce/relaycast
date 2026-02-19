@@ -78,13 +78,42 @@ function getPostHogKey(): string {
     DEFAULT_POSTHOG_KEY;
 }
 
-function postJson(urlString: string, payload: Record<string, unknown>): Promise<void> {
+function runtimePrefersFetch(): boolean {
+  return typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined';
+}
+
+async function postJsonWithFetch(urlString: string, payload: Record<string, unknown>): Promise<void> {
+  if (typeof fetch !== 'function') return;
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
+  const timer = setTimeout(() => controller?.abort(), 1000) as ReturnType<typeof setTimeout> & {
+    unref?: () => void;
+  };
+  timer.unref?.();
+
+  try {
+    await fetch(urlString, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller?.signal,
+    });
+  } catch {
+    // Best effort telemetry; swallow send errors.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function postJsonWithNodeRequest(urlString: string, payload: Record<string, unknown>): Promise<boolean> {
   return new Promise((resolve) => {
     let resolved = false;
     const finish = () => {
       if (resolved) return;
       resolved = true;
-      resolve();
+      resolve(true);
     };
 
     try {
@@ -117,9 +146,21 @@ function postJson(urlString: string, payload: Record<string, unknown>): Promise<
       req.write(body);
       req.end();
     } catch {
-      finish();
+      resolve(false);
     }
   });
+}
+
+async function postJson(urlString: string, payload: Record<string, unknown>): Promise<void> {
+  if (runtimePrefersFetch()) {
+    await postJsonWithFetch(urlString, payload);
+    return;
+  }
+
+  const sentWithNodeRequest = await postJsonWithNodeRequest(urlString, payload);
+  if (!sentWithNodeRequest) {
+    await postJsonWithFetch(urlString, payload);
+  }
 }
 
 export function createMcpTelemetry(version = 'unknown'): McpTelemetry {

@@ -169,6 +169,39 @@ describe('createMcpTelemetry', () => {
     });
   });
 
+  describe('worker runtime transport', () => {
+    it('prefers fetch transport when worker globals are present', async () => {
+      const originalFetch = globalThis.fetch;
+      const originalWebSocketPair = (globalThis as { WebSocketPair?: unknown }).WebSocketPair;
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+
+      try {
+        (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+        (globalThis as { WebSocketPair?: unknown }).WebSocketPair = class {};
+
+        vi.mocked(fs.readFileSync).mockImplementation(() => {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+        vi.mocked(fs.mkdirSync).mockImplementation(() => undefined);
+        vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
+
+        const telemetry = createMcpTelemetry('1.0.0');
+        telemetry.capture('test_event', {});
+        await telemetry.flush();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(posthogRequestMock).not.toHaveBeenCalled();
+      } finally {
+        (globalThis as { fetch: typeof fetch }).fetch = originalFetch;
+        if (typeof originalWebSocketPair === 'undefined') {
+          delete (globalThis as { WebSocketPair?: unknown }).WebSocketPair;
+        } else {
+          (globalThis as { WebSocketPair?: unknown }).WebSocketPair = originalWebSocketPair;
+        }
+      }
+    });
+  });
+
   describe('error-tolerant state persistence', () => {
     it('handles read-only filesystem gracefully on fresh state', () => {
       vi.mocked(fs.readFileSync).mockImplementation(() => {

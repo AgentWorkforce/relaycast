@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import express from 'express';
-import request from 'supertest';
 import crypto from 'node:crypto';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
 import {
   requireWorkspaceKey,
   requireAuth,
@@ -9,32 +9,17 @@ import {
   hashToken,
 } from '../auth.js';
 
-// Mock the DB module
-vi.mock('../../db/index.js', () => ({
-  getDb: vi.fn(),
+// Mock touchLastSeen to avoid DB calls
+vi.mock('../../engine/agent.js', () => ({
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
-
-import { getDb } from '../../db/index.js';
-
-function makeApp(middleware: express.RequestHandler) {
-  const app = express();
-  app.use(express.json());
-  app.use(middleware as express.RequestHandler);
-  app.get('/test', (_req, res) => {
-    res.json({ ok: true });
-  });
-  app.post('/test', (_req, res) => {
-    res.json({ ok: true });
-  });
-  return app;
-}
 
 const fakeWorkspace = {
   id: 'ws_123',
   name: 'test-workspace',
   apiKeyHash: '',
   systemPrompt: null,
-  plan: 'free',
+  plan: 'free' as const,
   stripeCustomerId: null,
   stripeSubscriptionId: null,
   createdAt: new Date(),
@@ -51,8 +36,36 @@ const fakeAgent = {
   persona: null,
   metadata: {},
   createdAt: new Date(),
-  lastSeen: new Date(),
+  lastSeen: new Date(0), // old date to trigger touchLastSeen
 };
+
+function makeApp(middleware: ReturnType<typeof import('hono/factory').createMiddleware>, mockDb: any) {
+  const app = new Hono<AppEnv>();
+  // Inject mock db into context
+  app.use('*', async (c, next) => {
+    c.set('db', mockDb);
+    await next();
+  });
+  app.use('*', middleware);
+  app.get('/test', (c) => c.json({ ok: true }));
+  app.post('/test', (c) => c.json({ ok: true }));
+  return app;
+}
+
+function mockDbReturning(...results: any[]) {
+  let callCount = 0;
+  return {
+    select: () => ({
+      from: () => ({
+        where: vi.fn().mockImplementation(() => {
+          const result = results[callCount] ?? results[results.length - 1];
+          callCount++;
+          return Promise.resolve(result);
+        }),
+      }),
+    }),
+  } as any;
+}
 
 describe('hashToken', () => {
   it('returns SHA-256 hex digest', () => {
@@ -66,54 +79,40 @@ describe('requireWorkspaceKey', () => {
   const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
   const apiKeyHash = hashToken(apiKey);
 
-  beforeEach(() => {
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: vi.fn().mockResolvedValue([{ ...fakeWorkspace, apiKeyHash }]),
-        }),
-      }),
-    } as ReturnType<typeof getDb>);
-  });
-
   it('returns 401 when no Authorization header', async () => {
-    const app = makeApp(requireWorkspaceKey as unknown as express.RequestHandler);
-    const res = await request(app).get('/test');
+    const app = makeApp(requireWorkspaceKey, mockDbReturning([]));
+    const res = await app.request('/test');
     expect(res.status).toBe(401);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error.code).toBe('unauthorized');
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('unauthorized');
   });
 
   it('returns 401 for agent token format', async () => {
-    const app = makeApp(requireWorkspaceKey as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', 'Bearer at_live_abc123');
+    const app = makeApp(requireWorkspaceKey, mockDbReturning([]));
+    const res = await app.request('/test', {
+      headers: { Authorization: 'Bearer at_live_abc123' },
+    });
     expect(res.status).toBe(401);
   });
 
   it('returns 200 with valid workspace key', async () => {
-    const app = makeApp(requireWorkspaceKey as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const db = mockDbReturning([{ ...fakeWorkspace, apiKeyHash }]);
+    const app = makeApp(requireWorkspaceKey, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
   });
 
   it('returns 401 with invalid workspace key', async () => {
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    } as ReturnType<typeof getDb>);
-
-    const app = makeApp(requireWorkspaceKey as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', 'Bearer rk_test_invalidkey1234567890abcde');
+    const db = mockDbReturning([]);
+    const app = makeApp(requireWorkspaceKey, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: 'Bearer rk_live_badkey' },
+    });
     expect(res.status).toBe(401);
   });
 });
@@ -125,52 +124,65 @@ describe('requireAuth', () => {
   const agentTokenHash = hashToken(agentToken);
 
   it('accepts workspace key', async () => {
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: vi.fn().mockResolvedValue([{ ...fakeWorkspace, apiKeyHash }]),
-        }),
-      }),
-    } as ReturnType<typeof getDb>);
-
-    const app = makeApp(requireAuth as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const db = mockDbReturning([{ ...fakeWorkspace, apiKeyHash }]);
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
     expect(res.status).toBe(200);
   });
 
   it('accepts agent token', async () => {
-    let callCount = 0;
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: vi.fn().mockImplementation(() => {
-            callCount++;
-            if (callCount === 1) {
-              return Promise.resolve([
-                { ...fakeAgent, tokenHash: agentTokenHash },
-              ]);
-            }
-            return Promise.resolve([fakeWorkspace]);
-          }),
-        }),
-      }),
-    } as ReturnType<typeof getDb>);
-
-    const app = makeApp(requireAuth as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const db = mockDbReturning(
+      [{ ...fakeAgent, tokenHash: agentTokenHash }],
+      [fakeWorkspace],
+    );
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${agentToken}` },
+    });
     expect(res.status).toBe(200);
   });
 
   it('rejects unknown token format', async () => {
-    const app = makeApp(requireAuth as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', 'Bearer unknown_format_token');
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: 'Bearer unknown_format_token' },
+    });
     expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when no Authorization header', async () => {
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for invalid agent token', async () => {
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer at_live_badtoken` },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.code).toBe('unauthorized');
+  });
+
+  it('returns 401 when agent workspace not found', async () => {
+    const db = mockDbReturning(
+      [{ ...fakeAgent, tokenHash: agentTokenHash }],
+      [], // workspace not found
+    );
+    const app = makeApp(requireAuth, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.message).toBe('Workspace not found');
   });
 });
 
@@ -179,35 +191,55 @@ describe('requireAgentToken', () => {
   const agentTokenHash = hashToken(agentToken);
 
   it('returns 401 for workspace key', async () => {
-    const app = makeApp(requireAgentToken as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', 'Bearer rk_live_abc123');
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAgentToken, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: 'Bearer rk_live_abc123' },
+    });
     expect(res.status).toBe(401);
   });
 
   it('returns 200 with valid agent token', async () => {
-    let callCount = 0;
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: vi.fn().mockImplementation(() => {
-            callCount++;
-            if (callCount === 1) {
-              return Promise.resolve([
-                { ...fakeAgent, tokenHash: agentTokenHash },
-              ]);
-            }
-            return Promise.resolve([fakeWorkspace]);
-          }),
-        }),
-      }),
-    } as ReturnType<typeof getDb>);
-
-    const app = makeApp(requireAgentToken as unknown as express.RequestHandler);
-    const res = await request(app)
-      .get('/test')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const db = mockDbReturning(
+      [{ ...fakeAgent, tokenHash: agentTokenHash }],
+      [fakeWorkspace],
+    );
+    const app = makeApp(requireAgentToken, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${agentToken}` },
+    });
     expect(res.status).toBe(200);
+  });
+
+  it('returns 401 when no Authorization header', async () => {
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAgentToken, db);
+    const res = await app.request('/test');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for invalid agent token', async () => {
+    const db = mockDbReturning([]);
+    const app = makeApp(requireAgentToken, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer at_live_badtoken` },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.message).toBe('Invalid agent token');
+  });
+
+  it('returns 401 when agent workspace not found', async () => {
+    const db = mockDbReturning(
+      [{ ...fakeAgent, tokenHash: agentTokenHash }],
+      [], // workspace not found
+    );
+    const app = makeApp(requireAgentToken, db);
+    const res = await app.request('/test', {
+      headers: { Authorization: `Bearer ${agentToken}` },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.message).toBe('Workspace not found');
   });
 });

@@ -5,30 +5,33 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { eq, and, ne, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
 import { files, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import type { getDb } from '../db/index.js';
 
-const BUCKET = process.env.S3_BUCKET || 'relay-files';
+type Db = ReturnType<typeof getDb>;
 
-function getS3Client(): S3Client {
+/**
+ * Build an S3-compatible client pointing at R2.
+ * R2 exposes an S3-compatible API at `<account-id>.r2.cloudflarestorage.com`.
+ */
+function getS3Client(accountId: string, accessKeyId: string, secretAccessKey: string): S3Client {
   return new S3Client({
-    endpoint: process.env.S3_ENDPOINT || 'http://localhost:9000',
-    region: process.env.S3_REGION || 'us-east-1',
-    forcePathStyle: true,
-    credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY || 'minioadmin',
-      secretAccessKey: process.env.S3_SECRET_KEY || 'minioadmin',
-    },
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: 'auto',
+    credentials: { accessKeyId, secretAccessKey },
   });
 }
 
+const BUCKET = 'relaycast-files';
+
 export async function createUpload(
+  db: Db,
+  s3: S3Client,
   workspaceId: string,
   agentId: string,
   data: { filename: string; content_type: string; size_bytes: number },
 ) {
-  const db = getDb();
   const id = generateId();
   const storageKey = `${workspaceId}/${id}/${data.filename}`;
 
@@ -43,7 +46,6 @@ export async function createUpload(
     status: 'pending',
   });
 
-  const s3 = getS3Client();
   const command = new PutObjectCommand({
     Bucket: BUCKET,
     Key: storageKey,
@@ -60,12 +62,12 @@ export async function createUpload(
 }
 
 export async function completeUpload(
+  db: Db,
+  s3: S3Client,
   workspaceId: string,
   fileId: string,
   agentId: string,
 ) {
-  const db = getDb();
-
   const [file] = await db
     .select()
     .from(files)
@@ -80,7 +82,6 @@ export async function completeUpload(
     .set({ status: 'complete' })
     .where(eq(files.id, fileId));
 
-  const s3 = getS3Client();
   const command = new GetObjectCommand({
     Bucket: BUCKET,
     Key: file.storageKey,
@@ -96,9 +97,7 @@ export async function completeUpload(
   };
 }
 
-export async function getFile(workspaceId: string, fileId: string) {
-  const db = getDb();
-
+export async function getFile(db: Db, s3: S3Client, workspaceId: string, fileId: string) {
   const [file] = await db
     .select()
     .from(files)
@@ -115,7 +114,6 @@ export async function getFile(workspaceId: string, fileId: string) {
 
   let downloadUrl: string | null = null;
   if (file.status === 'complete') {
-    const s3 = getS3Client();
     const command = new GetObjectCommand({
       Bucket: BUCKET,
       Key: file.storageKey,
@@ -136,12 +134,11 @@ export async function getFile(workspaceId: string, fileId: string) {
 }
 
 export async function deleteFile(
+  db: Db,
   workspaceId: string,
   fileId: string,
   agentId: string,
 ): Promise<true | null | 'forbidden'> {
-  const db = getDb();
-
   const [file] = await db
     .select()
     .from(files)
@@ -159,10 +156,10 @@ export async function deleteFile(
 }
 
 export async function listFiles(
+  db: Db,
   workspaceId: string,
   opts?: { uploaded_by?: string; limit?: number },
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts?.limit || 50, 1), 100);
 
   const conditions = [
@@ -190,3 +187,5 @@ export async function listFiles(
     created_at: f.createdAt.toISOString(),
   }));
 }
+
+export { getS3Client };

@@ -1,0 +1,65 @@
+{
+  "id": "traj_2pct5202h0s3",
+  "version": 1,
+  "task": {
+    "title": "Investigate e2e agent disconnect status not showing grey"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T01:59:30.094Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T02:04:52.468Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_egkwhvsoslxj",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T02:04:52.468Z",
+      "events": [
+        {
+          "ts": 1771380292469,
+          "type": "decision",
+          "content": "PresenceDO should emit canonical agent events and preserve recipient identity in AgentDO metadata: PresenceDO should emit canonical agent events and preserve recipient identity in AgentDO metadata",
+          "raw": {
+            "question": "PresenceDO should emit canonical agent events and preserve recipient identity in AgentDO metadata",
+            "chosen": "PresenceDO should emit canonical agent events and preserve recipient identity in AgentDO metadata",
+            "alternatives": [],
+            "reasoning": "Dashboard reducers and SDK schemas expect agent.online/offline as { agent: { name } }. PresenceDO was emitting agentId-only payloads and reusing agentId for both subject and recipient, which prevented UI status updates and could poison AgentDO ping/disconnect metadata."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771380297862,
+          "type": "decision",
+          "content": "Carry agentName through heartbeat/disconnect calls and cache it in PresenceDO: Carry agentName through heartbeat/disconnect calls and cache it in PresenceDO",
+          "raw": {
+            "question": "Carry agentName through heartbeat/disconnect calls and cache it in PresenceDO",
+            "chosen": "Carry agentName through heartbeat/disconnect calls and cache it in PresenceDO",
+            "alternatives": [],
+            "reasoning": "Presence events need stable display names without extra DB lookups and for stale-alarm offline events where only agent IDs are available."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T02:05:09.762Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cac5fa95b1272602710c9e891ae25bba6836f3",
+    "endRef": "d9cac5fa95b1272602710c9e891ae25bba6836f3"
+  },
+  "completedAt": "2026-02-18T02:05:09.762Z",
+  "retrospective": {
+    "summary": "Fixed dashboard presence disconnect updates by normalizing PresenceDO online/offline payloads to canonical {agent:{name}} shape, separating presence subject from AgentDO recipient metadata, and propagating agent names through heartbeat/disconnect paths with test coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.89
+  }
+}

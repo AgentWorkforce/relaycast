@@ -1,96 +1,101 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from '../auth.js';
-
-const mockExists = vi.fn().mockResolvedValue(0);
-const mockSet = vi.fn().mockResolvedValue('OK');
-const mockPublish = vi.fn().mockResolvedValue(1);
-
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    exists: mockExists,
-    set: mockSet,
-  })),
-}));
-
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: (...args: unknown[]) => mockPublish(...args),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
 import { presenceRefresh } from '../presenceRefresh.js';
 
-describe('presenceRefresh middleware', () => {
-  let mockReq: Partial<AuthenticatedRequest>;
-  let mockRes: Partial<Response>;
-  let mockNext: NextFunction;
+function createMockPresenceDO() {
+  const mockStub = {
+    fetch: vi.fn().mockResolvedValue(new Response('ok')),
+  };
+  return {
+    idFromName: vi.fn().mockReturnValue('do-id-123'),
+    get: vi.fn().mockReturnValue(mockStub),
+    _stub: mockStub,
+  };
+}
 
+function makeApp(options: { agent?: any; workspace?: any } = {}) {
+  const presenceDO = createMockPresenceDO();
+  const app = new Hono<AppEnv>();
+
+  app.use('*', async (c, next) => {
+    (c.env as any) = { PRESENCE_DO: presenceDO };
+    if (options.workspace) c.set('workspace', options.workspace);
+    if (options.agent) c.set('agent', options.agent);
+    await next();
+  });
+  app.use('*', presenceRefresh);
+  app.get('/test', (c) => c.json({ ok: true }));
+
+  return { app, presenceDO };
+}
+
+describe('presenceRefresh middleware', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockReq = {};
-    mockRes = {};
-    mockNext = vi.fn();
   });
 
-  it('sets presence key on agent token request', async () => {
-    mockReq.agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' } as AuthenticatedRequest['agent'];
-    mockReq.workspace = { id: 'ws_1' } as AuthenticatedRequest['workspace'];
-    mockExists.mockResolvedValue(1); // already online
+  it('sends heartbeat to PresenceDO for agent requests', async () => {
+    const agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' };
+    const workspace = { id: 'ws_1' };
+    const { app, presenceDO } = makeApp({ agent, workspace });
 
-    await presenceRefresh(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
 
-    expect(mockSet).toHaveBeenCalledWith('presence:ws_1:agent_1', '1', 'EX', 60);
-    expect(mockNext).toHaveBeenCalled();
-  });
-
-  it('emits agent.online event when newly online', async () => {
-    mockReq.agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' } as AuthenticatedRequest['agent'];
-    mockReq.workspace = { id: 'ws_1' } as AuthenticatedRequest['workspace'];
-    mockExists.mockResolvedValue(0); // not previously online
-
-    await presenceRefresh(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
-
-    expect(mockPublish).toHaveBeenCalledWith(
+    expect(presenceDO.idFromName).toHaveBeenCalledWith('ws_1');
+    expect(presenceDO.get).toHaveBeenCalledWith('do-id-123');
+    expect(presenceDO._stub.fetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'agent.online',
-        workspace_id: 'ws_1',
-        data: { agent_id: 'agent_1', agent_name: 'TestBot' },
+        method: 'POST',
       }),
     );
-    expect(mockNext).toHaveBeenCalled();
+
+    const req = presenceDO._stub.fetch.mock.calls[0][0] as Request;
+    await expect(req.clone().json()).resolves.toEqual({
+      agentId: 'agent_1',
+      workspaceId: 'ws_1',
+      agentName: 'TestBot',
+    });
   });
 
-  it('does not emit event when already online', async () => {
-    mockReq.agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' } as AuthenticatedRequest['agent'];
-    mockReq.workspace = { id: 'ws_1' } as AuthenticatedRequest['workspace'];
-    mockExists.mockResolvedValue(1); // already online
+  it('skips presence for non-agent requests (workspace key auth)', async () => {
+    const workspace = { id: 'ws_1' };
+    const { app, presenceDO } = makeApp({ workspace });
 
-    await presenceRefresh(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
-
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockNext).toHaveBeenCalled();
-  });
-
-  it('skips presence for non-agent requests', async () => {
-    mockReq.workspace = { id: 'ws_1' } as AuthenticatedRequest['workspace'];
-    // No agent set (workspace key auth)
-
-    await presenceRefresh(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
-
-    expect(mockSet).not.toHaveBeenCalled();
-    expect(mockNext).toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+    expect(presenceDO.idFromName).not.toHaveBeenCalled();
   });
 
   it('calls next even if presence refresh fails', async () => {
-    mockReq.agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' } as AuthenticatedRequest['agent'];
-    mockReq.workspace = { id: 'ws_1' } as AuthenticatedRequest['workspace'];
-    mockExists.mockRejectedValue(new Error('Redis connection error'));
+    const agent = { id: 'agent_1', workspaceId: 'ws_1', name: 'TestBot' };
+    const workspace = { id: 'ws_1' };
 
-    await presenceRefresh(mockReq as AuthenticatedRequest, mockRes as Response, mockNext);
+    const presenceDO = createMockPresenceDO();
+    presenceDO.idFromName.mockImplementation(() => {
+      throw new Error('DO error');
+    });
 
-    expect(mockNext).toHaveBeenCalled();
+    const app = new Hono<AppEnv>();
+    app.use('*', async (c, next) => {
+      (c.env as any) = { PRESENCE_DO: presenceDO };
+      c.set('workspace', workspace as any);
+      c.set('agent', agent as any);
+      await next();
+    });
+    app.use('*', presenceRefresh);
+    app.get('/test', (c) => c.json({ ok: true }));
+
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+  });
+
+  it('skips when neither agent nor workspace is set', async () => {
+    const { app, presenceDO } = makeApp({});
+
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+    expect(presenceDO.idFromName).not.toHaveBeenCalled();
   });
 });

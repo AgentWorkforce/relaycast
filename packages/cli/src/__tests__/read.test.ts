@@ -17,18 +17,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn(() => ({
-    as: vi.fn(() => ({
-      messages: mocks.messages,
-      thread: mocks.thread,
-      inbox: mocks.inbox,
-      dms: {
-        conversations: mocks.conversations,
-        messages: mocks.dmMessages,
-      },
-      readers: mocks.readers,
-    })),
-  })),
+  RelayCast: vi.fn(function () {
+    return {
+      as: vi.fn(() => ({
+        messages: mocks.messages,
+        thread: mocks.thread,
+        inbox: mocks.inbox,
+        dms: {
+          conversations: mocks.conversations,
+          messages: mocks.dmMessages,
+        },
+        readers: mocks.readers,
+      })),
+    };
+  }),
 }));
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ apiKey: 'rk_test', agentToken: 'at_test' })),

@@ -1,0 +1,146 @@
+name: Deploy Worker
+description: Deploy Cloudflare Worker using wrangler.toml environment configuration
+
+inputs:
+  worker-name:
+    description: Worker name (e.g. relaycast-api-staging, relaycast-pr-5)
+    required: true
+  environment:
+    description: Environment label (production, staging, preview)
+    required: true
+  route:
+    description: Route pattern (e.g. staging-api.relaycast.dev/*)
+    required: false
+  d1-database-id:
+    description: Cloudflare D1 database ID for the target environment
+    required: true
+  kv-id:
+    description: Cloudflare KV namespace ID for the target environment
+    required: true
+  r2-bucket:
+    description: Deprecated (kept for backward compatibility)
+    default: ''
+  queue-prefix:
+    description: Deprecated (kept for backward compatibility)
+    default: ''
+  notification-queue:
+    description: Deprecated (kept for backward compatibility)
+    default: ''
+  include-consumers:
+    description: Deprecated (kept for backward compatibility)
+    default: ''
+  crons:
+    description: Deprecated (kept for backward compatibility)
+    default: ''
+  extra-vars:
+    description: Extra TOML-style vars lines, e.g. KEY = "value" (one per line)
+    default: ''
+  cloudflare-api-token:
+    description: Cloudflare API token
+    required: true
+  cloudflare-account-id:
+    description: Cloudflare account ID
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare CI config from wrangler.toml
+      id: config
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        ENV_NAME="${{ inputs.environment }}"
+        D1_ID="${{ inputs.d1-database-id }}"
+        KV_ID="${{ inputs.kv-id }}"
+        CONFIG=".wrangler-ci-${ENV_NAME}.toml"
+        cp wrangler.toml "$CONFIG"
+
+        if [ -z "$D1_ID" ]; then
+          echo "Missing d1-database-id input for environment: $ENV_NAME"
+          echo "Set the corresponding GitHub variable (e.g. STAGING_D1_DATABASE_ID / PRODUCTION_D1_DATABASE_ID)."
+          exit 1
+        fi
+        if [ -z "$KV_ID" ]; then
+          echo "Missing kv-id input for environment: $ENV_NAME"
+          echo "Set the corresponding GitHub variable (e.g. STAGING_KV_ID / PRODUCTION_KV_ID)."
+          exit 1
+        fi
+
+        case "$ENV_NAME" in
+          staging)
+            DB_PLACEHOLDER="PLACEHOLDER_STAGING_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_STAGING_KV_ID"
+            ;;
+          preview)
+            DB_PLACEHOLDER="PLACEHOLDER_PREVIEW_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_PREVIEW_KV_ID"
+            ;;
+          production)
+            DB_PLACEHOLDER="PLACEHOLDER_PROD_DB_ID"
+            KV_PLACEHOLDER="PLACEHOLDER_KV_ID"
+            ;;
+          *)
+            echo "Unsupported environment: $ENV_NAME"
+            exit 1
+            ;;
+        esac
+
+        sed -i.bak "s/${DB_PLACEHOLDER}/${D1_ID}/g" "$CONFIG"
+        sed -i.bak "s/${KV_PLACEHOLDER}/${KV_ID}/g" "$CONFIG"
+        rm -f "${CONFIG}.bak"
+
+        echo "wrangler_config=$CONFIG" >> "$GITHUB_OUTPUT"
+
+    - name: Deploy
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        DEPLOY_ENV_ARG=()
+        if [ "${{ inputs.environment }}" != "production" ]; then
+          DEPLOY_ENV_ARG=(--env "${{ inputs.environment }}")
+        fi
+
+        CMD=(npx wrangler deploy --config "${{ steps.config.outputs.wrangler_config }}" --name "${{ inputs.worker-name }}" "${DEPLOY_ENV_ARG[@]}")
+
+        if [ -n "${{ inputs.route }}" ]; then
+          CMD+=(--routes "${{ inputs.route }}")
+        fi
+
+        EXTRA_VARS="${{ inputs.extra-vars }}"
+        if [ -n "$EXTRA_VARS" ]; then
+          while IFS= read -r line; do
+            key=""
+            value=""
+            line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            if [ -z "$line" ]; then
+              continue
+            fi
+
+            # Accept KEY = "value", KEY = 'value', or KEY = bare_value.
+            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\'(.*)\'$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*([A-Za-z0-9._:/+-]+)$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+            else
+              echo "Invalid extra-vars line: $line"
+              echo "Expected format: KEY = \"value\", KEY = 'value', or KEY = bare_value"
+              exit 1
+            fi
+
+            CMD+=(--var "${key}:${value}")
+          done <<< "$EXTRA_VARS"
+        fi
+
+        "${CMD[@]}"
+        rm -f "${{ steps.config.outputs.wrangler_config }}"
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}

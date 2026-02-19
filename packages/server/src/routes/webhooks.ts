@@ -1,8 +1,9 @@
-import { Router, Request, Response } from 'express';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as webhooksEngine from '../engine/webhooks.js';
 
-export const webhookRouter = Router();
+export const webhookRoutes = new Hono<AppEnv>();
 
 const WEBHOOK_TOLERANCE_SECONDS = 300; // 5 minutes
 
@@ -33,29 +34,28 @@ function verifyWebhookSignature(body: string, signature: string, secret: string)
   }
 }
 
-webhookRouter.post('/billing/webhooks', async (req: Request, res: Response) => {
+webhookRoutes.post('/billing/webhooks', async (c) => {
   try {
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const db = c.get('db');
+    const webhookSecret = c.env.STRIPE_WEBHOOK_SECRET;
+    const rawBody = await c.req.text();
+
     if (webhookSecret) {
-      const signature = req.headers['stripe-signature'] as string | undefined;
-      const rawBody = (req as Request & { rawBody?: Buffer }).rawBody?.toString() ?? JSON.stringify(req.body);
+      const signature = c.req.header('stripe-signature');
       if (!signature || !verifyWebhookSignature(rawBody, signature, webhookSecret)) {
-        res.status(401).json({ ok: false, error: { code: 'invalid_signature', message: 'Invalid webhook signature' } });
-        return;
+        return c.json({ ok: false, error: { code: 'invalid_signature', message: 'Invalid webhook signature' } }, 401);
       }
     }
 
-    const { type, data } = req.body as { type?: string; data?: Record<string, unknown> };
+    const body = JSON.parse(rawBody) as { type?: string; data?: Record<string, unknown> };
+    const { type, data } = body;
     if (!type) {
-      res.status(400).json({ ok: false, error: { code: 'invalid_request', message: 'type is required' } });
-      return;
+      return c.json({ ok: false, error: { code: 'invalid_request', message: 'type is required' } }, 400);
     }
-    const result = await webhooksEngine.processWebhook({ type, data: data || {} });
-    res.json({ ok: true, data: result });
+    const result = await webhooksEngine.processWebhook(db, { type, data: data || {} }, c.env.KV);
+    return c.json({ ok: true, data: result });
   } catch (err) {
     // Return 500 so Stripe retries on processing failures
-    if (!res.headersSent) {
-      res.status(500).json({ ok: false, error: { code: 'webhook_processing_error', message: (err as Error).message } });
-    }
+    return c.json({ ok: false, error: { code: 'webhook_processing_error', message: (err as Error).message } }, 500);
   }
 });

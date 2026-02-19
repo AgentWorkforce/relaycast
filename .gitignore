@@ -14,6 +14,9 @@ coverage/
 .codex/mcp.json
 .gemini/
 
+# Wrangler local state (D1 SQLite, builds)
+.wrangler/
+
 # Smithery build artifacts
 .smithery/
 

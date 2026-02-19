@@ -1,0 +1,25 @@
+name: Setup
+description: Install Node.js and dependencies (checkout must happen before this action)
+
+inputs:
+  build:
+    description: Run turbo build after install
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Build
+      if: inputs.build == 'true'
+      shell: bash
+      run: npx turbo build

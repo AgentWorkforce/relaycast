@@ -1,34 +1,54 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import express from 'express';
-import request from 'supertest';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
 import { rateLimit } from '../rateLimit.js';
 
-const mockIncr = vi.fn();
-const mockExpire = vi.fn();
+function createMockRateLimitNamespace(): DurableObjectNamespace {
+  const counters = new Map<string, number>();
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: mockIncr,
-    expire: mockExpire,
-  })),
-}));
+  return {
+    idFromName: vi.fn((name: string) => name),
+    get: vi.fn(() => ({
+      fetch: vi.fn(async (request: Request) => {
+        const body = await request.json() as { bucketKey?: string; limit?: number };
+        const key = body.bucketKey ?? 'default';
+        const next = (counters.get(key) ?? 0) + 1;
+        counters.set(key, next);
+        const limit = body.limit ?? 60;
+        return Response.json({
+          ok: true,
+          data: {
+            count: next,
+            limit,
+            remaining: Math.max(0, limit - next),
+            allowed: next <= limit,
+          },
+        });
+      }),
+    })),
+  } as unknown as DurableObjectNamespace;
+}
 
-function makeApp() {
-  const app = express();
-  app.use(express.json());
-  // Simulate authenticated request
-  app.use((req: express.Request & { workspace?: unknown }, _res, next) => {
-    req.workspace = {
+function makeApp(options: { plan?: string; doOverride?: DurableObjectNamespace } = {}) {
+  const rateLimitDo = options.doOverride ?? createMockRateLimitNamespace();
+  const app = new Hono<AppEnv>();
+
+  // Inject env and workspace into context
+  app.use('*', async (c, next) => {
+    (c.env as any) = { RATE_LIMIT_DO: rateLimitDo };
+    c.set('workspace', {
       id: 'ws_123',
-      plan: 'free', // 60 requests per minute
-    };
-    next();
+      name: 'test-workspace',
+      plan: options.plan || 'free',
+    } as any);
+    await next();
   });
-  app.use(rateLimit as unknown as express.RequestHandler);
-  app.get('/test', (_req, res) => {
-    res.json({ ok: true });
-  });
-  return app;
+  app.use('*', rateLimit);
+  app.get('/test', (c) => c.json({ ok: true }));
+  app.get('/v1/channels/general/messages', (c) => c.json({ ok: true }));
+  app.post('/v1/channels/general/messages', (c) => c.json({ ok: true }));
+
+  return { app, rateLimitDo };
 }
 
 describe('rateLimit middleware', () => {
@@ -37,31 +57,103 @@ describe('rateLimit middleware', () => {
   });
 
   it('allows request under limit', async () => {
-    mockIncr.mockResolvedValue(1);
-    mockExpire.mockResolvedValue(1);
-
-    const app = makeApp();
-    const res = await request(app).get('/test');
+    const { app } = makeApp();
+    const res = await app.request('/test');
     expect(res.status).toBe(200);
-    expect(res.headers['x-ratelimit-limit']).toBe('60');
-    expect(res.headers['x-ratelimit-remaining']).toBe('59');
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('59');
   });
 
   it('returns 429 when rate limit exceeded', async () => {
-    mockIncr.mockResolvedValue(61);
+    const exceededDo = {
+      idFromName: vi.fn(() => 'ws_123'),
+      get: vi.fn(() => ({
+        fetch: vi.fn(async () => Response.json({
+          ok: true,
+          data: { count: 61, limit: 60, remaining: 0, allowed: false },
+        })),
+      })),
+    } as unknown as DurableObjectNamespace;
+    const { app } = makeApp({ doOverride: exceededDo });
 
-    const app = makeApp();
-    const res = await request(app).get('/test');
+    const res = await app.request('/test');
     expect(res.status).toBe(429);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error.code).toBe('rate_limit_exceeded');
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('rate_limit_exceeded');
   });
 
-  it('allows request through when Redis is down', async () => {
-    mockIncr.mockRejectedValue(new Error('Connection refused'));
+  it('sets rate limit headers', async () => {
+    const fixedDo = {
+      idFromName: vi.fn(() => 'ws_123'),
+      get: vi.fn(() => ({
+        fetch: vi.fn(async () => Response.json({
+          ok: true,
+          data: { count: 11, limit: 60, remaining: 49, allowed: true },
+        })),
+      })),
+    } as unknown as DurableObjectNamespace;
+    const { app } = makeApp({ doOverride: fixedDo });
 
-    const app = makeApp();
-    const res = await request(app).get('/test');
+    const res = await app.request('/test');
     expect(res.status).toBe(200);
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('49');
+  });
+
+  it('uses higher limits for pro plan', async () => {
+    const { app } = makeApp({ plan: 'pro' });
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('300');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('299');
+  });
+
+  it('uses in-memory fallback when RateLimitDO fails', async () => {
+    const brokenDo = {
+      idFromName: vi.fn(() => 'ws_123'),
+      get: vi.fn(() => ({
+        fetch: vi.fn(async () => {
+          throw new Error('DO down');
+        }),
+      })),
+    } as unknown as DurableObjectNamespace;
+    const { app } = makeApp({ doOverride: brokenDo });
+
+    const res = await app.request('/test');
+    // Falls back to in-memory, first request should pass
+    expect(res.status).toBe(200);
+  });
+
+  it('skips rate limiting when no workspace', async () => {
+    const app = new Hono<AppEnv>();
+    app.use('*', async (c, next) => {
+      (c.env as any) = { RATE_LIMIT_DO: createMockRateLimitNamespace() };
+      // No workspace set
+      await next();
+    });
+    app.use('*', rateLimit);
+    app.get('/test', (c) => c.json({ ok: true }));
+
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+  });
+
+  it('applies route-specific multiplier for POST messages', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/v1/channels/general/messages', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    // POST messages get 0.5 multiplier: ceil(60 * 0.5) = 30
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('30');
+  });
+
+  it('calls RateLimitDO check endpoint', async () => {
+    const rateLimitDo = createMockRateLimitNamespace();
+    const { app } = makeApp({ doOverride: rateLimitDo });
+    await app.request('/test');
+    expect(rateLimitDo.idFromName).toHaveBeenCalledWith('ws_123');
+    expect(rateLimitDo.get).toHaveBeenCalled();
   });
 });

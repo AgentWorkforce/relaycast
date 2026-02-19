@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "id": "trace_ub39ee7veb7f",
+  "timestamp": "2026-02-19T02:03:39.551Z",
+  "trajectory": "traj_kw02soedki7x",
+  "files": [
+    {
+      "path": ".trajectories/completed/2026-02/traj_fiuhxus6k2rh.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 53,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".trajectories/completed/2026-02/traj_fiuhxus6k2rh.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 31,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".trajectories/index.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            },
+            {
+              "start_line": 358,
+              "end_line": 376,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/dashboard/src/components/ActivityLog.tsx",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 8,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            },
+            {
+              "start_line": 17,
+              "end_line": 23,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            },
+            {
+              "start_line": 45,
+              "end_line": 54,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/dashboard/src/hooks/use-websocket-feed.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 79,
+              "end_line": 85,
+              "revision": "db923d9a608dc75deffd1cdeeb7f62dd6ce9d363"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

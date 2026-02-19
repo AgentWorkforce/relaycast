@@ -1,61 +1,61 @@
-import { Router, Response } from 'express';
-import {
-  requireAuth,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
-export const threadRouter = Router();
+export const threadRoutes = new Hono<AppEnv>();
 
 // POST /v1/messages/:id/replies - post a reply
-threadRouter.post(
+threadRoutes.post(
   '/messages/:id/replies',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { text } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { text } = await c.req.json();
       if (!text || typeof text !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        });
-        return;
+        }, 400);
       }
 
-      const agentId = req.agent?.id;
+      const agentId = agent?.id;
       if (!agentId) {
-        res.status(403).json({
+        return c.json({
           ok: false,
           error: { code: 'agent_token_required', message: 'Agent token required to post replies' },
-        });
-        return;
+        }, 403);
       }
 
-      const parentId = req.params.id as string;
+      const parentId = c.req.param('id');
       const idempotent = await runIdempotent({
-        workspaceId: req.workspace!.id,
+        workspaceId: workspace.id,
         actorId: agentId,
         scope: `thread-reply:${parentId}`,
         key: idempotencyKey,
         status: 201,
         fingerprint: JSON.stringify({ parentId, text }),
+        kv: c.env.KV,
         operation: () =>
           threadEngine.postReply(
-            req.workspace!.id,
+            db,
+            workspace.id,
             parentId,
             agentId,
             { text },
@@ -63,54 +63,64 @@ threadRouter.post(
       });
 
       if (idempotent.replayed) {
-        res.setHeader('Idempotency-Replayed', 'true');
+        c.header('Idempotency-Replayed', 'true');
       }
 
-      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
-
-      // Fire-and-forget event publishing only for fresh writes.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, from_name: req.agent?.name } as Record<string, unknown>;
-        const channelId = typeof eventData.channel_id === 'string' ? eventData.channel_id : undefined;
-        publishEvent({ type: 'thread.reply', workspace_id: req.workspace!.id, channel_id: channelId, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-        deliverEvent(req.workspace!.id, 'thread.reply', eventData).catch(() => {});
+        const eventData = { ...idempotent.data, from_name: agent?.name };
+        if (idempotent.data.channel_id) {
+          runInBackground(c, fanoutToChannel(c, idempotent.data.channel_id, 'thread.reply', eventData), 'fanout thread.reply');
+        }
+
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({
+            type: 'thread.reply',
+            workspaceId: workspace.id,
+            data: eventData,
+          }),
+          'queue thread.reply',
+        );
       }
+
+      return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/messages/:id/replies - get thread
-threadRouter.get(
+threadRoutes.get(
   '/messages/:id/replies',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-      const before = req.query.before as string | undefined;
-      const after = req.query.after as string | undefined;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+      const before = c.req.query('before');
+      const after = c.req.query('after');
 
-      const parentId = req.params.id as string;
+      const parentId = c.req.param('id');
       const result = await threadEngine.getThread(
-        req.workspace!.id,
+        db,
+        workspace.id,
         parentId,
         { limit, before, after },
       );
-      res.json({ ok: true, data: result });
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

@@ -1,9 +1,12 @@
 import { eq, and } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { eventSubscriptions } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function createSubscription(
+  db: Db,
   workspaceId: string,
   data: {
     events: string[];
@@ -12,7 +15,6 @@ export async function createSubscription(
     secret?: string;
   },
 ) {
-  const db = getDb();
   const id = `sub_${generateId()}`;
 
   const [sub] = await db
@@ -37,8 +39,7 @@ export async function createSubscription(
   };
 }
 
-export async function listSubscriptions(workspaceId: string) {
-  const db = getDb();
+export async function listSubscriptions(db: Db, workspaceId: string) {
   const rows = await db
     .select()
     .from(eventSubscriptions)
@@ -54,8 +55,7 @@ export async function listSubscriptions(workspaceId: string) {
   }));
 }
 
-export async function getSubscription(workspaceId: string, subId: string) {
-  const db = getDb();
+export async function getSubscription(db: Db, workspaceId: string, subId: string) {
   const [row] = await db
     .select()
     .from(eventSubscriptions)
@@ -78,8 +78,7 @@ export async function getSubscription(workspaceId: string, subId: string) {
   };
 }
 
-export async function deleteSubscription(workspaceId: string, subId: string) {
-  const db = getDb();
+export async function deleteSubscription(db: Db, workspaceId: string, subId: string) {
   const result = await db
     .delete(eventSubscriptions)
     .where(
@@ -94,10 +93,10 @@ export async function deleteSubscription(workspaceId: string, subId: string) {
 }
 
 export async function getActiveSubscriptions(
+  db: Db,
   workspaceId: string,
   eventType: string,
 ) {
-  const db = getDb();
   const rows = await db
     .select()
     .from(eventSubscriptions)

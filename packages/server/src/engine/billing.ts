@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
-import { getRedis } from '../redis/index.js';
+import type { getDb } from '../db/index.js';
 import { workspaces } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export const PLAN_LIMITS: Record<string, { messages: number; agents: number; file_bytes: number; rate_per_min: number }> = {
   free: { messages: 10000, agents: 5, file_bytes: 100 * 1024 * 1024, rate_per_min: 60 },
@@ -21,11 +22,10 @@ function fromUnix(n: number) { return new Date(n * 1000).toISOString(); }
 function monthBounds(now: Date) { return { start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)), end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)) }; }
 function prevMonthBounds(now: Date) { return { start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)), end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) }; }
 
-async function readUsage(wid: string, period: 'current' | 'previous') {
-  const redis = getRedis();
+async function readUsage(kv: KVNamespace, wid: string, period: 'current' | 'previous') {
   const pfx = period === 'current' ? `usage:${wid}:` : `usage:${wid}:previous:`;
   const keys = [`${pfx}messages`, `${pfx}api_calls`, `${pfx}files`, `${pfx}file_bytes`, `${pfx}ws_minutes`];
-  const vals = await redis.mget(...keys);
+  const vals = await Promise.all(keys.map(k => kv.get(k)));
   const p = (v: string | null) => { const n = parseInt(v || '0', 10); return Number.isFinite(n) ? n : 0; };
   return { messages_sent: p(vals[0]), api_calls: p(vals[1]), files_uploaded: p(vals[2]), file_bytes: p(vals[3]), ws_minutes: p(vals[4]) };
 }
@@ -51,10 +51,9 @@ export const stripe = {
   billingPortal: { sessions: { async create(p: { customer: string; return_url?: string }) { return { url: `https://billing.example.com/session/${generateId()}?customer=${p.customer}` }; } } },
 };
 
-export async function subscribe(workspaceId: string, plan: string, paymentMethod: string) {
+export async function subscribe(db: Db, workspaceId: string, plan: string, paymentMethod: string) {
   if (plan !== 'pro' && plan !== 'enterprise') { const e = new Error("plan must be 'pro' or 'enterprise'"); Object.assign(e, { code: 'invalid_plan', status: 400 }); throw e; }
   if (!paymentMethod) { const e = new Error('payment_method is required'); Object.assign(e, { code: 'invalid_request', status: 400 }); throw e; }
-  const db = getDb();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!ws) { const e = new Error('Workspace not found'); Object.assign(e, { code: 'workspace_not_found', status: 404 }); throw e; }
   let cid = ws.stripeCustomerId;
@@ -64,18 +63,18 @@ export async function subscribe(workspaceId: string, plan: string, paymentMethod
   return { subscription_id: sub.id, plan, status: sub.status, current_period_end: fromUnix(sub.current_period_end) };
 }
 
-export async function getSubscription(workspaceId: string, plan: string, stripeSubId: string | null) {
+export async function getSubscription(kv: KVNamespace, workspaceId: string, plan: string, stripeSubId: string | null) {
   if (!stripeSubId) return { plan: 'free', status: 'active', current_period_end: null, usage_this_period: null };
   const sub = await stripe.subscriptions.retrieve(stripeSubId);
-  const usage = await readUsage(workspaceId, 'current');
+  const usage = await readUsage(kv, workspaceId, 'current');
   return { plan: sub.metadata.plan || plan, status: sub.status, current_period_end: fromUnix(sub.current_period_end), usage_this_period: usage };
 }
 
-export async function getUsage(workspaceId: string, period: string) {
+export async function getUsage(kv: KVNamespace, workspaceId: string, period: string) {
   const p: 'current' | 'previous' = period === 'previous' ? 'previous' : 'current';
   const now = new Date();
   const bounds = p === 'current' ? monthBounds(now) : prevMonthBounds(now);
-  const counters = await readUsage(workspaceId, p);
+  const counters = await readUsage(kv, workspaceId, p);
   return { ...counters, period_start: bounds.start.toISOString(), period_end: bounds.end.toISOString() };
 }
 

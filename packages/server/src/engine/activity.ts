@@ -1,12 +1,14 @@
 import { eq, and, desc, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, channels, agents } from '../db/schema.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function getActivityFeed(
+  db: Db,
   workspaceId: string,
   limit: number = 20,
 ) {
-  const db = getDb();
   const effectiveLimit = Math.min(Math.max(limit, 1), 100);
 
   const rows = await db

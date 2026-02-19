@@ -1,12 +1,15 @@
 import crypto from 'node:crypto';
 import { eq, and, lt, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { agents, channels, channelMembers } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
-const STALE_THRESHOLD_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS) || 5 * 60 * 1000; // 5 minutes
+type Db = ReturnType<typeof getDb>;
+
+const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function registerAgent(
+  db: Db,
   workspaceId: string,
   data: {
     name: string;
@@ -15,8 +18,6 @@ export async function registerAgent(
     metadata?: Record<string, unknown>;
   },
 ) {
-  const db = getDb();
-
   // Check for duplicate name within workspace
   const [existing] = await db
     .select()
@@ -70,9 +71,7 @@ export async function registerAgent(
   };
 }
 
-export async function listAgents(workspaceId: string, status?: string) {
-  const db = getDb();
-
+export async function listAgents(db: Db, workspaceId: string, status?: string) {
   let rows;
   if (status && status !== 'all') {
     rows = await db
@@ -99,8 +98,7 @@ export async function listAgents(workspaceId: string, status?: string) {
   }));
 }
 
-export async function getAgentByName(workspaceId: string, name: string) {
-  const db = getDb();
+export async function getAgentByName(db: Db, workspaceId: string, name: string) {
   const [agent] = await db
     .select()
     .from(agents)
@@ -138,6 +136,7 @@ export async function getAgentByName(workspaceId: string, name: string) {
 }
 
 export async function updateAgent(
+  db: Db,
   workspaceId: string,
   name: string,
   updates: {
@@ -146,14 +145,13 @@ export async function updateAgent(
     metadata?: Record<string, unknown>;
   },
 ) {
-  const db = getDb();
   const setClause: Record<string, unknown> = {};
   if (updates.status !== undefined) setClause.status = updates.status;
   if (updates.persona !== undefined) setClause.persona = updates.persona;
   if (updates.metadata !== undefined) setClause.metadata = updates.metadata;
 
   if (Object.keys(setClause).length === 0) {
-    return getAgentByName(workspaceId, name);
+    return getAgentByName(db, workspaceId, name);
   }
 
   const [agent] = await db
@@ -180,8 +178,7 @@ export async function updateAgent(
   };
 }
 
-export async function deleteAgent(workspaceId: string, name: string) {
-  const db = getDb();
+export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   const [agent] = await db
     .select()
     .from(agents)
@@ -193,16 +190,14 @@ export async function deleteAgent(workspaceId: string, name: string) {
   return true;
 }
 
-export async function touchLastSeen(agentId: string): Promise<void> {
-  const db = getDb();
+export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
   await db
     .update(agents)
     .set({ lastSeen: new Date(), status: 'online' })
     .where(eq(agents.id, agentId));
 }
 
-export async function sweepStaleAgents(): Promise<number> {
-  const db = getDb();
+export async function sweepStaleAgents(db: Db): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
 
   const result = await db
@@ -238,11 +233,10 @@ export interface SpawnAgentResult {
 }
 
 export async function spawnAgent(
+  db: Db,
   workspaceId: string,
   data: SpawnAgentData,
 ): Promise<SpawnAgentResult> {
-  const db = getDb();
-
   // Check if agent already exists
   const [existing] = await db
     .select()
@@ -380,11 +374,10 @@ export interface ReleaseAgentResult {
 }
 
 export async function releaseAgent(
+  db: Db,
   workspaceId: string,
   data: ReleaseAgentData,
 ): Promise<ReleaseAgentResult | null> {
-  const db = getDb();
-
   const [agent] = await db
     .select()
     .from(agents)

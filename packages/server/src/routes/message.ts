@@ -1,77 +1,73 @@
-import { Router, Response } from 'express';
-import {
-  requireAuth,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { enqueueEvent } from '../engine/eventQueue.js';
+import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
-export const messageRouter = Router();
+export const messageRoutes = new Hono<AppEnv>();
 
 // POST /v1/channels/:name/messages - post a message
-messageRouter.post(
+messageRoutes.post(
   '/channels/:name/messages',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { text, blocks, attachments, data, content_type } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { text, blocks, attachments, data, content_type } = await c.req.json();
       if (!text || typeof text !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        });
-        return;
+        }, 400);
       }
 
-      const channelName = req.params.name as string;
+      const channelName = c.req.param('name');
 
       // Resolve channel name to ID
-      const channel = await channelEngine.getChannel(
-        req.workspace!.id,
-        channelName,
-      );
+      const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        });
-        return;
+        }, 404);
       }
 
       // Determine agent ID (from agent token or body)
-      const agentId = req.agent?.id;
+      const agentId = agent?.id;
       if (!agentId) {
-        res.status(403).json({
+        return c.json({
           ok: false,
           error: { code: 'agent_token_required', message: 'Agent token required to post messages' },
-        });
-        return;
+        }, 403);
       }
 
       const idempotent = await runIdempotent({
-        workspaceId: req.workspace!.id,
+        workspaceId: workspace.id,
         actorId: agentId,
         scope: `channel-message:${channel.id}`,
         key: idempotencyKey,
         status: 201,
         fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type }),
+        kv: c.env.KV,
         operation: () =>
           messageEngine.postMessage(
-            req.workspace!.id,
+            db,
+            workspace.id,
             channel.id,
             agentId,
             { text, blocks, attachments, data, content_type },
@@ -79,96 +75,95 @@ messageRouter.post(
       });
 
       if (idempotent.replayed) {
-        res.setHeader('Idempotency-Replayed', 'true');
+        c.header('Idempotency-Replayed', 'true');
       }
-
-      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
 
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, channel_name: channelName, from_name: req.agent?.name };
-        publishEvent({ type: 'message.created', workspace_id: req.workspace!.id, channel_id: channel.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-        enqueueEvent(req.workspace!.id, 'message.created', eventData).catch(() => {});
+        const eventData = { ...idempotent.data, channel_name: channelName, from_name: agent?.name };
+        runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({ type: 'message.created', workspaceId: workspace.id, data: eventData }),
+          'queue message.created',
+        );
       }
+
+      return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/channels/:name/messages - list messages
-messageRouter.get(
+messageRoutes.get(
   '/channels/:name/messages',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const channelName = req.params.name as string;
-      const channel = await channelEngine.getChannel(
-        req.workspace!.id,
-        channelName,
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const channelName = c.req.param('name');
+      const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        });
-        return;
+        }, 404);
       }
 
-      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-      const before = req.query.before as string | undefined;
-      const after = req.query.after as string | undefined;
+      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+      const before = c.req.query('before');
+      const after = c.req.query('after');
 
       const messages = await messageEngine.getMessages(
-        req.workspace!.id,
+        db,
+        workspace.id,
         channel.id,
         { limit, before, after },
       );
-      res.json({ ok: true, data: messages });
+      return c.json({ ok: true, data: messages });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/messages/:id - get single message
-messageRouter.get(
+messageRoutes.get(
   '/messages/:id',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const messageId = req.params.id as string;
-      const message = await messageEngine.getMessage(
-        req.workspace!.id,
-        messageId,
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const messageId = c.req.param('id');
+      const message = await messageEngine.getMessage(db, workspace.id, messageId);
       if (!message) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
-      res.json({ ok: true, data: message });
+      return c.json({ ok: true, data: message });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

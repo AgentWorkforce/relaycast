@@ -1,33 +1,35 @@
-import { Router, Response } from 'express';
-import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
 
-export const searchRouter = Router();
+export const searchRoutes = new Hono<AppEnv>();
 
 // GET /v1/search?q=...&channel=...&from=...&limit=...&before=...&after=...
-searchRouter.get(
+searchRoutes.get(
   '/search',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const q = req.query.q as string | undefined;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const q = c.req.query('q');
       if (!q || typeof q !== 'string' || !q.trim()) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'q (search query) is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const channel = req.query.channel as string | undefined;
-      const from = req.query.from as string | undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-      const before = req.query.before as string | undefined;
-      const after = req.query.after as string | undefined;
+      const channel = c.req.query('channel');
+      const from = c.req.query('from');
+      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+      const before = c.req.query('before');
+      const after = c.req.query('after');
 
-      const results = await searchEngine.searchMessages(req.workspace!.id, {
+      const results = await searchEngine.searchMessages(db, workspace.id, {
         q,
         channel,
         from,
@@ -36,13 +38,13 @@ searchRouter.get(
         after,
       });
 
-      res.json({ ok: true, data: results });
+      return c.json({ ok: true, data: results });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

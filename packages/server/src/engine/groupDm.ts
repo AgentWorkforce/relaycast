@@ -1,15 +1,16 @@
 import { eq, and, sql, isNull } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function createGroupDm(
+  db: Db,
   workspaceId: string,
   creatorAgentId: string,
   data: { participants: string[]; name?: string },
 ) {
-  const db = getDb();
-
   // Resolve participant agent names to IDs
   const participantAgents = [];
   for (const name of data.participants) {
@@ -68,13 +69,12 @@ export async function createGroupDm(
 }
 
 export async function postGroupMessage(
+  db: Db,
   workspaceId: string,
   conversationId: string,
   agentId: string,
   data: { text: string },
 ) {
-  const db = getDb();
-
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
     .select()
@@ -133,13 +133,12 @@ export async function postGroupMessage(
 }
 
 export async function addParticipant(
+  db: Db,
   workspaceId: string,
   conversationId: string,
   agentId: string,
   inviteeAgentName: string,
 ) {
-  const db = getDb();
-
   // Verify requester is a participant
   const [requester] = await db
     .select()
@@ -207,12 +206,11 @@ export async function addParticipant(
 }
 
 export async function removeParticipant(
+  db: Db,
   workspaceId: string,
   conversationId: string,
   agentId: string,
 ) {
-  const db = getDb();
-
   // Verify agent is a participant
   const [participant] = await db
     .select()

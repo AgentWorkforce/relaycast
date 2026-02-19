@@ -1,146 +1,140 @@
-import { Router, Request, Response } from 'express';
-import {
-  requireAuth,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
-export const inboundWebhookRouter = Router();
+export const inboundWebhookRoutes = new Hono<AppEnv>();
 
 // POST /v1/webhooks - create an inbound webhook
-inboundWebhookRouter.post(
-  '/webhooks',
-  requireAuth,
-  rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { name, channel } = req.body;
-      if (!name || typeof name !== 'string') {
-        res.status(400).json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'name is required' },
-        });
-        return;
-      }
-      if (!channel || typeof channel !== 'string') {
-        res.status(400).json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'channel is required' },
-        });
-        return;
-      }
+inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const { name, channel } = await c.req.json();
 
-      // Resolve channel name to ID
-      const ch = await channelEngine.getChannel(req.workspace!.id, channel);
-      if (!ch) {
-        res.status(404).json({
-          ok: false,
-          error: { code: 'channel_not_found', message: `Channel "${channel}" not found` },
-        });
-        return;
-      }
-
-      const result = await inboundWebhookEngine.createWebhook(
-        req.workspace!.id,
-        ch.id,
-        { name },
-        req.agent?.id,
-      );
-      res.status(201).json({ ok: true, data: result });
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+    if (!name || typeof name !== 'string') {
+      return c.json({
         ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+        error: { code: 'invalid_request', message: 'name is required' },
+      }, 400);
     }
-  },
-);
+    if (!channel || typeof channel !== 'string') {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'channel is required' },
+      }, 400);
+    }
+
+    // Resolve channel name to ID
+    const ch = await channelEngine.getChannel(db, workspace.id, channel);
+    if (!ch) {
+      return c.json({
+        ok: false,
+        error: { code: 'channel_not_found', message: `Channel "${channel}" not found` },
+      }, 404);
+    }
+
+    const result = await inboundWebhookEngine.createWebhook(
+      db,
+      workspace.id,
+      ch.id,
+      { name },
+    );
+    return c.json({ ok: true, data: result }, 201);
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
 
 // GET /v1/webhooks - list webhooks
-inboundWebhookRouter.get(
-  '/webhooks',
-  requireAuth,
-  rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const result = await inboundWebhookEngine.listWebhooks(req.workspace!.id);
-      res.json({ ok: true, data: result });
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
-    }
-  },
-);
+inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const result = await inboundWebhookEngine.listWebhooks(db, workspace.id);
+    return c.json({ ok: true, data: result });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
 
 // DELETE /v1/webhooks/:id - delete a webhook
-inboundWebhookRouter.delete(
-  '/webhooks/:id',
-  requireAuth,
-  rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const deleted = await inboundWebhookEngine.deleteWebhook(
-        req.workspace!.id,
-        req.params.id as string,
-      );
-      if (!deleted) {
-        res.status(404).json({
-          ok: false,
-          error: { code: 'webhook_not_found', message: 'Webhook not found' },
-        });
-        return;
-      }
-      res.status(204).send();
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const deleted = await inboundWebhookEngine.deleteWebhook(
+      db,
+      workspace.id,
+      c.req.param('id'),
+    );
+    if (!deleted) {
+      return c.json({
         ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+        error: { code: 'webhook_not_found', message: 'Webhook not found' },
+      }, 404);
     }
-  },
-);
+    return c.body(null, 204);
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
 
 // POST /v1/hooks/:webhookId - trigger a webhook (external callers)
-inboundWebhookRouter.post(
-  '/hooks/:webhookId',
-  async (req: Request, res: Response) => {
-    try {
-      const { text, source, payload } = req.body || {};
-      const result = await inboundWebhookEngine.triggerWebhook(
-        req.params.webhookId as string,
-        { text, source, payload },
-      );
-      if (!result) {
-        res.status(404).json({
-          ok: false,
-          error: { code: 'webhook_not_found', message: 'Webhook not found or inactive' },
-        });
-        return;
-      }
-      const { workspace_id, channel_id, ...responseData } = result;
-      res.status(201).json({ ok: true, data: responseData });
-
-      // Fire-and-forget event publishing
-      const eventData = { webhook_id: result.webhook_id, channel: result.channel, channel_name: result.channel, message_id: result.message_id, text: result.text, source: result.source };
-      publishEvent({ type: 'webhook.received', workspace_id, channel_id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(workspace_id, 'webhook.received', eventData).catch(() => {});
-    } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
+  try {
+    const db = c.get('db');
+    const body = await c.req.json();
+    const { text, source, payload } = body || {};
+    const result = await inboundWebhookEngine.triggerWebhook(
+      db,
+      c.req.param('webhookId'),
+      { text, source, payload },
+    );
+    if (!result) {
+      return c.json({
+        ok: false,
+        error: { code: 'webhook_not_found', message: 'Webhook not found or inactive' },
+      }, 404);
     }
-  },
-);
+    const { workspace_id, channel_id, ...responseData } = result;
+
+    const eventData = { ...responseData, channel_id };
+    if (channel_id) {
+      runInBackground(c, fanoutToChannel(c, channel_id, 'webhook.received', eventData), 'fanout webhook.received');
+    }
+    runInBackground(
+      c,
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'webhook.received',
+        workspaceId: workspace_id,
+        data: eventData,
+      }),
+      'queue webhook.received',
+    );
+
+    return c.json({ ok: true, data: responseData }, 201);
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});

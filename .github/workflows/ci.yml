@@ -1,10 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,72 +13,12 @@ jobs:
   ci:
     name: Lint, Build & Test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npx turbo lint
-
-      - name: Build
-        run: npx turbo build
-
-      - name: Test
-        run: npx turbo test
+          build: 'true'
+      - run: npx turbo lint
+      - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
-
-  docker:
-    name: Docker Build Smoke Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: docker build -f deploy/Dockerfile -t relaycast-test .
-
-      - name: Smoke test — server starts and responds to health check
-        run: |
-          docker run -d --name relaycast-smoke \
-            -p 8080:8080 \
-            -e DATABASE_URL=postgres://fake:fake@localhost:5432/fake \
-            -e REDIS_URL=redis://localhost:6379 \
-            relaycast-test || true
-
-          # Give it a moment to either start or crash
-          sleep 3
-
-          # Check if the container is still running (not crash-looping)
-          STATE=$(docker inspect -f '{{.State.Status}}' relaycast-smoke 2>/dev/null || echo "missing")
-
-          # Get logs for debugging
-          echo "=== Container logs ==="
-          docker logs relaycast-smoke 2>&1 | tail -20
-
-          if [ "$STATE" = "running" ]; then
-            echo "Container is running — server started successfully"
-          else
-            # Even if DB connection fails, the process should get past module loading.
-            # Check logs for the specific error that bit us: ERR_MODULE_NOT_FOUND
-            LOGS=$(docker logs relaycast-smoke 2>&1)
-            if echo "$LOGS" | grep -q 'ERR_MODULE_NOT_FOUND'; then
-              echo "FAIL: Missing module dependency in Docker image"
-              echo "$LOGS" | grep 'ERR_MODULE_NOT_FOUND'
-              exit 1
-            fi
-            echo "Container exited (expected — no real DB), but no missing module errors"
-          fi
-
-          docker rm -f relaycast-smoke || true

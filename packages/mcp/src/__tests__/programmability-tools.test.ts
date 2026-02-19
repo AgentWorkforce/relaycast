@@ -52,8 +52,8 @@ describe('programmability tools', () => {
 
   // === Webhooks ===
 
-  it('create_webhook calls agentClient.client.post()', async () => {
-    mockAgentClient.client.post.mockResolvedValue({
+  it('create_webhook calls relay.webhooks.create()', async () => {
+    mockRelay.webhooks.create.mockResolvedValue({
       webhook_id: 'wh_1',
       name: 'GitHub',
       channel: 'dev',
@@ -63,7 +63,7 @@ describe('programmability tools', () => {
       name: 'create_webhook',
       arguments: { name: 'GitHub', channel: 'dev' },
     });
-    expect(mockAgentClient.client.post).toHaveBeenCalledWith('/v1/webhooks', {
+    expect(mockRelay.webhooks.create).toHaveBeenCalledWith({
       name: 'GitHub',
       channel: 'dev',
     });

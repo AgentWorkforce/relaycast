@@ -1,0 +1,53 @@
+{
+  "id": "traj_6mzfyc3u0qd0",
+  "version": 1,
+  "task": {
+    "title": "Fix preview observer dashboard workspace stream enable failure"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T03:18:53.787Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T03:20:34.694Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_8ccdjl1syo0b",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T03:20:34.694Z",
+      "events": [
+        {
+          "ts": 1771471234695,
+          "type": "decision",
+          "content": "Make dashboard login stream-enable non-blocking and harden preview host forwarding: Make dashboard login stream-enable non-blocking and harden preview host forwarding",
+          "raw": {
+            "question": "Make dashboard login stream-enable non-blocking and harden preview host forwarding",
+            "chosen": "Make dashboard login stream-enable non-blocking and harden preview host forwarding",
+            "alternatives": [],
+            "reasoning": "Preview observer traffic can lose original host context through edge/page hops, and stream toggle support may differ across backend versions; login should remain functional while preserving correct PR API routing."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T03:20:37.250Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e22e0b07101f18b82f6f9b39563facfea3a6630c",
+    "endRef": "e22e0b07101f18b82f6f9b39563facfea3a6630c"
+  },
+  "completedAt": "2026-02-19T03:20:37.250Z",
+  "retrospective": {
+    "summary": "Fixed preview observer login failures by forwarding a dedicated observer-host header from observer-router, prioritizing that header in dashboard relay URL resolution, and making workspace stream enablement best-effort during login.",
+    "approach": "Standard approach",
+    "confidence": 0.82
+  }
+}

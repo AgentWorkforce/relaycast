@@ -1,0 +1,214 @@
+name: Preview Deploy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy Preview
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+
+      # Preview environments share staging data; schema changes run only via main deploy pipeline.
+      - uses: ./.github/actions/deploy-worker
+        with:
+          worker-name: relaycast-pr-${{ github.event.pull_request.number }}
+          environment: preview
+          route: 'pr${{ github.event.pull_request.number }}-api.relaycast.dev/*'
+          d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
+          kv-id: ${{ vars.STAGING_KV_ID }}
+          extra-vars: 'PR_NUMBER = "${{ github.event.pull_request.number }}"'
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - uses: ./.github/actions/deploy-observer-dashboard
+        with:
+          branch: pr-${{ github.event.pull_request.number }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy observer host route for this PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          WS="${GITHUB_WORKSPACE:-$PWD}"
+          CFG="$(mktemp /tmp/wrangler-observer-pr-XXXX.toml)"
+          cat > "$CFG" <<EOF
+          name = "relaycast-observer-pr-${PR_NUM}"
+          main = "${WS}/packages/observer-router/src/worker.ts"
+          compatibility_date = "2024-12-01"
+
+          routes = [
+            { pattern = "pr${PR_NUM}-observer.relaycast.dev/*", zone_name = "relaycast.dev" },
+          ]
+
+          [vars]
+          OBSERVER_ORIGIN = "https://pr-${PR_NUM}.relaycast-observer.pages.dev"
+          EOF
+          npx wrangler deploy --config "$CFG"
+          rm -f "$CFG"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set staging secrets on preview worker
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          echo "$STRIPE_SECRET_KEY" | npx wrangler secret put STRIPE_SECRET_KEY --name "relaycast-pr-${PR_NUM}" --env=""
+          echo "$STRIPE_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_WEBHOOK_SECRET --name "relaycast-pr-${PR_NUM}" --env=""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
+
+      - name: Verify preview URL is reachable
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          URL="https://pr${{ github.event.pull_request.number }}-api.relaycast.dev"
+          HOST="pr${{ github.event.pull_request.number }}-api.relaycast.dev"
+
+          echo "DNS lookup for ${HOST}:"
+          getent hosts "$HOST" || nslookup "$HOST" || true
+          echo ""
+
+          echo "Checking ${URL}/health"
+          for i in $(seq 1 20); do
+            code="$(curl -s -o /tmp/preview-health.out -w "%{http_code}" "${URL}/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Preview is healthy."
+              exit 0
+            fi
+            echo "Attempt $i/20: health returned HTTP ${code}. Retrying in 6s..."
+            sleep 6
+          done
+
+          echo "Preview URL did not become healthy in time."
+          echo ""
+          echo "Response headers for ${URL}/health:"
+          curl -sS -D - -o /tmp/preview-health.out "${URL}/health" || true
+          echo "Last response body:"
+          cat /tmp/preview-health.out || true
+          echo ""
+
+          echo "Wrangler deployments for worker relaycast-pr-${PR_NUM}:"
+          npx wrangler deployments list --name "relaycast-pr-${PR_NUM}" || true
+          echo ""
+
+          ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
+          if [ -z "$ZONE_ID" ]; then
+            ZONE_ID="$(curl -sS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/zones?name=relaycast.dev&status=active&page=1&per_page=1" \
+              | jq -r '.result[0].id // empty')"
+          fi
+
+          if [ -n "$ZONE_ID" ]; then
+            echo "Matching workers route for ${HOST}:"
+            curl -sS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/workers/routes" \
+              | jq -r --arg p "pr${PR_NUM}-api.relaycast.dev/*" '.result[] | select(.pattern == $p) | @json' || true
+          fi
+
+          exit 1
+
+      - name: Verify observer preview URL is reachable
+        run: |
+          set -euo pipefail
+          URL="https://pr${{ github.event.pull_request.number }}-observer.relaycast.dev"
+          echo "Checking ${URL}"
+          for i in $(seq 1 20); do
+            code="$(curl -s -o /tmp/observer-preview.out -w "%{http_code}" "${URL}" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Observer preview is reachable."
+              exit 0
+            fi
+            echo "Attempt $i/20: observer returned HTTP ${code}. Retrying in 6s..."
+            sleep 6
+          done
+
+          echo "Observer preview URL did not become reachable in time."
+          echo "Response headers for ${URL}:"
+          curl -sS -D - -o /tmp/observer-preview.out "${URL}" || true
+          echo "Last response body:"
+          cat /tmp/observer-preview.out || true
+          exit 1
+
+      - name: Run E2E smoke test (preview)
+        timeout-minutes: 15
+        run: npm run e2e -- "https://pr${{ github.event.pull_request.number }}-api.relaycast.dev" --ci
+
+      - name: Comment on PR
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNum = context.payload.pull_request.number;
+            const url = `https://pr${prNum}-api.relaycast.dev`;
+            const observerUrl = `https://pr${prNum}-observer.relaycast.dev`;
+            const body = `**Preview deployed!**\n\n` +
+              `| Environment | URL |\n` +
+              `|-------------|-----|\n` +
+              `| API | ${url} |\n` +
+              `| Health | ${url}/health |\n` +
+              `| Observer | ${observerUrl} |\n\n` +
+              `This preview shares the staging database and will be cleaned up when the PR is closed.\n\n` +
+              `### Run E2E tests\n` +
+              `\`\`\`bash\n` +
+              `npm run e2e -- ${url} --ci\n` +
+              `\`\`\`\n\n` +
+              `### Open observer dashboard\n` +
+              `${observerUrl}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNum,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Preview deployed')
+            );
+
+            const params = { owner: context.repo.owner, repo: context.repo.repo, body };
+            if (existing) {
+              await github.rest.issues.updateComment({ ...params, comment_id: existing.id });
+            } else {
+              await github.rest.issues.createComment({ ...params, issue_number: prNum });
+            }
+
+  cleanup-preview:
+    name: Cleanup Preview
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx wrangler delete --name "relaycast-pr-${{ github.event.pull_request.number }}" --force
+      - run: npx wrangler delete --name "relaycast-observer-pr-${{ github.event.pull_request.number }}" --force || true

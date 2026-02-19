@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getRelayApiKey } from '../../../lib/relay-api';
+import { cookies } from 'next/headers';
+
+export const runtime = 'edge';
 
 /**
  * GET /api/spawned
@@ -7,7 +9,8 @@ import { getRelayApiKey } from '../../../lib/relay-api';
  * Returns an empty list but requires auth.
  */
 export async function GET() {
-  const apiKey = await getRelayApiKey();
+  const cookieStore = await cookies();
+  const apiKey = cookieStore.get('relaycast_key')?.value;
   if (!apiKey) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }

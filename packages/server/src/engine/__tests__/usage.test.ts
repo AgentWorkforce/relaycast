@@ -1,131 +1,115 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMockKV } from '../../__tests__/test-helpers.js';
+import {
+  incrementUsage,
+  getUsageCounters,
+  resetUsageCounters,
+  getUsageMetric,
+} from '../usage.js';
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(),
-}));
+describe('usage engine (KV-based)', () => {
+  let kv: KVNamespace;
 
-import { getRedis } from '../../redis/index.js';
-import { incrementUsage, getUsageCounters, resetUsageCounters, getUsageMetric } from '../usage.js';
-
-describe('incrementUsage', () => {
   beforeEach(() => {
+    kv = createMockKV();
     vi.clearAllMocks();
   });
 
-  it('increments by 1 by default', async () => {
-    const mockRedis = { incrby: vi.fn().mockResolvedValue(1) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+  describe('incrementUsage', () => {
+    it('increments from zero', async () => {
+      const result = await incrementUsage(kv, 'ws_123', 'messages');
+      expect(result).toBe(1);
+      expect(kv.put).toHaveBeenCalledWith('usage:ws_123:messages', '1');
+    });
 
-    const result = await incrementUsage('ws_123', 'messages');
-    expect(result).toBe(1);
-    expect(mockRedis.incrby).toHaveBeenCalledWith('usage:ws_123:messages', 1);
-  });
+    it('increments existing value', async () => {
+      vi.mocked(kv.get).mockResolvedValue('41');
+      const result = await incrementUsage(kv, 'ws_123', 'messages');
+      expect(result).toBe(42);
+      expect(kv.put).toHaveBeenCalledWith('usage:ws_123:messages', '42');
+    });
 
-  it('increments by custom amount', async () => {
-    const mockRedis = { incrby: vi.fn().mockResolvedValue(5) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    it('increments by custom amount', async () => {
+      vi.mocked(kv.get).mockResolvedValue('10');
+      const result = await incrementUsage(kv, 'ws_123', 'file_bytes', 1024);
+      expect(result).toBe(1034);
+      expect(kv.put).toHaveBeenCalledWith('usage:ws_123:file_bytes', '1034');
+    });
 
-    const result = await incrementUsage('ws_123', 'file_bytes', 5);
-    expect(result).toBe(5);
-    expect(mockRedis.incrby).toHaveBeenCalledWith('usage:ws_123:file_bytes', 5);
-  });
-
-  it('returns the new value after increment', async () => {
-    const mockRedis = { incrby: vi.fn().mockResolvedValue(42) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
-
-    const result = await incrementUsage('ws_456', 'api_calls', 1);
-    expect(result).toBe(42);
-  });
-});
-
-describe('getUsageCounters', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('returns all 5 metrics', async () => {
-    const mockRedis = { mget: vi.fn().mockResolvedValue(['100', '200', '5', '1048576', '30']) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
-
-    const result = await getUsageCounters('ws_123');
-    expect(result).toEqual({
-      messages: 100,
-      api_calls: 200,
-      files: 5,
-      file_bytes: 1048576,
-      ws_minutes: 30,
+    it('reads the correct KV key', async () => {
+      await incrementUsage(kv, 'ws_456', 'api_calls');
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_456:api_calls');
     });
   });
 
-  it('returns 0 for missing keys', async () => {
-    const mockRedis = { mget: vi.fn().mockResolvedValue([null, null, null, null, null]) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+  describe('getUsageCounters', () => {
+    it('returns all metrics as zero when no data', async () => {
+      const counters = await getUsageCounters(kv, 'ws_123');
+      expect(counters).toEqual({
+        messages: 0,
+        api_calls: 0,
+        files: 0,
+        file_bytes: 0,
+        ws_minutes: 0,
+      });
+    });
 
-    const result = await getUsageCounters('ws_empty');
-    expect(result).toEqual({
-      messages: 0,
-      api_calls: 0,
-      files: 0,
-      file_bytes: 0,
-      ws_minutes: 0,
+    it('returns parsed values from KV', async () => {
+      vi.mocked(kv.get).mockImplementation(async (key: string) => {
+        const values: Record<string, string> = {
+          'usage:ws_123:messages': '100',
+          'usage:ws_123:api_calls': '500',
+          'usage:ws_123:files': '10',
+          'usage:ws_123:file_bytes': '2048',
+          'usage:ws_123:ws_minutes': '60',
+        };
+        return values[key as string] ?? null;
+      });
+
+      const counters = await getUsageCounters(kv, 'ws_123');
+      expect(counters).toEqual({
+        messages: 100,
+        api_calls: 500,
+        files: 10,
+        file_bytes: 2048,
+        ws_minutes: 60,
+      });
+    });
+
+    it('fetches all 5 metric keys', async () => {
+      await getUsageCounters(kv, 'ws_123');
+      expect(kv.get).toHaveBeenCalledTimes(5);
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:messages');
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:api_calls');
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:files');
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:file_bytes');
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:ws_minutes');
     });
   });
 
-  it('uses correct redis keys', async () => {
-    const mockRedis = { mget: vi.fn().mockResolvedValue([null, null, null, null, null]) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
-
-    await getUsageCounters('ws_abc');
-    expect(mockRedis.mget).toHaveBeenCalledWith(
-      'usage:ws_abc:messages',
-      'usage:ws_abc:api_calls',
-      'usage:ws_abc:files',
-      'usage:ws_abc:file_bytes',
-      'usage:ws_abc:ws_minutes',
-    );
-  });
-});
-
-describe('resetUsageCounters', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  describe('resetUsageCounters', () => {
+    it('deletes all metric keys', async () => {
+      await resetUsageCounters(kv, 'ws_123');
+      expect(kv.delete).toHaveBeenCalledTimes(5);
+      expect(kv.delete).toHaveBeenCalledWith('usage:ws_123:messages');
+      expect(kv.delete).toHaveBeenCalledWith('usage:ws_123:api_calls');
+      expect(kv.delete).toHaveBeenCalledWith('usage:ws_123:files');
+      expect(kv.delete).toHaveBeenCalledWith('usage:ws_123:file_bytes');
+      expect(kv.delete).toHaveBeenCalledWith('usage:ws_123:ws_minutes');
+    });
   });
 
-  it('deletes all usage keys', async () => {
-    const mockRedis = { del: vi.fn().mockResolvedValue(5) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+  describe('getUsageMetric', () => {
+    it('returns zero when key does not exist', async () => {
+      const result = await getUsageMetric(kv, 'ws_123', 'messages');
+      expect(result).toBe(0);
+    });
 
-    await resetUsageCounters('ws_123');
-    expect(mockRedis.del).toHaveBeenCalledWith(
-      'usage:ws_123:messages',
-      'usage:ws_123:api_calls',
-      'usage:ws_123:files',
-      'usage:ws_123:file_bytes',
-      'usage:ws_123:ws_minutes',
-    );
-  });
-});
-
-describe('getUsageMetric', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('returns the value of a single metric', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('42') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
-
-    const result = await getUsageMetric('ws_123', 'messages');
-    expect(result).toBe(42);
-    expect(mockRedis.get).toHaveBeenCalledWith('usage:ws_123:messages');
-  });
-
-  it('returns 0 for missing metric', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue(null) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
-
-    const result = await getUsageMetric('ws_123', 'messages');
-    expect(result).toBe(0);
+    it('returns parsed value from KV', async () => {
+      vi.mocked(kv.get).mockResolvedValue('42');
+      const result = await getUsageMetric(kv, 'ws_123', 'messages');
+      expect(result).toBe(42);
+      expect(kv.get).toHaveBeenCalledWith('usage:ws_123:messages');
+    });
   });
 });

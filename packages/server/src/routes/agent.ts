@@ -1,201 +1,196 @@
-import { Router, Response } from 'express';
-import { requireWorkspaceKey, type AuthenticatedRequest } from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { fanoutToWorkspace } from './fanout.js';
+import { runInBackground } from './background.js';
 
-export const agentRouter = Router();
-
-function paramName(req: AuthenticatedRequest): string {
-  return req.params.name as string;
-}
+export const agentRoutes = new Hono<AppEnv>();
 
 // POST /v1/agents - register agent (workspace key required)
-agentRouter.post(
+agentRoutes.post(
   '/agents',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { name, type, persona, metadata } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const { name, type, persona, metadata } = await c.req.json();
       if (!name || typeof name !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const result = await agentEngine.registerAgent(req.workspace!.id, {
+      const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
         type,
         persona,
         metadata,
       });
-      res.status(201).json({ ok: true, data: result });
+      return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       const status = error.status || 500;
-      res.status(status).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, status as any);
     }
   },
 );
 
 // GET /v1/agents - list agents
-agentRouter.get(
+agentRoutes.get(
   '/agents',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const status = req.query.status as string | undefined;
-      const agents = await agentEngine.listAgents(req.workspace!.id, status);
-      res.json({ ok: true, data: agents });
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const status = c.req.query('status');
+      const agents = await agentEngine.listAgents(db, workspace.id, status);
+      return c.json({ ok: true, data: agents });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/agents/:name - get agent by name
-agentRouter.get(
+agentRoutes.get(
   '/agents/:name',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const agent = await agentEngine.getAgentByName(
-        req.workspace!.id,
-        paramName(req),
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {
-        res.status(404).json({
+        return c.json({
           ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${paramName(req)}" not found` },
-        });
-        return;
+          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
+        }, 404);
       }
-      res.json({ ok: true, data: agent });
+      return c.json({ ok: true, data: agent });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // PATCH /v1/agents/:name - update agent
-agentRouter.patch(
+agentRoutes.patch(
   '/agents/:name',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const updated = await agentEngine.updateAgent(
-        req.workspace!.id,
-        paramName(req),
-        req.body,
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const body = await c.req.json();
+      const updated = await agentEngine.updateAgent(db, workspace.id, name, body);
       if (!updated) {
-        res.status(404).json({
+        return c.json({
           ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${paramName(req)}" not found` },
-        });
-        return;
+          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
+        }, 404);
       }
-      res.json({ ok: true, data: updated });
+      return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // DELETE /v1/agents/:name - delete agent
-agentRouter.delete(
+agentRoutes.delete(
   '/agents/:name',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const deleted = await agentEngine.deleteAgent(
-        req.workspace!.id,
-        paramName(req),
-      );
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
       if (!deleted) {
-        res.status(404).json({
+        return c.json({
           ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${paramName(req)}" not found` },
-        });
-        return;
+          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
+        }, 404);
       }
-      res.status(204).send();
+      return c.body(null, 204);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/agents/spawn - spawn agent (registers if new, rotates token if exists)
-agentRouter.post(
+agentRoutes.post(
   '/agents/spawn',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { name, cli, task, channel, persona, metadata } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const { name, cli, task, channel, persona, metadata } = await c.req.json();
 
       if (!name || typeof name !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
-        });
-        return;
+        }, 400);
       }
 
       if (!cli || typeof cli !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'cli is required' },
-        });
-        return;
+        }, 400);
       }
 
       const validClis = ['claude', 'codex', 'gemini', 'aider', 'goose'];
       if (!validClis.includes(cli)) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: `cli must be one of: ${validClis.join(', ')}` },
-        });
-        return;
+        }, 400);
       }
 
       if (!task || typeof task !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'task is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const result = await agentEngine.spawnAgent(req.workspace!.id, {
+      const result = await agentEngine.spawnAgent(db, workspace.id, {
         name,
         cli,
         task,
@@ -204,7 +199,6 @@ agentRouter.post(
         metadata,
       });
 
-      // Emit WS event so connected brokers can spawn local processes
       const spawnEventData = {
         agent_id: result.id,
         agent_name: result.name,
@@ -213,77 +207,84 @@ agentRouter.post(
         channel: result.channel,
         already_existed: result.already_existed,
       };
-      publishEvent({
-        type: 'agent.spawn_requested',
-        workspace_id: req.workspace!.id,
-        data: spawnEventData,
-        timestamp: new Date().toISOString(),
-      }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'agent.spawn_requested', spawnEventData).catch(() => {});
 
-      res.status(result.already_existed ? 200 : 201).json({ ok: true, data: result });
+      runInBackground(c, fanoutToWorkspace(c, 'agent.spawn_requested', spawnEventData), 'fanout agent.spawn_requested');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'agent.spawn_requested',
+          workspaceId: workspace.id,
+          data: spawnEventData,
+        }),
+        'queue agent.spawn_requested',
+      );
+
+      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as any);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // POST /v1/agents/release - release (mark offline) or delete an agent
-agentRouter.post(
+agentRoutes.post(
   '/agents/release',
   requireWorkspaceKey,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { name, reason, delete_agent } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const { name, reason, delete_agent } = await c.req.json();
 
       if (!name || typeof name !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const result = await agentEngine.releaseAgent(req.workspace!.id, {
+      const result = await agentEngine.releaseAgent(db, workspace.id, {
         name,
         reason,
         delete_agent,
       });
 
       if (!result) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        });
-        return;
+        }, 404);
       }
 
-      // Emit WS event so connected brokers can release local processes
       const releaseEventData = {
         agent_name: result.name,
         reason: result.reason ?? null,
         deleted: result.deleted,
       };
-      publishEvent({
-        type: 'agent.release_requested',
-        workspace_id: req.workspace!.id,
-        data: releaseEventData,
-        timestamp: new Date().toISOString(),
-      }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'agent.release_requested', releaseEventData).catch(() => {});
 
-      res.json({ ok: true, data: result });
+      runInBackground(c, fanoutToWorkspace(c, 'agent.release_requested', releaseEventData), 'fanout agent.release_requested');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'agent.release_requested',
+          workspaceId: workspace.id,
+          data: releaseEventData,
+        }),
+        'queue agent.release_requested',
+      );
+
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
