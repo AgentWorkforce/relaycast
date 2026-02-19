@@ -1,4 +1,5 @@
 import type { workspaces, agents } from './db/schema.js';
+import type { Logger } from './logger.js';
 
 /** Cloudflare Worker bindings */
 export interface CloudflareBindings {
@@ -21,6 +22,9 @@ export interface CloudflareBindings {
   ENVIRONMENT: string;
   APP_SEMVER?: string;
   APP_VERSION?: string;
+  // PostHog logging (optional)
+  POSTHOG_API_KEY?: string;
+  POSTHOG_HOST?: string;
 }
 
 /** Hono context variables set by middleware */
@@ -28,6 +32,7 @@ export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
   db: ReturnType<typeof import('./db/index.js').getDb>;
+  logger: Logger;
 }
 
 /** The Hono Env type used throughout the app */

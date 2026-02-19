@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env.js';
 import { dbMiddleware } from './middleware/db.js';
+import { loggerMiddleware } from './middleware/logger.js';
+import { createLogger } from './logger.js';
 import { MCP_VERSION } from '@relaycast/mcp';
 
 // Route imports
@@ -40,6 +42,7 @@ const app = new Hono<AppEnv>();
 
 // Global middleware
 app.use('*', cors());
+app.use('*', loggerMiddleware);
 app.use('*', dbMiddleware);
 
 // MCP server card — before secureHeaders to avoid cross-origin policy issues
@@ -241,10 +244,37 @@ app.notFound((c) => {
 // Global error handler
 app.onError((err, c) => {
   const error = err as Error & { code?: string; status?: number };
+  const logger = c.get('logger') || createLogger(c.env);
+
   if (error.message?.includes('JSON')) {
+    logger.warn('Invalid JSON in request body', {
+      route: c.req.path,
+      method: c.req.method,
+    });
+    c.executionCtx.waitUntil(logger.flush());
     return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
   }
+
   const status = error.status || 500;
+
+  // Log all errors (warnings for 4xx, errors for 5xx)
+  if (status >= 500) {
+    logger.error('Unhandled server error', error, {
+      route: c.req.path,
+      method: c.req.method,
+      statusCode: status,
+    });
+  } else {
+    logger.warn('Request error', {
+      route: c.req.path,
+      method: c.req.method,
+      statusCode: status,
+      error_message: error.message,
+    });
+  }
+
+  c.executionCtx.waitUntil(logger.flush());
+
   return c.json({
     ok: false,
     error: {
@@ -259,35 +289,52 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const { deliverEvent } = await import('./engine/eventDelivery.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env);
 
   for (const msg of batch.messages) {
     try {
       const event = msg.body as { type: string; workspaceId: string; data: Record<string, unknown> };
       const result = await deliverEvent(db, event.workspaceId, event.type, event.data);
       if (result.failed > 0) {
-        console.warn(
-          `[queue] Non-retryable webhook delivery failures for event ${event.type}: ${result.failed}/${result.attempted}`,
-        );
+        logger.warn('Webhook delivery failures', {
+          workspaceId: event.workspaceId,
+          eventType: event.type,
+          failed: result.failed,
+          attempted: result.attempted,
+        });
       }
       msg.ack();
-    } catch {
+    } catch (err) {
+      logger.error('Queue message processing failed', err, {
+        messageId: msg.id,
+      });
       msg.retry();
     }
   }
+
+  await logger.flush();
 }
 
 // Scheduled handler for cleanup tasks
 async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env);
 
   // Clean up expired idempotency keys
   try {
     const { sql } = await import('drizzle-orm');
     await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
-  } catch {
-    // Table may not exist yet
+    logger.info('Scheduled cleanup completed', {
+      cronTrigger: event.cron,
+    });
+  } catch (err) {
+    logger.error('Scheduled cleanup failed', err, {
+      cronTrigger: event.cron,
+    });
   }
+
+  await logger.flush();
 }
 
 export default {

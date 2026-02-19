@@ -5,6 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
+POSTHOG_HOST = "https://us.i.posthog.com"
 
 # D1 Database
 [[d1_databases]]
@@ -177,3 +178,4 @@ crons = []
 # R2_ACCESS_KEY_ID
 # R2_SECRET_ACCESS_KEY
 # CF_ACCOUNT_ID
+# POSTHOG_API_KEY
