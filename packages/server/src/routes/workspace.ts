@@ -10,6 +10,7 @@ import {
   getWorkspaceStreamConfig,
   setWorkspaceStreamOverride,
 } from '../lib/workspaceStream.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -153,6 +154,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
 
 // GET /workspace/stream - get workspace stream effective config
 workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.stream.get');
   const workspaceId = c.get('workspace').id;
   try {
     const config = await getWorkspaceStreamConfig(c.env, workspaceId);
@@ -166,11 +168,11 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    console.error('[workspace/stream] Failed to get stream config', {
+    logger.error('Failed to get stream config', {
       workspaceId,
       code: error.code,
       status: error.status,
-      message: error.message,
+      ...toErrorDetails(error),
     });
     return c.json({
       ok: false,
@@ -181,6 +183,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
 
 // PUT /workspace/stream - set workspace stream override
 workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.stream.put');
   const workspaceId = c.get('workspace').id;
   try {
     const body = await c.req.json() as { enabled?: unknown; mode?: unknown };
@@ -210,11 +213,11 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    console.error('[workspace/stream] Failed to update stream config', {
+    logger.error('Failed to update stream config', {
       workspaceId,
       code: error.code,
       status: error.status,
-      message: error.message,
+      ...toErrorDetails(error),
     });
     return c.json({
       ok: false,

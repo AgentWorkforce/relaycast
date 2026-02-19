@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 
 type WaitUntilContext = {
   executionCtx?: {
@@ -21,8 +22,12 @@ export function runInBackground(
   task: Promise<unknown> | unknown,
   label: string,
 ): void {
-  const wrapped = Promise.resolve(task).catch((error) => {
-    console.error(`[background] ${label} failed:`, error);
+  const logger = getRequestLogger(c, 'background.task');
+  const wrapped = Promise.resolve(task).catch(async (error) => {
+    logger.error(`${label} failed`, {
+      ...toErrorDetails(error),
+    });
+    await logger.flush();
   });
 
   let executionCtx: WaitUntilContext['executionCtx'];
