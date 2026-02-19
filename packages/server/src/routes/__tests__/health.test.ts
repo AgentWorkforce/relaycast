@@ -42,11 +42,26 @@ app.onError((err, c) => {
 });
 
 describe('GET /health', () => {
-  it('returns 200 with ok and version', async () => {
+  it('returns 200 with ok, version, and build', async () => {
     vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
     const res = await app.request('/health', {}, bindings);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, version: '0.1.0' });
+    expect(await res.json()).toEqual({ ok: true, version: '0.1.0', build: 'unknown' });
+  });
+
+  it('uses app semver and build from bindings when provided', async () => {
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+    const res = await app.request('/health', {}, {
+      ...bindings,
+      APP_SEMVER: '0.2.5',
+      APP_VERSION: '10d3df0a1118f4bae7147bc257c4cdbe07f7a04a',
+    } as any);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      version: '0.2.5',
+      build: '10d3df0a1118f4bae7147bc257c4cdbe07f7a04a',
+    });
   });
 });
 

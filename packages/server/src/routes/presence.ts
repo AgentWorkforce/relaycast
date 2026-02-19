@@ -21,6 +21,28 @@ presenceRoutes.get('/agents/presence', requireAuth, rateLimit, async (c) => {
   }
 });
 
+// POST /agents/heartbeat — refresh presence for an agent (REST alternative to WebSocket ping)
+presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c) => {
+  try {
+    const agent = c.get('agent')!;
+    const workspace = c.get('workspace');
+    const doId = c.env.PRESENCE_DO.idFromName(workspace.id);
+    const stub = c.env.PRESENCE_DO.get(doId);
+    await stub.fetch(new Request('http://do/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
+    }));
+    return c.json({ ok: true });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
+
 // POST /agents/disconnect — explicitly mark agent offline
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {

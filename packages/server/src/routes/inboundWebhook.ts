@@ -117,7 +117,11 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
 
     const eventData = { ...responseData, channel_id };
     if (channel_id) {
-      runInBackground(c, fanoutToChannel(c, channel_id, 'webhook.received', eventData), 'fanout webhook.received');
+      runInBackground(
+        c,
+        fanoutToChannel(c, channel_id, 'webhook.received', eventData, undefined, workspace_id),
+        'fanout webhook.received',
+      );
     }
     runInBackground(
       c,

@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/types",
-  "version": "0.2.5",
+  "version": "0.3.1",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,7 +15,7 @@
     "directory": "packages/types"
   },
   "dependencies": {
-    "zod": "^3.24.0"
+    "zod": "^4.3.6"
   },
   "files": [
     "dist"

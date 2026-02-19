@@ -44,11 +44,19 @@ jobs:
           database-name: relaycast-staging
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api-staging
           environment: staging
           route: 'staging-api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
           d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
           kv-id: ${{ vars.STAGING_KV_ID }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -79,6 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+        with:
+          build: 'true'
       - uses: ./.github/actions/apply-d1-migrations
         with:
           migration-worker-name: relaycast-d1-migrate-production
@@ -86,10 +96,32 @@ jobs:
           database-name: relaycast
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Sync PostHog API key secret (production)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTHOG_API_KEY:-}" ]; then
+            echo "POSTHOG_API_KEY GitHub secret is not set."
+            exit 1
+          fi
+          echo "$POSTHOG_API_KEY" | npx wrangler secret put POSTHOG_API_KEY --name relaycast-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-api
           environment: production
+          route: 'api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
           d1-database-id: ${{ vars.PRODUCTION_D1_DATABASE_ID }}
           kv-id: ${{ vars.PRODUCTION_KV_ID }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}

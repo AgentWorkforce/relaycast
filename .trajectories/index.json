@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T06:25:28.364Z",
+  "lastUpdated": "2026-02-19T18:14:06.379Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -506,26 +506,109 @@
       "completedAt": "2026-02-19T05:47:25.089Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6814hh1aleva.json"
     },
-    "traj_qja7zvywp7xq": {
-      "title": "Fix failure in GitHub Actions job 64106388975",
+    "traj_rfjrtd752ohm": {
+      "title": "Investigate GitHub Actions job 64108714064 from run 22170238748",
       "status": "completed",
-      "startedAt": "2026-02-19T06:16:20.221Z",
-      "completedAt": "2026-02-19T06:18:17.449Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_qja7zvywp7xq.json"
+      "startedAt": "2026-02-19T06:26:35.308Z",
+      "completedAt": "2026-02-19T06:27:45.099Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_rfjrtd752ohm.json"
     },
-    "traj_lb1h61b1acre": {
-      "title": "Harden preview environment cleanup on PR close/merge",
+    "traj_b6dydm9igd7q": {
+      "title": "Debug observer websocket stream status 404 on production",
       "status": "completed",
-      "startedAt": "2026-02-19T06:19:51.297Z",
-      "completedAt": "2026-02-19T06:20:30.737Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lb1h61b1acre.json"
+      "startedAt": "2026-02-19T06:36:41.779Z",
+      "completedAt": "2026-02-19T06:37:58.269Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_b6dydm9igd7q.json"
     },
-    "traj_ytd41ii48d1k": {
-      "title": "Add callable preview environment audit/remove workflow",
+    "traj_3jjknhkwxa7z": {
+      "title": "Add semantic version and build SHA to /health",
+      "status": "active",
+      "startedAt": "2026-02-19T06:40:55.489Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_3jjknhkwxa7z.json"
+    },
+    "traj_mhdyvbvq8uz4": {
+      "title": "Finalize health endpoint with semver and build metadata",
       "status": "completed",
-      "startedAt": "2026-02-19T06:25:18.213Z",
-      "completedAt": "2026-02-19T06:25:28.292Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ytd41ii48d1k.json"
+      "startedAt": "2026-02-19T06:46:20.769Z",
+      "completedAt": "2026-02-19T06:46:27.450Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_mhdyvbvq8uz4.json"
+    },
+    "traj_lduaqusufszd": {
+      "title": "Investigate GitHub Actions job 64110433860 from run 22171547176",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:50:51.511Z",
+      "completedAt": "2026-02-19T06:52:56.558Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lduaqusufszd.json"
+    },
+    "traj_z6z8dggfaksc": {
+      "title": "Investigate GitHub Actions job 64110444297 from run 22171585691",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:58:04.923Z",
+      "completedAt": "2026-02-19T07:04:27.776Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_z6z8dggfaksc.json"
+    },
+    "traj_iguwex834jkq": {
+      "title": "Add PostHog production logging in server with local console logger and version metadata",
+      "status": "completed",
+      "startedAt": "2026-02-19T14:33:18.296Z",
+      "completedAt": "2026-02-19T14:39:13.254Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_iguwex834jkq.json"
+    },
+    "traj_6oqalk31dh5h": {
+      "title": "Wire POSTHOG_API_KEY GitHub Secret into deploy workflow and sync to Cloudflare Worker secret",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:01:05.777Z",
+      "completedAt": "2026-02-19T16:01:54.075Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6oqalk31dh5h.json"
+    },
+    "traj_y9blwypztwkw": {
+      "title": "Enhance server PostHog logging with request middleware and flush reliability",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:14:09.336Z",
+      "completedAt": "2026-02-19T16:14:21.942Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_y9blwypztwkw.json"
+    },
+    "traj_azdtac0r4bdj": {
+      "title": "Address useful Copilot feedback: add toErrorDetails tests and improve logger flush reliability in background/DO paths",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:28:53.985Z",
+      "completedAt": "2026-02-19T16:29:49.101Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_azdtac0r4bdj.json"
+    },
+    "traj_y4bxzz5ecbrq": {
+      "title": "Check Relaycast logs in PostHog MCP",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:41:06.173Z",
+      "completedAt": "2026-02-19T17:41:14.855Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_y4bxzz5ecbrq.json"
+    },
+    "traj_n2zaedeyx6t1": {
+      "title": "Reduce Relaycast request log noise and add actionable structured fields",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:46:55.272Z",
+      "completedAt": "2026-02-19T17:57:19.385Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_n2zaedeyx6t1.json"
+    },
+    "traj_s8f8kd38qwb2": {
+      "title": "Fix latest Relaycast production error in fanout webhook path",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:03:19.714Z",
+      "completedAt": "2026-02-19T18:03:27.196Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_s8f8kd38qwb2.json"
+    },
+    "traj_n6fetxnqklm5": {
+      "title": "Remove request-log sampling for expected client noise",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:10:32.557Z",
+      "completedAt": "2026-02-19T18:10:40.732Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_n6fetxnqklm5.json"
+    },
+    "traj_lnkh9rtdn04z": {
+      "title": "Simplify request logger by removing noise suppression logic",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:13:59.002Z",
+      "completedAt": "2026-02-19T18:14:06.305Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lnkh9rtdn04z.json"
     }
   }
 }

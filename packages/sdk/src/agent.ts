@@ -76,6 +76,11 @@ export class AgentClient {
     this.ws.connect();
   }
 
+  /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
+  async heartbeat(): Promise<void> {
+    await this.client.post('/v1/agents/heartbeat', {});
+  }
+
   async disconnect(): Promise<void> {
     if (this.ws) {
       // Notify the server before closing the WebSocket so presence

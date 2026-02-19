@@ -9,7 +9,7 @@ export const WorkspaceSchema = z.object({
   stripe_customer_id: z.string().nullable(),
   stripe_subscription_id: z.string().nullable(),
   created_at: z.string(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

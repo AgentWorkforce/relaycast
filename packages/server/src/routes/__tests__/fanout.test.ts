@@ -19,6 +19,13 @@ function createContext(bindings: AppEnv['Bindings']): Context<AppEnv> {
   } as Context<AppEnv>;
 }
 
+function createContextWithoutWorkspace(bindings: AppEnv['Bindings']): Context<AppEnv> {
+  return {
+    env: bindings,
+    get: (() => undefined) as any,
+  } as Context<AppEnv>;
+}
+
 describe('fanout helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -146,7 +153,11 @@ describe('fanout helpers', () => {
     await fanoutToChannel(c, 'ch_1', 'message.created', { text: 'hi' });
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO broadcast failed: 500 for channel ch_1'),
+      expect.stringContaining('ChannelDO broadcast failed: 500 for channel ch_1'),
+      expect.objectContaining({
+        app_version: expect.any(String),
+        sdk_version: expect.any(String),
+      }),
     );
     consoleError.mockRestore();
   });
@@ -165,8 +176,10 @@ describe('fanout helpers', () => {
       .resolves.toBeUndefined();
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO broadcast error for channel ch_1'),
-      expect.any(Error),
+      expect.stringContaining('ChannelDO broadcast error for channel ch_1'),
+      expect.objectContaining({
+        error_message: 'Network failure',
+      }),
     );
     consoleError.mockRestore();
   });
@@ -184,7 +197,10 @@ describe('fanout helpers', () => {
     await fanoutToWorkspace(c, 'agent.online', { agent_name: 'Bot' });
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] PresenceDO status failed: 500 for workspace ws_123'),
+      expect.stringContaining('PresenceDO status failed: 500 for workspace ws_123'),
+      expect.objectContaining({
+        event_type: 'agent.online',
+      }),
     );
     consoleError.mockRestore();
   });
@@ -202,7 +218,10 @@ describe('fanout helpers', () => {
     await updateChannelMembers(c, 'ch_2', ['a1']);
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[fanout] ChannelDO update-members failed: 500 for channel ch_2'),
+      expect.stringContaining('ChannelDO update-members failed: 500 for channel ch_2'),
+      expect.objectContaining({
+        channel_id: 'ch_2',
+      }),
     );
     consoleError.mockRestore();
   });
@@ -221,5 +240,27 @@ describe('fanout helpers', () => {
     const req = channelFetch.mock.calls[0][0] as Request;
     const body = await req.json();
     expect(body.members).toEqual(['agent_1', 'agent_2']);
+  });
+
+  it('fanoutToChannel supports workspace override when context workspace is missing', async () => {
+    const channelFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const bindings = createMockBindings() as AppEnv['Bindings'];
+    bindings.CHANNEL_DO = {
+      idFromName: vi.fn(() => 'channel-id'),
+      get: vi.fn(() => ({ fetch: channelFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const c = createContextWithoutWorkspace(bindings);
+    await fanoutToChannel(c, 'ch_1', 'webhook.received', {
+      webhook_id: 'wh_1',
+      channel: 'general',
+      message_id: 'msg_1',
+      text: 'hello',
+      source: 'webhook',
+    }, undefined, 'ws_999');
+
+    const req = channelFetch.mock.calls[0][0] as Request;
+    const body = await req.json();
+    expect(body.workspaceId).toBe('ws_999');
   });
 });

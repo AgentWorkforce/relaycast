@@ -8,7 +8,7 @@
   "packages": [
     {
       "name": "optimizing-smithery-score",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Use when publishing an MCP server to Smithery and need to maximize the quality score - covers scoring categories, tool metadata requirements, deploy reliability, and known external deployment limitations",
       "format": "claude",
       "subtype": "skill",

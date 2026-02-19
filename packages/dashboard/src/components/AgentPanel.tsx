@@ -44,7 +44,7 @@ interface AgentPanelProps {
 
 export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const status = statusLabel(agent.status);
-  const cli = (agent.metadata?.cli as string) || 'unknown';
+  const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
   const currentTask = (agent.metadata?.current_task as string) || '';
 
   // Collect metadata entries to display (excluding known fields)

@@ -209,7 +209,7 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
     const lastMessage = lastMessageByChannel.get(conv.channelId);
     return {
       id: conv.id,
-      dm_type: conv.dmType,
+      type: conv.dmType,
       name: conv.name,
       participants: participantsByConversation.get(conv.id) || [],
       last_message: lastMessage

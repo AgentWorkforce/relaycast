@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env.js';
 import { dbMiddleware } from './middleware/db.js';
+import { loggerMiddleware } from './middleware/logger.js';
 import { MCP_VERSION } from '@relaycast/mcp';
 
 // Route imports
@@ -27,6 +28,7 @@ import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
+import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -40,6 +42,7 @@ const app = new Hono<AppEnv>();
 
 // Global middleware
 app.use('*', cors());
+app.use('*', loggerMiddleware);
 app.use('*', dbMiddleware);
 
 // MCP server card — before secureHeaders to avoid cross-origin policy issues
@@ -112,9 +115,20 @@ app.all('/mcp', async (c) => {
 
   if (sessionId) {
     // Route to existing session DO.
-    const doId = c.env.MCP_SESSION_DO.idFromName(sessionId);
-    const stub = c.env.MCP_SESSION_DO.get(doId);
-    return stub.fetch(c.req.raw);
+    // The session ID is the DO's hex ID (from state.id.toString()), so we
+    // must use idFromString() — NOT idFromName() which would hash it again
+    // and route to a different, uninitialized DO.
+    try {
+      const doId = c.env.MCP_SESSION_DO.idFromString(sessionId);
+      const stub = c.env.MCP_SESSION_DO.get(doId);
+      return stub.fetch(c.req.raw);
+    } catch {
+      // Invalid session ID format — treat as expired session.
+      return c.json(
+        { jsonrpc: '2.0', error: { code: -32000, message: 'Invalid or expired session' }, id: null },
+        { status: 404 },
+      );
+    }
   }
 
   // New session — create a DO with a fresh name.
@@ -230,6 +244,15 @@ app.notFound((c) => {
 // Global error handler
 app.onError((err, c) => {
   const error = err as Error & { code?: string; status?: number };
+  const logger = getRequestLogger(c, 'worker.on_error');
+  logger.error('Unhandled request error', {
+    error_code: error.code ?? 'internal_error',
+    error_status: error.status ?? 500,
+    path: c.req.path,
+    method: c.req.method,
+    ...toErrorDetails(error),
+  });
+
   if (error.message?.includes('JSON')) {
     return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
   }
@@ -248,35 +271,48 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const { deliverEvent } = await import('./engine/eventDelivery.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env, { source: 'worker.queue' });
 
   for (const msg of batch.messages) {
     try {
       const event = msg.body as { type: string; workspaceId: string; data: Record<string, unknown> };
       const result = await deliverEvent(db, event.workspaceId, event.type, event.data);
       if (result.failed > 0) {
-        console.warn(
-          `[queue] Non-retryable webhook delivery failures for event ${event.type}: ${result.failed}/${result.attempted}`,
-        );
+        logger.warn('Non-retryable webhook delivery failures', {
+          event_type: event.type,
+          workspace_id: event.workspaceId,
+          failed: result.failed,
+          attempted: result.attempted,
+        });
       }
       msg.ack();
-    } catch {
+    } catch (error) {
+      logger.error('Webhook queue message processing failed; retrying', {
+        ...toErrorDetails(error),
+      });
       msg.retry();
     }
   }
+  await logger.flush();
 }
 
 // Scheduled handler for cleanup tasks
 async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env, { source: 'worker.scheduled' });
 
   // Clean up expired idempotency keys
   try {
     const { sql } = await import('drizzle-orm');
     await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
-  } catch {
-    // Table may not exist yet
+  } catch (error) {
+    logger.warn('Failed to clean expired idempotency keys', {
+      ...toErrorDetails(error),
+      schedule: event.cron ?? 'unknown',
+    });
   }
+  await logger.flush();
 }
 
 export default {

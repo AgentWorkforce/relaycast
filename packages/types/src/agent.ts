@@ -14,7 +14,7 @@ export const AgentSchema = z.object({
   token_hash: z.string(),
   status: AgentStatusSchema,
   persona: z.string().nullable(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   last_seen: z.string(),
 });
@@ -24,7 +24,7 @@ export const CreateAgentRequestSchema = z.object({
   name: z.string(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 
@@ -40,7 +40,7 @@ export type CreateAgentResponse = z.infer<typeof CreateAgentResponseSchema>;
 export const UpdateAgentRequestSchema = z.object({
   status: AgentStatusSchema.optional(),
   persona: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
@@ -67,7 +67,7 @@ export const SpawnAgentRequestSchema = z.object({
   task: z.string(),
   channel: z.string().optional(),
   persona: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type SpawnAgentRequest = z.infer<typeof SpawnAgentRequestSchema>;
 
