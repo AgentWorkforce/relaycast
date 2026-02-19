@@ -542,8 +542,8 @@ ${B}${CYAN}╔══════════════════════
       name: 'CI Pipeline',
       channel: channelName,
     });
-    webhookId = wh.id;
-    log('🔗', `Created webhook ${B}${wh.id}${R} → #${channelName}`);
+    webhookId = wh.webhook_id;
+    log('🔗', `Created webhook ${B}${wh.webhook_id}${R} → #${channelName}`);
   });
   await pause();
 
@@ -617,7 +617,7 @@ ${B}${CYAN}╔══════════════════════
   // Retrieve the group conversation and send follow-up messages
   await run(`${INFRA} replies in group DM`, async () => {
     const convos = await infra.dms.conversations();
-    const group = convos.find((c) => c.is_group);
+    const group = convos.find((c) => c.type === 'group');
     if (!group) throw new Error('Group DM conversation not found');
     await infra.dms.sendMessage(group.id, 'Sounds good. I have the runbook ready.');
     log('📤', `${GREEN}${B}${INFRA}${R} → group: Sounds good. I have the runbook ready.`);
@@ -626,7 +626,7 @@ ${B}${CYAN}╔══════════════════════
 
   await run(`${BACKEND} replies in group DM`, async () => {
     const convos = await backend.dms.conversations();
-    const group = convos.find((c) => c.is_group);
+    const group = convos.find((c) => c.type === 'group');
     if (!group) throw new Error('Group DM conversation not found');
     await backend.dms.sendMessage(group.id, 'I can run the integration tests after. Ready when you are.');
     log('📤', `${BLUE}${B}${BACKEND}${R} → group: I can run the integration tests after. Ready when you are.`);
