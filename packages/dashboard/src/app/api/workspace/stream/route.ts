@@ -101,6 +101,11 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
+    const current = await relayCtx.relay.workspace.stream.get();
+    if (current.enabled === enabled) {
+      return NextResponse.json(toPayload(current));
+    }
+
     const data = await relayCtx.relay.workspace.stream.set(enabled);
     return NextResponse.json(toPayload(data));
   } catch (error) {

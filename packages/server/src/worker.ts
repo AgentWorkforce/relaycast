@@ -34,6 +34,7 @@ export { AgentDO } from './durable-objects/agent.js';
 export { PresenceDO } from './durable-objects/presence.js';
 export { WorkspaceStreamDO } from './durable-objects/workspaceStream.js';
 export { McpSessionDO } from './durable-objects/mcpSession.js';
+export { RateLimitDO } from './durable-objects/rateLimit.js';
 
 const app = new Hono<AppEnv>();
 

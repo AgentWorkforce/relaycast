@@ -11,6 +11,7 @@ export interface CloudflareBindings {
   PRESENCE_DO: DurableObjectNamespace;
   WORKSPACE_STREAM_DO: DurableObjectNamespace;
   MCP_SESSION_DO: DurableObjectNamespace;
+  RATE_LIMIT_DO: DurableObjectNamespace;
   KV: KVNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;

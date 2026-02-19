@@ -30,7 +30,7 @@ function getRouteKey(method: string, path: string): string | null {
   return ROUTE_MULTIPLIERS[key] !== undefined ? key : null;
 }
 
-// In-memory token bucket fallback when KV fails
+// In-memory token bucket fallback when Durable Object checks fail
 const inMemoryBuckets = new Map<string, { tokens: number; lastRefill: number }>();
 const BUCKET_CLEANUP_INTERVAL = 60_000;
 let lastCleanup = Date.now();
@@ -73,20 +73,44 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
   const window = Math.floor(Date.now() / 60000);
-  const kvKey = routeKey
-    ? `rate:${workspace.id}:${routeKey}:${window}`
-    : `rate:${workspace.id}:${window}`;
+  const bucketKey = routeKey
+    ? `${routeKey}:${window}`
+    : `global:${window}`;
 
   try {
-    const kv = c.env.KV;
-    const currentStr = await kv.get(kvKey);
-    const count = parseInt(currentStr || '0', 10) + 1;
-    await kv.put(kvKey, String(count), { expirationTtl: 60 });
+    const id = c.env.RATE_LIMIT_DO.idFromName(workspace.id);
+    const stub = c.env.RATE_LIMIT_DO.get(id);
+    const res = await stub.fetch(new Request('http://do/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bucketKey,
+        limit,
+        windowMs: 60_000,
+      }),
+    }));
+
+    if (!res.ok) {
+      throw new Error(`RateLimitDO returned HTTP ${res.status}`);
+    }
+
+    const payload = await res.json() as {
+      ok?: boolean;
+      data?: {
+        count?: number;
+        remaining?: number;
+        allowed?: boolean;
+      };
+    };
+
+    const count = payload.data?.count ?? 1;
+    const remaining = payload.data?.remaining ?? Math.max(0, limit - count);
+    const allowed = payload.data?.allowed ?? count <= limit;
 
     c.header('X-RateLimit-Limit', String(limit));
-    c.header('X-RateLimit-Remaining', String(Math.max(0, limit - count)));
+    c.header('X-RateLimit-Remaining', String(remaining));
 
-    if (count > limit) {
+    if (!allowed) {
       return c.json(
         {
           ok: false,
@@ -99,7 +123,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
       );
     }
   } catch {
-    // In-memory fallback when KV is down — still respects route multipliers
+    // In-memory fallback when RateLimitDO is unavailable — still respects route multipliers
     const { allowed, count } = inMemoryRateCheck(workspace.id, routeKey, limit);
     c.header('X-RateLimit-Limit', String(limit));
     c.header('X-RateLimit-Remaining', String(Math.max(0, limit - count)));

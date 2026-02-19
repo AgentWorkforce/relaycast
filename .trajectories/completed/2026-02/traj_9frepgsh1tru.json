@@ -1,0 +1,53 @@
+{
+  "id": "traj_9frepgsh1tru",
+  "version": 1,
+  "task": {
+    "title": "Make workspace streaming default-off and avoid login/logout KV churn"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T04:06:35.448Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T04:07:35.724Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_egwz2fjvgozq",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T04:07:35.724Z",
+      "events": [
+        {
+          "ts": 1771474055728,
+          "type": "decision",
+          "content": "Removed auth-time workspace stream toggles: Removed auth-time workspace stream toggles",
+          "raw": {
+            "question": "Removed auth-time workspace stream toggles",
+            "chosen": "Removed auth-time workspace stream toggles",
+            "alternatives": [],
+            "reasoning": "Login/logout should not mutate workspace stream state; this avoids unnecessary KV reads/writes and leaves stream changes to explicit dashboard controls."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T04:07:38.610Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "059f2723b789fd15602e2a7142fcc1350b331fd2",
+    "endRef": "059f2723b789fd15602e2a7142fcc1350b331fd2"
+  },
+  "completedAt": "2026-02-19T04:07:38.610Z",
+  "retrospective": {
+    "summary": "Kept workspace stream default disabled and removed dashboard login/logout stream.set calls to reduce KV churn; stream can now only be changed via explicit workspace stream endpoint/UI.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  }
+}

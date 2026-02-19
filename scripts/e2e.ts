@@ -22,6 +22,38 @@ const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 const BASE_URL = (args[0] ?? 'http://localhost:8787').replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
+function isLocalHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.localhost');
+}
+
+function resolveDashboardUrl(baseUrl: string): string {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return 'http://localhost:3100';
+  }
+
+  if (!host || isLocalHost(host)) {
+    return 'http://localhost:3100';
+  }
+
+  const prMatch = host.match(/^pr(\d+)-api(?:[.-]|$)/);
+  if (prMatch) {
+    return `https://pr${prMatch[1]}-observer.relaycast.dev`;
+  }
+
+  if (host === 'staging-api.relaycast.dev') {
+    return 'https://staging-observer.relaycast.dev';
+  }
+
+  if (host === 'api.relaycast.dev') {
+    return 'https://observer.relaycast.dev';
+  }
+
+  return 'https://observer.relaycast.dev';
+}
+
 // ---------------------------------------------------------------------------
 // Terminal colors
 // ---------------------------------------------------------------------------
@@ -189,8 +221,13 @@ ${B}${CYAN}╔══════════════════════
   });
 
   if (!CI) {
+    const dashboardUrl = resolveDashboardUrl(BASE_URL);
+    const dashboardLabel =
+      dashboardUrl === 'http://localhost:3100'
+        ? 'Open the dashboard'
+        : 'Open the hosted observer dashboard';
     console.log();
-    log('📊', `Open the dashboard: ${B}${CYAN}http://localhost:3100${R}`);
+    log('📊', `${dashboardLabel}: ${B}${CYAN}${dashboardUrl}${R}`);
     log('🔑', `Workspace key: ${B}${workspaceKey}${R}`);
     console.log();
     await waitForEnter(`${YELLOW}${B}  Press Enter to start the test run...${R} `);

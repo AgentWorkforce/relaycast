@@ -12,7 +12,7 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 /**
  * POST /api/auth/login
  * Validates the API key and sets httpOnly cookies.
- * WebSocket stream now authenticates directly with workspace key.
+ * WebSocket stream authenticates directly with workspace key.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -40,11 +40,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Enable workspace stream for this workspace so observer dashboard
-    // receives full realtime event fanout.
+    // receives realtime event fanout.
     try {
       await relay.workspace.stream.set(true);
     } catch (error) {
-      // Best-effort: older backends or partial preview rollouts may not support this yet.
+      // Best-effort: dashboard can still load and show in-app recovery controls.
       const relayError = error instanceof RelayError ? error : null;
       console.warn('[api/auth/login] Failed to enable workspace stream', {
         detail: relayError

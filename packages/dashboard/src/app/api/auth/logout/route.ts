@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { RelayCast } from '@relaycast/sdk';
+import { RelayCast, RelayError } from '@relaycast/sdk';
 import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
 
 export const runtime = 'edge';
@@ -22,8 +22,18 @@ export async function POST(request: NextRequest) {
     try {
       await relay.workspace.stream.set(false);
     } catch (error) {
-      // Stream toggling should not block logout.
-      console.warn('[api/auth/logout] Failed to disable workspace stream:', error);
+      const relayError = error instanceof RelayError ? error : null;
+      console.warn('[api/auth/logout] Failed to disable workspace stream', {
+        detail: relayError
+          ? `${relayError.code} (${relayError.status}): ${relayError.message}`
+          : error instanceof Error
+            ? error.message
+            : String(error),
+        baseUrl: relayServer,
+        host: request.headers.get('host'),
+        observerHost: request.headers.get('x-relaycast-observer-host'),
+        forwardedHost: request.headers.get('x-forwarded-host'),
+      });
     }
   }
 

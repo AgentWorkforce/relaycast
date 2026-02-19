@@ -47,6 +47,7 @@ bindings = [
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
   { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
 ]
 
 [[migrations]]
@@ -61,7 +62,11 @@ new_sqlite_classes = ["McpSessionDO"]
 tag = "v3"
 new_sqlite_classes = ["WorkspaceStreamDO"]
 
-# KV namespace (rate limiting, usage counters)
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["RateLimitDO"]
+
+# KV namespace (usage counters, stream overrides, lightweight config)
 [[kv_namespaces]]
 binding = "KV"
 id = "PLACEHOLDER_KV_ID"
@@ -114,6 +119,7 @@ bindings = [
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
   { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
 ]
 
 [[env.staging.kv_namespaces]]
@@ -155,6 +161,7 @@ bindings = [
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
   { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
 ]
 
 [[env.preview.kv_namespaces]]

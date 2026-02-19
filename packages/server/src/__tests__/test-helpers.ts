@@ -146,6 +146,12 @@ export function createMockBindings() {
   const doStub = {
     fetch: vi.fn().mockResolvedValue(new Response(null, { status: 200 })),
   };
+  const rateLimitStub = {
+    fetch: vi.fn().mockResolvedValue(Response.json({
+      ok: true,
+      data: { count: 1, limit: 60, remaining: 59, allowed: true },
+    })),
+  };
   const presenceStub = {
     fetch: vi.fn().mockImplementation(async () => new Response(JSON.stringify({ agents: [] }), {
       status: 200,
@@ -163,6 +169,7 @@ export function createMockBindings() {
     PRESENCE_DO: { idFromName: vi.fn(() => 'presence-do'), get: vi.fn(() => presenceStub) } as unknown as DurableObjectNamespace,
     WORKSPACE_STREAM_DO: { idFromName: vi.fn(() => 'workspace-stream-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     MCP_SESSION_DO: { idFromName: vi.fn(() => 'mcp-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
+    RATE_LIMIT_DO: { idFromName: vi.fn(() => 'rate-limit-do'), get: vi.fn(() => rateLimitStub) } as unknown as DurableObjectNamespace,
     KV: createMockKV(),
     STRIPE_SECRET_KEY: 'sk_test_fake',
     STRIPE_WEBHOOK_SECRET: 'whsec_test_fake',
