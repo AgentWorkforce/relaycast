@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T01:49:45.031Z",
+  "lastUpdated": "2026-02-19T02:03:39.586Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -368,9 +368,10 @@
     },
     "traj_kw02soedki7x": {
       "title": "Host observer dashboard and map observer hostnames to matching API env",
-      "status": "active",
+      "status": "completed",
       "startedAt": "2026-02-19T01:49:45.002Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_kw02soedki7x.json"
+      "completedAt": "2026-02-19T02:03:39.485Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_kw02soedki7x.json"
     }
   }
 }

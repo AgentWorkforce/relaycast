@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast } from '@relaycast/sdk';
-
-const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+import { resolveRelayServerUrlFromRequest } from '../../../../../lib/relay-server';
 
 /**
  * GET /api/dms/:id/messages
  * Fetches messages for a DM conversation using the workspace API key.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -20,7 +19,10 @@ export async function GET(
   }
 
   try {
-    const relay = new RelayCast({ apiKey, baseUrl: RELAY_SERVER });
+    const relay = new RelayCast({
+      apiKey,
+      baseUrl: resolveRelayServerUrlFromRequest(request),
+    });
     const messages = await relay.dmMessages(id, { limit: 50 });
     return NextResponse.json({ messages });
   } catch (error) {

@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast } from '@relaycast/sdk';
+import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
@@ -9,12 +10,12 @@ const AGENT_COOKIE_NAME = 'relaycast_agent_token';
  * POST /api/auth/logout
  * Disables workspace stream (best-effort) and clears auth cookies.
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get(COOKIE_NAME)?.value;
 
   if (apiKey?.startsWith('rk_live_')) {
-    const relayServer = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+    const relayServer = resolveRelayServerUrlFromRequest(request);
     const relay = new RelayCast({ apiKey, baseUrl: relayServer });
     try {
       await relay.workspace.stream.set(false);

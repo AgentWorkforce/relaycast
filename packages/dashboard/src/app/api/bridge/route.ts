@@ -1,14 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast, RelayError } from '@relaycast/sdk';
-
-const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
 
 /**
  * GET /api/bridge
  * Constructs the multi-project view from relaycast agents and channels.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const cookieStore = await cookies();
     const apiKey = cookieStore.get('relaycast_key')?.value;
@@ -19,7 +18,10 @@ export async function GET() {
       );
     }
 
-    const relay = new RelayCast({ apiKey, baseUrl: RELAY_SERVER });
+    const relay = new RelayCast({
+      apiKey,
+      baseUrl: resolveRelayServerUrlFromRequest(request),
+    });
     const [agentList, channelList] = await Promise.allSettled([
       relay.agents.list(),
       relay.channels.list(),

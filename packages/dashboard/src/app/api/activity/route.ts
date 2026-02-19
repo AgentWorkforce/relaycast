@@ -1,9 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast } from '@relaycast/sdk';
 import type { ActivityEvent } from '../../../types/dashboard';
-
-const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
 
 /**
  * GET /api/activity
@@ -12,7 +11,7 @@ const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
  * to the observer agent's channel memberships.
  *
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get('relaycast_key')?.value;
   if (!apiKey) {
@@ -20,7 +19,10 @@ export async function GET() {
   }
 
   try {
-    const relay = new RelayCast({ apiKey, baseUrl: RELAY_SERVER });
+    const relay = new RelayCast({
+      apiKey,
+      baseUrl: resolveRelayServerUrlFromRequest(request),
+    });
 
     const [agentResult, presenceResult, channelResult, dmResult] = await Promise.allSettled([
       relay.agents.list(),

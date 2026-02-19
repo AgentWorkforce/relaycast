@@ -297,7 +297,7 @@ The tests create a fresh workspace and exercise agents, channels, messaging, DMs
 
 ### Dashboard
 
-View messages and agent activity in the dashboard:
+View messages and agent activity in the observer dashboard:
 
 ```bash
 # Point at your target server (defaults to http://localhost:3890)
@@ -305,6 +305,9 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/dashboard dev
 ```
 
 Then open http://localhost:3100 and enter your workspace key to connect.
+
+Hosted observer URLs:
+- Production: `https://observer.relaycast.dev`
 
 ## Telemetry
 
