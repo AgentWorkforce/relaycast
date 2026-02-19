@@ -19,7 +19,6 @@ function getExecutionCtx(c: unknown): WaitUntilContext['executionCtx'] | undefin
   return undefined;
 }
 
-const EXPECTED_NOISE_SAMPLE_PERCENT = 2;
 const EXPECTED_NOISE_WINDOW_MS = 60_000;
 const MAX_NOISE_BUCKETS = 500;
 
@@ -31,7 +30,6 @@ type ErrorInfo = {
 type NoiseBucket = {
   window_start_ms: number;
   suppressed_count: number;
-  sampled_count: number;
   exemplar_fields: Record<string, unknown>;
 };
 
@@ -51,7 +49,6 @@ function recordExpectedClientNoise(
   logger: ReturnType<typeof createRequestLogger>,
   key: string,
   fields: Record<string, unknown>,
-  sampled: boolean,
 ): void {
   const now = Date.now();
   let bucket = expectedClientNoiseBuckets.get(key);
@@ -60,7 +57,6 @@ function recordExpectedClientNoise(
     bucket = {
       window_start_ms: now,
       suppressed_count: 0,
-      sampled_count: 0,
       exemplar_fields: fields,
     };
     expectedClientNoiseBuckets.set(key, bucket);
@@ -70,16 +66,13 @@ function recordExpectedClientNoise(
       ...bucket.exemplar_fields,
       noise_window_ms: EXPECTED_NOISE_WINDOW_MS,
       suppressed_count: bucket.suppressed_count,
-      sampled_count: bucket.sampled_count,
     });
     bucket.window_start_ms = now;
     bucket.suppressed_count = 0;
-    bucket.sampled_count = 0;
     bucket.exemplar_fields = fields;
   }
 
   bucket.suppressed_count += 1;
-  if (sampled) bucket.sampled_count += 1;
 }
 
 function parseBearerToken(authorization: string | undefined): string | undefined {
@@ -166,14 +159,6 @@ function statusClass(statusCode: number): string {
   return '1xx';
 }
 
-function sampleByRequestId(requestId: string, percent: number): boolean {
-  const compact = requestId.replace(/-/g, '');
-  const prefix = compact.slice(0, 2);
-  const value = Number.parseInt(prefix, 16);
-  if (Number.isNaN(value)) return false;
-  return value % 100 < percent;
-}
-
 export function isExpectedClientNoise(route: string, statusCode: number, errorCode?: string): boolean {
   if (
     route === '/v1/ws'
@@ -244,7 +229,6 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     );
 
     if (expectedNoise) {
-      const sampled = sampleByRequestId(requestId, EXPECTED_NOISE_SAMPLE_PERCENT);
       const noiseKey = [
         c.req.method,
         c.req.path,
@@ -253,14 +237,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
         authScheme,
       ].join('|');
 
-      recordExpectedClientNoise(logger, noiseKey, metadata, sampled);
-
-      if (sampled) {
-        logger.info('Expected client error (sampled)', {
-          ...metadata,
-          noise_sampled: true,
-        });
-      }
+      recordExpectedClientNoise(logger, noiseKey, metadata);
     } else {
       logger.warn('Request client error', metadata);
     }
