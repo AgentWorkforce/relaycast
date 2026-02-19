@@ -259,6 +259,7 @@ export async function spawnAgent(
     const spawnMetadata = {
       ...(existing.metadata as Record<string, unknown> || {}),
       ...(data.metadata || {}),
+      cli: data.cli,
       spawn: {
         cli: data.cli,
         task: data.task,
@@ -286,6 +287,7 @@ export async function spawnAgent(
 
     const spawnMetadata = {
       ...(data.metadata || {}),
+      cli: data.cli,
       spawn: {
         cli: data.cli,
         task: data.task,

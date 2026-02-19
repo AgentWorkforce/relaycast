@@ -185,7 +185,7 @@ export function AgentSidebar({
               <span className="truncate flex-1 text-left">{agent.name}</span>
               <span className={cn('h-2 w-2 rounded-full shrink-0', statusColor(agent.status))} />
               <span className="text-[10px] text-[var(--color-text-dim)] shrink-0">
-                {(agent.metadata?.cli as string) || agent.type}
+                {(agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || agent.type}
               </span>
             </button>
           ))}
