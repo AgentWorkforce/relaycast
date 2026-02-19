@@ -4,6 +4,7 @@ import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import { fanoutToWorkspace } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -207,12 +208,16 @@ agentRoutes.post(
         already_existed: result.already_existed,
       };
 
-      fanoutToWorkspace(c, 'agent.spawn_requested', spawnEventData).catch(() => {});
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'agent.spawn_requested',
-        workspaceId: workspace.id,
-        data: spawnEventData,
-      });
+      runInBackground(c, fanoutToWorkspace(c, 'agent.spawn_requested', spawnEventData), 'fanout agent.spawn_requested');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'agent.spawn_requested',
+          workspaceId: workspace.id,
+          data: spawnEventData,
+        }),
+        'queue agent.spawn_requested',
+      );
 
       return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as any);
     } catch (err: unknown) {
@@ -262,12 +267,16 @@ agentRoutes.post(
         deleted: result.deleted,
       };
 
-      fanoutToWorkspace(c, 'agent.release_requested', releaseEventData).catch(() => {});
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'agent.release_requested',
-        workspaceId: workspace.id,
-        data: releaseEventData,
-      });
+      runInBackground(c, fanoutToWorkspace(c, 'agent.release_requested', releaseEventData), 'fanout agent.release_requested');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'agent.release_requested',
+          workspaceId: workspace.id,
+          data: releaseEventData,
+        }),
+        'queue agent.release_requested',
+      );
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {

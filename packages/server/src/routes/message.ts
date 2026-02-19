@@ -6,6 +6,7 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -81,8 +82,12 @@ messageRoutes.post(
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
         const eventData = { ...idempotent.data, channel_name: channelName, from_name: agent?.name };
-        fanoutToChannel(c, channel.id, 'message.created', eventData).catch(() => {});
-        c.env.WEBHOOK_QUEUE.send({ type: 'message.created', workspaceId: workspace.id, data: eventData });
+        runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({ type: 'message.created', workspaceId: workspace.id, data: eventData }),
+          'queue message.created',
+        );
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

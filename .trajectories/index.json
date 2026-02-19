@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T00:30:29.696Z",
+  "lastUpdated": "2026-02-19T01:17:42.902Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -337,6 +337,27 @@
       "startedAt": "2026-02-19T00:27:56.743Z",
       "completedAt": "2026-02-19T00:30:29.614Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_b15lhm3m4cne.json"
+    },
+    "traj_x9vby627jwz3": {
+      "title": "Fix workspace websocket missing events (messages, reactions, threads, DMs)",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:03:05.303Z",
+      "completedAt": "2026-02-19T01:08:29.275Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_x9vby627jwz3.json"
+    },
+    "traj_igzdsl8csyi2": {
+      "title": "Add why-comment to background.ts helper",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:10:03.839Z",
+      "completedAt": "2026-02-19T01:10:44.923Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_igzdsl8csyi2.json"
+    },
+    "traj_2hlr0ib4ijwe": {
+      "title": "Make all route event emissions reliable via runInBackground",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:14:15.251Z",
+      "completedAt": "2026-02-19T01:17:42.835Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2hlr0ib4ijwe.json"
     }
   }
 }

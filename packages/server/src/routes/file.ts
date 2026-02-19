@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
 import { getS3Client } from '../engine/file.js';
 import { fanoutToWorkspace } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const fileRoutes = new Hono<AppEnv>();
 
@@ -77,12 +78,16 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
     }
 
     const eventData = { ...result, agent_id: agent.id };
-    fanoutToWorkspace(c, 'file.uploaded', eventData).catch(() => {});
-    c.env.WEBHOOK_QUEUE.send({
-      type: 'file.uploaded',
-      workspaceId: workspace.id,
-      data: { ...result, uploaded_by_name: agent.name },
-    });
+    runInBackground(c, fanoutToWorkspace(c, 'file.uploaded', eventData), 'fanout file.uploaded');
+    runInBackground(
+      c,
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'file.uploaded',
+        workspaceId: workspace.id,
+        data: { ...result, uploaded_by_name: agent.name },
+      }),
+      'queue file.uploaded',
+    );
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {

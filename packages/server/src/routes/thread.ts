@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const threadRoutes = new Hono<AppEnv>();
 
@@ -68,14 +69,18 @@ threadRoutes.post(
       if (!idempotent.replayed) {
         const eventData = { ...idempotent.data, from_name: agent?.name };
         if (idempotent.data.channel_id) {
-          fanoutToChannel(c, idempotent.data.channel_id, 'thread.reply', eventData).catch(() => {});
+          runInBackground(c, fanoutToChannel(c, idempotent.data.channel_id, 'thread.reply', eventData), 'fanout thread.reply');
         }
 
-        c.env.WEBHOOK_QUEUE.send({
-          type: 'thread.reply',
-          workspaceId: workspace.id,
-          data: eventData,
-        });
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({
+            type: 'thread.reply',
+            workspaceId: workspace.id,
+            data: eventData,
+          }),
+          'queue thread.reply',
+        );
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

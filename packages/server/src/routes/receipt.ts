@@ -6,6 +6,7 @@ import * as receiptEngine from '../engine/receipt.js';
 import { and, eq } from 'drizzle-orm';
 import { messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const receiptRoutes = new Hono<AppEnv>();
 
@@ -39,17 +40,21 @@ receiptRoutes.post(
           .from(messages)
           .where(and(eq(messages.id, c.req.param('id')), eq(messages.workspaceId, workspace.id)));
         if (row?.channelId) {
-          fanoutToChannel(c, row.channelId, 'message.read', eventData).catch(() => {});
+          runInBackground(c, fanoutToChannel(c, row.channelId, 'message.read', eventData), 'fanout message.read');
         }
       } catch {
         // Ignore fanout failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'message.read',
-        workspaceId: workspace.id,
-        data: eventData,
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'message.read',
+          workspaceId: workspace.id,
+          data: eventData,
+        }),
+        'queue message.read',
+      );
 
       return c.json({ ok: true, data: result }, 200);
     } catch (err: unknown) {

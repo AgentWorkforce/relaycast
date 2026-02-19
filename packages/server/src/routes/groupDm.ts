@@ -7,6 +7,7 @@ import * as groupDmEngine from '../engine/groupDm.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const groupDmRoutes = new Hono<AppEnv>();
 
@@ -106,16 +107,24 @@ groupDmRoutes.post(
               ),
             );
           const eventData = { ...idempotent.data, from_name: agent!.name };
-          fanoutToAgents(c, rows.map((r) => r.agentId), 'group_dm.received', eventData).catch(() => {});
+          runInBackground(
+            c,
+            fanoutToAgents(c, rows.map((r) => r.agentId), 'group_dm.received', eventData),
+            'fanout group_dm.received',
+          );
         } catch {
           // Ignore fanout failures
         }
 
-        c.env.WEBHOOK_QUEUE.send({
-          type: 'group_dm.received',
-          workspaceId: workspace.id,
-          data: { ...idempotent.data, from_name: agent!.name },
-        });
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({
+            type: 'group_dm.received',
+            workspaceId: workspace.id,
+            data: { ...idempotent.data, from_name: agent!.name },
+          }),
+          'queue group_dm.received',
+        );
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

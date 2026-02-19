@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
@@ -116,13 +117,17 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
 
     const eventData = { ...responseData, channel_id };
     if (channel_id) {
-      fanoutToChannel(c, channel_id, 'webhook.received', eventData).catch(() => {});
+      runInBackground(c, fanoutToChannel(c, channel_id, 'webhook.received', eventData), 'fanout webhook.received');
     }
-    c.env.WEBHOOK_QUEUE.send({
-      type: 'webhook.received',
-      workspaceId: workspace_id,
-      data: eventData,
-    });
+    runInBackground(
+      c,
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'webhook.received',
+        workspaceId: workspace_id,
+        data: eventData,
+      }),
+      'queue webhook.received',
+    );
 
     return c.json({ ok: true, data: responseData }, 201);
   } catch (err: unknown) {

@@ -4,6 +4,7 @@ import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -32,22 +33,26 @@ channelRoutes.post(
         agent?.id,
       );
 
-      // Fire-and-forget fanout — workspace-wide so all online agents learn about the new channel
+      // Workspace-wide fanout so all online agents learn about the new channel.
       const eventData = { ...result, channel_name: result.name };
-      fanoutToWorkspace(c, 'channel.created', eventData).catch(() => {});
+      runInBackground(c, fanoutToWorkspace(c, 'channel.created', eventData), 'fanout channel.created');
       // Update ChannelDO member cache (creator auto-joined)
       try {
         const members = await channelEngine.getMembers(db, workspace.id, result.name);
-        updateChannelMembers(c, result.id, members.map((m) => m.agent_id)).catch(() => {});
+        runInBackground(c, updateChannelMembers(c, result.id, members.map((m) => m.agent_id)), 'update-members channel.created');
       } catch {
         // Ignore cache update failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'channel.created',
-        workspaceId: workspace.id,
-        data: { ...result, created_by_name: agent?.name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'channel.created',
+          workspaceId: workspace.id,
+          data: { ...result, created_by_name: agent?.name },
+        }),
+        'queue channel.created',
+      );
 
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
@@ -146,12 +151,16 @@ channelRoutes.patch(
       }
 
       const eventData = { ...updated, channel_name: updated.name };
-      fanoutToChannel(c, updated.id, 'channel.updated', eventData).catch(() => {});
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'channel.updated',
-        workspaceId: workspace.id,
-        data: { ...updated, channel_name: name },
-      });
+      runInBackground(c, fanoutToChannel(c, updated.id, 'channel.updated', eventData), 'fanout channel.updated');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'channel.updated',
+          workspaceId: workspace.id,
+          data: { ...updated, channel_name: name },
+        }),
+        'queue channel.updated',
+      );
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -201,12 +210,16 @@ channelRoutes.patch(
       }
 
       const eventData = { ...updated, channel_name: name };
-      fanoutToChannel(c, updated.id, 'channel.updated', eventData).catch(() => {});
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'channel.updated',
-        workspaceId: workspace.id,
-        data: { ...updated, channel_name: name },
-      });
+      runInBackground(c, fanoutToChannel(c, updated.id, 'channel.updated', eventData), 'fanout channel.updated topic');
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'channel.updated',
+          workspaceId: workspace.id,
+          data: { ...updated, channel_name: name },
+        }),
+        'queue channel.updated topic',
+      );
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -247,13 +260,17 @@ channelRoutes.delete(
       const channel = await channelEngine.getChannel(db, workspace.id, name);
       if (channel) {
         const eventData = { channel_name: name };
-        fanoutToChannel(c, channel.id, 'channel.archived', eventData).catch(() => {});
+        runInBackground(c, fanoutToChannel(c, channel.id, 'channel.archived', eventData), 'fanout channel.archived');
       }
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'channel.archived',
-        workspaceId: workspace.id,
-        data: { channel_name: name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'channel.archived',
+          workspaceId: workspace.id,
+          data: { channel_name: name },
+        }),
+        'queue channel.archived',
+      );
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -289,19 +306,23 @@ channelRoutes.post(
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.joined');
           const eventData = { channel_name: name, agent_name: agent!.name };
-          fanoutToChannel(c, channel.id, 'member.joined', eventData).catch(() => {});
+          runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.joined');
         }
       } catch {
         // Ignore cache update failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'member.joined',
-        workspaceId: workspace.id,
-        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'member.joined',
+          workspaceId: workspace.id,
+          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+        }),
+        'queue member.joined',
+      );
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
@@ -337,7 +358,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           const eventData = { channel_name: name, agent_name: agent!.name };
-          fanoutToChannel(c, channel.id, 'member.left', eventData).catch(() => {});
+          runInBackground(c, fanoutToChannel(c, channel.id, 'member.left', eventData), 'fanout member.left');
         }
       } catch {
         // Ignore fanout failures
@@ -348,17 +369,21 @@ channelRoutes.post(
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.left');
         }
       } catch {
         // Ignore cache update failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'member.left',
-        workspaceId: workspace.id,
-        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'member.left',
+          workspaceId: workspace.id,
+          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+        }),
+        'queue member.left',
+      );
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -443,19 +468,23 @@ channelRoutes.post(
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)).catch(() => {});
+          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.invited');
           const eventData = { channel_name: name, agent_name: agentName };
-          fanoutToChannel(c, channel.id, 'member.joined', eventData).catch(() => {});
+          runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.invited');
         }
       } catch {
         // Ignore cache update failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'member.joined',
-        workspaceId: workspace.id,
-        data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'member.joined',
+          workspaceId: workspace.id,
+          data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
+        }),
+        'queue member.invited',
+      );
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {

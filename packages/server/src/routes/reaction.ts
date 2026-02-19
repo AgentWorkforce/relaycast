@@ -6,6 +6,7 @@ import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -46,13 +47,17 @@ reactionRoutes.post(
 
       const eventData = { ...reactionData, channel_name, agent_name: agent!.name };
       if (channel_id) {
-        fanoutToChannel(c, channel_id, 'reaction.added', eventData).catch(() => {});
+        runInBackground(c, fanoutToChannel(c, channel_id, 'reaction.added', eventData), 'fanout reaction.added');
       }
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'reaction.added',
-        workspaceId: workspace.id,
-        data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name },
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'reaction.added',
+          workspaceId: workspace.id,
+          data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name },
+        }),
+        'queue reaction.added',
+      );
 
       return c.json({ ok: true, data: reactionData }, 201);
     } catch (err: unknown) {
@@ -102,17 +107,25 @@ reactionRoutes.delete(
           .innerJoin(channels, eq(messages.channelId, channels.id))
           .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
         if (row?.channelId) {
-          fanoutToChannel(c, row.channelId, 'reaction.removed', { ...eventData, channel_name: row.channelName }).catch(() => {});
+          runInBackground(
+            c,
+            fanoutToChannel(c, row.channelId, 'reaction.removed', { ...eventData, channel_name: row.channelName }),
+            'fanout reaction.removed',
+          );
         }
       } catch {
         // Ignore fanout failures
       }
 
-      c.env.WEBHOOK_QUEUE.send({
-        type: 'reaction.removed',
-        workspaceId: workspace.id,
-        data: eventData,
-      });
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'reaction.removed',
+          workspaceId: workspace.id,
+          data: eventData,
+        }),
+        'queue reaction.removed',
+      );
 
       return c.body(null, 204);
     } catch (err: unknown) {

@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as commandEngine from '../engine/command.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
 
 export const commandRoutes = new Hono<AppEnv>();
 
@@ -129,17 +130,21 @@ commandRoutes.post('/commands/:command/invoke', requireAuth, rateLimit, async (c
       const channelRecord = await channelEngine.getChannel(db, workspace.id, channel);
       if (channelRecord) {
         const eventData = { ...result, invoked_by_name: agent?.name };
-        fanoutToChannel(c, channelRecord.id, 'command.invoked', eventData).catch(() => {});
+        runInBackground(c, fanoutToChannel(c, channelRecord.id, 'command.invoked', eventData), 'fanout command.invoked');
       }
     } catch {
       // Ignore fanout failures
     }
 
-    c.env.WEBHOOK_QUEUE.send({
-      type: 'command.invoked',
-      workspaceId: workspace.id,
-      data: { ...result, invoked_by_name: agent?.name },
-    });
+    runInBackground(
+      c,
+      c.env.WEBHOOK_QUEUE.send({
+        type: 'command.invoked',
+        workspaceId: workspace.id,
+        data: { ...result, invoked_by_name: agent?.name },
+      }),
+      'queue command.invoked',
+    );
 
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
