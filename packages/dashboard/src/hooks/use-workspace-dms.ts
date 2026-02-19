@@ -2,14 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useEvent } from '@relaycast/react';
-import type { DmConversationSummary } from '@relaycast/types';
-
-const POLL_INTERVAL = 15_000; // 15 seconds
+import type { DmConversationSummary, DmReceivedEvent, GroupDmReceivedEvent } from '@relaycast/types';
 
 /**
- * Fetches DM conversations via the workspace-level API endpoint.
- * The observer agent isn't a DM participant, so we poll the server-side
- * endpoint which uses the workspace key for full visibility.
+ * Workspace DM list for observer dashboard.
+ * No polling: initial snapshot + websocket-driven updates only.
  */
 export function useWorkspaceDMs() {
   const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
@@ -25,33 +22,63 @@ export function useWorkspaceDMs() {
         const data = await res.json();
         if (!mounted) return;
         setConversations(data.conversations ?? []);
-        setLoading(false);
       } catch {
         // Ignore fetch errors
+      } finally {
+        if (mounted) setLoading(false);
       }
     }
 
-    fetchDMs();
-    const interval = setInterval(fetchDMs, POLL_INTERVAL);
+    void fetchDMs();
     return () => {
       mounted = false;
-      clearInterval(interval);
     };
   }, []);
 
-  // Refetch when DM events come in via WebSocket
-  useEvent('dm.received', () => {
-    fetch('/api/dms')
-      .then((res) => res.json())
-      .then((data) => setConversations(data.conversations ?? []))
-      .catch(() => {});
+  function updateConversation(
+    id: string,
+    type: '1:1' | 'group',
+    senderName: string,
+    text: string,
+  ) {
+    setConversations((prev) => {
+      const idx = prev.findIndex((c) => c.id === id);
+      if (idx === -1) {
+        const created: DmConversationSummary = {
+          id,
+          type,
+          name: type === 'group' ? null : senderName,
+          participants: [senderName],
+          last_message: text,
+          unread_count: 1,
+        };
+        return [created, ...prev];
+      }
+
+      const existing = prev[idx];
+      const participants = existing.participants.includes(senderName)
+        ? existing.participants
+        : [...existing.participants, senderName];
+      const updated: DmConversationSummary = {
+        ...existing,
+        participants,
+        last_message: text,
+        unread_count: existing.unread_count + 1,
+      };
+      const next = [...prev];
+      next.splice(idx, 1);
+      return [updated, ...next];
+    });
+  }
+
+  useEvent('dm.received', (evt) => {
+    const e = evt as DmReceivedEvent;
+    updateConversation(e.conversation_id, '1:1', e.message.agent_name, e.message.text);
   });
 
-  useEvent('group_dm.received', () => {
-    fetch('/api/dms')
-      .then((res) => res.json())
-      .then((data) => setConversations(data.conversations ?? []))
-      .catch(() => {});
+  useEvent('group_dm.received', (evt) => {
+    const e = evt as GroupDmReceivedEvent;
+    updateConversation(e.conversation_id, 'group', e.message.agent_name, e.message.text);
   });
 
   return { conversations, loading };

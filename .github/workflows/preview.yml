@@ -145,6 +145,10 @@ jobs:
 
           exit 1
 
+      - name: Run E2E smoke test (preview)
+        timeout-minutes: 15
+        run: npm run e2e -- "https://pr${{ github.event.pull_request.number }}-api.relaycast.dev" --ci
+
       - name: Comment on PR
         continue-on-error: true
         uses: actions/github-script@v7

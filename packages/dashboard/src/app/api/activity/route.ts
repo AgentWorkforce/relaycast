@@ -11,13 +11,10 @@ const RELAY_SERVER = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
  * Sees everything: all channels, DMs, reactions, threads — not limited
  * to the observer agent's channel memberships.
  *
- * Also ensures the observer agent stays joined to all channels so that
- * WebSocket events are delivered via ChannelDO fanout.
  */
 export async function GET() {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get('relaycast_key')?.value;
-  const agentToken = cookieStore.get('relaycast_agent_token')?.value;
   if (!apiKey) {
     return NextResponse.json({ events: [] }, { status: 401 });
   }
@@ -31,14 +28,6 @@ export async function GET() {
       relay.channels.list(),
       relay.allDmConversations(),
     ]);
-
-    // Keep observer joined to all channels (handles channels created after login)
-    if (agentToken && channelResult.status === 'fulfilled') {
-      const observerClient = relay.as(agentToken);
-      Promise.allSettled(
-        channelResult.value.map((ch) => observerClient.channels.join(ch.name))
-      ).catch(() => {});
-    }
 
     const agentList = agentResult.status === 'fulfilled' ? agentResult.value : [];
     const presenceList = presenceResult.status === 'fulfilled' ? presenceResult.value : [];

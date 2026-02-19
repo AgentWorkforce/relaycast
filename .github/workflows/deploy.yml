@@ -70,14 +70,18 @@ jobs:
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   smoke-test-staging:
-    name: Smoke Test Staging
+    name: Smoke + E2E Test Staging
     runs-on: ubuntu-latest
     needs: deploy-staging
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
       - uses: ./.github/actions/smoke-test
         with:
           base-url: https://staging-api.relaycast.dev
+      - name: Run E2E smoke test (staging)
+        timeout-minutes: 15
+        run: npm run e2e -- https://staging-api.relaycast.dev --ci
 
   deploy-production:
     name: Deploy to Production

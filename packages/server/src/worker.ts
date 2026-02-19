@@ -26,11 +26,13 @@ import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
+import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
 export { AgentDO } from './durable-objects/agent.js';
 export { PresenceDO } from './durable-objects/presence.js';
+export { WorkspaceStreamDO } from './durable-objects/workspaceStream.js';
 export { McpSessionDO } from './durable-objects/mcpSession.js';
 
 const app = new Hono<AppEnv>();
@@ -141,42 +143,58 @@ app.get('/v1/ws', async (c) => {
     return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
   }
 
-  // Validate agent token (at_live_...) and extract workspaceId + agentId
-  if (!token.startsWith('at_live_')) {
-    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Agent token required (at_live_...)' } }, 401);
-  }
-
   const { hashToken } = await import('./middleware/auth.js');
   const { getDb } = await import('./db/index.js');
-  const { agents } = await import('./db/schema.js');
+  const { agents, workspaces } = await import('./db/schema.js');
   const { eq } = await import('drizzle-orm');
 
   const hash = hashToken(token);
   const db = getDb(c.env.DB);
-  const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-
-  if (!agent) {
-    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid agent token' } }, 401);
-  }
-
-  const workspaceId = agent.workspaceId;
-  const agentId = agent.id;
-
-  // Register the agent as online in PresenceDO (fire-and-forget)
-  const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
-  const presenceStub = c.env.PRESENCE_DO.get(presenceDoId);
-  presenceStub.fetch(new Request('http://do/heartbeat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId, workspaceId, agentName: agent.name }),
-  })).catch(() => {});
-
-  const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
-  const stub = c.env.AGENT_DO.get(doId);
-  // Rewrite path from /v1/ws to /ws for the AgentDO handler
   const url = new URL(c.req.url);
   url.pathname = '/ws';
-  return stub.fetch(new Request(url.toString(), c.req.raw));
+
+  if (token.startsWith('at_live_')) {
+    const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
+
+    if (!agent) {
+      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid agent token' } }, 401);
+    }
+
+    const workspaceId = agent.workspaceId;
+    const agentId = agent.id;
+
+    // Register the agent as online in PresenceDO (fire-and-forget)
+    const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
+    const presenceStub = c.env.PRESENCE_DO.get(presenceDoId);
+    presenceStub.fetch(new Request('http://do/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, workspaceId, agentName: agent.name }),
+    })).catch(() => {});
+
+    const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
+    const stub = c.env.AGENT_DO.get(doId);
+    return stub.fetch(new Request(url.toString(), c.req.raw));
+  }
+
+  if (token.startsWith('rk_live_')) {
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+    if (!workspace) {
+      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid workspace key' } }, 401);
+    }
+    if (!(await isWorkspaceStreamEnabled(c.env, workspace.id))) {
+      return c.json(
+        { ok: false, error: { code: 'not_found', message: 'Workspace stream is disabled' } },
+        404,
+      );
+    }
+
+    const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspace.id);
+    const stub = c.env.WORKSPACE_STREAM_DO.get(doId);
+    return stub.fetch(new Request(url.toString(), c.req.raw));
+  }
+
+  return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
 });
 
 // API v1 routes — specific routes before parameterized routes

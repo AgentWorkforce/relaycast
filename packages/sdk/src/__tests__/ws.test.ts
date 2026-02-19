@@ -71,6 +71,18 @@ describe('WsClient', () => {
     );
   });
 
+  it('normalizes trailing slash in baseUrl', () => {
+    const client = new WsClient({
+      token: 'at_live_test',
+      baseUrl: 'https://pr28-api.relaycast.dev/',
+    });
+    client.connect();
+
+    expect(MockWebSocket.instances[0]!.url).toBe(
+      'wss://pr28-api.relaycast.dev/v1/ws?token=at_live_test',
+    );
+  });
+
   it('emits events from server messages', () => {
     const client = new WsClient({ token: 'at_live_test' });
     const handler = vi.fn();
@@ -150,6 +162,18 @@ describe('WsClient', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
     vi.advanceTimersByTime(1);
     expect(MockWebSocket.instances).toHaveLength(3);
+  });
+
+  it('reconnects when connect fails with error before close', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws1 = MockWebSocket.instances[0]!;
+
+    ws1.onerror?.();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1000);
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 
   it('disconnect() stops reconnection', () => {
@@ -357,5 +381,19 @@ describe('WsClient', () => {
     // Don't connect, just try to subscribe
     client.subscribe(['general']);
     // No crash, no send
+  });
+
+  it('fires late open listeners immediately when already connected', async () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    client.on('open', handler);
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ type: 'open' }));
   });
 });

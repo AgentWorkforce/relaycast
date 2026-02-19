@@ -8,19 +8,20 @@ import { handleServerEvent } from './reducer.js';
 export interface RelayProviderProps {
   apiKey: string;
   agentToken: string;
+  wsToken?: string;
   baseUrl?: string;
   channels?: string[];
   debug?: boolean;
   children: React.ReactNode;
 }
 
-export function RelayProvider({ apiKey, agentToken, baseUrl, channels, debug, children }: RelayProviderProps) {
+export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, debug, children }: RelayProviderProps) {
   const clients = useMemo(() => {
     const relay = new RelayCast({ apiKey, baseUrl });
     const agent = relay.as(agentToken);
-    const ws = new WsClient({ token: agentToken, baseUrl, debug });
+    const ws = new WsClient({ token: wsToken ?? agentToken, baseUrl, debug });
     return { relay, agent, ws };
-  }, [apiKey, agentToken, baseUrl, debug]);
+  }, [apiKey, agentToken, wsToken, baseUrl, debug]);
 
   const store = useMemo(() => createStore(), []);
 

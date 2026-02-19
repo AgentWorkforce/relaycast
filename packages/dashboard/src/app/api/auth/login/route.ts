@@ -8,8 +8,8 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 /**
  * POST /api/auth/login
- * Validates the API key, registers a dashboard observer agent,
- * and sets httpOnly cookies for both tokens.
+ * Validates the API key and sets httpOnly cookies.
+ * WebSocket stream now authenticates directly with workspace key.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,22 +36,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Register (or re-register) the dashboard observer agent
-    const agent = await relay.agents.registerOrGet({
-      name: '_dashboard_observer',
-      type: 'human',
-      metadata: { cli: 'dashboard' },
-    });
-
-    // Join the observer to all existing channels so it receives WS events
-    const observerClient = relay.as(agent.token);
+    // Enable workspace stream for this workspace so observer dashboard
+    // receives full realtime event fanout.
     try {
-      const channels = await relay.channels.list();
-      await Promise.allSettled(
-        channels.map((ch) => observerClient.channels.join(ch.name))
-      );
+      await relay.workspace.stream.set(true);
     } catch {
-      // Non-fatal: observer may miss some channels until next login
+      return NextResponse.json(
+        { success: false, error: 'Failed to enable workspace stream' },
+        { status: 500 }
+      );
     }
 
     const cookieStore = await cookies();
@@ -64,7 +57,9 @@ export async function POST(request: NextRequest) {
       maxAge: COOKIE_MAX_AGE,
     });
 
-    cookieStore.set(AGENT_COOKIE_NAME, agent.token, {
+    // Agent cookie remains for compatibility with existing client shape.
+    // Workspace keys are accepted by read-only endpoints used in dashboard.
+    cookieStore.set(AGENT_COOKIE_NAME, apiKey, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -75,7 +70,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       apiKey,
-      agentToken: agent.token,
+      agentToken: apiKey,
+      wsToken: apiKey,
       baseUrl: relayServer,
     });
   } catch (error) {

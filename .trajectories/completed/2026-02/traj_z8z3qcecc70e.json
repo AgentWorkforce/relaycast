@@ -1,0 +1,53 @@
+{
+  "id": "traj_z8z3qcecc70e",
+  "version": 1,
+  "task": {
+    "title": "Harden e2e script for staging consistency and websocket reconnect timing"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T23:09:50.435Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T23:19:10.141Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_8gx0a7skz7p5",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T23:19:10.141Z",
+      "events": [
+        {
+          "ts": 1771456750142,
+          "type": "decision",
+          "content": "Normalize WebSocket base URLs and reconnect on pre-open errors in SDK: Normalize WebSocket base URLs and reconnect on pre-open errors in SDK",
+          "raw": {
+            "question": "Normalize WebSocket base URLs and reconnect on pre-open errors in SDK",
+            "chosen": "Normalize WebSocket base URLs and reconnect on pre-open errors in SDK",
+            "alternatives": [],
+            "reasoning": "Cloudflare treats //v1/ws as a distinct path (404), while local dev tolerated it; trailing-slash base URLs caused ws handshake failures and silent connect timeouts. Adding URL normalization and explicit reconnect fallback improves cross-environment reliability."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T23:19:40.814Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-18T23:19:40.814Z",
+  "retrospective": {
+    "summary": "Fixed staging/preview WebSocket instability by normalizing SDK WS URLs (removing trailing-slash double-path bug), adding reconnect fallback for pre-open errors, and hardening e2e URL normalization. Added regression tests for both cases.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  }
+}

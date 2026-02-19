@@ -1,0 +1,53 @@
+{
+  "id": "traj_rnzyauhkoon1",
+  "version": 1,
+  "task": {
+    "title": "Add E2E CI run after Cloudflare deploys"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T23:21:39.304Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T23:22:32.370Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_auycnw3ttke6",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T23:22:32.370Z",
+      "events": [
+        {
+          "ts": 1771456952371,
+          "type": "decision",
+          "content": "Run e2e smoke script in CI for preview and staging: Run e2e smoke script in CI for preview and staging",
+          "raw": {
+            "question": "Run e2e smoke script in CI for preview and staging",
+            "chosen": "Run e2e smoke script in CI for preview and staging",
+            "alternatives": [],
+            "reasoning": "Health checks alone missed websocket/session regressions. Running scripts/e2e.ts in CI exercises registration, channels, websocket connectivity, and message flow end-to-end before merge/prod promotion."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T23:22:40.393Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-18T23:22:40.393Z",
+  "retrospective": {
+    "summary": "Enabled CI execution of the e2e smoke script for both preview deploys and staging deploy validation, so websocket/message-flow regressions are caught before merge and before production promotion.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  }
+}

@@ -15,9 +15,12 @@ export class WsClient {
   private baseUrl: string;
   private ws: WebSocket | null = null;
   private handlers: Map<string, Set<EventHandler>> = new Map();
+  private isOpen = false;
   private reconnectAttempt = 0;
   private maxReconnectAttempts = 10;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimeoutMs = 10_000;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private debug: boolean;
@@ -25,7 +28,7 @@ export class WsClient {
   constructor(options: WsClientOptions) {
     this.token = options.token;
     this.debug = options.debug ?? false;
-    const base = options.baseUrl ?? 'https://api.relaycast.dev';
+    const base = (options.baseUrl ?? 'https://api.relaycast.dev').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
   }
 
@@ -33,17 +36,36 @@ export class WsClient {
     if (this.ws) return;
     this.closed = false;
 
-    const url = `${this.baseUrl}/v1/ws?token=${encodeURIComponent(this.token)}`;
-    this.ws = new WebSocket(url);
+    const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
+    wsUrl.searchParams.set('token', this.token);
 
-    this.ws.onopen = () => {
+    const ws = new WebSocket(wsUrl.toString());
+    this.ws = ws;
+
+    this.connectTimer = setTimeout(() => {
+      if (this.ws !== ws || this.isOpen || this.closed) return;
+      this.ws = null;
+      this.emit('error', { type: 'error' });
+      this.scheduleReconnect();
+      try {
+        ws.close();
+      } catch {
+        // noop
+      }
+    }, this.connectTimeoutMs);
+
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimer();
+      this.isOpen = true;
       this.reconnectAttempt = 0;
       this.startPing();
       const openEvent: WsOpenEvent = { type: 'open' };
       this.emit('open', openEvent);
     };
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    ws.onmessage = (event: MessageEvent) => {
+      if (this.ws !== ws) return;
       try {
         const parsed = JSON.parse(String(event.data));
         const result = ServerEventSchema.safeParse(parsed);
@@ -66,7 +88,10 @@ export class WsClient {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimer();
+      this.isOpen = false;
       this.stopPing();
       this.ws = null;
       if (!this.closed) {
@@ -76,14 +101,25 @@ export class WsClient {
       this.emit('close', closeEvent);
     };
 
-    this.ws.onerror = () => {
+    ws.onerror = () => {
+      if (this.ws !== ws) return;
       const errorEvent: WsErrorEvent = { type: 'error' };
       this.emit('error', errorEvent);
+
+      // Some runtimes report handshake failures via `error` without a
+      // corresponding `close`. Ensure reconnect still progresses.
+      if (!this.isOpen && !this.closed) {
+        this.clearConnectTimer();
+        this.ws = null;
+        this.scheduleReconnect();
+      }
     };
   }
 
   disconnect(): void {
     this.closed = true;
+    this.isOpen = false;
+    this.clearConnectTimer();
     this.stopPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -114,6 +150,16 @@ export class WsClient {
       this.handlers.set(event, new Set());
     }
     this.handlers.get(event)!.add(handler);
+
+    // If the socket is already connected, immediately notify late open listeners.
+    if (event === 'open' && this.isOpen) {
+      queueMicrotask(() => {
+        if (this.handlers.get('open')?.has(handler)) {
+          handler({ type: 'open' } as WsOpenEvent);
+        }
+      });
+    }
+
     return () => {
       this.handlers.get(event)?.delete(handler);
     };
@@ -148,13 +194,22 @@ export class WsClient {
     }
   }
 
+  private clearConnectTimer(): void {
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+  }
+
   private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
     if (this.reconnectAttempt >= this.maxReconnectAttempts) return;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
     this.reconnectAttempt++;
     const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
     this.emit('reconnecting', reconnectingEvent);
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.connect();
     }, delay);
   }

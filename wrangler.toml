@@ -45,6 +45,7 @@ bindings = [
   { name = "CHANNEL_DO", class_name = "ChannelDO" },
   { name = "AGENT_DO", class_name = "AgentDO" },
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
 ]
 
@@ -55,6 +56,10 @@ new_sqlite_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["McpSessionDO"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["WorkspaceStreamDO"]
 
 # KV namespace (rate limiting, usage counters)
 [[kv_namespaces]]
@@ -107,6 +112,7 @@ bindings = [
   { name = "CHANNEL_DO", class_name = "ChannelDO" },
   { name = "AGENT_DO", class_name = "AgentDO" },
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
 ]
 
@@ -147,6 +153,7 @@ bindings = [
   { name = "CHANNEL_DO", class_name = "ChannelDO" },
   { name = "AGENT_DO", class_name = "AgentDO" },
   { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
   { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
 ]
 

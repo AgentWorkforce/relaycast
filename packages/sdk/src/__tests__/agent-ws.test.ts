@@ -73,6 +73,19 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
+  it('connect() normalizes trailing slash base URL', () => {
+    const client = new HttpClient({
+      apiKey: 'at_live_test',
+      baseUrl: 'https://pr28-api.relaycast.dev/',
+    });
+    const agent = new AgentClient(client);
+    agent.connect();
+
+    expect(MockWebSocket.instances[0]!.url).toBe(
+      'wss://pr28-api.relaycast.dev/v1/ws?token=at_live_test',
+    );
+  });
+
   it('connect() is idempotent — second call does not create another WebSocket', () => {
     const agent = createAgent();
     agent.connect();
@@ -237,6 +250,19 @@ describe('AgentClient WebSocket integration', () => {
     agent.on.connected(handler);
 
     ws.simulateOpen();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('on.connected fires immediately if registered after open', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.connected(handler);
+    await Promise.resolve();
 
     expect(handler).toHaveBeenCalledTimes(1);
   });

@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
 
 interface Session {
   apiKey: string;
   agentToken: string;
+  wsToken: string;
   baseUrl: string;
 }
 
@@ -14,10 +15,14 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
+    const seq = ++requestSeq.current;
+
     fetch('/api/auth/session')
       .then((res) => {
+        if (seq !== requestSeq.current) return null;
         if (!res.ok) {
           router.replace('/login');
           return null;
@@ -25,18 +30,26 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
         return res.json();
       })
       .then((data) => {
+        if (seq !== requestSeq.current) return;
         if (data?.authenticated) {
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,
+            wsToken: data.wsToken ?? data.apiKey,
             baseUrl: data.baseUrl,
           });
+        } else {
+          router.replace('/login');
         }
       })
       .catch(() => {
+        if (seq !== requestSeq.current) return;
         router.replace('/login');
       })
-      .finally(() => setChecking(false));
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setChecking(false);
+      });
   }, [router]);
 
   if (checking || !session) {
@@ -51,6 +64,7 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
     <RelayProvider
       apiKey={session.apiKey}
       agentToken={session.agentToken}
+      wsToken={session.wsToken}
       baseUrl={session.baseUrl}
       debug
     >

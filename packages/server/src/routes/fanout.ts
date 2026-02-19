@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
+import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -42,6 +43,28 @@ async function deliverToAgent(
   }
 }
 
+async function publishToWorkspaceStream(
+  c: HonoContext,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const workspaceId = c.get('workspace').id;
+  if (!(await isWorkspaceStreamEnabled(c.env, workspaceId))) return;
+  try {
+    const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspaceId);
+    const stub = c.env.WORKSPACE_STREAM_DO.get(doId);
+    const res = await stub.fetch(new Request('http://do/deliver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }));
+    if (!res.ok) {
+      console.error(`[fanout] WorkspaceStreamDO deliver failed: ${res.status} for workspace ${workspaceId}`);
+    }
+  } catch (err) {
+    console.error(`[fanout] WorkspaceStreamDO deliver error for workspace ${workspaceId}:`, err);
+  }
+}
+
 export async function fanoutToChannel(
   c: HonoContext,
   channelId: string,
@@ -53,21 +76,26 @@ export async function fanoutToChannel(
   const event = buildEvent(type, workspaceId, data, channelId);
   const payload = transformForClient(event);
 
-  try {
-    const doId = c.env.CHANNEL_DO.idFromName(`${workspaceId}:${channelId}`);
-    const stub = c.env.CHANNEL_DO.get(doId);
-    const res = await stub.fetch(new Request('http://do/broadcast', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspaceId, channelId, event: payload, members }),
-    }));
-    if (!res.ok) {
-      console.error(`[fanout] ChannelDO broadcast failed: ${res.status} for channel ${channelId}, event ${type}`);
+  const tasks: Promise<void>[] = [];
+  tasks.push((async () => {
+    try {
+      const doId = c.env.CHANNEL_DO.idFromName(`${workspaceId}:${channelId}`);
+      const stub = c.env.CHANNEL_DO.get(doId);
+      const res = await stub.fetch(new Request('http://do/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, channelId, event: payload, members }),
+      }));
+      if (!res.ok) {
+        console.error(`[fanout] ChannelDO broadcast failed: ${res.status} for channel ${channelId}, event ${type}`);
+      }
+    } catch (err) {
+      console.error(`[fanout] ChannelDO broadcast error for channel ${channelId}, event ${type}:`, err);
     }
-  } catch (err) {
-    console.error(`[fanout] ChannelDO broadcast error for channel ${channelId}, event ${type}:`, err);
-    throw err; // Re-throw so caller's .catch() still works but we have visibility
-  }
+  })());
+  tasks.push(publishToWorkspaceStream(c, payload));
+
+  await Promise.allSettled(tasks);
 }
 
 export async function fanoutToAgents(
@@ -81,7 +109,10 @@ export async function fanoutToAgents(
   const payload = transformForClient(event);
 
   const unique = [...new Set(agentIds)];
-  await Promise.allSettled(unique.map((agentId) => deliverToAgent(c, agentId, payload)));
+  await Promise.allSettled([
+    ...unique.map((agentId) => deliverToAgent(c, agentId, payload)),
+    publishToWorkspaceStream(c, payload),
+  ]);
 }
 
 export async function fanoutToWorkspace(

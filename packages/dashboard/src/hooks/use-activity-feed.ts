@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useEvent } from '@relaycast/react';
 import type { ActivityEvent, ActivityEventType } from '../types/dashboard';
 import type {
@@ -9,46 +9,13 @@ import type {
   ReactionAddedEvent,
   AgentOnlineEvent,
   AgentOfflineEvent,
+  DmReceivedEvent,
+  GroupDmReceivedEvent,
 } from '@relaycast/types';
 
-const POLL_INTERVAL = 10_000; // 10 seconds
-
 export function useActivityFeed(): ActivityEvent[] {
-  const [polledEvents, setPolledEvents] = useState<ActivityEvent[]>([]);
-  const liveEventsRef = useRef<ActivityEvent[]>([]);
+  const eventsRef = useRef<ActivityEvent[]>([]);
   const [, forceUpdate] = useState(0);
-  const polledIdsRef = useRef(new Set<string>());
-
-  // Poll the server-side activity endpoint (uses workspace key, sees everything)
-  useEffect(() => {
-    let mounted = true;
-
-    async function poll() {
-      try {
-        const res = await fetch('/api/activity');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!mounted) return;
-        const events: ActivityEvent[] = data.events ?? [];
-        setPolledEvents(events);
-        // Track polled IDs so we don't duplicate with live events
-        polledIdsRef.current = new Set(events.map((e) => e.id));
-        // Clear live events that are now covered by the poll
-        liveEventsRef.current = liveEventsRef.current.filter(
-          (e) => !polledIdsRef.current.has(e.id)
-        );
-      } catch {
-        // Ignore fetch errors
-      }
-    }
-
-    poll();
-    const interval = setInterval(poll, POLL_INTERVAL);
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, []);
 
   const pushLiveEvent = useCallback(
     (type: ActivityEventType, summary: string, agent?: string) => {
@@ -59,7 +26,7 @@ export function useActivityFeed(): ActivityEvent[] {
         timestamp: new Date().toISOString(),
         agent,
       };
-      liveEventsRef.current = [...liveEventsRef.current, event].slice(-50);
+      eventsRef.current = [...eventsRef.current, event].slice(-200);
       forceUpdate((n) => n + 1);
     },
     []
@@ -95,8 +62,15 @@ export function useActivityFeed(): ActivityEvent[] {
     }
   });
 
-  // Merge polled + live events, deduplicate, sort chronologically
-  const merged = [...polledEvents, ...liveEventsRef.current];
-  merged.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  return merged.slice(-200);
+  useEvent('dm.received', (evt) => {
+    const e = evt as DmReceivedEvent;
+    pushLiveEvent('message_sent', `${e.message.agent_name} sent a DM`, e.message.agent_name);
+  });
+
+  useEvent('group_dm.received', (evt) => {
+    const e = evt as GroupDmReceivedEvent;
+    pushLiveEvent('message_sent', `${e.message.agent_name} sent a group DM`, e.message.agent_name);
+  });
+
+  return eventsRef.current;
 }

@@ -1,0 +1,53 @@
+{
+  "id": "traj_b15lhm3m4cne",
+  "version": 1,
+  "task": {
+    "title": "Make workspace stream default disabled and remove env-var control"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T00:27:56.743Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T00:30:20.879Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2vhwc8xa6q1u",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T00:30:20.879Z",
+      "events": [
+        {
+          "ts": 1771461020883,
+          "type": "decision",
+          "content": "Workspace stream defaults to disabled with no environment-variable control: Workspace stream defaults to disabled with no environment-variable control",
+          "raw": {
+            "question": "Workspace stream defaults to disabled with no environment-variable control",
+            "chosen": "Workspace stream defaults to disabled with no environment-variable control",
+            "alternatives": [],
+            "reasoning": "Prevents accidental enablement across environments; stream can only be turned on per-workspace via authenticated workspace-key API"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T00:30:29.614Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-19T00:30:29.614Z",
+  "retrospective": {
+    "summary": "Removed ENABLE_WORKSPACE_STREAM config path; workspace stream now defaults disabled and can only be enabled with workspace-key toggle endpoint.",
+    "approach": "Standard approach",
+    "confidence": 0.97
+  }
+}

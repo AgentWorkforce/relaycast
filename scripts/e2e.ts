@@ -19,7 +19,7 @@ import { RelayCast, AgentClient } from '../packages/sdk/src/index.js';
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
-const BASE_URL = args[0] ?? 'http://localhost:8787';
+const BASE_URL = (args[0] ?? 'http://localhost:8787').replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
 // ---------------------------------------------------------------------------
@@ -139,6 +139,45 @@ ${B}${CYAN}╔══════════════════════
     }
   }
 
+  async function waitForConnected(name: string, client: AgentClient, timeoutMs = 15000): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let offOpen: () => void = () => {};
+      let offError: () => void = () => {};
+      let offClose: () => void = () => {};
+      let errors = 0;
+      let closes = 0;
+      const cleanup = (subs: Array<() => void>, timer: ReturnType<typeof setTimeout>) => {
+        subs.forEach((off) => off());
+        clearTimeout(timer);
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup([offOpen, offError, offClose], timer);
+        reject(new Error(`${name} websocket connect timeout after ${timeoutMs}ms (errors=${errors}, closes=${closes})`));
+      }, timeoutMs);
+
+      offOpen = client.on.connected(() => {
+        if (settled) return;
+        settled = true;
+        cleanup([offOpen, offError, offClose], timer);
+        resolve();
+      });
+
+      offError = client.on.error(() => {
+        if (settled) return;
+        errors++;
+      });
+
+      offClose = client.on.disconnected(() => {
+        if (settled) return;
+        closes++;
+      });
+    });
+  }
+
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
@@ -220,32 +259,6 @@ ${B}${CYAN}╔══════════════════════
     log('👋', `${BLUE}${B}${BACKEND}${R} joined #${channelName}`);
   });
 
-  // Invite the dashboard observer to channels so it receives WS events.
-  // Uses lead.channels.invite() instead of registering/joining the observer
-  // directly, which would rotate its token and break the dashboard's WS.
-  await run('Invite dashboard observer to channels', async () => {
-    const agents = await relay.agents.list();
-    const observer = agents.find((a) => a.name === '_dashboard_observer');
-    if (!observer) {
-      log('⏭️ ', `${DIM}No dashboard observer found — skipping invite${R}`);
-      return;
-    }
-    // Invite to both channels (invite is idempotent if already a member)
-    await Promise.allSettled([
-      lead.channels.invite(channelName, '_dashboard_observer'),
-      lead.channels.invite('general', '_dashboard_observer'),
-    ]);
-    // Verify membership
-    const ch = await lead.channels.get(channelName);
-    const isMember = ch.members?.some((m: { agent_name?: string }) => m.agent_name === '_dashboard_observer');
-    if (!isMember) {
-      throw new Error(`_dashboard_observer not found in #${channelName} members`);
-    }
-    log('👋', `${DIM}_dashboard_observer${R} invited to #${channelName} and #general (verified)`);
-  });
-
-  await pause();
-
   // ── 4. Connect WebSockets ────────────────────────────────────────────
   step('Connect WebSockets');
 
@@ -257,9 +270,9 @@ ${B}${CYAN}╔══════════════════════
     backend.connect();
 
     await Promise.all([
-      new Promise<void>((res) => { lead.on.connected(res); }),
-      new Promise<void>((res) => { infra.on.connected(res); }),
-      new Promise<void>((res) => { backend.on.connected(res); }),
+      waitForConnected(LEAD, lead),
+      waitForConnected(INFRA, infra),
+      waitForConnected(BACKEND, backend),
     ]);
 
     // Listen for events on all agents

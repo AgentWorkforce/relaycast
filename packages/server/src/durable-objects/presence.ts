@@ -1,4 +1,5 @@
 import type { CloudflareBindings } from '../env.js';
+import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 
 /** Agents not seen within this window (ms) are considered offline. */
 const PRESENCE_TTL_MS = 60_000;
@@ -111,6 +112,20 @@ export class PresenceDO implements DurableObject {
     }));
   }
 
+  private async deliverToWorkspaceStream(
+    workspaceId: string,
+    event: Record<string, unknown>,
+  ): Promise<void> {
+    if (!(await isWorkspaceStreamEnabled(this.env, workspaceId))) return;
+    const id = this.env.WORKSPACE_STREAM_DO.idFromName(workspaceId);
+    const stub = this.env.WORKSPACE_STREAM_DO.get(id);
+    await stub.fetch(new Request('http://do/deliver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    }));
+  }
+
   /**
    * Broadcast a presence event to all currently-online agents.
    */
@@ -122,7 +137,10 @@ export class PresenceDO implements DurableObject {
     const promises = onlineAgentIds.map((agentId) =>
       this.deliverToAgent(workspaceId, agentId, event),
     );
-    await Promise.allSettled(promises);
+    await Promise.allSettled([
+      ...promises,
+      this.deliverToWorkspaceStream(workspaceId, event),
+    ]);
   }
 
   /**

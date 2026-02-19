@@ -12,3 +12,10 @@ export interface ActivityEvent {
   timestamp: string;
   agent?: string;
 }
+
+export interface WebSocketFeedEvent {
+  id: string;
+  eventType: string;
+  summary: string;
+  timestamp: string;
+}

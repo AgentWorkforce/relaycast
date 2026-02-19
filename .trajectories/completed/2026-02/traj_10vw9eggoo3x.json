@@ -1,0 +1,65 @@
+{
+  "id": "traj_10vw9eggoo3x",
+  "version": 1,
+  "task": {
+    "title": "Implement workspace-key websocket stream and remove dashboard polling"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T23:47:18.662Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T23:55:18.092Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_gl2q9nqig58q",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T23:55:18.092Z",
+      "events": [
+        {
+          "ts": 1771458918095,
+          "type": "decision",
+          "content": "Introduce workspace-key websocket stream and publish all fanout events to it: Introduce workspace-key websocket stream and publish all fanout events to it",
+          "raw": {
+            "question": "Introduce workspace-key websocket stream and publish all fanout events to it",
+            "chosen": "Introduce workspace-key websocket stream and publish all fanout events to it",
+            "alternatives": [],
+            "reasoning": "Observer dashboards need workspace-wide realtime visibility without synthetic channel membership. A dedicated workspace stream authenticated by rk_live keys decouples observability from agent joins and makes websocket behavior deterministic."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771458925302,
+          "type": "decision",
+          "content": "Remove dashboard polling loops in favor of websocket-driven updates: Remove dashboard polling loops in favor of websocket-driven updates",
+          "raw": {
+            "question": "Remove dashboard polling loops in favor of websocket-driven updates",
+            "chosen": "Remove dashboard polling loops in favor of websocket-driven updates",
+            "alternatives": [],
+            "reasoning": "Polling masked realtime delivery issues and added lag/complexity. With workspace websocket stream available, activity and DM updates can be driven directly by pushed events with only an initial snapshot fetch."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T23:55:32.300Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-18T23:55:32.300Z",
+  "retrospective": {
+    "summary": "Implemented workspace-key websocket stream (rk_live) via WorkspaceStreamDO, published fanout + presence events to it, switched dashboard WS to workspace key, removed observer-join dependency and polling loops, and removed observer invite step from e2e.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  }
+}

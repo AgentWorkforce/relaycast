@@ -9,6 +9,7 @@ export interface CloudflareBindings {
   CHANNEL_DO: DurableObjectNamespace;
   AGENT_DO: DurableObjectNamespace;
   PRESENCE_DO: DurableObjectNamespace;
+  WORKSPACE_STREAM_DO: DurableObjectNamespace;
   MCP_SESSION_DO: DurableObjectNamespace;
   KV: KVNamespace;
   STRIPE_SECRET_KEY: string;

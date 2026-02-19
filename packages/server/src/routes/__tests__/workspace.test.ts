@@ -32,6 +32,7 @@ import {
   mockDbForWorkspaceAuth,
   wsAuthHeaders,
   createMockBindings,
+  createMockKV,
   FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
 
@@ -196,6 +197,72 @@ describe('Dashboard routes', () => {
       const body = await res.json();
       expect(body.ok).toBe(false);
       expect(body.error.code).toBe('not_found');
+    });
+  });
+
+  describe('Workspace stream toggle', () => {
+    beforeEach(() => {
+      (bindings as any).KV = createMockKV();
+    });
+
+    it('returns effective stream config', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+
+      const res = await app.request('/v1/workspace/stream', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data).toEqual({
+        enabled: false,
+        default_enabled: false,
+        override: null,
+      });
+    });
+
+    it('enables stream override with PUT', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+
+      const putRes = await app.request('/v1/workspace/stream', {
+        method: 'PUT',
+        headers: wsAuthHeaders(),
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(putRes.status).toBe(200);
+      const putBody = await putRes.json();
+      expect(putBody.data.enabled).toBe(true);
+      expect(putBody.data.override).toBe(true);
+
+      const getRes = await app.request('/v1/workspace/stream', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
+      const getBody = await getRes.json();
+      expect(getBody.data.enabled).toBe(true);
+      expect(getBody.data.override).toBe(true);
+    });
+
+    it('clears override with inherit mode', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+
+      await app.request('/v1/workspace/stream', {
+        method: 'PUT',
+        headers: wsAuthHeaders(),
+        body: JSON.stringify({ enabled: true }),
+      });
+
+      const inheritRes = await app.request('/v1/workspace/stream', {
+        method: 'PUT',
+        headers: wsAuthHeaders(),
+        body: JSON.stringify({ mode: 'inherit' }),
+      });
+      expect(inheritRes.status).toBe(200);
+      const inheritBody = await inheritRes.json();
+      expect(inheritBody.data.enabled).toBe(false);
+      expect(inheritBody.data.override).toBeNull();
     });
   });
 });

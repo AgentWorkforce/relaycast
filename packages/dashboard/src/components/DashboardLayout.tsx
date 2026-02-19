@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Activity } from 'lucide-react';
-import { usePresence, useChannels, useEvent, useAgent, useWebSocket } from '@relaycast/react';
+import { usePresence, useChannels, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
@@ -10,20 +10,13 @@ import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
 import { cn } from '../lib/utils';
 import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
-import type { Agent as ApiAgent, ChannelCreatedEvent } from '@relaycast/types';
+import type { Agent as ApiAgent } from '@relaycast/types';
 
 export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
   const { channels } = useChannels();
   const { conversations } = useWorkspaceDMs();
-  const agentClient = useAgent();
   const { status: wsStatus } = useWebSocket();
-
-  // Auto-join observer to newly created channels so we receive WS events
-  useEvent('channel.created', (evt) => {
-    const e = evt as ChannelCreatedEvent;
-    agentClient.channels.join(e.channel.name).catch(() => {});
-  });
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(true);

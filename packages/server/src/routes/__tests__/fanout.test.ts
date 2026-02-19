@@ -151,7 +151,7 @@ describe('fanout helpers', () => {
     consoleError.mockRestore();
   });
 
-  it('fanoutToChannel throws and logs on network error', async () => {
+  it('fanoutToChannel logs on network error without throwing', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const channelFetch = vi.fn().mockRejectedValue(new Error('Network failure'));
     const bindings = createMockBindings() as AppEnv['Bindings'];
@@ -162,7 +162,7 @@ describe('fanout helpers', () => {
 
     const c = createContext(bindings);
     await expect(fanoutToChannel(c, 'ch_1', 'message.created', { text: 'hi' }))
-      .rejects.toThrow('Network failure');
+      .resolves.toBeUndefined();
 
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining('[fanout] ChannelDO broadcast error for channel ch_1'),

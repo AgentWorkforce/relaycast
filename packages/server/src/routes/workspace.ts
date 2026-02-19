@@ -6,6 +6,10 @@ import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
 import * as tokenRotateEngine from '../engine/tokenRotate.js';
+import {
+  getWorkspaceStreamConfig,
+  setWorkspaceStreamOverride,
+} from '../lib/workspaceStream.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -138,6 +142,66 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
       c.req.param('name'),
     );
     return c.json({ ok: true, data: result });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
+
+// GET /workspace/stream - get workspace stream effective config
+workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const workspaceId = c.get('workspace').id;
+    const config = await getWorkspaceStreamConfig(c.env, workspaceId);
+    return c.json({
+      ok: true,
+      data: {
+        enabled: config.enabled,
+        default_enabled: config.defaultEnabled,
+        override: config.override,
+      },
+    });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
+
+// PUT /workspace/stream - set workspace stream override
+workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const workspaceId = c.get('workspace').id;
+    const body = await c.req.json() as { enabled?: unknown; mode?: unknown };
+
+    let override: boolean | null;
+    if (body?.mode === 'inherit') {
+      override = null;
+    } else if (typeof body?.enabled === 'boolean') {
+      override = body.enabled;
+    } else {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
+      }, 400);
+    }
+
+    await setWorkspaceStreamOverride(c.env, workspaceId, override);
+    const config = await getWorkspaceStreamConfig(c.env, workspaceId);
+
+    return c.json({
+      ok: true,
+      data: {
+        enabled: config.enabled,
+        default_enabled: config.defaultEnabled,
+        override: config.override,
+      },
+    });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
     return c.json({

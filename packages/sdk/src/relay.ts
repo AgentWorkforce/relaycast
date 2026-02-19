@@ -45,6 +45,12 @@ export interface RelayCastOptions {
   baseUrl?: string;
 }
 
+export interface WorkspaceStreamConfig {
+  enabled: boolean;
+  default_enabled: boolean;
+  override: boolean | null;
+}
+
 export class RelayCast {
   private client: HttpClient;
   billing: BillingClient;
@@ -113,6 +119,13 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+    stream: {
+      get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
+      set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
+        this.client.put('/v1/workspace/stream', { enabled }),
+      inherit: (): Promise<WorkspaceStreamConfig> =>
+        this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
+    },
   };
 
   systemPrompt = {

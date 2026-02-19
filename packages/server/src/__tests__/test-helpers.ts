@@ -161,6 +161,7 @@ export function createMockBindings() {
     CHANNEL_DO: { idFromName: vi.fn(() => 'channel-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     AGENT_DO: { idFromName: vi.fn(() => 'agent-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     PRESENCE_DO: { idFromName: vi.fn(() => 'presence-do'), get: vi.fn(() => presenceStub) } as unknown as DurableObjectNamespace,
+    WORKSPACE_STREAM_DO: { idFromName: vi.fn(() => 'workspace-stream-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     MCP_SESSION_DO: { idFromName: vi.fn(() => 'mcp-do'), get: vi.fn(() => doStub) } as unknown as DurableObjectNamespace,
     KV: createMockKV(),
     STRIPE_SECRET_KEY: 'sk_test_fake',
