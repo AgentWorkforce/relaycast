@@ -5,7 +5,7 @@ compatibility_date = "2024-12-01"
 routes = [
   { pattern = "observer.relaycast.dev/*", zone_name = "relaycast.dev" },
   { pattern = "staging-observer.relaycast.dev/*", zone_name = "relaycast.dev" },
-  { pattern = "pr*-observer.relaycast.dev/*", zone_name = "relaycast.dev" },
+  { pattern = "*-observer.relaycast.dev/*", zone_name = "relaycast.dev" },
 ]
 
 [vars]
