@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/spawned
  * Relaycast doesn't support spawning agents from the dashboard yet.

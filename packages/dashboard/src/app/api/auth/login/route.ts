@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import { RelayCast } from '@relaycast/sdk';
 import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days

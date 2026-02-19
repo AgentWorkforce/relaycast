@@ -4,6 +4,8 @@ import { RelayCast } from '@relaycast/sdk';
 import type { ActivityEvent } from '../../../types/dashboard';
 import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/activity
  * Builds a full workspace activity feed using the workspace API key.

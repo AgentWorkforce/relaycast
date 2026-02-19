@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 const COOKIE_NAME = 'relaycast_key';
 
 /**

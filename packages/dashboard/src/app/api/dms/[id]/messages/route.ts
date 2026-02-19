@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import { RelayCast } from '@relaycast/sdk';
 import { resolveRelayServerUrlFromRequest } from '../../../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/dms/:id/messages
  * Fetches messages for a DM conversation using the workspace API key.

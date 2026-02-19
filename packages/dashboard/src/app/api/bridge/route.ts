@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import { RelayCast, RelayError } from '@relaycast/sdk';
 import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/bridge
  * Constructs the multi-project view from relaycast agents and channels.

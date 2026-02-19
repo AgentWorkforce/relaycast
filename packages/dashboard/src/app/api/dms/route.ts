@@ -4,6 +4,8 @@ import { RelayCast } from '@relaycast/sdk';
 import type { DmConversationSummary } from '@relaycast/types';
 import { resolveRelayServerUrlFromRequest } from '../../../lib/relay-server';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/dms
  * Lists all DM conversations using the workspace API key.
