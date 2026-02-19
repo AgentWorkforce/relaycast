@@ -62,6 +62,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+        with:
+          build: 'true'
       - uses: ./.github/actions/smoke-test
         with:
           base-url: https://staging-api.relaycast.dev
