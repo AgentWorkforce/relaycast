@@ -189,11 +189,80 @@ This reduces the response from ~39KB to ~29KB without losing tool call functiona
 | Expanding descriptions for quality | No effect | 14pt is fixed max for presence, not quality |
 | tools/list response > ~30KB | Scanner shows 0/0 tools | Strip execution, outputSchema, _meta from list response |
 | MCP SDK v1.26+ execution field | Scanner rejects unknown fields | Delete from registered tools or override handler |
+| CF DO `idFromName(sessionId)` | Session routes to wrong DO, 0 tools | Use `idFromString(sessionId)` for hex DO IDs |
+
+## Cloudflare Durable Object Session Routing
+
+When hosting MCP on Cloudflare Workers with Durable Objects for stateful sessions, the session routing MUST use `idFromString()` — not `idFromName()`.
+
+**The bug**: The MCP transport returns `state.id.toString()` (a 64-char hex DO ID) as the `mcp-session-id` header. If the worker routes subsequent requests with `idFromName(sessionId)`, it hashes the hex string into a DIFFERENT DO ID, sending the request to an uninitialized DO. Result: `"Bad Request: Server not initialized"` (100 bytes), and Smithery sees 0 tools.
+
+**Symptoms**:
+- `tools/list warm-up returned 0 name fields (100 bytes)`
+- `[scan] No capabilities found` in Smithery publish output
+- Score drops to 55-60 (metadata + config UX still work since those don't need MCP protocol)
+- `initialize` succeeds but ALL follow-up requests fail
+
+**Fix**:
+```typescript
+// worker.ts — MCP session routing
+app.all('/mcp', async (c) => {
+  const sessionId = c.req.header('mcp-session-id');
+
+  if (sessionId) {
+    // CORRECT: idFromString() reverses state.id.toString()
+    try {
+      const doId = c.env.MCP_SESSION_DO.idFromString(sessionId);
+      const stub = c.env.MCP_SESSION_DO.get(doId);
+      return stub.fetch(c.req.raw);
+    } catch {
+      return c.json(
+        { jsonrpc: '2.0', error: { code: -32000, message: 'Invalid or expired session' }, id: null },
+        { status: 404 },
+      );
+    }
+  }
+
+  // New session
+  const newSessionId = crypto.randomUUID();
+  const doId = c.env.MCP_SESSION_DO.idFromName(newSessionId);
+  const stub = c.env.MCP_SESSION_DO.get(doId);
+  return stub.fetch(c.req.raw);
+});
+```
+
+**Key distinction**:
+- `idFromName(string)` — one-way hash, creates a NEW deterministic ID from any string
+- `idFromString(hex)` — reverses `id.toString()`, returns the SAME DO ID
+
+**Verification**: After fixing, test the full MCP handshake:
+```bash
+# 1. Initialize (creates session)
+RESP=$(curl -s -D /tmp/h -X POST https://api.example.com/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}')
+
+# 2. Get session ID
+SID=$(grep -i 'mcp-session-id' /tmp/h | tr -d '\r' | awk '{print $2}')
+
+# 3. Send initialized notification
+curl -s -X POST https://api.example.com/mcp \
+  -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# 4. Verify tools/list returns tools (NOT "Server not initialized")
+curl -s -X POST https://api.example.com/mcp \
+  -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}' | head -c 500
+```
 
 ## Score Debugging
 
 If score drops unexpectedly:
-1. Re-publish manually — scanner is flaky, especially for external deployments
-2. Check if Tool Quality shows 0/0 tools — means scanner timeout, not a code issue
-3. Check Server Capabilities — Prompts most likely to be missed
-4. Verify the MCP endpoint responds to `initialize` + `tools/list` quickly (< 5s)
+1. **Test the full MCP handshake** — initialize → tools/list with same session. If tools/list returns "Server not initialized", session routing is broken.
+2. Re-publish manually — scanner is flaky, especially for external deployments
+3. Check if Tool Quality shows 0/0 tools — means scanner timeout OR session routing broken
+4. Check Server Capabilities — Prompts most likely to be missed
+5. Verify the MCP endpoint responds to `initialize` + `tools/list` quickly (< 5s)
+6. Check CI logs for `tools/list warm-up returned 0 name fields` — this is the session routing bug

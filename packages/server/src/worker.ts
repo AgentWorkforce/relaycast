@@ -112,9 +112,20 @@ app.all('/mcp', async (c) => {
 
   if (sessionId) {
     // Route to existing session DO.
-    const doId = c.env.MCP_SESSION_DO.idFromName(sessionId);
-    const stub = c.env.MCP_SESSION_DO.get(doId);
-    return stub.fetch(c.req.raw);
+    // The session ID is the DO's hex ID (from state.id.toString()), so we
+    // must use idFromString() — NOT idFromName() which would hash it again
+    // and route to a different, uninitialized DO.
+    try {
+      const doId = c.env.MCP_SESSION_DO.idFromString(sessionId);
+      const stub = c.env.MCP_SESSION_DO.get(doId);
+      return stub.fetch(c.req.raw);
+    } catch {
+      // Invalid session ID format — treat as expired session.
+      return c.json(
+        { jsonrpc: '2.0', error: { code: -32000, message: 'Invalid or expired session' }, id: null },
+        { status: 404 },
+      );
+    }
   }
 
   // New session — create a DO with a fresh name.
