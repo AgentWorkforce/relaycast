@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T01:42:34.863Z",
+  "lastUpdated": "2026-02-20T03:10:02.126Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -691,6 +691,27 @@
       "startedAt": "2026-02-20T01:35:18.494Z",
       "completedAt": "2026-02-20T01:42:34.786Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6vawys36wf3u.json"
+    },
+    "traj_brmfimzc551m": {
+      "title": "Update Relaycast PostHog dashboard for product usage and workspace activity metrics",
+      "status": "completed",
+      "startedAt": "2026-02-20T02:52:45.204Z",
+      "completedAt": "2026-02-20T03:00:30.075Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_brmfimzc551m.json"
+    },
+    "traj_9gqm35yj301r": {
+      "title": "Stop noisy scheduled idempotency cleanup warnings",
+      "status": "completed",
+      "startedAt": "2026-02-20T03:07:44.337Z",
+      "completedAt": "2026-02-20T03:08:40.401Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_9gqm35yj301r.json"
+    },
+    "traj_yzc96mubsmlk": {
+      "title": "Remove scheduled handler entirely",
+      "status": "completed",
+      "startedAt": "2026-02-20T03:09:49.629Z",
+      "completedAt": "2026-02-20T03:10:02.043Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yzc96mubsmlk.json"
     }
   }
 }

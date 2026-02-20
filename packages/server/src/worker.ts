@@ -326,27 +326,7 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   await logger.flush();
 }
 
-// Scheduled handler for cleanup tasks
-async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
-  const { getDb } = await import('./db/index.js');
-  const db = getDb(env.DB);
-  const logger = createLogger(env, { source: 'worker.scheduled' });
-
-  // Clean up expired idempotency keys
-  try {
-    const { sql } = await import('drizzle-orm');
-    await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
-  } catch (error) {
-    logger.warn('Failed to clean expired idempotency keys', {
-      ...toErrorDetails(error),
-      schedule: event.cron ?? 'unknown',
-    });
-  }
-  await logger.flush();
-}
-
 export default {
   fetch: app.fetch,
   queue: handleQueue,
-  scheduled: handleScheduled,
 };
