@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T01:42:34.863Z",
+  "lastUpdated": "2026-02-20T14:23:52.381Z",
   "trajectories": {
     "traj_mcpcredfallback": {
       "title": "Add credential file fallback to MCP stdio entry point",
@@ -698,6 +698,20 @@
       "startedAt": "2026-02-20T01:35:18.494Z",
       "completedAt": "2026-02-20T01:42:34.786Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6vawys36wf3u.json"
+    },
+    "traj_nck4ip3pfbfz": {
+      "title": "Update Python SDK WebSocket endpoint to /v1/ws",
+      "status": "completed",
+      "startedAt": "2026-02-20T14:14:09.112Z",
+      "completedAt": "2026-02-20T14:15:19.338Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_nck4ip3pfbfz.json"
+    },
+    "traj_vwrhp5hvaml2": {
+      "title": "Remove stale root-level test-prod-ws.mjs script",
+      "status": "completed",
+      "startedAt": "2026-02-20T14:23:42.546Z",
+      "completedAt": "2026-02-20T14:23:52.308Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vwrhp5hvaml2.json"
     }
   }
 }

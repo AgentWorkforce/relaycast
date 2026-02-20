@@ -150,6 +150,7 @@ class TestWsClientOriginParams:
                 await ws._connect_once()
 
         url = connect_mock.call_args.args[0]
+        assert "/v1/ws?" in url
         assert "token=at_xxx" in url
         assert "origin_surface=sdk" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
