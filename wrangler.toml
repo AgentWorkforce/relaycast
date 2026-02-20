@@ -75,7 +75,7 @@ id = "PLACEHOLDER_KV_ID"
 
 # Cron triggers
 [triggers]
-crons = ["0 * * * *"]
+crons = []
 
 # Staging environment overrides
 [env.staging]
@@ -129,7 +129,7 @@ binding = "KV"
 id = "PLACEHOLDER_STAGING_KV_ID"
 
 [env.staging.triggers]
-crons = ["0 * * * *"]
+crons = []
 
 # Preview environment overrides
 [env.preview]

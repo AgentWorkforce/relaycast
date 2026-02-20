@@ -1,14 +1,7 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T14:23:52.381Z",
+  "lastUpdated": "2026-02-20T15:52:06.042Z",
   "trajectories": {
-    "traj_mcpcredfallback": {
-      "title": "Add credential file fallback to MCP stdio entry point",
-      "status": "completed",
-      "startedAt": "2026-02-19T17:00:00.000Z",
-      "completedAt": "2026-02-19T17:15:00.000Z",
-      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/completed/2026-02/traj_mcpcredfallback.json"
-    },
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
       "status": "completed",
@@ -699,6 +692,41 @@
       "completedAt": "2026-02-20T01:42:34.786Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6vawys36wf3u.json"
     },
+    "traj_brmfimzc551m": {
+      "title": "Update Relaycast PostHog dashboard for product usage and workspace activity metrics",
+      "status": "completed",
+      "startedAt": "2026-02-20T02:52:45.204Z",
+      "completedAt": "2026-02-20T03:00:30.075Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_brmfimzc551m.json"
+    },
+    "traj_9gqm35yj301r": {
+      "title": "Stop noisy scheduled idempotency cleanup warnings",
+      "status": "completed",
+      "startedAt": "2026-02-20T03:07:44.337Z",
+      "completedAt": "2026-02-20T03:08:40.401Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_9gqm35yj301r.json"
+    },
+    "traj_yzc96mubsmlk": {
+      "title": "Remove scheduled handler entirely",
+      "status": "completed",
+      "startedAt": "2026-02-20T03:09:49.629Z",
+      "completedAt": "2026-02-20T03:10:02.043Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yzc96mubsmlk.json"
+    },
+    "traj_41voodt0ty32": {
+      "title": "Disable worker cron triggers after scheduled handler removal",
+      "status": "completed",
+      "startedAt": "2026-02-20T14:56:11.358Z",
+      "completedAt": "2026-02-20T14:56:38.877Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_41voodt0ty32.json"
+    },
+    "traj_mcpcredfallback": {
+      "title": "Add credential file fallback to MCP stdio entry point",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:00:00.000Z",
+      "completedAt": "2026-02-19T17:15:00.000Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/completed/2026-02/traj_mcpcredfallback.json"
+    },
     "traj_nck4ip3pfbfz": {
       "title": "Update Python SDK WebSocket endpoint to /v1/ws",
       "status": "completed",
@@ -712,6 +740,12 @@
       "startedAt": "2026-02-20T14:23:42.546Z",
       "completedAt": "2026-02-20T14:23:52.308Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vwrhp5hvaml2.json"
+    },
+    "traj_8tyqp3fg0c6p": {
+      "title": "Resolve current merge conflicts",
+      "status": "active",
+      "startedAt": "2026-02-20T15:52:06.015Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_8tyqp3fg0c6p.json"
     }
   }
 }
