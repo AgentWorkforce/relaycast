@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-09T09:38:24.126Z",
+  "lastUpdated": "2026-02-20T01:42:34.863Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -102,9 +102,595 @@
     },
     "traj_dht6j7qg1k4b": {
       "title": "Fix rate limiter fallback keying, event queue recovery/guard, remove dead cache code",
-      "status": "active",
+      "status": "completed",
       "startedAt": "2026-02-09T09:38:24.102Z",
-      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/active/traj_dht6j7qg1k4b.json"
+      "completedAt": "2026-02-18T01:40:56.945Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dht6j7qg1k4b.json"
+    },
+    "traj_2pct5202h0s3": {
+      "title": "Investigate e2e agent disconnect status not showing grey",
+      "status": "completed",
+      "startedAt": "2026-02-18T01:59:30.094Z",
+      "completedAt": "2026-02-18T02:05:09.762Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2pct5202h0s3.json"
+    },
+    "traj_2oo0sn6nipt4": {
+      "title": "Fix stale online status in dashboard activity feed after disconnect",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:22:06.916Z",
+      "completedAt": "2026-02-18T02:22:12.963Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2oo0sn6nipt4.json"
+    },
+    "traj_tgbx19bcb7y8": {
+      "title": "Fix agent metadata loss and online flip on dashboard refresh",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:25:38.596Z",
+      "completedAt": "2026-02-18T02:25:48.571Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_tgbx19bcb7y8.json"
+    },
+    "traj_bjdj94bonf2h": {
+      "title": "Review packages/server/src architecture and performance",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:30:02.204Z",
+      "completedAt": "2026-02-18T02:33:49.941Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_bjdj94bonf2h.json"
+    },
+    "traj_wepzl2fo72sy": {
+      "title": "Compare inbound webhook auth behavior with main branch",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:38:51.035Z",
+      "completedAt": "2026-02-18T02:39:28.904Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wepzl2fo72sy.json"
+    },
+    "traj_c773fz3z2siw": {
+      "title": "Fix server reliability and performance issues from review",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:44:11.668Z",
+      "completedAt": "2026-02-18T02:49:12.931Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_c773fz3z2siw.json"
+    },
+    "traj_8sayb5myluu5": {
+      "title": "Remove searchQuery legacy alias and update callers",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:54:05.544Z",
+      "completedAt": "2026-02-18T02:54:28.695Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8sayb5myluu5.json"
+    },
+    "traj_zpeiij64dghj": {
+      "title": "Remove Postgres references from server package",
+      "status": "completed",
+      "startedAt": "2026-02-18T02:57:12.920Z",
+      "completedAt": "2026-02-18T02:58:19.247Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zpeiij64dghj.json"
+    },
+    "traj_4mzzy906j6j5": {
+      "title": "Restore telemetry in cf-deploy branch (MCP in worker runtime)",
+      "status": "completed",
+      "startedAt": "2026-02-18T03:11:17.247Z",
+      "completedAt": "2026-02-18T03:12:37.927Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_4mzzy906j6j5.json"
+    },
+    "traj_c1kczv1p6ta8": {
+      "title": "Resolve merge from main and align follow-up changes",
+      "status": "completed",
+      "startedAt": "2026-02-18T03:16:15.831Z",
+      "completedAt": "2026-02-18T03:21:57.524Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_c1kczv1p6ta8.json"
+    },
+    "traj_obm3zg13advr": {
+      "title": "Finalize Terraform removal cleanup",
+      "status": "completed",
+      "startedAt": "2026-02-18T04:27:36.815Z",
+      "completedAt": "2026-02-18T04:27:36.922Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_obm3zg13advr.json"
+    },
+    "traj_v8miiw6stwh1": {
+      "title": "Add explicit CI validation for missing D1/KV IDs in deploy action",
+      "status": "completed",
+      "startedAt": "2026-02-18T14:21:39.478Z",
+      "completedAt": "2026-02-18T14:22:13.892Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_v8miiw6stwh1.json"
+    },
+    "traj_vaikoxpvvbwd": {
+      "title": "Fix Durable Object migration schema for free-plan deploys",
+      "status": "completed",
+      "startedAt": "2026-02-18T17:31:38.536Z",
+      "completedAt": "2026-02-18T17:31:38.728Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vaikoxpvvbwd.json"
+    },
+    "traj_u78g1an1f16d": {
+      "title": "Fix preview workflow PR comment permission failure",
+      "status": "completed",
+      "startedAt": "2026-02-18T17:51:21.804Z",
+      "completedAt": "2026-02-18T17:51:21.927Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_u78g1an1f16d.json"
+    },
+    "traj_wncvu75orefd": {
+      "title": "Switch preview host pattern to pr<PR>-api.relaycast.dev and align bootstrap DNS",
+      "status": "completed",
+      "startedAt": "2026-02-18T18:22:18.710Z",
+      "completedAt": "2026-02-18T18:24:47.964Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wncvu75orefd.json"
+    },
+    "traj_o7ab6q0xj934": {
+      "title": "Remove unused setup-staging-resources helper script",
+      "status": "completed",
+      "startedAt": "2026-02-18T18:29:07.313Z",
+      "completedAt": "2026-02-18T18:29:31.600Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_o7ab6q0xj934.json"
+    },
+    "traj_7a7oxz8ohrvh": {
+      "title": "Switch staging hostname to staging-api.relaycast.dev and align CI/bootstrap",
+      "status": "completed",
+      "startedAt": "2026-02-18T19:20:00.139Z",
+      "completedAt": "2026-02-18T19:21:21.729Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7a7oxz8ohrvh.json"
+    },
+    "traj_ykop9o21xkx0": {
+      "title": "Fix CI health checks to use /health endpoint",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:37:24.867Z",
+      "completedAt": "2026-02-18T20:37:24.994Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ykop9o21xkx0.json"
+    },
+    "traj_iw14fib9dcqm": {
+      "title": "Fix PR comment preview URL format for E2E command",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:39:09.270Z",
+      "completedAt": "2026-02-18T20:39:24.364Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_iw14fib9dcqm.json"
+    },
+    "traj_pxuw34etn6ly": {
+      "title": "Automate D1 migrations in deploy workflow",
+      "status": "completed",
+      "startedAt": "2026-02-18T20:42:33.680Z",
+      "completedAt": "2026-02-18T20:42:33.798Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_pxuw34etn6ly.json"
+    },
+    "traj_zy0hrxo4wsuh": {
+      "title": "Temporarily run D1 migrations in preview workflow",
+      "status": "completed",
+      "startedAt": "2026-02-18T21:45:23.518Z",
+      "completedAt": "2026-02-18T21:46:14.118Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zy0hrxo4wsuh.json"
+    },
+    "traj_0pddd19khtim": {
+      "title": "Fix CI migration config paths to absolute workspace paths",
+      "status": "completed",
+      "startedAt": "2026-02-18T22:04:33.115Z",
+      "completedAt": "2026-02-18T22:05:29.238Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_0pddd19khtim.json"
+    },
+    "traj_vggar70nbi7h": {
+      "title": "Fix WS open-listener race causing e2e connect hang",
+      "status": "completed",
+      "startedAt": "2026-02-18T22:33:47.064Z",
+      "completedAt": "2026-02-18T22:35:06.545Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vggar70nbi7h.json"
+    },
+    "traj_von72mrd9ji2": {
+      "title": "Auto-recover stale dashboard observer token in auth session route",
+      "status": "completed",
+      "startedAt": "2026-02-18T22:36:09.858Z",
+      "completedAt": "2026-02-18T22:36:09.975Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_von72mrd9ji2.json"
+    },
+    "traj_lttuuzddynla": {
+      "title": "Fix stale dashboard observer token handling and duplicate session fetch race",
+      "status": "completed",
+      "startedAt": "2026-02-18T22:41:13.118Z",
+      "completedAt": "2026-02-18T22:41:13.283Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lttuuzddynla.json"
+    },
+    "traj_z8z3qcecc70e": {
+      "title": "Harden e2e script for staging consistency and websocket reconnect timing",
+      "status": "completed",
+      "startedAt": "2026-02-18T23:09:50.435Z",
+      "completedAt": "2026-02-18T23:19:40.814Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_z8z3qcecc70e.json"
+    },
+    "traj_rnzyauhkoon1": {
+      "title": "Add E2E CI run after Cloudflare deploys",
+      "status": "completed",
+      "startedAt": "2026-02-18T23:21:39.304Z",
+      "completedAt": "2026-02-18T23:22:40.393Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_rnzyauhkoon1.json"
+    },
+    "traj_zweu8t4tdv87": {
+      "title": "Add websocket status and websocket event feed to observer dashboard",
+      "status": "completed",
+      "startedAt": "2026-02-18T23:27:09.021Z",
+      "completedAt": "2026-02-18T23:30:46.688Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zweu8t4tdv87.json"
+    },
+    "traj_ozyhafvw2lx7": {
+      "title": "Stabilize observer channel membership for realtime websocket fanout",
+      "status": "completed",
+      "startedAt": "2026-02-18T23:43:26.939Z",
+      "completedAt": "2026-02-18T23:43:46.862Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ozyhafvw2lx7.json"
+    },
+    "traj_10vw9eggoo3x": {
+      "title": "Implement workspace-key websocket stream and remove dashboard polling",
+      "status": "completed",
+      "startedAt": "2026-02-18T23:47:18.662Z",
+      "completedAt": "2026-02-18T23:55:32.300Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_10vw9eggoo3x.json"
+    },
+    "traj_vjm560a3god4": {
+      "title": "Add runtime API toggle for workspace stream",
+      "status": "completed",
+      "startedAt": "2026-02-19T00:07:01.505Z",
+      "completedAt": "2026-02-19T00:09:45.937Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vjm560a3god4.json"
+    },
+    "traj_uqiizlbcq7az": {
+      "title": "Enable workspace stream on observer login and disable on logout",
+      "status": "completed",
+      "startedAt": "2026-02-19T00:13:30.751Z",
+      "completedAt": "2026-02-19T00:15:08.136Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_uqiizlbcq7az.json"
+    },
+    "traj_b15lhm3m4cne": {
+      "title": "Make workspace stream default disabled and remove env-var control",
+      "status": "completed",
+      "startedAt": "2026-02-19T00:27:56.743Z",
+      "completedAt": "2026-02-19T00:30:29.614Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_b15lhm3m4cne.json"
+    },
+    "traj_x9vby627jwz3": {
+      "title": "Fix workspace websocket missing events (messages, reactions, threads, DMs)",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:03:05.303Z",
+      "completedAt": "2026-02-19T01:08:29.275Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_x9vby627jwz3.json"
+    },
+    "traj_igzdsl8csyi2": {
+      "title": "Add why-comment to background.ts helper",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:10:03.839Z",
+      "completedAt": "2026-02-19T01:10:44.923Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_igzdsl8csyi2.json"
+    },
+    "traj_2hlr0ib4ijwe": {
+      "title": "Make all route event emissions reliable via runInBackground",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:14:15.251Z",
+      "completedAt": "2026-02-19T01:17:42.835Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_2hlr0ib4ijwe.json"
+    },
+    "traj_fiuhxus6k2rh": {
+      "title": "Fix WS activity channel labels and remove App tab from Activity",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:42:55.461Z",
+      "completedAt": "2026-02-19T01:44:28.289Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_fiuhxus6k2rh.json"
+    },
+    "traj_kw02soedki7x": {
+      "title": "Host observer dashboard and map observer hostnames to matching API env",
+      "status": "completed",
+      "startedAt": "2026-02-19T01:49:45.002Z",
+      "completedAt": "2026-02-19T02:03:39.485Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_kw02soedki7x.json"
+    },
+    "traj_d0xnv1mzwe16": {
+      "title": "Host observer dashboard on observer.relaycast.dev and prNN-observer.relaycast.dev with env-aware API routing",
+      "status": "completed",
+      "startedAt": "2026-02-19T02:05:58.922Z",
+      "completedAt": "2026-02-19T02:15:21.095Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_d0xnv1mzwe16.json"
+    },
+    "traj_ch7yzgb4xwrv": {
+      "title": "Fix preview observer URL deployment so prNN-observer is reachable",
+      "status": "completed",
+      "startedAt": "2026-02-19T02:40:51.918Z",
+      "completedAt": "2026-02-19T02:41:24.128Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ch7yzgb4xwrv.json"
+    },
+    "traj_ki0jk1s5rw9o": {
+      "title": "Fix observer preview Pages build by marking Next routes Edge runtime",
+      "status": "completed",
+      "startedAt": "2026-02-19T02:49:20.669Z",
+      "completedAt": "2026-02-19T02:52:25.607Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ki0jk1s5rw9o.json"
+    },
+    "traj_dqnql7lvslb7": {
+      "title": "Silence wrangler secret env warning in preview workflow",
+      "status": "completed",
+      "startedAt": "2026-02-19T02:57:40.140Z",
+      "completedAt": "2026-02-19T02:57:48.591Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dqnql7lvslb7.json"
+    },
+    "traj_37osqjvdyph7": {
+      "title": "Fix PR observer 404 by targeting PR Pages branch and setting nodejs_compat flags",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:00:31.809Z",
+      "completedAt": "2026-02-19T03:01:00.672Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_37osqjvdyph7.json"
+    },
+    "traj_yqdd9ygzpe4c": {
+      "title": "Review and simplify CI actions for robust PR and production deployments",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:07:19.236Z",
+      "completedAt": "2026-02-19T03:10:28.326Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yqdd9ygzpe4c.json"
+    },
+    "traj_5s3bval2x69h": {
+      "title": "Disable D1 migrations in PR preview deployments",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:14:39.688Z",
+      "completedAt": "2026-02-19T03:15:05.181Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_5s3bval2x69h.json"
+    },
+    "traj_6mzfyc3u0qd0": {
+      "title": "Fix preview observer dashboard workspace stream enable failure",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:18:53.787Z",
+      "completedAt": "2026-02-19T03:20:37.250Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6mzfyc3u0qd0.json"
+    },
+    "traj_d4knd6y3ep2h": {
+      "title": "Add dashboard alert and retry control for workspace stream enablement",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:20:52.022Z",
+      "completedAt": "2026-02-19T03:22:41.685Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_d4knd6y3ep2h.json"
+    },
+    "traj_g6jvzwvbg32k": {
+      "title": "Add stream toggle diagnostics for preview dashboard failures",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:39:57.025Z",
+      "completedAt": "2026-02-19T03:40:04.497Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_g6jvzwvbg32k.json"
+    },
+    "traj_es4apynfhj1i": {
+      "title": "Reduce KV write pressure for workspace stream toggles",
+      "status": "completed",
+      "startedAt": "2026-02-19T03:52:44.921Z",
+      "completedAt": "2026-02-19T03:52:51.860Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_es4apynfhj1i.json"
+    },
+    "traj_lv3vd87v1q0m": {
+      "title": "Replace KV-backed rate limiting with Durable Object limiter",
+      "status": "completed",
+      "startedAt": "2026-02-19T04:02:12.500Z",
+      "completedAt": "2026-02-19T04:02:21.647Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lv3vd87v1q0m.json"
+    },
+    "traj_m74iciwp24tr": {
+      "title": "Restore workspace stream default-off with login/logout toggles",
+      "status": "completed",
+      "startedAt": "2026-02-19T04:04:48.442Z",
+      "completedAt": "2026-02-19T04:06:01.641Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_m74iciwp24tr.json"
+    },
+    "traj_9frepgsh1tru": {
+      "title": "Make workspace streaming default-off and avoid login/logout KV churn",
+      "status": "completed",
+      "startedAt": "2026-02-19T04:06:35.448Z",
+      "completedAt": "2026-02-19T04:07:38.610Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_9frepgsh1tru.json"
+    },
+    "traj_26h60ka3ei4c": {
+      "title": "Restore stream enable/disable on auth login/logout",
+      "status": "completed",
+      "startedAt": "2026-02-19T04:09:00.700Z",
+      "completedAt": "2026-02-19T04:09:37.663Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_26h60ka3ei4c.json"
+    },
+    "traj_wtxllprw3dph": {
+      "title": "Update e2e prompt text to hosted observer dashboard",
+      "status": "completed",
+      "startedAt": "2026-02-19T04:13:49.069Z",
+      "completedAt": "2026-02-19T04:15:03.433Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_wtxllprw3dph.json"
+    },
+    "traj_ofnw58ut8kh6": {
+      "title": "Fix broken deploy from GitHub Actions run 22169361663",
+      "status": "completed",
+      "startedAt": "2026-02-19T05:12:47.613Z",
+      "completedAt": "2026-02-19T05:16:06.595Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_ofnw58ut8kh6.json"
+    },
+    "traj_uqrqmongqt0f": {
+      "title": "Fix failure in GitHub Actions job 64104920817",
+      "status": "completed",
+      "startedAt": "2026-02-19T05:43:59.496Z",
+      "completedAt": "2026-02-19T05:44:39.802Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_uqrqmongqt0f.json"
+    },
+    "traj_6814hh1aleva": {
+      "title": "Fix failure in GitHub Actions job 64104869295",
+      "status": "completed",
+      "startedAt": "2026-02-19T05:46:55.050Z",
+      "completedAt": "2026-02-19T05:47:25.089Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6814hh1aleva.json"
+    },
+    "traj_rfjrtd752ohm": {
+      "title": "Investigate GitHub Actions job 64108714064 from run 22170238748",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:26:35.308Z",
+      "completedAt": "2026-02-19T06:27:45.099Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_rfjrtd752ohm.json"
+    },
+    "traj_b6dydm9igd7q": {
+      "title": "Debug observer websocket stream status 404 on production",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:36:41.779Z",
+      "completedAt": "2026-02-19T06:37:58.269Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_b6dydm9igd7q.json"
+    },
+    "traj_3jjknhkwxa7z": {
+      "title": "Add semantic version and build SHA to /health",
+      "status": "active",
+      "startedAt": "2026-02-19T06:40:55.489Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_3jjknhkwxa7z.json"
+    },
+    "traj_mhdyvbvq8uz4": {
+      "title": "Finalize health endpoint with semver and build metadata",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:46:20.769Z",
+      "completedAt": "2026-02-19T06:46:27.450Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_mhdyvbvq8uz4.json"
+    },
+    "traj_lduaqusufszd": {
+      "title": "Investigate GitHub Actions job 64110433860 from run 22171547176",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:50:51.511Z",
+      "completedAt": "2026-02-19T06:52:56.558Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lduaqusufszd.json"
+    },
+    "traj_z6z8dggfaksc": {
+      "title": "Investigate GitHub Actions job 64110444297 from run 22171585691",
+      "status": "completed",
+      "startedAt": "2026-02-19T06:58:04.923Z",
+      "completedAt": "2026-02-19T07:04:27.776Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_z6z8dggfaksc.json"
+    },
+    "traj_iguwex834jkq": {
+      "title": "Add PostHog production logging in server with local console logger and version metadata",
+      "status": "completed",
+      "startedAt": "2026-02-19T14:33:18.296Z",
+      "completedAt": "2026-02-19T14:39:13.254Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_iguwex834jkq.json"
+    },
+    "traj_6oqalk31dh5h": {
+      "title": "Wire POSTHOG_API_KEY GitHub Secret into deploy workflow and sync to Cloudflare Worker secret",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:01:05.777Z",
+      "completedAt": "2026-02-19T16:01:54.075Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6oqalk31dh5h.json"
+    },
+    "traj_y9blwypztwkw": {
+      "title": "Enhance server PostHog logging with request middleware and flush reliability",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:14:09.336Z",
+      "completedAt": "2026-02-19T16:14:21.942Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_y9blwypztwkw.json"
+    },
+    "traj_azdtac0r4bdj": {
+      "title": "Address useful Copilot feedback: add toErrorDetails tests and improve logger flush reliability in background/DO paths",
+      "status": "completed",
+      "startedAt": "2026-02-19T16:28:53.985Z",
+      "completedAt": "2026-02-19T16:29:49.101Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_azdtac0r4bdj.json"
+    },
+    "traj_y4bxzz5ecbrq": {
+      "title": "Check Relaycast logs in PostHog MCP",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:41:06.173Z",
+      "completedAt": "2026-02-19T17:41:14.855Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_y4bxzz5ecbrq.json"
+    },
+    "traj_n2zaedeyx6t1": {
+      "title": "Reduce Relaycast request log noise and add actionable structured fields",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:46:55.272Z",
+      "completedAt": "2026-02-19T17:57:19.385Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_n2zaedeyx6t1.json"
+    },
+    "traj_s8f8kd38qwb2": {
+      "title": "Fix latest Relaycast production error in fanout webhook path",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:03:19.714Z",
+      "completedAt": "2026-02-19T18:03:27.196Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_s8f8kd38qwb2.json"
+    },
+    "traj_n6fetxnqklm5": {
+      "title": "Remove request-log sampling for expected client noise",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:10:32.557Z",
+      "completedAt": "2026-02-19T18:10:40.732Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_n6fetxnqklm5.json"
+    },
+    "traj_lnkh9rtdn04z": {
+      "title": "Simplify request logger by removing noise suppression logic",
+      "status": "completed",
+      "startedAt": "2026-02-19T18:13:59.002Z",
+      "completedAt": "2026-02-19T18:14:06.305Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lnkh9rtdn04z.json"
+    },
+    "traj_9gj8uce900eq": {
+      "title": "Define Relaycast telemetry event plan and audit current MCP server telemetry implementation",
+      "status": "completed",
+      "startedAt": "2026-02-19T21:59:54.539Z",
+      "completedAt": "2026-02-19T22:02:16.586Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_9gj8uce900eq.json"
+    },
+    "traj_1zx5j907bfz9": {
+      "title": "Create root TELEMETRY.md with Relaycast PostHog events table and naming conventions",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:07:29.319Z",
+      "completedAt": "2026-02-19T22:08:37.041Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_1zx5j907bfz9.json"
+    },
+    "traj_32weksbyao4m": {
+      "title": "Remove legacy docs/TELEMETRY.md pointer and add concrete telemetry implementation plan",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:09:21.278Z",
+      "completedAt": "2026-02-19T22:10:10.158Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_32weksbyao4m.json"
+    },
+    "traj_8ve1h3nihz9u": {
+      "title": "Audit and fix telemetry disclosure references to canonical TELEMETRY.md",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:37:01.506Z",
+      "completedAt": "2026-02-19T22:37:50.927Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8ve1h3nihz9u.json"
+    },
+    "traj_hx25e0ryz9vz": {
+      "title": "Add origin attribution parameters from SDK/MCP into server telemetry metadata",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:46:47.608Z",
+      "completedAt": "2026-02-19T22:46:58.050Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_hx25e0ryz9vz.json"
+    },
+    "traj_qyjiw6is57yx": {
+      "title": "Route client telemetry through server ingestion endpoint instead of direct PostHog calls",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:54:46.371Z",
+      "completedAt": "2026-02-19T23:10:39.985Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_qyjiw6is57yx.json"
+    },
+    "traj_psb7y9q9bcpg": {
+      "title": "Make SDK origin metadata internal-only and non-configurable",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:10:35.985Z",
+      "completedAt": "2026-02-20T00:12:03.958Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_psb7y9q9bcpg.json"
+    },
+    "traj_7qgqustv0zzw": {
+      "title": "Simplify origin handling: hardcoded internal constants, no normalization functions",
+      "status": "active",
+      "startedAt": "2026-02-20T00:16:37.909Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_7qgqustv0zzw.json"
+    },
+    "traj_qit8f873kdm0": {
+      "title": "Finalize origin hardcoding refactor",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:21:42.885Z",
+      "completedAt": "2026-02-20T00:21:42.956Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_qit8f873kdm0.json"
+    },
+    "traj_kujdxi4a2dyo": {
+      "title": "Remove telemetry ingestion endpoint and send client telemetry directly to PostHog",
+      "status": "active",
+      "startedAt": "2026-02-20T00:34:19.822Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_kujdxi4a2dyo.json"
+    },
+    "traj_v99y9f14ixs6": {
+      "title": "Finalize direct PostHog telemetry switch",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:38:21.608Z",
+      "completedAt": "2026-02-20T00:38:21.678Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_v99y9f14ixs6.json"
+    },
+    "traj_6vawys36wf3u": {
+      "title": "Expand server telemetry coverage across routes and align schema/docs/tests",
+      "status": "completed",
+      "startedAt": "2026-02-20T01:35:18.494Z",
+      "completedAt": "2026-02-20T01:42:34.786Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6vawys36wf3u.json"
     }
   }
 }

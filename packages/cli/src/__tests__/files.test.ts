@@ -15,15 +15,17 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn(() => ({
-    as: vi.fn(() => ({
-      files: {
-        upload: mocks.upload,
-        list: mocks.listFiles,
-      },
-      send: mocks.send,
-    })),
-  })),
+  RelayCast: vi.fn(function () {
+    return {
+      as: vi.fn(() => ({
+        files: {
+          upload: mocks.upload,
+          list: mocks.listFiles,
+        },
+        send: mocks.send,
+      })),
+    };
+  }),
 }));
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({ apiKey: 'rk_test', agentToken: 'at_test' })),

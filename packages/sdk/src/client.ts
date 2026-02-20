@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
+import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
 
 export interface ClientOptions {
   apiKey: string;
@@ -10,6 +11,30 @@ export interface ClientOptions {
 export interface RequestOptions {
   headers?: Record<string, string>;
   schema?: z.ZodType;
+}
+
+const INTERNAL_ORIGIN = Symbol('relaycast.internal.origin');
+
+type ClientOptionsWithInternalOrigin = ClientOptions & {
+  [INTERNAL_ORIGIN]?: InternalOrigin;
+};
+
+function readInternalOrigin(options: ClientOptions): InternalOrigin | undefined {
+  return (options as ClientOptionsWithInternalOrigin)[INTERNAL_ORIGIN];
+}
+
+export function withInternalOrigin<T extends ClientOptions>(
+  options: T,
+  origin: InternalOrigin,
+): T {
+  const copy = { ...options } as ClientOptionsWithInternalOrigin;
+  Object.defineProperty(copy, INTERNAL_ORIGIN, {
+    value: origin,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return copy as T;
 }
 
 export class RelayError extends Error {
@@ -44,10 +69,17 @@ const apiEnvelopeSchema = z.object({
 export class HttpClient {
   private _apiKey: string;
   private _baseUrl: string;
+  private _originSurface: string;
+  private _originClient: string;
+  private _originVersion: string;
 
   constructor(options: ClientOptions) {
+    const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
     this._apiKey = options.apiKey;
-    this._baseUrl = options.baseUrl ?? 'https://api.agentrelay.dev';
+    this._baseUrl = options.baseUrl ?? 'https://api.relaycast.dev';
+    this._originSurface = origin.surface;
+    this._originClient = origin.client;
+    this._originVersion = origin.version;
   }
 
   get apiKey(): string {
@@ -56,6 +88,29 @@ export class HttpClient {
 
   get baseUrl(): string {
     return this._baseUrl;
+  }
+
+  get originSurface(): string {
+    return this._originSurface;
+  }
+
+  get originClient(): string {
+    return this._originClient;
+  }
+
+  get originVersion(): string {
+    return this._originVersion;
+  }
+
+  withApiKey(apiKey: string): HttpClient {
+    return new HttpClient(withInternalOrigin(
+      { apiKey, baseUrl: this._baseUrl },
+      {
+        surface: this._originSurface,
+        client: this._originClient,
+        version: this._originVersion,
+      },
+    ));
   }
 
   async request<T>(
@@ -75,6 +130,9 @@ export class HttpClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this._apiKey}`,
       'X-SDK-Version': SDK_VERSION,
+      'X-Relaycast-Origin-Surface': this._originSurface,
+      'X-Relaycast-Origin-Client': this._originClient,
+      'X-Relaycast-Origin-Version': this._originVersion,
       ...(options?.headers || {}),
     };
 

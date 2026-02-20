@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
 
-export async function rotateAgentToken(workspaceId: string, agentName: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
+export async function rotateAgentToken(db: Db, workspaceId: string, agentName: string) {
   const [agent] = await db
     .select()
     .from(agents)

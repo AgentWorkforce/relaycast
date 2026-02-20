@@ -1,59 +1,24 @@
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/d1';
 import * as schema from './schema.js';
 
-let sql: ReturnType<typeof postgres> | null = null;
-let db: ReturnType<typeof drizzle> | null = null;
+type D1Db = ReturnType<typeof drizzle>;
 
-export interface DbConfig {
-  url?: string;
-  max?: number; // max pool connections, default 25
-  idleTimeout?: number; // seconds, default 20
-  connectTimeout?: number; // seconds, default 10
-  maxLifetime?: number; // max connection lifetime in seconds
+/**
+ * Create a per-request database instance using the D1 driver.
+ * On Cloudflare Workers, pass `c.env.DB` (the D1 binding).
+ */
+export function getDb(d1: D1Database): D1Db {
+  return drizzle(d1, { schema });
 }
 
-export function getDb(config?: DbConfig) {
-  if (!db) {
-    const url =
-      config?.url ||
-      process.env.DATABASE_URL ||
-      'postgresql://relay:relay@localhost:5433/relay';
-
-    sql = postgres(url, {
-      max: config?.max || 25,
-      idle_timeout: config?.idleTimeout || 20,
-      connect_timeout: config?.connectTimeout || 10,
-      max_lifetime: config?.maxLifetime || 60 * 30, // 30 min
-    });
-
-    db = drizzle(sql, { schema });
-  }
-  return db;
-}
-
-export function getSql() {
-  if (!sql) {
-    throw new Error('Database not initialized. Call getDb() first.');
-  }
-  return sql;
-}
-
-export async function closeDb(): Promise<void> {
-  if (sql) {
-    await sql.end();
-    sql = null;
-    db = null;
-  }
-}
-
-export async function healthCheck(): Promise<boolean> {
+/**
+ * Health check — run a simple query to verify DB connectivity.
+ */
+export async function healthCheck(d1: D1Database): Promise<boolean> {
   try {
-    const s = getSql();
-    await s`SELECT 1`;
+    await d1.prepare('SELECT 1').first();
     return true;
   } catch {
     return false;
   }
 }
-

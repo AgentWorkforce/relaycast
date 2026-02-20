@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 
 vi.mock('../../engine/agent.js', () => ({
   registerAgent: vi.fn(),
@@ -7,158 +6,42 @@ vi.mock('../../engine/agent.js', () => ({
   getAgentByName: vi.fn(),
   updateAgent: vi.fn(),
   deleteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/message.js', () => ({
-  postMessage: vi.fn(),
-  getMessages: vi.fn(),
-  getMessage: vi.fn(),
-}));
-
-vi.mock('../../engine/channel.js', () => ({
-  createChannel: vi.fn(),
-  listChannels: vi.fn(),
-  getChannel: vi.fn(),
-  updateChannel: vi.fn(),
-  archiveChannel: vi.fn(),
-  joinChannel: vi.fn(),
-  leaveChannel: vi.fn(),
-  getMembers: vi.fn(),
-  inviteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/thread.js', () => ({
-  postReply: vi.fn(),
-  getReplies: vi.fn(),
-}));
-
-vi.mock('../../engine/dm.js', () => ({
-  sendDm: vi.fn(),
-  listConversations: vi.fn(),
-  getConversationMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/groupDm.js', () => ({
-  createGroupDm: vi.fn(),
-  postToGroupDm: vi.fn(),
-  addParticipant: vi.fn(),
-  removeParticipant: vi.fn(),
-}));
-
-vi.mock('../../engine/reaction.js', () => ({
-  addReaction: vi.fn(),
-  removeReaction: vi.fn(),
-  getReactions: vi.fn(),
-}));
-
-vi.mock('../../engine/search.js', () => ({
-  searchMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/inbox.js', () => ({
-  getInbox: vi.fn(),
-}));
-
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-}));
-
-vi.mock('../../engine/receipt.js', () => ({
-  markRead: vi.fn(),
-  getReaders: vi.fn(),
-  getReadStatus: vi.fn(),
-}));
-
-vi.mock('../../engine/file.js', () => ({
-  createUpload: vi.fn(),
-  completeUpload: vi.fn(),
-  getFile: vi.fn(),
-  deleteFile: vi.fn(),
-  listFiles: vi.fn(),
-}));
-
-vi.mock('../../engine/presence.js', () => ({
-  getPresence: vi.fn(),
-}));
-
-vi.mock('../../engine/systemPrompt.js', () => ({
-  getSystemPrompt: vi.fn(),
-  setSystemPrompt: vi.fn(),
-}));
-
-vi.mock('../../engine/billing.js', () => ({
-  subscribe: vi.fn(),
-  getSubscription: vi.fn(),
-  getUsage: vi.fn(),
-  getInvoices: vi.fn(),
-  createPortalSession: vi.fn(),
-}));
-
-vi.mock('../../engine/webhooks.js', () => ({
-  processWebhook: vi.fn(),
+  spawnAgent: vi.fn(),
+  releaseAgent: vi.fn(),
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-  })),
-}));
-
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventQueue.js', () => ({
-  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
-}));
-
-import { app } from '../../app.js';
-import * as agentEngine from '../../engine/agent.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { dbMiddleware } from '../../middleware/db.js';
+import { agentRoutes } from '../../routes/agent.js';
 import { getDb } from '../../db/index.js';
-import { hashToken } from '../../middleware/auth.js';
-import crypto from 'node:crypto';
+import * as agentEngine from '../../engine/agent.js';
+import {
+  createMockBindings, mockDbForWorkspaceAuth, wsAuthHeaders,
+} from '../../__tests__/test-helpers.js';
 
-const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-const apiKeyHash = hashToken(apiKey);
+const bindings = createMockBindings();
 
-const fakeWorkspace = {
-  id: 'ws_123',
-  name: 'test-workspace',
-  apiKeyHash,
-  systemPrompt: null,
-  plan: 'free',
-  stripeCustomerId: null,
-  stripeSubscriptionId: null,
-  createdAt: new Date(),
-  metadata: {},
-};
+const app = new Hono<AppEnv>();
+app.use('*', dbMiddleware);
+const v1 = new Hono<AppEnv>();
+v1.route('/', agentRoutes);
+app.route('/v1', v1);
 
-function mockDbForAuth() {
-  vi.mocked(getDb).mockReturnValue({
-    select: () => ({
-      from: () => ({
-        where: vi.fn().mockResolvedValue([fakeWorkspace]),
-      }),
-    }),
-  } as ReturnType<typeof getDb>);
-}
+app.onError((err, c) => {
+  const error = err as Error & { code?: string; status?: number };
+  return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+});
 
 describe('POST /v1/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
   it('registers an agent and returns 201 with token', async () => {
@@ -170,24 +53,28 @@ describe('POST /v1/agents', () => {
       created_at: '2025-01-01T00:00:00.000Z',
     });
 
-    const res = await request(app)
-      .post('/v1/agents')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ name: 'CodeReviewer', persona: 'Senior code reviewer' });
+    const res = await app.request('/v1/agents', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'CodeReviewer', persona: 'Senior code reviewer' }),
+    }, bindings);
 
     expect(res.status).toBe(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data.name).toBe('CodeReviewer');
-    expect(res.body.data.token).toContain('at_live_');
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.name).toBe('CodeReviewer');
+    expect(body.data.token).toContain('at_live_');
   });
 
   it('returns 400 when name is missing', async () => {
-    const res = await request(app)
-      .post('/v1/agents')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({});
+    const res = await app.request('/v1/agents', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({}),
+    }, bindings);
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
   });
 
   it('returns 409 for duplicate agent name', async () => {
@@ -198,19 +85,21 @@ describe('POST /v1/agents', () => {
       }),
     );
 
-    const res = await request(app)
-      .post('/v1/agents')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ name: 'CodeReviewer' });
+    const res = await app.request('/v1/agents', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'CodeReviewer' }),
+    }, bindings);
     expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('agent_already_exists');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('agent_already_exists');
   });
 });
 
 describe('GET /v1/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
   it('lists agents', async () => {
@@ -226,29 +115,30 @@ describe('GET /v1/agents', () => {
       },
     ]);
 
-    const res = await request(app)
-      .get('/v1/agents')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/agents', {
+      headers: wsAuthHeaders(),
+    }, bindings);
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].name).toBe('Bot1');
+    const body = await res.json() as any;
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].name).toBe('Bot1');
   });
 
   it('filters agents by status', async () => {
     vi.mocked(agentEngine.listAgents).mockResolvedValue([]);
 
-    await request(app)
-      .get('/v1/agents?status=online')
-      .set('Authorization', `Bearer ${apiKey}`);
+    await app.request('/v1/agents?status=online', {
+      headers: wsAuthHeaders(),
+    }, bindings);
 
-    expect(agentEngine.listAgents).toHaveBeenCalledWith('ws_123', 'online');
+    expect(agentEngine.listAgents).toHaveBeenCalledWith(expect.anything(), 'ws_123', 'online');
   });
 });
 
 describe('GET /v1/agents/:name', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
   it('returns agent by name', async () => {
@@ -263,29 +153,31 @@ describe('GET /v1/agents/:name', () => {
       channels: [{ id: 'ch_1', name: 'general', role: 'member', joined_at: '2025-01-01T00:00:00.000Z' }],
     });
 
-    const res = await request(app)
-      .get('/v1/agents/Bot1')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/agents/Bot1', {
+      headers: wsAuthHeaders(),
+    }, bindings);
     expect(res.status).toBe(200);
-    expect(res.body.data.name).toBe('Bot1');
-    expect(res.body.data.channels).toHaveLength(1);
+    const body = await res.json() as any;
+    expect(body.data.name).toBe('Bot1');
+    expect(body.data.channels).toHaveLength(1);
   });
 
   it('returns 404 for unknown agent', async () => {
     vi.mocked(agentEngine.getAgentByName).mockResolvedValue(null);
 
-    const res = await request(app)
-      .get('/v1/agents/Unknown')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/agents/Unknown', {
+      headers: wsAuthHeaders(),
+    }, bindings);
     expect(res.status).toBe(404);
-    expect(res.body.error.code).toBe('agent_not_found');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('agent_not_found');
   });
 });
 
 describe('PATCH /v1/agents/:name', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
   it('updates agent', async () => {
@@ -299,36 +191,154 @@ describe('PATCH /v1/agents/:name', () => {
       metadata: {},
     });
 
-    const res = await request(app)
-      .patch('/v1/agents/Bot1')
-      .set('Authorization', `Bearer ${apiKey}`)
-      .send({ status: 'offline' });
+    const res = await app.request('/v1/agents/Bot1', {
+      method: 'PATCH',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ status: 'offline' }),
+    }, bindings);
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('offline');
+    const body = await res.json() as any;
+    expect(body.data.status).toBe('offline');
   });
 });
 
 describe('DELETE /v1/agents/:name', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
   });
 
   it('deletes agent and returns 204', async () => {
     vi.mocked(agentEngine.deleteAgent).mockResolvedValue(true);
 
-    const res = await request(app)
-      .delete('/v1/agents/Bot1')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/agents/Bot1', {
+      method: 'DELETE',
+      headers: wsAuthHeaders(),
+    }, bindings);
     expect(res.status).toBe(204);
   });
 
   it('returns 404 for unknown agent', async () => {
     vi.mocked(agentEngine.deleteAgent).mockResolvedValue(false);
 
-    const res = await request(app)
-      .delete('/v1/agents/Unknown')
-      .set('Authorization', `Bearer ${apiKey}`);
+    const res = await app.request('/v1/agents/Unknown', {
+      method: 'DELETE',
+      headers: wsAuthHeaders(),
+    }, bindings);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /v1/agents/spawn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+  });
+
+  it('spawns a new agent and returns 201', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_tokenvalue123',
+      cli: 'claude',
+      task: 'Review the PR',
+      channel: 'dev-team',
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: false,
+    });
+
+    const res = await app.request('/v1/agents/spawn', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', cli: 'claude', task: 'Review the PR', channel: 'dev-team' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.name).toBe('worker-1');
+    expect(body.data.already_existed).toBe(false);
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent.spawn_requested',
+      workspaceId: 'ws_123',
+      data: expect.objectContaining({
+        agent_name: 'worker-1',
+        cli: 'claude',
+      }),
+    }));
+  });
+
+  it('reactivates existing agent and returns 200', async () => {
+    vi.mocked(agentEngine.spawnAgent).mockResolvedValue({
+      id: 'agent_456',
+      name: 'worker-1',
+      token: 'at_live_newtokenvalue',
+      cli: 'codex',
+      task: 'New task',
+      channel: null,
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+      already_existed: true,
+    });
+
+    const res = await app.request('/v1/agents/spawn', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', cli: 'codex', task: 'New task' }),
+    }, bindings);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.data.already_existed).toBe(true);
+  });
+});
+
+describe('POST /v1/agents/release', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+  });
+
+  it('releases an agent and returns 200', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue({
+      name: 'worker-1',
+      released: true,
+      deleted: false,
+      reason: 'task completed',
+    });
+
+    const res = await app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'worker-1', reason: 'task completed' }),
+    }, bindings);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.deleted).toBe(false);
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent.release_requested',
+      workspaceId: 'ws_123',
+      data: expect.objectContaining({
+        agent_name: 'worker-1',
+        reason: 'task completed',
+      }),
+    }));
+  });
+
+  it('returns 404 when agent does not exist', async () => {
+    vi.mocked(agentEngine.releaseAgent).mockResolvedValue(null);
+
+    const res = await app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'missing-agent' }),
+    }, bindings);
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('agent_not_found');
   });
 });

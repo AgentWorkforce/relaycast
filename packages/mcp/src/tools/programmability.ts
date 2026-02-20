@@ -22,8 +22,8 @@ export function registerProgrammabilityTools(
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ name, channel }) => {
-    const client = getAgentClient();
-    const result = await client.client.post('/v1/webhooks', { name, channel });
+    const relay = getRelay();
+    const result = await relay.webhooks.create({ name, channel });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -264,6 +264,70 @@ export function registerProgrammabilityTools(
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  // === Agent Lifecycle (Spawn/Release) ===
+
+  server.registerTool('add_agent', {
+    title: 'Add Agent',
+    description: 'Add a new AI agent to the workspace to work on a task. This is a BUILT-IN system operation for creating worker agents. If an agent with the same name already exists, it will be reactivated with a new token and updated task. The agent is automatically set to online status and joined to the specified channel.',
+    inputSchema: {
+      name: z.string().describe('Unique name for the new agent within the workspace (e.g. "worker-1", "code-reviewer")'),
+      cli: z.enum(['claude', 'codex', 'gemini', 'aider', 'goose']).describe('Which AI CLI tool to use for the agent process'),
+      task: z.string().describe('The task description or instructions for the agent to work on'),
+      channel: z.string().optional().describe('Channel name to automatically join the agent to (e.g. "general", "dev-team")'),
+      persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role'),
+    },
+    outputSchema: {
+      id: z.string().describe('Unique identifier of the added agent'),
+      name: z.string().describe('Name of the added agent'),
+      token: z.string().describe('Authentication token for the agent to use when connecting'),
+      cli: z.string().describe('The CLI tool specified for this agent'),
+      task: z.string().describe('The task assigned to this agent'),
+      channel: z.string().nullable().describe('Channel the agent was joined to, or null if none specified'),
+      status: z.string().describe('Current status of the agent (online)'),
+      created_at: z.string().describe('ISO timestamp when the agent was created'),
+      already_existed: z.boolean().describe('True if the agent already existed and was reactivated'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, cli, task, channel, persona }) => {
+    const relay = getRelay();
+    const result = await relay.agents.spawn({ name, cli, task, channel, persona });
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('remove_agent', {
+    title: 'Remove Agent',
+    description: 'Remove an agent from active duty, marking it as offline. This is a BUILT-IN system operation for agent lifecycle management. Optionally delete the agent entirely from the workspace. Use this when an agent has completed its task or is no longer needed.',
+    inputSchema: {
+      name: z.string().describe('Name of the agent to remove (e.g. "worker-1", "code-reviewer")'),
+      reason: z.string().optional().describe('Human-readable reason for removing the agent (e.g. "task completed", "no longer needed")'),
+      delete_agent: z.boolean().optional().describe('If true, permanently delete the agent instead of just marking it offline'),
+    },
+    outputSchema: {
+      name: z.string().describe('Name of the removed agent'),
+      removed: z.boolean().describe('True if the agent was successfully removed'),
+      deleted: z.boolean().describe('True if the agent was permanently deleted'),
+      reason: z.string().nullable().describe('The reason provided for removing the agent'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, reason, delete_agent }) => {
+    const relay = getRelay();
+    const result = await relay.agents.release({ name, reason, delete_agent });
+    // Transform 'released' to 'removed' for agent-facing consistency
+    const transformed = {
+      name: result.name,
+      removed: result.released,
+      deleted: result.deleted,
+      reason: result.reason,
+    };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(transformed, null, 2) }],
+      structuredContent: transformed as unknown as Record<string, unknown>,
     };
   });
 }

@@ -1,5 +1,5 @@
 import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import {
   readReceipts,
   messages,
@@ -8,13 +8,14 @@ import {
   channels,
 } from '../db/schema.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function markRead(
+  db: Db,
   workspaceId: string,
   messageId: string,
   agentId: string,
 ) {
-  const db = getDb();
-
   // Verify message exists and belongs to workspace
   const [msg] = await db
     .select()
@@ -57,9 +58,7 @@ export async function markRead(
   };
 }
 
-export async function getReaders(workspaceId: string, messageId: string) {
-  const db = getDb();
-
+export async function getReaders(db: Db, workspaceId: string, messageId: string) {
   const [msg] = await db
     .select()
     .from(messages)
@@ -78,9 +77,7 @@ export async function getReaders(workspaceId: string, messageId: string) {
   }));
 }
 
-export async function getReadStatus(workspaceId: string, channelName: string) {
-  const db = getDb();
-
+export async function getReadStatus(db: Db, workspaceId: string, channelName: string) {
   const [channel] = await db
     .select()
     .from(channels)

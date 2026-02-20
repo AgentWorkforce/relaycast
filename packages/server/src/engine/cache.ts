@@ -1,6 +1,5 @@
-import { getRedis } from '../redis/index.js';
+const DEFAULT_TTL = 60_000; // 60 seconds for channel metadata (in ms)
 
-const DEFAULT_TTL = 60; // 60 seconds for channel metadata
 export interface CachedChannel {
   id: string;
   name: string;
@@ -16,16 +15,27 @@ export interface CachedChannel {
   is_archived: boolean;
 }
 
+interface CacheEntry {
+  data: CachedChannel;
+  expiresAt: number;
+}
+
+const cache = new Map<string, CacheEntry>();
+
 function channelCacheKey(workspaceId: string, name: string): string {
   return `cache:ch:${workspaceId}:${name}`;
 }
 
 export async function getCachedChannel(workspaceId: string, name: string): Promise<CachedChannel | null> {
   try {
-    const redis = getRedis();
-    const raw = await redis.get(channelCacheKey(workspaceId, name));
-    if (!raw) return null;
-    return JSON.parse(raw) as CachedChannel;
+    const key = channelCacheKey(workspaceId, name);
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      cache.delete(key);
+      return null;
+    }
+    return entry.data;
   } catch {
     return null;
   }
@@ -33,8 +43,8 @@ export async function getCachedChannel(workspaceId: string, name: string): Promi
 
 export async function setCachedChannel(workspaceId: string, name: string, data: CachedChannel): Promise<void> {
   try {
-    const redis = getRedis();
-    await redis.set(channelCacheKey(workspaceId, name), JSON.stringify(data), 'EX', DEFAULT_TTL);
+    const key = channelCacheKey(workspaceId, name);
+    cache.set(key, { data, expiresAt: Date.now() + DEFAULT_TTL });
   } catch {
     // Cache write failures are non-critical
   }
@@ -42,10 +52,9 @@ export async function setCachedChannel(workspaceId: string, name: string, data: 
 
 export async function invalidateChannelCache(workspaceId: string, name: string): Promise<void> {
   try {
-    const redis = getRedis();
-    await redis.del(channelCacheKey(workspaceId, name));
+    const key = channelCacheKey(workspaceId, name);
+    cache.delete(key);
   } catch {
     // Cache invalidation failures are non-critical
   }
 }
-

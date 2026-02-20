@@ -1,16 +1,17 @@
-import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import { eq, and, sql, inArray } from 'drizzle-orm';
+import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 
+type Db = ReturnType<typeof getDb>;
+
 export async function createChannel(
+  db: Db,
   workspaceId: string,
   data: { name: string; topic?: string },
   creatorAgentId?: string,
 ) {
-  const db = getDb();
-
   // Validate channel name: lowercase alphanumeric + hyphens
   if (!/^[a-z0-9][a-z0-9-]*$/.test(data.name)) {
     const err = new Error(
@@ -65,11 +66,10 @@ export async function createChannel(
 }
 
 export async function listChannels(
+  db: Db,
   workspaceId: string,
   includeArchived = false,
 ) {
-  const db = getDb();
-
   let rows;
   if (includeArchived) {
     rows = await db
@@ -94,33 +94,34 @@ export async function listChannels(
       );
   }
 
-  // Get member counts
-  const result = [];
-  for (const ch of rows) {
-    const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(channelMembers)
-      .where(eq(channelMembers.channelId, ch.id));
+  if (rows.length === 0) return [];
 
-    result.push({
-      id: ch.id,
-      name: ch.name,
-      topic: ch.topic,
-      member_count: countRow?.count ?? 0,
-      created_at: ch.createdAt.toISOString(),
-      is_archived: ch.isArchived,
-    });
-  }
+  const channelIds = rows.map((ch) => ch.id);
 
-  return result;
+  // Batch: member counts
+  const memberCounts = await db
+    .select({ channelId: channelMembers.channelId, count: sql<number>`count(*)` })
+    .from(channelMembers)
+    .where(inArray(channelMembers.channelId, channelIds))
+    .groupBy(channelMembers.channelId);
+
+  const memberCountMap = new Map(memberCounts.map((r) => [r.channelId, r.count]));
+
+  return rows.map((ch) => ({
+    id: ch.id,
+    name: ch.name,
+    topic: ch.topic,
+    member_count: memberCountMap.get(ch.id) ?? 0,
+    created_at: ch.createdAt.toISOString(),
+    is_archived: ch.isArchived,
+  }));
 }
 
-export async function getChannel(workspaceId: string, name: string) {
-  // Check Redis cache first
+export async function getChannel(db: Db, workspaceId: string, name: string) {
+  // Check in-memory cache first
   const cached = await getCachedChannel(workspaceId, name);
   if (cached) return cached;
 
-  const db = getDb();
   const [channel] = await db
     .select()
     .from(channels)
@@ -164,11 +165,11 @@ export async function getChannel(workspaceId: string, name: string) {
 }
 
 export async function updateChannel(
+  db: Db,
   workspaceId: string,
   name: string,
   updates: { topic?: string },
 ) {
-  const db = getDb();
   const [channel] = await db
     .select()
     .from(channels)
@@ -188,7 +189,7 @@ export async function updateChannel(
   if (updates.topic !== undefined) setClause.topic = updates.topic;
 
   if (Object.keys(setClause).length === 0) {
-    return getChannel(workspaceId, name);
+    return getChannel(db, workspaceId, name);
   }
 
   const [updated] = await db
@@ -209,9 +210,7 @@ export async function updateChannel(
   };
 }
 
-export async function archiveChannel(workspaceId: string, name: string) {
-  const db = getDb();
-
+export async function archiveChannel(db: Db, workspaceId: string, name: string) {
   // #general cannot be deleted
   if (name === 'general') {
     const err = new Error('The #general channel cannot be archived');
@@ -239,11 +238,11 @@ export async function archiveChannel(workspaceId: string, name: string) {
 }
 
 export async function joinChannel(
+  db: Db,
   workspaceId: string,
   channelName: string,
   agentId: string,
 ) {
-  const db = getDb();
   const [channel] = await db
     .select()
     .from(channels)
@@ -293,11 +292,11 @@ export async function joinChannel(
 }
 
 export async function leaveChannel(
+  db: Db,
   workspaceId: string,
   channelName: string,
   agentId: string,
 ) {
-  const db = getDb();
   const [channel] = await db
     .select()
     .from(channels)
@@ -326,8 +325,7 @@ export async function leaveChannel(
   await invalidateChannelCache(workspaceId, channelName);
 }
 
-export async function getMembers(workspaceId: string, channelName: string) {
-  const db = getDb();
+export async function getMembers(db: Db, workspaceId: string, channelName: string) {
   const [channel] = await db
     .select()
     .from(channels)
@@ -364,12 +362,12 @@ export async function getMembers(workspaceId: string, channelName: string) {
 }
 
 export async function inviteAgent(
+  db: Db,
   workspaceId: string,
   channelName: string,
   inviterAgentId: string,
   inviteeAgentName: string,
 ) {
-  const db = getDb();
   const [channel] = await db
     .select()
     .from(channels)

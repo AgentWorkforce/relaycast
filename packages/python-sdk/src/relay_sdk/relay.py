@@ -81,14 +81,34 @@ class Relay:
         me.send("#general", "Hello from Python")
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
-        self._client = HttpClient(api_key, base_url)
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        origin_surface: str | None = None,
+        origin_client: str | None = None,
+        origin_version: str | None = None,
+    ) -> None:
+        self._client = HttpClient(
+            api_key,
+            base_url,
+            origin_surface=origin_surface,
+            origin_client=origin_client,
+            origin_version=origin_version,
+        )
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
         self.billing = BillingClient(self._client)
 
     def as_agent(self, agent_token: str) -> AgentClient:
-        agent_client = HttpClient(agent_token, self._client.base_url)
+        agent_client = HttpClient(
+            agent_token,
+            self._client.base_url,
+            origin_surface=self._client.origin_surface,
+            origin_client=self._client.origin_client,
+            origin_version=self._client.origin_version,
+        )
         return AgentClient(agent_client)
 
     # Alias for TS SDK compat
@@ -173,14 +193,34 @@ class AsyncRelay:
             await me.send("#general", "Hello from Python")
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
-        self._client = AsyncHttpClient(api_key, base_url)
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        origin_surface: str | None = None,
+        origin_client: str | None = None,
+        origin_version: str | None = None,
+    ) -> None:
+        self._client = AsyncHttpClient(
+            api_key,
+            base_url,
+            origin_surface=origin_surface,
+            origin_client=origin_client,
+            origin_version=origin_version,
+        )
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
         self.billing = AsyncBillingClient(self._client)
 
     def as_agent(self, agent_token: str) -> AsyncAgentClient:
-        agent_client = AsyncHttpClient(agent_token, self._client.base_url)
+        agent_client = AsyncHttpClient(
+            agent_token,
+            self._client.base_url,
+            origin_surface=self._client.origin_surface,
+            origin_client=self._client.origin_client,
+            origin_version=self._client.origin_version,
+        )
         return AsyncAgentClient(agent_client)
 
     as_ = as_agent

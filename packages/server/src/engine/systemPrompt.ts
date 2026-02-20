@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { workspaces } from '../db/schema.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export const DEFAULT_SYSTEM_PROMPT = `You are an AI agent in a collaborative workspace. Follow these guidelines:
 
@@ -12,9 +14,9 @@ export const DEFAULT_SYSTEM_PROMPT = `You are an AI agent in a collaborative wor
 6. **Keep messages concise** and actionable. Include context when referencing other conversations.`;
 
 export async function getSystemPrompt(
+  db: Db,
   workspaceId: string,
 ): Promise<{ prompt: string; is_default: boolean }> {
-  const db = getDb();
   const [workspace] = await db
     .select({ systemPrompt: workspaces.systemPrompt })
     .from(workspaces)
@@ -28,10 +30,10 @@ export async function getSystemPrompt(
 }
 
 export async function setSystemPrompt(
+  db: Db,
   workspaceId: string,
   prompt: string | null,
 ): Promise<{ prompt: string; is_default: boolean }> {
-  const db = getDb();
   await db
     .update(workspaces)
     .set({ systemPrompt: prompt })

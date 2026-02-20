@@ -1,0 +1,182 @@
+name = "relaycast-api"
+main = "packages/server/src/worker.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+# APP_SEMVER / APP_VERSION / SDK_SEMVER can be injected at deploy time for observability metadata.
+# POSTHOG_HOST is optional and defaults to https://us.i.posthog.com in the server logger.
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "relaycast"
+database_id = "PLACEHOLDER_PROD_DB_ID"
+migrations_dir = "packages/server/src/db/migrations"
+
+# R2 bucket
+[[r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "relaycast-files"
+
+# Queues - producers
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "relaycast-webhooks"
+
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "relaycast-notifications"
+
+# Queues - consumers
+[[queues.consumers]]
+queue = "relaycast-webhooks"
+max_batch_size = 50
+max_retries = 5
+dead_letter_queue = "relaycast-webhooks-dlq"
+
+[[queues.consumers]]
+queue = "relaycast-notifications"
+max_batch_size = 50
+max_retries = 3
+
+# Durable Objects
+[durable_objects]
+bindings = [
+  { name = "CHANNEL_DO", class_name = "ChannelDO" },
+  { name = "AGENT_DO", class_name = "AgentDO" },
+  { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
+  { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChannelDO", "AgentDO", "PresenceDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["McpSessionDO"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["WorkspaceStreamDO"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["RateLimitDO"]
+
+# KV namespace (usage counters, stream overrides, lightweight config)
+[[kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_KV_ID"
+
+# Cron triggers
+[triggers]
+crons = ["0 * * * *"]
+
+# Staging environment overrides
+[env.staging]
+name = "relaycast-api-staging"
+route = { pattern = "staging-api.relaycast.dev/*", zone_name = "relaycast.dev" }
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "relaycast-staging"
+database_id = "PLACEHOLDER_STAGING_DB_ID"
+migrations_dir = "packages/server/src/db/migrations"
+
+[[env.staging.r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "relaycast-files-staging"
+
+[[env.staging.queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "relaycast-webhooks-staging"
+
+[[env.staging.queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "relaycast-notifications-staging"
+
+[[env.staging.queues.consumers]]
+queue = "relaycast-webhooks-staging"
+max_batch_size = 50
+max_retries = 5
+dead_letter_queue = "relaycast-webhooks-staging-dlq"
+
+[[env.staging.queues.consumers]]
+queue = "relaycast-notifications-staging"
+max_batch_size = 50
+max_retries = 3
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "CHANNEL_DO", class_name = "ChannelDO" },
+  { name = "AGENT_DO", class_name = "AgentDO" },
+  { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
+  { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
+]
+
+[[env.staging.kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_STAGING_KV_ID"
+
+[env.staging.triggers]
+crons = ["0 * * * *"]
+
+# Preview environment overrides
+[env.preview]
+name = "relaycast-api-preview"
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "relaycast-staging"
+database_id = "PLACEHOLDER_PREVIEW_DB_ID"
+migrations_dir = "packages/server/src/db/migrations"
+
+[[env.preview.r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "relaycast-files-staging"
+
+[[env.preview.queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "relaycast-webhooks-staging"
+
+[[env.preview.queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "relaycast-notifications-staging"
+
+[env.preview.durable_objects]
+bindings = [
+  { name = "CHANNEL_DO", class_name = "ChannelDO" },
+  { name = "AGENT_DO", class_name = "AgentDO" },
+  { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
+  { name = "MCP_SESSION_DO", class_name = "McpSessionDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
+]
+
+[[env.preview.kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_PREVIEW_KV_ID"
+
+[env.preview.triggers]
+crons = []
+
+# Secrets (set via `wrangler secret put`):
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+# R2_ACCESS_KEY_ID
+# R2_SECRET_ACCESS_KEY
+# CF_ACCOUNT_ID
+# POSTHOG_API_KEY

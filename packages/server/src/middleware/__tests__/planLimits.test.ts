@@ -1,11 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(),
-}));
-
-import { getRedis } from '../../redis/index.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { createMockKV } from '../../__tests__/test-helpers.js';
 import { PLAN_LIMITS, checkPlanLimit } from '../planLimits.js';
+
+function makeApp(options: {
+  metric: 'messages' | 'agents' | 'file_bytes';
+  plan?: string;
+  kvOverride?: KVNamespace;
+  noWorkspace?: boolean;
+}) {
+  const kv = options.kvOverride ?? createMockKV();
+  const app = new Hono<AppEnv>();
+
+  app.use('*', async (c, next) => {
+    (c.env as any) = { KV: kv };
+    if (!options.noWorkspace) {
+      c.set('workspace', {
+        id: 'ws_123',
+        name: 'test-workspace',
+        plan: options.plan || 'free',
+      } as any);
+    }
+    await next();
+  });
+  app.use('*', checkPlanLimit(options.metric));
+  app.get('/test', (c) => c.json({ ok: true }));
+
+  return { app, kv };
+}
 
 describe('PLAN_LIMITS', () => {
   it('has correct free limits', () => {
@@ -42,81 +65,58 @@ describe('checkPlanLimit("messages")', () => {
   });
 
   it('allows requests under the limit', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('5000') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue('5000');
+    const { app } = makeApp({ metric: 'messages', kvOverride: kv });
 
-    const middleware = checkPlanLimit('messages');
-    const req = { workspace: { id: 'ws_123', plan: 'free' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
   });
 
   it('returns 429 when at the limit', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('10000') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue('10000');
+    const { app } = makeApp({ metric: 'messages', kvOverride: kv });
 
-    const middleware = checkPlanLimit('messages');
-    const req = { workspace: { id: 'ws_123', plan: 'free' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(429);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      ok: false,
-      error: expect.objectContaining({ code: 'plan_limit_exceeded' }),
-    }));
+    const res = await app.request('/test');
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('plan_limit_exceeded');
   });
 
   it('allows pro plan with higher limits', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('50000') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue('50000');
+    const { app } = makeApp({ metric: 'messages', plan: 'pro', kvOverride: kv });
 
-    const middleware = checkPlanLimit('messages');
-    const req = { workspace: { id: 'ws_123', plan: 'pro' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
   });
 
   it('always allows enterprise (Infinity)', async () => {
-    const middleware = checkPlanLimit('messages');
-    const req = { workspace: { id: 'ws_123', plan: 'enterprise' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const { app, kv } = makeApp({ metric: 'messages', plan: 'enterprise' });
 
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
-    // Redis should not be called for Infinity limits
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
+    // KV should not be called for Infinity limits
+    expect(kv.get).not.toHaveBeenCalled();
   });
 
-  it('fails open on Redis error', async () => {
-    vi.mocked(getRedis).mockImplementation(() => { throw new Error('Redis down'); });
+  it('fails open on KV error', async () => {
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockRejectedValue(new Error('KV down'));
+    const { app } = makeApp({ metric: 'messages', kvOverride: kv });
 
-    const middleware = checkPlanLimit('messages');
-    const req = { workspace: { id: 'ws_123', plan: 'free' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
   });
 
   it('calls next if no workspace', async () => {
-    const middleware = checkPlanLimit('messages');
-    const req = {} as any;
-    const res = {} as any;
-    const next = vi.fn();
+    const { app } = makeApp({ metric: 'messages', noWorkspace: true });
 
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
   });
 });
 
@@ -126,30 +126,21 @@ describe('checkPlanLimit("agents")', () => {
   });
 
   it('returns 429 at 5 agents for free plan', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('5') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue('5');
+    const { app } = makeApp({ metric: 'agents', kvOverride: kv });
 
-    const middleware = checkPlanLimit('agents');
-    const req = { workspace: { id: 'ws_123', plan: 'free' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(429);
+    const res = await app.request('/test');
+    expect(res.status).toBe(429);
   });
 
   it('allows pro plan up to 100 agents', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue('99') };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue('99');
+    const { app } = makeApp({ metric: 'agents', plan: 'pro', kvOverride: kv });
 
-    const middleware = checkPlanLimit('agents');
-    const req = { workspace: { id: 'ws_123', plan: 'pro' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).toHaveBeenCalled();
+    const res = await app.request('/test');
+    expect(res.status).toBe(200);
   });
 });
 
@@ -159,16 +150,11 @@ describe('checkPlanLimit("file_bytes")', () => {
   });
 
   it('returns 429 at 100MB for free plan', async () => {
-    const mockRedis = { get: vi.fn().mockResolvedValue(String(100 * 1024 * 1024)) };
-    vi.mocked(getRedis).mockReturnValue(mockRedis as any);
+    const kv = createMockKV();
+    vi.mocked(kv.get).mockResolvedValue(String(100 * 1024 * 1024));
+    const { app } = makeApp({ metric: 'file_bytes', kvOverride: kv });
 
-    const middleware = checkPlanLimit('file_bytes');
-    const req = { workspace: { id: 'ws_123', plan: 'free' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
-
-    await middleware(req, res, next);
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(429);
+    const res = await app.request('/test');
+    expect(res.status).toBe(429);
   });
 });

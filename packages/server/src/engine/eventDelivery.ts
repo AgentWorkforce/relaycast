@@ -1,5 +1,8 @@
 import { createHmac } from 'node:crypto';
+import type { getDb } from '../db/index.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export function signPayload(payload: string, secret: string): string {
   return createHmac('sha256', secret).update(payload).digest('hex');
@@ -9,6 +12,18 @@ interface DeliveryTarget {
   url: string;
   secret: string | null;
   filter: { channel?: string; mentions?: string } | null;
+}
+
+interface AttemptDeliveryResult {
+  ok: boolean;
+  retryable: boolean;
+}
+
+export interface EventDeliverySummary {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  retryableFailures: number;
 }
 
 function matchesFilter(
@@ -37,7 +52,7 @@ async function attemptDelivery(
   body: string,
   headers: Record<string, string>,
   retries: number = 3,
-): Promise<boolean> {
+): Promise<AttemptDeliveryResult> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await fetch(url, {
@@ -47,11 +62,11 @@ async function attemptDelivery(
         signal: AbortSignal.timeout(10_000),
       });
       if (response.ok) {
-        return true;
+        return { ok: true, retryable: false };
       }
       // 4xx errors are not retried (client error, won't succeed on retry)
       if (response.status >= 400 && response.status < 500) {
-        return false;
+        return { ok: false, retryable: false };
       }
     } catch {
       // Network error or timeout — retry
@@ -62,27 +77,30 @@ async function attemptDelivery(
       await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
     }
   }
-  return false;
+  return { ok: false, retryable: true };
 }
 
 export async function deliverEvent(
+  db: Db,
   workspaceId: string,
   eventType: string,
   payload: Record<string, unknown>,
-): Promise<void> {
+): Promise<EventDeliverySummary> {
   let subscriptions: DeliveryTarget[];
   try {
-    const rows = await getActiveSubscriptions(workspaceId, eventType);
+    const rows = await getActiveSubscriptions(db, workspaceId, eventType);
     subscriptions = rows.map((r) => ({
       url: r.url,
       secret: r.secret,
       filter: r.filter as { channel?: string; mentions?: string } | null,
     }));
   } catch {
-    return;
+    return { attempted: 0, succeeded: 0, failed: 0, retryableFailures: 0 };
   }
 
-  if (subscriptions.length === 0) return;
+  if (subscriptions.length === 0) {
+    return { attempted: 0, succeeded: 0, failed: 0, retryableFailures: 0 };
+  }
 
   const eventPayload = {
     type: eventType,
@@ -94,9 +112,14 @@ export async function deliverEvent(
   const body = JSON.stringify(eventPayload);
   const timestamp = eventPayload.timestamp;
 
-  const deliveries = subscriptions
-    .filter((sub) => matchesFilter(sub.filter, payload))
-    .map((sub) => {
+  const filteredSubscriptions = subscriptions.filter((sub) => matchesFilter(sub.filter, payload));
+
+  if (filteredSubscriptions.length === 0) {
+    return { attempted: 0, succeeded: 0, failed: 0, retryableFailures: 0 };
+  }
+
+  const deliveryResults = await Promise.all(
+    filteredSubscriptions.map(async (sub) => {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'X-Relay-Event': eventType,
@@ -107,9 +130,22 @@ export async function deliverEvent(
         headers['X-Relay-Signature'] = `sha256=${signPayload(body, sub.secret)}`;
       }
 
-      return attemptDelivery(sub.url, body, headers).catch(() => {});
-    });
+      return attemptDelivery(sub.url, body, headers);
+    }),
+  );
 
-  // Fire-and-forget — deliveries proceed in background
-  Promise.allSettled(deliveries).catch(() => {});
+  const attempted = deliveryResults.length;
+  const succeeded = deliveryResults.filter((r) => r.ok).length;
+  const failed = attempted - succeeded;
+  const retryableFailures = deliveryResults.filter((r) => !r.ok && r.retryable).length;
+
+  if (retryableFailures > 0) {
+    const err = new Error(
+      `Retryable webhook delivery failures: ${retryableFailures} of ${attempted}`,
+    );
+    Object.assign(err, { code: 'event_delivery_retryable_failure', status: 503 });
+    throw err;
+  }
+
+  return { attempted, succeeded, failed, retryableFailures };
 }

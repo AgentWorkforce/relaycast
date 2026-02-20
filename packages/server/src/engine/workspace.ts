@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { workspaces, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
-export async function createWorkspace(name: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
+export async function createWorkspace(db: Db, name: string) {
   // Check for duplicate name
   const [existing] = await db
     .select()
@@ -50,8 +50,7 @@ export async function createWorkspace(name: string) {
   };
 }
 
-export async function getWorkspace(workspaceId: string) {
-  const db = getDb();
+export async function getWorkspace(db: Db, workspaceId: string) {
   const [workspace] = await db
     .select()
     .from(workspaces)
@@ -69,17 +68,17 @@ export async function getWorkspace(workspaceId: string) {
 }
 
 export async function updateWorkspace(
+  db: Db,
   workspaceId: string,
   updates: { name?: string; system_prompt?: string },
 ) {
-  const db = getDb();
   const setClause: Record<string, unknown> = {};
   if (updates.name !== undefined) setClause.name = updates.name;
   if (updates.system_prompt !== undefined)
     setClause.systemPrompt = updates.system_prompt;
 
   if (Object.keys(setClause).length === 0) {
-    return getWorkspace(workspaceId);
+    return getWorkspace(db, workspaceId);
   }
 
   const [updated] = await db
@@ -100,7 +99,6 @@ export async function updateWorkspace(
   };
 }
 
-export async function deleteWorkspace(workspaceId: string) {
-  const db = getDb();
+export async function deleteWorkspace(db: Db, workspaceId: string) {
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
 }

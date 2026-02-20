@@ -1,134 +1,169 @@
-import { Router, Response } from 'express';
-import {
-  requireAgentToken,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { and, eq, isNull } from 'drizzle-orm';
+import { dmParticipants } from '../db/schema.js';
+import { fanoutToAgents } from './fanout.js';
+import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
-export const dmRouter = Router();
+export const dmRoutes = new Hono<AppEnv>();
 
 // POST /v1/dm - send a DM
-dmRouter.post(
+dmRoutes.post(
   '/dm',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const { to, text } = req.body;
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const { to, text } = await c.req.json();
       if (!to || typeof to !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: {
             code: 'invalid_request',
             message: '"to" agent name is required',
           },
-        });
-        return;
+        }, 400);
       }
       if (!text || typeof text !== 'string') {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
-        });
-        return;
+        }, 400);
       }
 
-      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(req);
+      const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        res.status(400).json({
+        return c.json({
           ok: false,
           error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        });
-        return;
+        }, 400);
       }
 
       const idempotent = await runIdempotent({
-        workspaceId: req.workspace!.id,
-        actorId: req.agent!.id,
+        workspaceId: workspace.id,
+        actorId: agent!.id,
         scope: 'dm:direct',
         key: idempotencyKey,
         status: 201,
         fingerprint: JSON.stringify({ to, text }),
-        operation: () => dmEngine.sendDm(req.workspace!.id, req.agent!.id, { to, text }),
+        kv: c.env.KV,
+        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text }),
       });
 
       if (idempotent.replayed) {
-        res.setHeader('Idempotency-Replayed', 'true');
+        c.header('Idempotency-Replayed', 'true');
       }
 
-      res.status(idempotent.status).json({ ok: true, data: idempotent.data });
-
-      // Fire-and-forget event publishing only for fresh writes.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, from_name: req.agent!.name };
-        publishEvent({ type: 'dm.received', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-        deliverEvent(req.workspace!.id, 'dm.received', eventData).catch(() => {});
-      }
-    } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
+        try {
+          const rows = await db
+            .select({ agentId: dmParticipants.agentId })
+            .from(dmParticipants)
+            .where(
+              and(
+                eq(dmParticipants.conversationId, idempotent.data.conversation_id),
+                isNull(dmParticipants.leftAt),
+              ),
+            );
+          const eventData = { ...idempotent.data, from_name: agent!.name };
+          runInBackground(c, fanoutToAgents(c, rows.map((r) => r.agentId), 'dm.received', eventData), 'fanout dm.received');
+        } catch {
+          // Ignore fanout failures
+        }
+
+        runInBackground(
+          c,
+          c.env.WEBHOOK_QUEUE.send({
+            type: 'dm.received',
+            workspaceId: workspace.id,
+            data: { ...idempotent.data, from_name: agent!.name },
+          }),
+          'queue dm.received',
+        );
+        emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+          conversation_id: idempotent.data.conversation_id,
+          message_id: idempotent.data.id,
+          from_agent_id: agent!.id,
+          to_agent_name: to,
         });
       }
+
+      return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/dm/conversations - list DM conversations
-dmRouter.get(
+dmRoutes.get(
   '/dm/conversations',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
       const conversations = await dmEngine.listConversations(
-        req.workspace!.id,
-        req.agent!.id,
+        db,
+        workspace.id,
+        agent!.id,
       );
-      res.json({ ok: true, data: conversations });
+      return c.json({ ok: true, data: conversations });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
 // GET /v1/dm/:conversation_id/messages - get DM messages
-dmRouter.get(
+dmRoutes.get(
   '/dm/:conversation_id/messages',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
-      const limit = req.query.limit
-        ? parseInt(req.query.limit as string, 10)
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const limit = c.req.query('limit')
+        ? parseInt(c.req.query('limit')!, 10)
         : undefined;
-      const before = req.query.before as string | undefined;
-      const after = req.query.after as string | undefined;
+      const before = c.req.query('before');
+      const after = c.req.query('after');
 
-      const conversationId = req.params.conversation_id as string;
+      const conversationId = c.req.param('conversation_id');
       const msgs = await dmEngine.getDmMessages(
-        req.workspace!.id,
+        db,
+        workspace.id,
         conversationId,
-        req.agent!.id,
+        agent!.id,
         { limit, before, after },
       );
-      res.json({ ok: true, data: msgs });
+      return c.json({ ok: true, data: msgs });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

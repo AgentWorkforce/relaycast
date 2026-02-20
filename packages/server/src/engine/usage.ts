@@ -1,14 +1,21 @@
-import { getRedis } from '../redis/index.js';
+/**
+ * Usage tracking via KV counters (replaces Redis-based counters).
+ * All functions accept a KVNamespace binding.
+ */
 
-export async function incrementUsage(workspaceId: string, metric: string, amount: number = 1): Promise<number> {
-  const redis = getRedis();
-  return await redis.incrby(`usage:${workspaceId}:${metric}`, amount);
+export async function incrementUsage(kv: KVNamespace, workspaceId: string, metric: string, amount: number = 1): Promise<number> {
+  const key = `usage:${workspaceId}:${metric}`;
+  const current = parseInt(await kv.get(key) || '0', 10);
+  const next = current + amount;
+  await kv.put(key, String(next));
+  return next;
 }
 
-export async function getUsageCounters(workspaceId: string) {
-  const redis = getRedis();
-  const keys = ['messages', 'api_calls', 'files', 'file_bytes', 'ws_minutes'].map(m => `usage:${workspaceId}:${m}`);
-  const values = await redis.mget(...keys);
+export async function getUsageCounters(kv: KVNamespace, workspaceId: string) {
+  const metrics = ['messages', 'api_calls', 'files', 'file_bytes', 'ws_minutes'];
+  const values = await Promise.all(
+    metrics.map(m => kv.get(`usage:${workspaceId}:${m}`)),
+  );
   return {
     messages: parseInt(values[0] || '0', 10),
     api_calls: parseInt(values[1] || '0', 10),
@@ -18,14 +25,14 @@ export async function getUsageCounters(workspaceId: string) {
   };
 }
 
-export async function resetUsageCounters(workspaceId: string): Promise<void> {
-  const redis = getRedis();
-  const keys = ['messages', 'api_calls', 'files', 'file_bytes', 'ws_minutes'].map(m => `usage:${workspaceId}:${m}`);
-  await redis.del(...keys);
+export async function resetUsageCounters(kv: KVNamespace, workspaceId: string): Promise<void> {
+  const metrics = ['messages', 'api_calls', 'files', 'file_bytes', 'ws_minutes'];
+  await Promise.all(
+    metrics.map(m => kv.delete(`usage:${workspaceId}:${m}`)),
+  );
 }
 
-export async function getUsageMetric(workspaceId: string, metric: string): Promise<number> {
-  const redis = getRedis();
-  const value = await redis.get(`usage:${workspaceId}:${metric}`);
+export async function getUsageMetric(kv: KVNamespace, workspaceId: string, metric: string): Promise<number> {
+  const value = await kv.get(`usage:${workspaceId}:${metric}`);
   return parseInt(value || '0', 10);
 }

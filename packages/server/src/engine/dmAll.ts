@@ -1,68 +1,149 @@
-import { eq, sql, desc } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import { eq, and, sql, lt, gt, inArray } from 'drizzle-orm';
+import type { getDb } from '../db/index.js';
 import {
   dmConversations,
   dmParticipants,
-  channels,
   messages,
   agents,
 } from '../db/schema.js';
 
-export async function listAllDmConversations(workspaceId: string) {
-  const db = getDb();
+type Db = ReturnType<typeof getDb>;
 
-  // Get all DM conversations for this workspace
-  const convos = await db
+export async function listAllDmConversations(db: Db, workspaceId: string) {
+  const conversations = await db
     .select({
       id: dmConversations.id,
       dmType: dmConversations.dmType,
+      name: dmConversations.name,
       channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
     })
     .from(dmConversations)
     .where(eq(dmConversations.workspaceId, workspaceId));
 
-  const results = [];
-  for (const convo of convos) {
-    // Get participants
-    const participants = await db
-      .select({ agentName: agents.name })
-      .from(dmParticipants)
-      .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-      .where(eq(dmParticipants.conversationId, convo.id));
-
-    // Get message count
-    const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(eq(messages.channelId, convo.channelId));
-
-    // Get last message
-    const [lastMsg] = await db
-      .select({
-        body: messages.body,
-        agentName: agents.name,
-        createdAt: messages.createdAt,
-      })
-      .from(messages)
-      .innerJoin(agents, eq(messages.agentId, agents.id))
-      .where(eq(messages.channelId, convo.channelId))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
-
-    results.push({
-      id: convo.id,
-      type: convo.dmType,
-      participants: participants.map((p) => p.agentName),
-      last_message: lastMsg
-        ? {
-            text: lastMsg.body,
-            agent_name: lastMsg.agentName,
-            created_at: lastMsg.createdAt.toISOString(),
-          }
-        : null,
-      message_count: countRow?.count ?? 0,
-    });
+  if (conversations.length === 0) {
+    return [];
   }
 
-  return results;
+  const conversationIds = conversations.map((convo) => convo.id);
+  const channelIds = conversations.map((convo) => convo.channelId);
+
+  const participantRows = await db
+    .select({
+      conversationId: dmParticipants.conversationId,
+      agentName: agents.name,
+    })
+    .from(dmParticipants)
+    .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+    .where(inArray(dmParticipants.conversationId, conversationIds));
+
+  const messageCounts = await db
+    .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
+    .from(messages)
+    .where(inArray(messages.channelId, channelIds))
+    .groupBy(messages.channelId);
+
+  const latestMessageIds = await db
+    .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
+    .from(messages)
+    .where(inArray(messages.channelId, channelIds))
+    .groupBy(messages.channelId);
+
+  const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
+  const latestMessages = lastIds.length > 0
+    ? await db
+      .select({
+        id: messages.id,
+        channelId: messages.channelId,
+        body: messages.body,
+        createdAt: messages.createdAt,
+        agentName: agents.name,
+      })
+      .from(messages)
+      .leftJoin(agents, eq(messages.agentId, agents.id))
+      .where(inArray(messages.id, lastIds))
+    : [];
+
+  const participantsByConversation = new Map<string, string[]>();
+  for (const row of participantRows) {
+    const list = participantsByConversation.get(row.conversationId) || [];
+    list.push(row.agentName);
+    participantsByConversation.set(row.conversationId, list);
+  }
+
+  const messageCountByChannel = new Map<string, number>(
+    messageCounts.map((row) => [row.channelId, row.count]),
+  );
+  const latestByChannel = new Map<string, typeof latestMessages[number]>(
+    latestMessages.map((row) => [row.channelId, row]),
+  );
+
+  return conversations.map((convo) => {
+    const lastMsg = latestByChannel.get(convo.channelId);
+    return {
+      id: convo.id,
+      channel_id: convo.channelId,
+      type: convo.dmType,
+      participants: participantsByConversation.get(convo.id) || [],
+      last_message: lastMsg
+        ? {
+          text: lastMsg.body,
+          agent_name: lastMsg.agentName || 'unknown',
+          created_at: lastMsg.createdAt.toISOString(),
+        }
+        : null,
+      message_count: messageCountByChannel.get(convo.channelId) ?? 0,
+    };
+  });
+}
+
+export async function getDmMessagesForWorkspace(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  opts: { limit?: number; before?: string; after?: string } = {},
+) {
+  const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
+
+  const [conv] = await db
+    .select()
+    .from(dmConversations)
+    .where(
+      and(
+        eq(dmConversations.id, conversationId),
+        eq(dmConversations.workspaceId, workspaceId),
+      ),
+    );
+
+  if (!conv) {
+    const err = new Error('Conversation not found');
+    Object.assign(err, { code: 'not_found', status: 404 });
+    throw err;
+  }
+
+  const conditions = [eq(messages.channelId, conv.channelId)];
+  if (opts.before) conditions.push(lt(messages.id, opts.before));
+  if (opts.after) conditions.push(gt(messages.id, opts.after));
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      body: messages.body,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
+    .where(and(...conditions))
+    .orderBy(sql`${messages.id} DESC`)
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    agent_id: r.agentId,
+    agent_name: r.agentName || 'unknown',
+    text: r.body,
+    created_at: r.createdAt.toISOString(),
+  }));
 }

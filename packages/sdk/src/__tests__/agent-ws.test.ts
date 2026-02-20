@@ -68,9 +68,30 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'ws://localhost:8080/v1/stream?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('ws://localhost:8080');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
+  });
+
+  it('connect() normalizes trailing slash base URL', () => {
+    const client = new HttpClient({
+      apiKey: 'at_live_test',
+      baseUrl: 'https://pr28-api.relaycast.dev/',
+    });
+    const agent = new AgentClient(client);
+    agent.connect();
+
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('wss://pr28-api.relaycast.dev');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('connect() is idempotent — second call does not create another WebSocket', () => {
@@ -81,20 +102,20 @@ describe('AgentClient WebSocket integration', () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it('disconnect() closes WebSocket', () => {
+  it('disconnect() closes WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    agent.disconnect();
+    await agent.disconnect();
     expect(ws.close).toHaveBeenCalled();
   });
 
-  it('disconnect() allows reconnect with a fresh WebSocket', () => {
+  it('disconnect() allows reconnect with a fresh WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
-    agent.disconnect();
+    await agent.disconnect();
 
     agent.connect();
     expect(MockWebSocket.instances).toHaveLength(2);
@@ -237,6 +258,19 @@ describe('AgentClient WebSocket integration', () => {
     agent.on.connected(handler);
 
     ws.simulateOpen();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('on.connected fires immediately if registered after open', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.connected(handler);
+    await Promise.resolve();
 
     expect(handler).toHaveBeenCalledTimes(1);
   });

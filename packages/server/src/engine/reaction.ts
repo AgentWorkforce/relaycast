@@ -1,16 +1,26 @@
 import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { reactions, messages, agents, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
+function isUniqueConstraintViolation(err: unknown): boolean {
+  const candidate = err as { code?: string; message?: string };
+  return (
+    candidate.code === 'SQLITE_CONSTRAINT'
+    || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    || (candidate.message?.includes('UNIQUE constraint failed') ?? false)
+  );
+}
+
 export async function addReaction(
+  db: Db,
   workspaceId: string,
   messageId: string,
   agentId: string,
   emoji: string,
 ) {
-  const db = getDb();
-
   // Verify message exists and belongs to workspace
   const [msg] = await db
     .select()
@@ -39,9 +49,8 @@ export async function addReaction(
       created_at: reaction.createdAt.toISOString(),
     };
   } catch (err: unknown) {
-    const pgErr = err as Error & { code?: string };
     // Unique constraint violation — idempotent: return existing
-    if (pgErr.code === '23505') {
+    if (isUniqueConstraintViolation(err)) {
       const [existing] = await db
         .select()
         .from(reactions)
@@ -52,6 +61,9 @@ export async function addReaction(
             eq(reactions.emoji, emoji),
           ),
         );
+      if (!existing) {
+        throw err;
+      }
       return {
         id: existing.id,
         message_id: existing.messageId,
@@ -67,13 +79,12 @@ export async function addReaction(
 }
 
 export async function removeReaction(
+  db: Db,
   workspaceId: string,
   messageId: string,
   agentId: string,
   emoji: string,
 ) {
-  const db = getDb();
-
   const [msg] = await db
     .select()
     .from(messages)
@@ -92,9 +103,7 @@ export async function removeReaction(
   return true;
 }
 
-export async function getReactions(workspaceId: string, messageId: string) {
-  const db = getDb();
-
+export async function getReactions(db: Db, workspaceId: string, messageId: string) {
   const [msg] = await db
     .select()
     .from(messages)

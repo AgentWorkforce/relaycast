@@ -4,25 +4,69 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {
+  parseTelemetryIngestionEvent,
+  sanitizeTelemetryProperties,
+  type ClientTelemetryEventName,
+} from '@relaycast/types';
 
 interface TelemetryState {
   anonymousId: string;
   telemetryDisabled?: boolean;
 }
 
+export interface McpTelemetryOptions {
+  posthogHost?: string;
+  posthogApiKey?: string;
+  originSurface?: 'mcp';
+  originClient?: string;
+  originVersion?: string;
+}
+
 export interface McpTelemetry {
-  capture: (event: string, properties?: Record<string, unknown>) => void;
+  capture: (event: ClientTelemetryEventName, properties?: Record<string, unknown>) => void;
   flush: (timeoutMs?: number) => Promise<void>;
 }
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-const DEFAULT_POSTHOG_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
+const DEFAULT_POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function telemetryEnabled(state: TelemetryState): boolean {
+  if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
+    return false;
+  }
+  if (state.telemetryDisabled === true) return false;
+  return true;
+}
+
+function normalizeHost(host: string | undefined): string {
+  const value = host?.trim();
+  if (!value) return DEFAULT_POSTHOG_HOST;
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function getPosthogHost(options: McpTelemetryOptions): string {
+  return normalizeHost(
+    process.env.RELAYCAST_POSTHOG_HOST
+      ?? process.env.POSTHOG_HOST
+      ?? options.posthogHost,
+  );
+}
+
+function getPosthogApiKey(options: McpTelemetryOptions): string {
+  return (
+    process.env.RELAYCAST_POSTHOG_API_KEY
+    ?? process.env.POSTHOG_API_KEY
+    ?? options.posthogApiKey
+    ?? DEFAULT_POSTHOG_PUBLIC_KEY
+  );
 }
 
 function loadState(): TelemetryState {
@@ -56,35 +100,51 @@ function loadState(): TelemetryState {
   return state;
 }
 
-function telemetryEnabled(state: TelemetryState): boolean {
-  if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
-    return false;
+function runtimePrefersFetch(): boolean {
+  return typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined';
+}
+
+async function postJsonWithFetch(
+  urlString: string,
+  payload: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<void> {
+  if (typeof fetch !== 'function') return;
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
+  const timer = setTimeout(() => controller?.abort(), 1000) as ReturnType<typeof setTimeout> & {
+    unref?: () => void;
+  };
+  timer.unref?.();
+
+  try {
+    await fetch(urlString, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+      signal: controller?.signal,
+    });
+  } catch {
+    // Best effort telemetry; swallow send errors.
+  } finally {
+    clearTimeout(timer);
   }
-  if (state.telemetryDisabled === true) return false;
-  return true;
 }
 
-function getPostHogHost(): string {
-  const configured = process.env.POSTHOG_HOST ??
-    process.env.RELAYCAST_POSTHOG_HOST ??
-    DEFAULT_POSTHOG_HOST;
-  return configured.endsWith('/') ? configured.slice(0, -1) : configured;
-}
-
-function getPostHogKey(): string {
-  return process.env.POSTHOG_API_KEY ??
-    process.env.RELAYCAST_POSTHOG_KEY ??
-    process.env.POSTHOG_KEY ??
-    DEFAULT_POSTHOG_KEY;
-}
-
-function postJson(urlString: string, payload: Record<string, unknown>): Promise<void> {
+function postJsonWithNodeRequest(
+  urlString: string,
+  payload: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<boolean> {
   return new Promise((resolve) => {
     let resolved = false;
     const finish = () => {
       if (resolved) return;
       resolved = true;
-      resolve();
+      resolve(true);
     };
 
     try {
@@ -100,6 +160,7 @@ function postJson(urlString: string, payload: Record<string, unknown>): Promise<
           headers: {
             'content-type': 'application/json',
             'content-length': Buffer.byteLength(body),
+            ...headers,
           },
         },
         (res) => {
@@ -117,25 +178,45 @@ function postJson(urlString: string, payload: Record<string, unknown>): Promise<
       req.write(body);
       req.end();
     } catch {
-      finish();
+      resolve(false);
     }
   });
 }
 
-export function createMcpTelemetry(version = 'unknown'): McpTelemetry {
+async function postJson(
+  urlString: string,
+  payload: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<void> {
+  if (runtimePrefersFetch()) {
+    await postJsonWithFetch(urlString, payload, headers);
+    return;
+  }
+
+  const sentWithNodeRequest = await postJsonWithNodeRequest(urlString, payload, headers);
+  if (!sentWithNodeRequest) {
+    await postJsonWithFetch(urlString, payload, headers);
+  }
+}
+
+export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOptions = {}): McpTelemetry {
   const state = loadState();
   const sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
   const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
+  const posthogHost = getPosthogHost(options);
+  const posthogApiKey = getPosthogApiKey(options);
+  const originSurface = options.originSurface ?? 'mcp';
+  const originClient = options.originClient ?? '@relaycast/mcp';
+  const originVersion = options.originVersion ?? version;
 
-  const capture = (event: string, properties: Record<string, unknown> = {}) => {
+  const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
     if (!telemetryEnabled(state)) return;
 
-    const payload = {
-      api_key: getPostHogKey(),
+    const parsed = parseTelemetryIngestionEvent({
       event,
       distinct_id: distinctId,
-      properties: {
+      properties: sanitizeTelemetryProperties({
         surface: 'mcp',
         mcp_version: version,
         session_id: sessionId,
@@ -143,10 +224,26 @@ export function createMcpTelemetry(version = 'unknown'): McpTelemetry {
         platform: process.platform,
         arch: process.arch,
         ...properties,
+      }),
+    });
+
+    const payload = {
+      api_key: posthogApiKey,
+      event: parsed.event,
+      distinct_id: parsed.distinct_id,
+      properties: {
+        ...parsed.properties,
+        origin_surface: originSurface,
+        origin_client: originClient,
+        origin_version: originVersion,
       },
     };
 
-    const promise = postJson(`${getPostHogHost()}/capture/`, payload);
+    const promise = postJson(
+      `${posthogHost}/capture/`,
+      payload,
+      {},
+    );
     pending.add(promise);
     void promise.finally(() => pending.delete(promise));
   };

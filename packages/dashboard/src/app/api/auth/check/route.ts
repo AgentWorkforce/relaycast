@@ -1,5 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
+
+export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 
@@ -7,7 +10,7 @@ const COOKIE_NAME = 'relaycast_key';
  * GET /api/auth/check
  * Validates the auth cookie against the relay server.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(COOKIE_NAME);
 
@@ -20,7 +23,7 @@ export async function GET() {
 
   // Validate key against the relay server
   try {
-    const relayServer = process.env.RELAY_SERVER_URL || 'http://localhost:3890';
+    const relayServer = resolveRelayServerUrlFromRequest(request);
     const res = await fetch(`${relayServer}/v1/workspace`, {
       headers: { Authorization: `Bearer ${cookie.value}` },
     });

@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy
   cancel-in-progress: false
@@ -13,63 +16,161 @@ jobs:
   ci:
     name: Lint, Build & Test
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npx turbo lint
-
-      - name: Build
-        run: npx turbo build
-
-      - name: Test
-        run: npx turbo test
+          build: 'true'
+      - run: npx turbo lint
+      - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
 
-  deploy:
-    name: Deploy to Fly.io
+  deploy-staging:
+    name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: ci
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+      - uses: ./.github/actions/apply-d1-migrations
+        with:
+          migration-worker-name: relaycast-d1-migrate-staging
+          database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
+          database-name: relaycast-staging
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/deploy-worker
+        with:
+          worker-name: relaycast-api-staging
+          environment: staging
+          route: 'staging-api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
+          d1-database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
+          kv-id: ${{ vars.STAGING_KV_ID }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Setup Fly.io CLI
-        uses: superfly/flyctl-actions/setup-flyctl@master
+  smoke-test-staging:
+    name: Smoke + E2E Test Staging
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+      - uses: ./.github/actions/smoke-test
+        with:
+          base-url: https://staging-api.relaycast.dev
+      - name: Run E2E smoke test (staging)
+        timeout-minutes: 15
+        run: npm run e2e -- https://staging-api.relaycast.dev --ci
 
-      - name: Deploy
-        run: flyctl deploy --config deploy/fly.toml --remote-only
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: smoke-test-staging
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+      - uses: ./.github/actions/apply-d1-migrations
+        with:
+          migration-worker-name: relaycast-d1-migrate-production
+          database-id: ${{ vars.PRODUCTION_D1_DATABASE_ID }}
+          database-name: relaycast
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Resolve server version
+        id: server_version
+        shell: bash
+        run: |
+          echo "semver=$(node -p 'require("./packages/server/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Sync PostHog API key secret (production)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTHOG_API_KEY:-}" ]; then
+            echo "POSTHOG_API_KEY GitHub secret is not set."
+            exit 1
+          fi
+          echo "$POSTHOG_API_KEY" | npx wrangler secret put POSTHOG_API_KEY --name relaycast-api
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      - uses: ./.github/actions/deploy-worker
+        with:
+          worker-name: relaycast-api
+          environment: production
+          route: 'api.relaycast.dev/*'
+          extra-vars: |
+            APP_SEMVER = "${{ steps.server_version.outputs.semver }}"
+            APP_VERSION = "${{ github.sha }}"
+          d1-database-id: ${{ vars.PRODUCTION_D1_DATABASE_ID }}
+          kv-id: ${{ vars.PRODUCTION_KV_ID }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-observer-pages:
+    name: Deploy Observer Dashboard
+    runs-on: ubuntu-latest
+    needs: ci
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+      - uses: ./.github/actions/deploy-observer-dashboard
+        with:
+          branch: main
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-observer-router:
+    name: Deploy Observer Host Router
+    runs-on: ubuntu-latest
+    needs: deploy-observer-pages
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Deploy observer hostname router worker
+        run: npx wrangler deploy --config wrangler.observer-router.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy-pages:
     name: Deploy to Cloudflare Pages
     runs-on: ubuntu-latest
     needs: ci
-
+    timeout-minutes: 10
     permissions:
       contents: read
       deployments: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -78,15 +179,12 @@ jobs:
   deploy-smithery:
     name: Deploy MCP to Smithery
     runs-on: ubuntu-latest
-    needs: deploy
-
+    needs: deploy-production
+    timeout-minutes: 20
     steps:
-      - name: Wait for Fly.io instances to warm up
-        run: sleep 30
-
-      - name: Warm up MCP endpoint (initialize + tools/list)
+      - name: Warm up MCP endpoint
         run: |
-          # Step 1: Wait for initialize to work
+          sleep 15
           for i in $(seq 1 10); do
             RESP=$(curl -s -D /tmp/mcp-headers -X POST 'https://api.relaycast.dev/mcp' \
               -H 'Content-Type: application/json' \
@@ -101,7 +199,6 @@ jobs:
             sleep 5
           done
 
-          # Step 2: Extract session ID and warm up tools/list (the 39KB payload Smithery needs)
           SESSION_ID=$(grep -i 'mcp-session-id' /tmp/mcp-headers | tr -d '\r' | awk '{print $2}')
           if [ -n "$SESSION_ID" ]; then
             curl -s -X POST 'https://api.relaycast.dev/mcp' \
@@ -123,30 +220,20 @@ jobs:
             echo "Warning: No session ID from initialize"
           fi
 
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
       - name: Publish to Smithery (with retry)
         run: |
           for attempt in 1 2 3 4 5; do
             echo "=== Attempt $attempt of 5 ==="
-            OUTPUT=$(npx @smithery/cli@latest publish \
+            OUTPUT=$(npx @smithery/cli@3 publish \
               -u https://api.relaycast.dev/mcp \
               -n "relaycast/relay" \
               -k "$SMITHERY_API_KEY" \
               --config-schema packages/mcp/smithery-config-schema.json 2>&1) || true
             echo "$OUTPUT"
-            if echo "$OUTPUT" | grep -q "37 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
-              echo "Full capabilities detected (37 tools + 1 prompt)!"
+            if echo "$OUTPUT" | grep -q "39 tools" && echo "$OUTPUT" | grep -q "1 prompt"; then
+              echo "Full capabilities detected (39 tools + 1 prompt)!"
               break
             fi
             if [ "$attempt" -lt 5 ]; then

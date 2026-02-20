@@ -1,0 +1,53 @@
+{
+  "id": "traj_6vawys36wf3u",
+  "version": 1,
+  "task": {
+    "title": "Expand server telemetry coverage across routes and align schema/docs/tests"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T01:35:18.494Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T01:42:30.810Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_ygqatw4p9hn6",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T01:42:30.810Z",
+      "events": [
+        {
+          "ts": 1771551750811,
+          "type": "decision",
+          "content": "Expanded server telemetry from narrow lifecycle events to broad API mutation coverage: Expanded server telemetry from narrow lifecycle events to broad API mutation coverage",
+          "raw": {
+            "question": "Expanded server telemetry from narrow lifecycle events to broad API mutation coverage",
+            "chosen": "Expanded server telemetry from narrow lifecycle events to broad API mutation coverage",
+            "alternatives": [],
+            "reasoning": "E2E exercises many mutating features beyond message/file/reaction/search/ws, so we added first-class server events for workspace/agent/channel/dm/commands/webhooks/presence/system prompt to close product-usage blind spots while keeping workspace-based distinct_id."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T01:42:34.786Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-20T01:42:34.786Z",
+  "retrospective": {
+    "summary": "Added server-side telemetry coverage for core E2E mutations, introduced shared route telemetry emitter helper, expanded telemetry schema required props, and updated TELEMETRY.md event catalog + distinct_id guidance. Validated with types/server builds and full server/types tests.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  }
+}

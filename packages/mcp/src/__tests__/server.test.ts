@@ -65,9 +65,80 @@ vi.mock('@relaycast/sdk', () => {
   }
 
   return {
-    Relay: MockRelay,
     AgentClient: class {},
     HttpClient: class {},
+    Relay: MockRelay,
+  };
+});
+
+vi.mock('@relaycast/sdk/internal', () => {
+  const mockAgentClient = {
+    send: vi.fn().mockResolvedValue({ id: 'msg1' }),
+    messages: vi.fn().mockResolvedValue([]),
+    reply: vi.fn().mockResolvedValue({ id: 'reply1' }),
+    thread: vi.fn().mockResolvedValue({ parent: {}, replies: [] }),
+    dm: vi.fn().mockResolvedValue({}),
+    dms: {
+      conversations: vi.fn().mockResolvedValue([]),
+      createGroup: vi.fn().mockResolvedValue({}),
+    },
+    channels: {
+      create: vi.fn().mockResolvedValue({ name: 'test' }),
+      list: vi.fn().mockResolvedValue([]),
+      join: vi.fn().mockResolvedValue(undefined),
+      leave: vi.fn().mockResolvedValue(undefined),
+      invite: vi.fn().mockResolvedValue(undefined),
+      setTopic: vi.fn().mockResolvedValue({ name: 'test', topic: 'new' }),
+      archive: vi.fn().mockResolvedValue(undefined),
+    },
+    react: vi.fn().mockResolvedValue(undefined),
+    unreact: vi.fn().mockResolvedValue(undefined),
+    search: vi.fn().mockResolvedValue([]),
+    inbox: vi.fn().mockResolvedValue({ unread: 0 }),
+    markRead: vi.fn().mockResolvedValue(undefined),
+    readers: vi.fn().mockResolvedValue([]),
+    files: { upload: vi.fn().mockResolvedValue({ id: 'f1' }) },
+    commands: { invoke: vi.fn().mockResolvedValue({ id: 'inv1' }) },
+  };
+
+  class MockRelay {
+    agents = {
+      register: vi.fn().mockResolvedValue({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      }),
+      list: vi.fn().mockResolvedValue([]),
+    };
+    webhooks = {
+      create: vi.fn().mockResolvedValue({ webhook_id: 'wh_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+      trigger: vi.fn().mockResolvedValue({ message_id: 'm_1' }),
+    };
+    subscriptions = {
+      create: vi.fn().mockResolvedValue({ id: 'sub_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      get: vi.fn().mockResolvedValue({ id: 'sub_1' }),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    commands = {
+      register: vi.fn().mockResolvedValue({ id: 'cmd_1' }),
+      list: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    as(_token: string) {
+      return mockAgentClient;
+    }
+    constructor(_opts: any) {}
+  }
+
+  return {
+    createInternalRelayCast: vi.fn().mockImplementation(() => new MockRelay({})),
+    createInternalWsClient: vi.fn().mockImplementation(() => ({
+      on: vi.fn().mockReturnValue(() => {}),
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    })),
   };
 });
 
@@ -84,11 +155,12 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 37 tools', async () => {
+  it('lists all 39 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(37);
+    expect(tools.tools.length).toBe(39);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
+      'add_agent',
       'add_reaction',
       'archive_channel',
       'check_inbox',
@@ -117,6 +189,7 @@ describe('createRelayMcpServer', () => {
       'post_message',
       'register',
       'register_command',
+      'remove_agent',
       'remove_reaction',
       'reply_to_thread',
       'search_messages',

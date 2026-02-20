@@ -1,35 +1,42 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { getDb, closeDb, healthCheck } from '../index.js';
+import { describe, it, expect } from 'vitest';
+import { getDb, healthCheck } from '../index.js';
+
+function createMockD1(shouldThrow = false): D1Database {
+  return {
+    prepare: () => ({
+      first: async () => {
+        if (shouldThrow) throw new Error('query failed');
+        return { ok: 1 } as unknown;
+      },
+    }),
+  } as unknown as D1Database;
+}
 
 describe('Database Connection', () => {
-  afterEach(async () => {
-    await closeDb();
-  });
-
   it('getDb returns a drizzle instance', () => {
-    const db = getDb();
+    const db = getDb(createMockD1());
     expect(db).toBeDefined();
     expect(typeof db.select).toBe('function');
   });
 
-  it('getDb returns same instance on multiple calls', () => {
-    const db1 = getDb();
-    const db2 = getDb();
-    expect(db1).toBe(db2);
-  });
-
-  it('closeDb resets the instance', async () => {
-    getDb();
-    await closeDb();
-    const db2 = getDb();
+  it('getDb creates a new instance per call', () => {
+    const binding = createMockD1();
+    const db1 = getDb(binding);
+    const db2 = getDb(binding);
+    // Per-request instances — not singleton
+    expect(db1).toBeDefined();
     expect(db2).toBeDefined();
+    expect(db1).not.toBe(db2);
   });
 
-  it('healthCheck returns boolean', async () => {
-    // Without a real database, this should return false
-    getDb({ url: 'postgresql://invalid:invalid@localhost:1/nonexistent' });
-    const result = await healthCheck();
-    expect(typeof result).toBe('boolean');
+  it('getDb works with different D1 bindings', () => {
+    const db = getDb(createMockD1());
+    expect(db).toBeDefined();
+    expect(typeof db.select).toBe('function');
+  });
+
+  it('healthCheck returns false when query fails', async () => {
+    const result = await healthCheck(createMockD1(true));
+    expect(result).toBe(false);
   });
 });
-

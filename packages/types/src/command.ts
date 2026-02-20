@@ -42,7 +42,7 @@ export type CreateCommandResponse = z.infer<typeof CreateCommandResponseSchema>;
 export const InvokeCommandRequestSchema = z.object({
   channel: z.string(),
   args: z.string().optional(),
-  parameters: z.record(z.unknown()).optional(),
+  parameters: z.record(z.string(), z.unknown()).optional(),
 });
 export type InvokeCommandRequest = z.infer<typeof InvokeCommandRequestSchema>;
 
@@ -52,7 +52,7 @@ export const CommandInvocationSchema = z.object({
   channel: z.string(),
   invoked_by: z.string(),
   args: z.string().nullable(),
-  parameters: z.record(z.unknown()).nullable(),
+  parameters: z.record(z.string(), z.unknown()).nullable(),
   response_message_id: z.string().nullable(),
   created_at: z.string(),
 });

@@ -1,58 +1,58 @@
-import { Router, Response } from 'express';
-import { requireAuth, requireWorkspaceKey, type AuthenticatedRequest } from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as systemPromptEngine from '../engine/systemPrompt.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
-export const systemPromptRouter = Router();
+export const systemPromptRoutes = new Hono<AppEnv>();
 
-systemPromptRouter.get(
-  '/workspace/system-prompt',
-  requireAuth,
-  rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const result = await systemPromptEngine.getSystemPrompt(req.workspace!.id);
-      res.json({ ok: true, data: result });
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
+systemPromptRoutes.get('/workspace/system-prompt', requireAuth, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const result = await systemPromptEngine.getSystemPrompt(db, workspace.id);
+    return c.json({ ok: true, data: result });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});
+
+systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const { prompt, reset } = await c.req.json();
+
+    if (reset === true || prompt === null) {
+      const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, null);
+      emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+        operation: 'reset',
       });
+      return c.json({ ok: true, data: result });
     }
-  },
-);
 
-systemPromptRouter.put(
-  '/workspace/system-prompt',
-  requireWorkspaceKey,
-  rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { prompt, reset } = req.body;
-
-      if (reset === true || prompt === null) {
-        const result = await systemPromptEngine.setSystemPrompt(req.workspace!.id, null);
-        res.json({ ok: true, data: result });
-        return;
-      }
-
-      if (!prompt || typeof prompt !== 'string') {
-        res.status(400).json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'prompt must be a non-empty string' },
-        });
-        return;
-      }
-
-      const result = await systemPromptEngine.setSystemPrompt(req.workspace!.id, prompt);
-      res.json({ ok: true, data: result });
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+    if (!prompt || typeof prompt !== 'string') {
+      return c.json({
         ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      });
+        error: { code: 'invalid_request', message: 'prompt must be a non-empty string' },
+      }, 400);
     }
-  },
-);
+
+    const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, prompt);
+    emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+      operation: 'set',
+    });
+    return c.json({ ok: true, data: result });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as any);
+  }
+});

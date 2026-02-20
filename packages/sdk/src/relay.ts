@@ -2,6 +2,8 @@ import type {
   Agent,
   AgentListQuery,
   AgentPresenceInfo,
+  Channel,
+  ChannelMemberInfo,
   CreateAgentRequest,
   CreateAgentResponse,
   UpdateAgentRequest,
@@ -21,20 +23,33 @@ import type {
   CreateCommandRequest,
   CreateCommandResponse,
   AgentCommand,
-  WorkspaceStats,
   ActivityItem,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  MessageListQuery,
+  MessageWithMeta,
+  ReactionGroup,
+  SpawnAgentRequest,
+  SpawnAgentResponse,
+  ReleaseAgentRequest,
+  ReleaseAgentResponse,
 } from '@relaycast/types';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
 import { SDK_VERSION } from './version.js';
+import { SDK_ORIGIN } from './origin.js';
 
 export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
+}
+
+export interface WorkspaceStreamConfig {
+  enabled: boolean;
+  default_enabled: boolean;
+  override: boolean | null;
 }
 
 export class RelayCast {
@@ -50,12 +65,15 @@ export class RelayCast {
     name: string,
     baseUrl?: string,
   ): Promise<CreateWorkspaceResponse> {
-    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.agentrelay.dev');
+    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.relaycast.dev');
     const res = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-SDK-Version': SDK_VERSION,
+        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
+        'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
+        'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
       },
       body: JSON.stringify({ name }),
     });
@@ -105,12 +123,51 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+    stream: {
+      get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
+      set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
+        this.client.put('/v1/workspace/stream', { enabled }),
+      inherit: (): Promise<WorkspaceStreamConfig> =>
+        this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
+    },
   };
 
   systemPrompt = {
     get: (): Promise<SystemPrompt> => this.client.get('/v1/workspace/system-prompt'),
     set: (data: SetSystemPromptRequest): Promise<SystemPrompt> =>
       this.client.put('/v1/workspace/system-prompt', data),
+  };
+
+  channels = {
+    list: (opts?: { include_archived?: boolean }): Promise<Channel[]> => {
+      const query: Record<string, string> = {};
+      if (opts?.include_archived) query.include_archived = 'true';
+      return this.client.get('/v1/channels', query);
+    },
+    get: (name: string): Promise<Channel & { members: ChannelMemberInfo[] }> =>
+      this.client.get(`/v1/channels/${encodeURIComponent(name)}`),
+  };
+
+  messages = {
+    list: (channel: string, opts?: MessageListQuery): Promise<MessageWithMeta[]> => {
+      const name = channel.startsWith('#') ? channel.slice(1) : channel;
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.before) query.before = opts.before;
+      if (opts?.after) query.after = opts.after;
+      return this.client.get(`/v1/channels/${encodeURIComponent(name)}/messages`, query);
+    },
+    get: (id: string): Promise<MessageWithMeta> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}`),
+    thread: (id: string, opts?: MessageListQuery): Promise<{ parent: MessageWithMeta; replies: MessageWithMeta[] }> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      if (opts?.before) query.before = opts.before;
+      if (opts?.after) query.after = opts.after;
+      return this.client.get(`/v1/messages/${encodeURIComponent(id)}/replies`, query);
+    },
+    reactions: (id: string): Promise<ReactionGroup[]> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
   };
 
   agents = {
@@ -149,6 +206,10 @@ export class RelayCast {
         throw err;
       }
     },
+    spawn: (data: SpawnAgentRequest): Promise<SpawnAgentResponse> =>
+      this.client.post('/v1/agents/spawn', data),
+    release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
+      this.client.post('/v1/agents/release', data),
   };
 
   webhooks = {
@@ -190,9 +251,6 @@ export class RelayCast {
       this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
   };
 
-  stats = (): Promise<WorkspaceStats> =>
-    this.client.get('/v1/workspace/stats');
-
   activity = (limit?: number): Promise<ActivityItem[]> => {
     const params: Record<string, string> = {};
     if (limit !== undefined) params.limit = String(limit);
@@ -202,11 +260,16 @@ export class RelayCast {
   allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
     this.client.get('/v1/dm/conversations/all');
 
+  dmMessages = (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<Array<{ id: string; agent_id: string; agent_name: string; text: string; created_at: string }>> => {
+    const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
+
   as(agentToken: string): AgentClient {
-    const agentHttpClient = new HttpClient({
-      apiKey: agentToken,
-      baseUrl: this.client.baseUrl,
-    });
+    const agentHttpClient = this.client.withApiKey(agentToken);
     return new AgentClient(agentHttpClient);
   }
 }

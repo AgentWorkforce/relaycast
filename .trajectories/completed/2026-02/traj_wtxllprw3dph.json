@@ -1,0 +1,53 @@
+{
+  "id": "traj_wtxllprw3dph",
+  "version": 1,
+  "task": {
+    "title": "Update e2e prompt text to hosted observer dashboard"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T04:13:49.069Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T04:15:00.742Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_gu76t2yppj63",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T04:15:00.742Z",
+      "events": [
+        {
+          "ts": 1771474500745,
+          "type": "decision",
+          "content": "Map e2e API targets to observer dashboard URL: Map e2e API targets to observer dashboard URL",
+          "raw": {
+            "question": "Map e2e API targets to observer dashboard URL",
+            "chosen": "Map e2e API targets to observer dashboard URL",
+            "alternatives": [],
+            "reasoning": "When e2e runs against preview/staging/prod APIs, the prompt should point to hosted observer domains rather than localhost to avoid confusion."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T04:15:03.433Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "059f2723b789fd15602e2a7142fcc1350b331fd2",
+    "endRef": "059f2723b789fd15602e2a7142fcc1350b331fd2"
+  },
+  "completedAt": "2026-02-19T04:15:03.433Z",
+  "retrospective": {
+    "summary": "Updated scripts/e2e.ts so interactive prompt uses hosted observer dashboard URL and label for remote API bases (PR/staging/prod); local bases still show localhost dashboard.",
+    "approach": "Standard approach",
+    "confidence": 0.97
+  }
+}

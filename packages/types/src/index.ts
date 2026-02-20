@@ -12,4 +12,4 @@ export * from './api.js';
 export * from './webhook.js';
 export * from './subscription.js';
 export * from './command.js';
-export * from './dashboard.js';
+export * from './telemetry.js';

@@ -1,0 +1,53 @@
+{
+  "id": "traj_d4knd6y3ep2h",
+  "version": 1,
+  "task": {
+    "title": "Add dashboard alert and retry control for workspace stream enablement"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T03:20:52.022Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T03:22:36.688Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_8jbbrexihmzz",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T03:22:36.688Z",
+      "events": [
+        {
+          "ts": 1771471356688,
+          "type": "decision",
+          "content": "Expose workspace stream status/toggle endpoint and add dashboard-level remediation UI: Expose workspace stream status/toggle endpoint and add dashboard-level remediation UI",
+          "raw": {
+            "question": "Expose workspace stream status/toggle endpoint and add dashboard-level remediation UI",
+            "chosen": "Expose workspace stream status/toggle endpoint and add dashboard-level remediation UI",
+            "alternatives": [],
+            "reasoning": "Stream enablement can fail at login time due backend or routing conditions, so operators need an in-app signal plus explicit retry control instead of silent degradation or hard login failure."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T03:22:41.685Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e22e0b07101f18b82f6f9b39563facfea3a6630c",
+    "endRef": "e22e0b07101f18b82f6f9b39563facfea3a6630c"
+  },
+  "completedAt": "2026-02-19T03:22:41.685Z",
+  "retrospective": {
+    "summary": "Added /api/workspace/stream GET/PUT endpoint and dashboard warning banner with an Enable Stream button. Dashboard now detects disabled stream state and allows in-app retry to enable it.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  }
+}

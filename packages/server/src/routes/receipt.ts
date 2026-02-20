@@ -1,110 +1,137 @@
-import { Router, Response } from 'express';
-import {
-  requireAuth,
-  requireAgentToken,
-  type AuthenticatedRequest,
-} from '../middleware/auth.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../env.js';
+import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
-import { publishEvent } from '../ws/pubsub.js';
-import { deliverEvent } from '../engine/eventDelivery.js';
+import { and, eq } from 'drizzle-orm';
+import { messages } from '../db/schema.js';
+import { fanoutToChannel } from './fanout.js';
+import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
-export const receiptRouter = Router();
+export const receiptRoutes = new Hono<AppEnv>();
 
-// POST /v1/messages/:id/read — Mark message as read
-receiptRouter.post(
+// POST /v1/messages/:id/read - Mark message as read
+receiptRoutes.post(
   '/messages/:id/read',
   requireAgentToken,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
       const result = await receiptEngine.markRead(
-        req.workspace!.id,
-        req.params.id as string,
-        req.agent!.id,
+        db,
+        workspace.id,
+        c.req.param('id'),
+        agent!.id,
       );
       if (!result) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
 
-      res.status(200).json({ ok: true, data: result });
+      const eventData = { ...result, agent_name: agent!.name };
+      try {
+        const [row] = await db
+          .select({ channelId: messages.channelId })
+          .from(messages)
+          .where(and(eq(messages.id, c.req.param('id')), eq(messages.workspaceId, workspace.id)));
+        if (row?.channelId) {
+          runInBackground(c, fanoutToChannel(c, row.channelId, 'message.read', eventData), 'fanout message.read');
+        }
+      } catch {
+        // Ignore fanout failures
+      }
 
-      // Fire-and-forget event publishing
-      const eventData = { ...result };
-      publishEvent({ type: 'message.read', workspace_id: req.workspace!.id, data: eventData, timestamp: new Date().toISOString() }).catch(() => {});
-      deliverEvent(req.workspace!.id, 'message.read', eventData).catch(() => {});
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'message.read',
+          workspaceId: workspace.id,
+          data: eventData,
+        }),
+        'queue message.read',
+      );
+      emitServerEvent(c, workspace.id, 'relaycast_server_message_read_marked', {
+        message_id: result.message_id,
+        agent_id: result.agent_id,
+      });
+
+      return c.json({ ok: true, data: result }, 200);
     } catch (err: unknown) {
-      if (!res.headersSent) {
-        const error = err as Error & { code?: string; status?: number };
-        res.status(error.status || 500).json({
-          ok: false,
-          error: { code: error.code || 'internal_error', message: error.message },
-        });
-      }
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
     }
   },
 );
 
-// GET /v1/messages/:id/readers — List agents who read
-receiptRouter.get(
+// GET /v1/messages/:id/readers - List agents who read
+receiptRoutes.get(
   '/messages/:id/readers',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
       const result = await receiptEngine.getReaders(
-        req.workspace!.id,
-        req.params.id as string,
+        db,
+        workspace.id,
+        c.req.param('id'),
       );
       if (result === null) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'message_not_found', message: 'Message not found' },
-        });
-        return;
+        }, 404);
       }
 
-      res.json({ ok: true, data: result });
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );
 
-// GET /v1/channels/:name/read-status — Per-member read positions
-receiptRouter.get(
+// GET /v1/channels/:name/read-status - Per-member read positions
+receiptRoutes.get(
   '/channels/:name/read-status',
   requireAuth,
   rateLimit,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (c) => {
     try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
       const result = await receiptEngine.getReadStatus(
-        req.workspace!.id,
-        req.params.name as string,
+        db,
+        workspace.id,
+        c.req.param('name'),
       );
       if (result === null) {
-        res.status(404).json({
+        return c.json({
           ok: false,
           error: { code: 'channel_not_found', message: 'Channel not found' },
-        });
-        return;
+        }, 404);
       }
 
-      res.json({ ok: true, data: result });
+      return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
-      res.status(error.status || 500).json({
+      return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      });
+      }, (error.status || 500) as any);
     }
   },
 );

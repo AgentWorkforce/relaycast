@@ -1,198 +1,50 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 
 vi.mock('../../engine/search.js', () => ({
   searchMessages: vi.fn(),
 }));
 
-vi.mock('../../engine/channel.js', () => ({
-  createChannel: vi.fn(),
-  listChannels: vi.fn(),
-  getChannel: vi.fn(),
-  updateChannel: vi.fn(),
-  archiveChannel: vi.fn(),
-  joinChannel: vi.fn(),
-  leaveChannel: vi.fn(),
-  getMembers: vi.fn(),
-  inviteAgent: vi.fn(),
-}));
-
 vi.mock('../../engine/agent.js', () => ({
-  registerAgent: vi.fn(),
-  listAgents: vi.fn(),
-  getAgentByName: vi.fn(),
-  updateAgent: vi.fn(),
-  deleteAgent: vi.fn(),
-}));
-
-vi.mock('../../engine/message.js', () => ({
-  postMessage: vi.fn(),
-  getMessages: vi.fn(),
-  getMessage: vi.fn(),
-}));
-
-vi.mock('../../engine/reaction.js', () => ({
-  addReaction: vi.fn(),
-  removeReaction: vi.fn(),
-  getReactions: vi.fn(),
-}));
-
-vi.mock('../../engine/inbox.js', () => ({
-  getInbox: vi.fn(),
-}));
-
-vi.mock('../../engine/thread.js', () => ({
-  postReply: vi.fn(),
-  getReplies: vi.fn(),
-}));
-
-vi.mock('../../engine/dm.js', () => ({
-  sendDm: vi.fn(),
-  listConversations: vi.fn(),
-  getConversationMessages: vi.fn(),
-}));
-
-vi.mock('../../engine/groupDm.js', () => ({
-  createGroupDm: vi.fn(),
-  postToGroupDm: vi.fn(),
-  addParticipant: vi.fn(),
-  removeParticipant: vi.fn(),
-}));
-
-vi.mock('../../engine/receipt.js', () => ({
-  markRead: vi.fn(),
-  getReaders: vi.fn(),
-  getReadStatus: vi.fn(),
-}));
-
-vi.mock('../../engine/file.js', () => ({
-  createUpload: vi.fn(),
-  completeUpload: vi.fn(),
-  getFile: vi.fn(),
-  deleteFile: vi.fn(),
-  listFiles: vi.fn(),
-}));
-
-vi.mock('../../engine/workspace.js', () => ({
-  createWorkspace: vi.fn(),
-  getWorkspace: vi.fn(),
-  updateWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-}));
-
-vi.mock('../../engine/presence.js', () => ({
-  getPresence: vi.fn(),
-}));
-
-vi.mock('../../engine/systemPrompt.js', () => ({
-  getSystemPrompt: vi.fn(),
-  setSystemPrompt: vi.fn(),
-}));
-
-vi.mock('../../engine/billing.js', () => ({
-  subscribe: vi.fn(),
-  getSubscription: vi.fn(),
-  getUsage: vi.fn(),
-  getInvoices: vi.fn(),
-  createPortalSession: vi.fn(),
-}));
-
-vi.mock('../../engine/webhooks.js', () => ({
-  processWebhook: vi.fn(),
+  touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock('../../redis/index.js', () => ({
-  getRedis: vi.fn(() => ({
-    incr: vi.fn().mockResolvedValue(1),
-    expire: vi.fn().mockResolvedValue(1),
-  })),
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
 }));
 
-vi.mock('../../ws/pubsub.js', () => ({
-  publishEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventDelivery.js', () => ({
-  deliverEvent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../engine/eventQueue.js', () => ({
-  enqueueEvent: vi.fn().mockResolvedValue('evt_mock'),
-}));
-
-import { app } from '../../app.js';
-import * as searchEngine from '../../engine/search.js';
+import { Hono } from 'hono';
+import type { AppEnv } from '../../env.js';
+import { dbMiddleware } from '../../middleware/db.js';
+import { searchRoutes } from '../../routes/search.js';
 import { getDb } from '../../db/index.js';
-import { hashToken } from '../../middleware/auth.js';
-import crypto from 'node:crypto';
+import * as searchEngine from '../../engine/search.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
+import {
+  createMockBindings, mockDbForAgentAuth, mockDbForWorkspaceAuth,
+  agentAuthHeaders, wsAuthHeaders,
+} from '../../__tests__/test-helpers.js';
 
-const agentToken = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-const agentTokenHash = hashToken(agentToken);
-const workspaceKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-const workspaceKeyHash = hashToken(workspaceKey);
+const bindings = createMockBindings();
 
-const fakeWorkspace = {
-  id: 'ws_123',
-  name: 'test-workspace',
-  apiKeyHash: workspaceKeyHash,
-  systemPrompt: null,
-  plan: 'free',
-  stripeCustomerId: null,
-  stripeSubscriptionId: null,
-  createdAt: new Date(),
-  metadata: {},
-};
+const app = new Hono<AppEnv>();
+app.use('*', dbMiddleware);
+const v1 = new Hono<AppEnv>();
+v1.route('/', searchRoutes);
+app.route('/v1', v1);
 
-const fakeAgent = {
-  id: 'agent_456',
-  workspaceId: 'ws_123',
-  name: 'TestBot',
-  type: 'agent',
-  tokenHash: agentTokenHash,
-  status: 'online',
-  persona: null,
-  metadata: {},
-  createdAt: new Date(),
-  lastSeen: new Date(),
-};
-
-function mockDbForAgentAuth() {
-  const mockSelect = vi.fn();
-  const mockFrom = vi.fn();
-  const mockWhere = vi.fn();
-  let callCount = 0;
-  mockWhere.mockImplementation(() => {
-    callCount++;
-    if (callCount === 1) return Promise.resolve([fakeAgent]);
-    return Promise.resolve([fakeWorkspace]);
-  });
-  mockFrom.mockReturnValue({ where: mockWhere });
-  mockSelect.mockReturnValue({ from: mockFrom });
-  vi.mocked(getDb).mockReturnValue({
-    select: mockSelect,
-  } as ReturnType<typeof getDb>);
-}
-
-function mockDbForWorkspaceAuth() {
-  const mockSelect = vi.fn();
-  const mockFrom = vi.fn();
-  const mockWhere = vi.fn();
-  mockWhere.mockResolvedValue([fakeWorkspace]);
-  mockFrom.mockReturnValue({ where: mockWhere });
-  mockSelect.mockReturnValue({ from: mockFrom });
-  vi.mocked(getDb).mockReturnValue({
-    select: mockSelect,
-  } as ReturnType<typeof getDb>);
-}
+app.onError((err, c) => {
+  const error = err as Error & { code?: string; status?: number };
+  return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+});
 
 describe('GET /v1/search', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbForAgentAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
   });
 
   it('returns search results', async () => {
@@ -207,43 +59,54 @@ describe('GET /v1/search', () => {
       },
     ]);
 
-    const res = await request(app)
-      .get('/v1/search?q=deployment+error')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/search?q=deployment+error', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].text).toContain('deployment error');
-    expect(res.body.data[0].relevance_score).toBe(0.85);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].text).toContain('deployment error');
+    expect(body.data[0].relevance_score).toBe(0.85);
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'ws_123',
+      'relaycast_server_search_executed',
+      expect.objectContaining({
+        query_length: 'deployment error'.length,
+      }),
+    );
   });
 
   it('returns 400 when q is missing', async () => {
-    const res = await request(app)
-      .get('/v1/search')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/search', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
   });
 
   it('returns 400 when q is empty string', async () => {
-    const res = await request(app)
-      .get('/v1/search?q=')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/search?q=', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('invalid_request');
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
   });
 
   it('passes filters to engine', async () => {
     vi.mocked(searchEngine.searchMessages).mockResolvedValue([]);
 
-    await request(app)
-      .get('/v1/search?q=test&channel=general&from=Alice&limit=10')
-      .set('Authorization', `Bearer ${agentToken}`);
+    await app.request('/v1/search?q=test&channel=general&from=Alice&limit=10', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
-    expect(searchEngine.searchMessages).toHaveBeenCalledWith('ws_123', {
+    expect(searchEngine.searchMessages).toHaveBeenCalledWith(expect.anything(), 'ws_123', {
       q: 'test',
       channel: 'general',
       from: 'Alice',
@@ -256,34 +119,36 @@ describe('GET /v1/search', () => {
   it('returns empty array for no results', async () => {
     vi.mocked(searchEngine.searchMessages).mockResolvedValue([]);
 
-    const res = await request(app)
-      .get('/v1/search?q=nonexistentterm')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/search?q=nonexistentterm', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([]);
+    const body = await res.json() as any;
+    expect(body.data).toEqual([]);
   });
 
   it('works with workspace key (requireAuth)', async () => {
-    mockDbForWorkspaceAuth();
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
     vi.mocked(searchEngine.searchMessages).mockResolvedValue([]);
 
-    const res = await request(app)
-      .get('/v1/search?q=test')
-      .set('Authorization', `Bearer ${workspaceKey}`);
+    const res = await app.request('/v1/search?q=test', {
+      headers: wsAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
   });
 
   it('passes cursor pagination params', async () => {
     vi.mocked(searchEngine.searchMessages).mockResolvedValue([]);
 
-    await request(app)
-      .get('/v1/search?q=test&before=msg_100&after=msg_050')
-      .set('Authorization', `Bearer ${agentToken}`);
+    await app.request('/v1/search?q=test&before=msg_100&after=msg_050', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
-    expect(searchEngine.searchMessages).toHaveBeenCalledWith('ws_123', {
+    expect(searchEngine.searchMessages).toHaveBeenCalledWith(expect.anything(), 'ws_123', {
       q: 'test',
       channel: undefined,
       from: undefined,
@@ -294,19 +159,20 @@ describe('GET /v1/search', () => {
   });
 
   it('returns 401 without auth', async () => {
-    const res = await request(app).get('/v1/search?q=test');
+    const res = await app.request('/v1/search?q=test', {}, bindings);
     expect(res.status).toBe(401);
   });
 
   it('handles engine errors gracefully', async () => {
     vi.mocked(searchEngine.searchMessages).mockRejectedValue(new Error('Search failed'));
 
-    const res = await request(app)
-      .get('/v1/search?q=test')
-      .set('Authorization', `Bearer ${agentToken}`);
+    const res = await app.request('/v1/search?q=test', {
+      headers: agentAuthHeaders(),
+    }, bindings);
 
     expect(res.status).toBe(500);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error.code).toBe('internal_error');
+    const body = await res.json() as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('internal_error');
   });
 });

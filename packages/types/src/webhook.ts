@@ -32,7 +32,7 @@ export const WebhookTriggerRequestSchema = z.object({
   text: z.string().optional(),
   blocks: z.array(z.unknown()).optional(),
   source: z.string().optional(),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type WebhookTriggerRequest = z.infer<typeof WebhookTriggerRequestSchema>;
 

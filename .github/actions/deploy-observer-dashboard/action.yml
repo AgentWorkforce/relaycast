@@ -1,0 +1,65 @@
+name: Deploy Observer Dashboard
+description: Ensure observer Pages configuration and deploy dashboard to a target branch
+
+inputs:
+  branch:
+    description: Cloudflare Pages branch to deploy
+    required: true
+  project-name:
+    description: Cloudflare Pages project name
+    default: relaycast-observer
+  cloudflare-api-token:
+    description: Cloudflare API token
+    required: true
+  cloudflare-account-id:
+    description: Cloudflare account ID
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure Pages project exists
+      shell: bash
+      run: |
+        set -euo pipefail
+        PROJECT="${{ inputs.project-name }}"
+        if ! npx wrangler pages project create "$PROJECT" --production-branch main --compatibility-flags nodejs_compat --compatibility-date 2024-12-01 2>/tmp/observer-pages-create.err; then
+          if grep -qi "already exists" /tmp/observer-pages-create.err; then
+            echo "Pages project $PROJECT already exists."
+          else
+            cat /tmp/observer-pages-create.err
+            exit 1
+          fi
+        fi
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+
+    - name: Ensure Pages compatibility flags
+      shell: bash
+      run: |
+        set -euo pipefail
+        PROJECT="${{ inputs.project-name }}"
+        API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT}"
+        PROJECT_JSON="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API")"
+        PREVIEW_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.preview.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
+        PROD_FLAGS="$(echo "$PROJECT_JSON" | jq -c '((.result.deployment_configs.production.compatibility_flags // []) + ["nodejs_compat"]) | unique')"
+        PATCH_BODY="$(jq -n --argjson prev "$PREVIEW_FLAGS" --argjson prod "$PROD_FLAGS" '{deployment_configs: {preview: {compatibility_flags: $prev}, production: {compatibility_flags: $prod}}}')"
+        curl -fsS -X PATCH "$API" \
+          -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+          -H "Content-Type: application/json" \
+          --data "$PATCH_BODY" >/dev/null
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+
+    - name: Deploy dashboard
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd packages/dashboard
+        npx @cloudflare/next-on-pages@1
+        npx wrangler pages deploy .vercel/output/static --project-name="${{ inputs.project-name }}" --branch="${{ inputs.branch }}"
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}

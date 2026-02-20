@@ -1,11 +1,13 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
-async function fetchAttachmentsBatch(db: ReturnType<typeof getDb>, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
 
@@ -35,12 +37,12 @@ async function fetchAttachmentsBatch(db: ReturnType<typeof getDb>, msgIds: strin
 }
 
 export async function postMessage(
+  db: Db,
   workspaceId: string,
   channelId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; attachments?: string[]; data?: Record<string, unknown> | null; content_type?: string },
 ) {
-  const db = getDb();
   const messageId = generateId();
 
   // Parse @mentions from text
@@ -72,14 +74,18 @@ export async function postMessage(
     await db.insert(messageAttachments).values(attachmentValues);
   }
 
-  // Fetch attachment details if any
-  const attachmentMap = hasAttachments ? await fetchAttachmentsBatch(db, [messageId]) : new Map();
+  // Fetch attachment details and agent name
+  const [attachmentMap, [agent]] = await Promise.all([
+    hasAttachments ? fetchAttachmentsBatch(db, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
+    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+  ]);
   const attachments = attachmentMap.get(messageId) || [];
 
   return {
     id: message.id,
     channel_id: message.channelId,
     agent_id: message.agentId,
+    agent_name: agent?.name || 'unknown',
     text: message.body,
     blocks: (message.blocks as unknown[] | null) || null,
     has_attachments: message.hasAttachments,
@@ -91,11 +97,11 @@ export async function postMessage(
 }
 
 export async function getMessages(
+  db: Db,
   workspaceId: string,
   channelId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   const conditions = [
@@ -112,8 +118,21 @@ export async function getMessages(
   }
 
   const rows = await db
-    .select()
+    .select({
+      id: messages.id,
+      workspaceId: messages.workspaceId,
+      channelId: messages.channelId,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      threadId: messages.threadId,
+      body: messages.body,
+      blocks: messages.blocks,
+      hasAttachments: messages.hasAttachments,
+      createdAt: messages.createdAt,
+      updatedAt: messages.updatedAt,
+    })
     .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
@@ -126,7 +145,7 @@ export async function getMessages(
   const replyCounts = await db
     .select({
       threadId: messages.threadId,
-      count: sql<number>`count(*)::int`,
+      count: sql<number>`count(*)`,
     })
     .from(messages)
     .where(inArray(messages.threadId, msgIds))
@@ -137,21 +156,27 @@ export async function getMessages(
     if (r.threadId) replyCountMap.set(r.threadId, r.count);
   }
 
-  // Batch: reaction groups (single query for all messages)
+  // Batch: reaction rows with agent names (single query for all messages)
   const reactionRows = await db
     .select({
       messageId: reactions.messageId,
       emoji: reactions.emoji,
-      count: sql<number>`count(*)::int`,
+      agentName: agents.name,
     })
     .from(reactions)
-    .where(inArray(reactions.messageId, msgIds))
-    .groupBy(reactions.messageId, reactions.emoji);
+    .innerJoin(agents, eq(reactions.agentId, agents.id))
+    .where(inArray(reactions.messageId, msgIds));
 
-  const reactionMap = new Map<string, Array<{ emoji: string; count: number }>>();
+  const reactionMap = new Map<string, Array<{ emoji: string; count: number; agents: string[] }>>();
   for (const r of reactionRows) {
     const list = reactionMap.get(r.messageId) || [];
-    list.push({ emoji: r.emoji, count: r.count });
+    const existing = list.find((e) => e.emoji === r.emoji);
+    if (existing) {
+      existing.count++;
+      existing.agents.push(r.agentName);
+    } else {
+      list.push({ emoji: r.emoji, count: 1, agents: [r.agentName] });
+    }
     reactionMap.set(r.messageId, list);
   }
 
@@ -159,7 +184,7 @@ export async function getMessages(
   const readCounts = await db
     .select({
       messageId: readReceipts.messageId,
-      count: sql<number>`count(*)::int`,
+      count: sql<number>`count(*)`,
     })
     .from(readReceipts)
     .where(inArray(readReceipts.messageId, msgIds))
@@ -178,6 +203,7 @@ export async function getMessages(
     id: row.id,
     channel_id: row.channelId,
     agent_id: row.agentId,
+    agent_name: row.agentName || 'unknown',
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     has_attachments: row.hasAttachments,
@@ -190,11 +216,23 @@ export async function getMessages(
   }));
 }
 
-export async function getMessage(workspaceId: string, messageId: string) {
-  const db = getDb();
+export async function getMessage(db: Db, workspaceId: string, messageId: string) {
   const [row] = await db
-    .select()
+    .select({
+      id: messages.id,
+      workspaceId: messages.workspaceId,
+      channelId: messages.channelId,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      threadId: messages.threadId,
+      body: messages.body,
+      blocks: messages.blocks,
+      hasAttachments: messages.hasAttachments,
+      createdAt: messages.createdAt,
+      updatedAt: messages.updatedAt,
+    })
     .from(messages)
+    .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
 
   if (!row) return null;
@@ -202,19 +240,19 @@ export async function getMessage(workspaceId: string, messageId: string) {
   // Parallel enrichment queries for single message
   const [replyCounts, reactionRows, readCounts, attachmentMap] = await Promise.all([
     db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.threadId, row.id)),
     db
       .select({
         emoji: reactions.emoji,
-        count: sql<number>`count(*)::int`,
+        agentName: agents.name,
       })
       .from(reactions)
-      .where(eq(reactions.messageId, row.id))
-      .groupBy(reactions.emoji),
+      .innerJoin(agents, eq(reactions.agentId, agents.id))
+      .where(eq(reactions.messageId, row.id)),
     db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(readReceipts)
       .where(eq(readReceipts.messageId, row.id)),
     row.hasAttachments ? fetchAttachmentsBatch(db, [row.id]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
@@ -224,13 +262,19 @@ export async function getMessage(workspaceId: string, messageId: string) {
     id: row.id,
     channel_id: row.channelId,
     agent_id: row.agentId,
+    agent_name: row.agentName || 'unknown',
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
     reply_count: replyCounts[0]?.count ?? 0,
-    reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
+    reactions: Object.values(reactionRows.reduce<Record<string, { emoji: string; count: number; agents: string[] }>>((acc, r) => {
+      if (!acc[r.emoji]) acc[r.emoji] = { emoji: r.emoji, count: 0, agents: [] };
+      acc[r.emoji].count++;
+      acc[r.emoji].agents.push(r.agentName);
+      return acc;
+    }, {})),
     read_by_count: readCounts[0]?.count ?? 0,
     attachments: attachmentMap.get(row.id) || [],
   };

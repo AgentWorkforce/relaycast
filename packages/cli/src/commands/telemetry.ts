@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import type { CliTelemetry, TelemetryStatus } from '../telemetry.js';
 
+const TELEMETRY_DOCS_URL = 'https://github.com/AgentWorkforce/relaycast/blob/main/TELEMETRY.md';
+
 function reasonMessage(status: TelemetryStatus): string {
   if (status.reason === 'enabled') return 'Telemetry is enabled.';
   if (status.reason === 'env_opt_out') {
@@ -18,6 +20,7 @@ function printStatus(status: TelemetryStatus): void {
         env_opt_out: status.envOptOut,
         user_opt_out: status.userOptOut,
         message: reasonMessage(status),
+        documentation: TELEMETRY_DOCS_URL,
       },
       null,
       2,

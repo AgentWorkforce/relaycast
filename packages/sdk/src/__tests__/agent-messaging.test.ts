@@ -29,7 +29,7 @@ describe('AgentClient', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
     });
@@ -40,7 +40,7 @@ describe('AgentClient', () => {
       await me.send('#general', 'hello');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
     });
 
     it('URL-encodes channel name', async () => {
@@ -49,7 +49,7 @@ describe('AgentClient', () => {
       await me.send('#a/b', 'hello');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/a%2Fb/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/a%2Fb/messages');
     });
 
     it('includes attachments when provided', async () => {
@@ -79,7 +79,7 @@ describe('AgentClient', () => {
 
       expect(res).toEqual([{ id: 'm_1' }]);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/channels/general/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
       expect(init.method).toBe('GET');
     });
 
@@ -90,7 +90,7 @@ describe('AgentClient', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
-        'https://api.agentrelay.dev/v1/channels/general/messages?limit=10&before=m_2&after=m_0',
+        'https://api.relaycast.dev/v1/channels/general/messages?limit=10&before=m_2&after=m_0',
       );
     });
   });
@@ -102,7 +102,7 @@ describe('AgentClient', () => {
       await me.message('m_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1');
       expect(init.method).toBe('GET');
     });
 
@@ -112,7 +112,7 @@ describe('AgentClient', () => {
       await me.message('m/1');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m%2F1');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m%2F1');
     });
   });
 
@@ -123,7 +123,7 @@ describe('AgentClient', () => {
       await me.reply('m_1', 'reply');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1/replies');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/replies');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'reply' }));
     });
@@ -147,7 +147,7 @@ describe('AgentClient', () => {
 
       expect(res).toEqual(payload);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1/replies');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/replies');
       expect(init.method).toBe('GET');
     });
 
@@ -157,7 +157,7 @@ describe('AgentClient', () => {
       await me.thread('m_1', { limit: 25 } as any);
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/messages/m_1/replies?limit=25');
+      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/replies?limit=25');
     });
   });
 
@@ -168,7 +168,7 @@ describe('AgentClient', () => {
       await me.dm('Worker-1', 'hi');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi' }));
     });
@@ -192,7 +192,7 @@ describe('AgentClient', () => {
 
       expect(res).toEqual([{ id: 'c_1' }]);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/conversations');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations');
       expect(init.method).toBe('GET');
     });
 
@@ -202,7 +202,7 @@ describe('AgentClient', () => {
       await me.dms.messages('c_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/c_1/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('GET');
     });
 
@@ -212,7 +212,7 @@ describe('AgentClient', () => {
       await me.dms.messages('c_1', { limit: 2, before: 'm_9' } as any);
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/c_1/messages?limit=2&before=m_9');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages?limit=2&before=m_9');
     });
 
     it('createGroup() creates group DM', async () => {
@@ -221,7 +221,7 @@ describe('AgentClient', () => {
       await me.dms.createGroup({ participants: ['a', 'b'] } as any);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/group');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/group');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ participants: ['a', 'b'] }));
     });
@@ -232,7 +232,7 @@ describe('AgentClient', () => {
       await me.dms.sendMessage('c_1', 'hello');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/c_1/messages');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
     });
@@ -252,7 +252,7 @@ describe('AgentClient', () => {
       await me.dms.addParticipant('c_1', 'Worker-2');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/c_1/participants');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/participants');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ agent: 'Worker-2' }));
     });
@@ -263,7 +263,7 @@ describe('AgentClient', () => {
       await me.dms.removeParticipant('c_1', 'a/b');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.agentrelay.dev/v1/dm/c_1/participants/a%2Fb');
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/participants/a%2Fb');
       expect(init.method).toBe('DELETE');
       expect(init.body).toBeUndefined();
     });

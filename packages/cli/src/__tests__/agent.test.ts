@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
 
-const mockLoadConfig = vi.fn(() => ({ apiKey: 'rk_test', endpoint: 'https://example.test' }));
+const { mockLoadConfig, RelayMock } = vi.hoisted(() => ({
+  mockLoadConfig: vi.fn(() => ({ apiKey: 'rk_test', endpoint: 'https://example.test' })),
+  RelayMock: vi.fn(),
+}));
 vi.mock('../config.js', () => ({
   loadConfig: mockLoadConfig,
 }));
-
-const RelayMock = vi.fn();
 vi.mock('@relaycast/sdk', () => ({
   RelayCast: RelayMock,
 }));
@@ -36,7 +37,7 @@ describe('agent commands', () => {
         })),
       },
     };
-    RelayMock.mockImplementation(() => relayInstance);
+    RelayMock.mockImplementation(function () { return relayInstance; });
 
     const { registerAgentCommands } = await import('../commands/agent.js');
     const program = new Command().exitOverride();
@@ -85,7 +86,7 @@ describe('agent commands', () => {
         ]),
       },
     };
-    RelayMock.mockImplementation(() => relayInstance);
+    RelayMock.mockImplementation(function () { return relayInstance; });
 
     const { registerAgentCommands } = await import('../commands/agent.js');
     const program = new Command().exitOverride();
@@ -108,7 +109,7 @@ describe('agent commands', () => {
         })),
       },
     };
-    RelayMock.mockImplementation(() => relayInstance);
+    RelayMock.mockImplementation(function () { return relayInstance; });
 
     const { registerAgentCommands } = await import('../commands/agent.js');
     const program = new Command().exitOverride();
@@ -137,7 +138,7 @@ describe('agent commands', () => {
         })),
       },
     };
-    RelayMock.mockImplementation(() => relayInstance);
+    RelayMock.mockImplementation(function () { return relayInstance; });
 
     const { registerAgentCommands } = await import('../commands/agent.js');
     const program = new Command().exitOverride();

@@ -139,3 +139,18 @@ class TestWsClientDisconnect:
         ws.disconnect()
         mock_task.cancel.assert_called_once()
         assert ws._ping_task is None
+
+
+class TestWsClientOriginParams:
+    @pytest.mark.asyncio
+    async def test_connect_url_includes_origin_query_params(self):
+        ws = WsClient(token="at_xxx")
+        with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
+            with pytest.raises(RuntimeError):
+                await ws._connect_once()
+
+        url = connect_mock.call_args.args[0]
+        assert "token=at_xxx" in url
+        assert "origin_surface=sdk" in url
+        assert "origin_client=%40relaycast%2Fpython-sdk" in url
+        assert "origin_version=0.1.0" in url

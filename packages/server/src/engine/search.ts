@@ -1,9 +1,12 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import type { getDb } from '../db/index.js';
 import { messages, agents, channels } from '../db/schema.js';
-import { buildTsquery } from './searchQuery.js';
+import { buildFtsQuery } from './searchQuery.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export async function searchMessages(
+  db: Db,
   workspaceId: string,
   opts: {
     q: string;
@@ -14,78 +17,65 @@ export async function searchMessages(
     after?: string;
   },
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
 
-  // Build a conservative tsquery from user input.
-  // Important: treat punctuation (e.g. "cursor-test") as a delimiter, not a joiner.
-  const tsquery = buildTsquery(opts.q);
-  if (!tsquery) return [];
+  const ftsQuery = buildFtsQuery(opts.q);
+  if (!ftsQuery) return [];
 
-  const conditions: ReturnType<typeof eq>[] = [
-    eq(messages.workspaceId, workspaceId),
-    sql`${messages.searchVector} @@ to_tsquery('english', ${tsquery})`,
-  ];
-
-  // Optional channel filter
+  // Resolve optional filters to IDs
+  let channelId: string | undefined;
   if (opts.channel) {
     const [ch] = await db
       .select()
       .from(channels)
       .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, opts.channel)));
-    if (ch) {
-      conditions.push(eq(messages.channelId, ch.id));
-    }
+    if (ch) channelId = ch.id;
   }
 
-  // Optional agent filter
+  let agentId: string | undefined;
   if (opts.from) {
     const [agent] = await db
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, opts.from)));
-    if (agent) {
-      conditions.push(eq(messages.agentId, agent.id));
-    }
+    if (agent) agentId = agent.id;
   }
 
-  // Cursor pagination
-  if (opts.before) {
-    conditions.push(lt(messages.id, opts.before));
-  }
-  if (opts.after) {
-    conditions.push(gt(messages.id, opts.after));
-  }
+  // Build the FTS5 query with parameterized SQL.
+  // bm25() returns negative values where more negative = more relevant,
+  // so ORDER BY rank ASC gives best results first.
+  const rows = await db.all<{
+    id: string;
+    channel_id: string;
+    channel_name: string;
+    agent_id: string;
+    agent_name: string | null;
+    body: string;
+    created_at: number;
+    rank: number;
+  }>(sql`
+    SELECT m.id, m.channel_id, c.name AS channel_name, m.agent_id, a.name AS agent_name, m.body, m.created_at,
+           bm25(messages_fts) AS rank
+    FROM messages_fts fts
+    JOIN messages m ON m.id = fts.id
+    JOIN channels c ON c.id = m.channel_id
+    LEFT JOIN agents a ON a.id = m.agent_id
+    WHERE messages_fts MATCH ${ftsQuery}
+      AND m.workspace_id = ${workspaceId}
+      ${channelId ? sql`AND m.channel_id = ${channelId}` : sql``}
+      ${agentId ? sql`AND m.agent_id = ${agentId}` : sql``}
+      ${opts.before ? sql`AND m.id < ${opts.before}` : sql``}
+      ${opts.after ? sql`AND m.id > ${opts.after}` : sql``}
+    ORDER BY rank
+    LIMIT ${limit}
+  `);
 
-  const rows = await db
-    .select({
-      id: messages.id,
-      channelId: messages.channelId,
-      agentId: messages.agentId,
-      body: messages.body,
-      createdAt: messages.createdAt,
-      rank: sql<number>`ts_rank(${messages.searchVector}, to_tsquery('english', ${tsquery}))`,
-    })
-    .from(messages)
-    .where(and(...conditions))
-    .orderBy(sql`ts_rank(${messages.searchVector}, to_tsquery('english', ${tsquery})) DESC`)
-    .limit(limit);
-
-  // Enrich with channel name and agent name
-  const enriched = [];
-  for (const row of rows) {
-    const [ch] = await db.select().from(channels).where(eq(channels.id, row.channelId));
-    const [agent] = await db.select().from(agents).where(eq(agents.id, row.agentId));
-
-    enriched.push({
-      id: row.id,
-      channel_name: ch?.name ?? 'unknown',
-      agent_name: agent?.name ?? 'unknown',
-      text: row.body,
-      created_at: row.createdAt.toISOString(),
-      relevance_score: row.rank,
-    });
-  }
-
-  return enriched;
+  return rows.map((row) => ({
+    id: row.id,
+    channel_name: row.channel_name || 'unknown',
+    agent_name: row.agent_name || 'unknown',
+    text: row.body,
+    created_at: new Date(row.created_at * 1000).toISOString(),
+    relevance_score: row.rank,
+  }));
 }

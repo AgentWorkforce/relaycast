@@ -1,12 +1,16 @@
-// Keep this logic separate so query parsing can be unit-tested without a DB.
-export function buildTsquery(q: string): string {
-  // Treat punctuation as a delimiter ("cursor-test" -> "cursor" + "test").
-  // This avoids accidentally joining tokens into a non-existent lexeme.
+/**
+ * Build an FTS5 match expression from user input.
+ *
+ * FTS5 uses implicit AND between terms. Special characters are stripped
+ * to prevent query syntax errors. Double-quotes enable phrase matching.
+ */
+export function buildFtsQuery(q: string): string {
   return q
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, ' ')
+    // Strip characters that have special meaning in FTS5 (except quotes for phrases)
+    .replace(/[^a-z0-9\s"]/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
-    .join(' & ');
+    .join(' ');
 }

@@ -1,5 +1,6 @@
-import { eq, and, sql, lt, gt, isNull } from 'drizzle-orm';
-import { getDb } from '../db/index.js';
+import crypto from 'node:crypto';
+import { eq, and, sql, lt, gt, isNull, inArray } from 'drizzle-orm';
+import type { getDb } from '../db/index.js';
 import {
   messages,
   channels,
@@ -9,13 +10,23 @@ import {
 } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
+type Db = ReturnType<typeof getDb>;
+
+function getDmPairKey(workspaceId: string, agentA: string, agentB: string): string {
+  const [first, second] = [agentA, agentB].sort();
+  return crypto
+    .createHash('sha256')
+    .update(`${workspaceId}:${first}:${second}`)
+    .digest('hex')
+    .slice(0, 24);
+}
+
 export async function sendDm(
+  db: Db,
   workspaceId: string,
   fromAgentId: string,
   data: { to: string; text: string },
 ) {
-  const db = getDb();
-
   // Resolve the target agent by name
   const [toAgent] = await db
     .select()
@@ -28,77 +39,70 @@ export async function sendDm(
     throw err;
   }
 
-  // Check for existing DM conversation between these two agents
-  // Find conversations where both agents are participants and dm_type is '1:1'
-  const existingConversations = await db
-    .select({ conversationId: dmParticipants.conversationId })
-    .from(dmParticipants)
-    .where(eq(dmParticipants.agentId, fromAgentId));
+  const existing = await db.all<{ id: string; channel_id: string }>(sql`
+    SELECT dc.id, dc.channel_id
+    FROM dm_conversations dc
+    JOIN dm_participants p1
+      ON p1.conversation_id = dc.id
+     AND p1.agent_id = ${fromAgentId}
+     AND p1.left_at IS NULL
+    JOIN dm_participants p2
+      ON p2.conversation_id = dc.id
+     AND p2.agent_id = ${toAgent.id}
+     AND p2.left_at IS NULL
+    WHERE dc.workspace_id = ${workspaceId}
+      AND dc.dm_type = '1:1'
+    LIMIT 1
+  `);
 
-  let conversationId: string | null = null;
+  let conversationId = existing[0]?.id;
 
-  for (const conv of existingConversations) {
-    // Check if target agent is also in this conversation
-    const [match] = await db
-      .select()
-      .from(dmParticipants)
-      .where(
-        and(
-          eq(dmParticipants.conversationId, conv.conversationId),
-          eq(dmParticipants.agentId, toAgent.id),
-        ),
-      );
-
-    if (match) {
-      // Verify it's a 1:1 DM conversation
-      const [convRecord] = await db
-        .select()
-        .from(dmConversations)
-        .where(
-          and(
-            eq(dmConversations.id, conv.conversationId),
-            eq(dmConversations.dmType, '1:1'),
-            eq(dmConversations.workspaceId, workspaceId),
-          ),
-        );
-      if (convRecord) {
-        conversationId = convRecord.id;
-        break;
-      }
-    }
-  }
-
-  // Auto-create conversation if first message between these agents
   if (!conversationId) {
-    conversationId = generateId();
-    const channelId = generateId();
+    const pairKey = getDmPairKey(workspaceId, fromAgentId, toAgent.id);
+    const deterministicConversationId = `dm_${pairKey}`;
+    const deterministicChannelId = `dmch_${pairKey}`;
 
-    // Create a private channel for the DM (channel_type=1 for DM)
     await db.insert(channels).values({
-      id: channelId,
+      id: deterministicChannelId,
       workspaceId,
-      name: `dm-${conversationId}`,
+      name: `dm-${pairKey}`,
       channelType: 1,
-    });
+    }).onConflictDoNothing();
 
-    // Create the DM conversation
     await db.insert(dmConversations).values({
-      id: conversationId,
+      id: deterministicConversationId,
       workspaceId,
-      channelId,
+      channelId: deterministicChannelId,
       dmType: '1:1',
-    });
+    }).onConflictDoNothing();
 
-    // Add both participants (insert individually to avoid multi-row DEFAULT issues)
-    await db.insert(dmParticipants).values({ conversationId, agentId: fromAgentId });
-    await db.insert(dmParticipants).values({ conversationId, agentId: toAgent.id });
+    await db.insert(dmParticipants).values({
+      conversationId: deterministicConversationId,
+      agentId: fromAgentId,
+    }).onConflictDoNothing();
+    await db.insert(dmParticipants).values({
+      conversationId: deterministicConversationId,
+      agentId: toAgent.id,
+    }).onConflictDoNothing();
+
+    conversationId = deterministicConversationId;
   }
 
-  // Get the channel for this conversation
   const [conv] = await db
-    .select()
+    .select({ id: dmConversations.id, channelId: dmConversations.channelId })
     .from(dmConversations)
-    .where(eq(dmConversations.id, conversationId));
+    .where(
+      and(
+        eq(dmConversations.id, conversationId),
+        eq(dmConversations.workspaceId, workspaceId),
+      ),
+    );
+
+  if (!conv) {
+    const err = new Error('Conversation not found');
+    Object.assign(err, { code: 'not_found', status: 404 });
+    throw err;
+  }
 
   // Post the message
   const messageId = generateId();
@@ -116,7 +120,7 @@ export async function sendDm(
 
   return {
     id: message.id,
-    conversation_id: conversationId,
+    conversation_id: conv.id,
     from_agent_id: message.agentId,
     to: data.to,
     text: message.body,
@@ -124,80 +128,111 @@ export async function sendDm(
   };
 }
 
-export async function listConversations(workspaceId: string, agentId: string) {
-  const db = getDb();
+export async function listConversations(db: Db, workspaceId: string, agentId: string) {
+  const conversationRows = await db
+    .select({
+      id: dmConversations.id,
+      dmType: dmConversations.dmType,
+      name: dmConversations.name,
+      channelId: dmConversations.channelId,
+      createdAt: dmConversations.createdAt,
+    })
+    .from(dmConversations)
+    .innerJoin(dmParticipants, eq(dmParticipants.conversationId, dmConversations.id))
+    .where(
+      and(
+        eq(dmConversations.workspaceId, workspaceId),
+        eq(dmParticipants.agentId, agentId),
+        isNull(dmParticipants.leftAt),
+      ),
+    );
 
-  // Get all conversations this agent is a participant in
-  const participantRows = await db
-    .select({ conversationId: dmParticipants.conversationId })
-    .from(dmParticipants)
-    .where(and(eq(dmParticipants.agentId, agentId), isNull(dmParticipants.leftAt)));
-
-  const conversations = [];
-  for (const row of participantRows) {
-    const [conv] = await db
-      .select()
-      .from(dmConversations)
-      .where(
-        and(
-          eq(dmConversations.id, row.conversationId),
-          eq(dmConversations.workspaceId, workspaceId),
-        ),
-      );
-    if (!conv) continue;
-
-    // Get last message
-    const [lastMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.channelId, conv.channelId))
-      .orderBy(sql`${messages.id} DESC`)
-      .limit(1);
-
-    // Get other participants
-    const participants = await db
-      .select({ agentId: dmParticipants.agentId, agentName: agents.name })
-      .from(dmParticipants)
-      .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-      .where(eq(dmParticipants.conversationId, conv.id));
-
-    // Get unread count (messages after last read - simplified as total for now)
-    const [unreadCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(eq(messages.channelId, conv.channelId));
-
-    conversations.push({
-      id: conv.id,
-      dm_type: conv.dmType,
-      name: conv.name,
-      participants: participants.map((p) => ({
-        agent_id: p.agentId,
-        agent_name: p.agentName,
-      })),
-      last_message: lastMessage
-        ? {
-            id: lastMessage.id,
-            text: lastMessage.body,
-            agent_id: lastMessage.agentId,
-            created_at: lastMessage.createdAt.toISOString(),
-          }
-        : null,
-      unread_count: unreadCount?.count ?? 0,
-      created_at: conv.createdAt.toISOString(),
-    });
+  if (conversationRows.length === 0) {
+    return [];
   }
 
-  return conversations;
+  const conversationIds = conversationRows.map((row) => row.id);
+  const channelIds = conversationRows.map((row) => row.channelId);
+
+  const participantRows = await db
+    .select({
+      conversationId: dmParticipants.conversationId,
+      agentId: dmParticipants.agentId,
+      agentName: agents.name,
+    })
+    .from(dmParticipants)
+    .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+    .where(inArray(dmParticipants.conversationId, conversationIds));
+
+  const counts = await db
+    .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
+    .from(messages)
+    .where(inArray(messages.channelId, channelIds))
+    .groupBy(messages.channelId);
+
+  const latestMessageIds = await db
+    .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
+    .from(messages)
+    .where(inArray(messages.channelId, channelIds))
+    .groupBy(messages.channelId);
+
+  const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
+  const lastMessages = lastIds.length > 0
+    ? await db
+      .select({
+        id: messages.id,
+        channelId: messages.channelId,
+        agentId: messages.agentId,
+        body: messages.body,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(inArray(messages.id, lastIds))
+    : [];
+
+  const participantsByConversation = new Map<string, Array<{ agent_id: string; agent_name: string }>>();
+  for (const row of participantRows) {
+    const list = participantsByConversation.get(row.conversationId) || [];
+    list.push({ agent_id: row.agentId, agent_name: row.agentName });
+    participantsByConversation.set(row.conversationId, list);
+  }
+
+  const countByChannel = new Map<string, number>(
+    counts.map((row) => [row.channelId, row.count]),
+  );
+
+  const lastMessageByChannel = new Map<string, typeof lastMessages[number]>(
+    lastMessages.map((row) => [row.channelId, row]),
+  );
+
+  return conversationRows.map((conv) => {
+    const lastMessage = lastMessageByChannel.get(conv.channelId);
+    return {
+      id: conv.id,
+      type: conv.dmType,
+      name: conv.name,
+      participants: participantsByConversation.get(conv.id) || [],
+      last_message: lastMessage
+        ? {
+          id: lastMessage.id,
+          text: lastMessage.body,
+          agent_id: lastMessage.agentId,
+          created_at: lastMessage.createdAt.toISOString(),
+        }
+        : null,
+      unread_count: countByChannel.get(conv.channelId) ?? 0,
+      created_at: conv.createdAt.toISOString(),
+    };
+  });
 }
 
 export async function getDmMessages(
+  db: Db,
   workspaceId: string,
   conversationId: string,
   agentId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
 ) {
-  const db = getDb();
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   // Verify agent is a participant
@@ -208,6 +243,7 @@ export async function getDmMessages(
       and(
         eq(dmParticipants.conversationId, conversationId),
         eq(dmParticipants.agentId, agentId),
+        isNull(dmParticipants.leftAt),
       ),
     );
 
@@ -257,4 +293,3 @@ export async function getDmMessages(
     created_at: r.createdAt.toISOString(),
   }));
 }
-
