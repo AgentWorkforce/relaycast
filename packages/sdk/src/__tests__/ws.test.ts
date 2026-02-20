@@ -49,14 +49,18 @@ describe('WsClient', () => {
     vi.useRealTimers();
   });
 
-  it('connects to correct URL with token', () => {
+  it('connects to correct URL with token and sdk origin', () => {
     const client = new WsClient({ token: 'at_live_test' });
     client.connect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'wss://api.relaycast.dev/v1/ws?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('wss://api.relaycast.dev');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('converts http baseUrl to ws', () => {
@@ -66,9 +70,13 @@ describe('WsClient', () => {
     });
     client.connect();
 
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'ws://localhost:8080/v1/ws?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('ws://localhost:8080');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('normalizes trailing slash in baseUrl', () => {
@@ -78,9 +86,13 @@ describe('WsClient', () => {
     });
     client.connect();
 
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'wss://pr28-api.relaycast.dev/v1/ws?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('wss://pr28-api.relaycast.dev');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('emits events from server messages', () => {

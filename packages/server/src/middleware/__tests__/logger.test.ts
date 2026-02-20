@@ -127,6 +127,27 @@ describe('loggerMiddleware', () => {
     expect(mockLogger.flush).toHaveBeenCalledTimes(1);
   });
 
+  it('captures origin metadata from endpoint parameters', async () => {
+    const app = makeApp();
+
+    const res = await app.request('/v1/channels?origin_surface=sdk&origin_client=query-client&origin_version=0.1.0', {
+      headers: {
+        Authorization: 'Bearer at_live_abcdef123456',
+        'X-Relaycast-Origin-Client': '@relaycast/mcp',
+        'X-Relaycast-Origin-Version': '0.3.1',
+      },
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    const [, fields] = mockLogger.warn.mock.calls[0];
+    expect(fields).toMatchObject({
+      origin_surface: 'sdk',
+      origin_client: '@relaycast/mcp',
+      origin_version: '0.3.1',
+    });
+  });
+
   it('logs server failures as error', async () => {
     const app = makeApp();
     const res = await app.request('/boom');

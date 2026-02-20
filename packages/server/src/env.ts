@@ -23,6 +23,8 @@ export interface CloudflareBindings {
   APP_SEMVER?: string;
   APP_VERSION?: string;
   SDK_SEMVER?: string;
+  DO_NOT_TRACK?: string;
+  RELAYCAST_TELEMETRY_DISABLED?: string;
   POSTHOG_API_KEY?: string;
   POSTHOG_HOST?: string;
 }

@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -58,6 +59,11 @@ reactionRoutes.post(
         }),
         'queue reaction.added',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
+        message_id: c.req.param('id'),
+        emoji,
+        channel_id: channel_id ?? null,
+      });
 
       return c.json({ ok: true, data: reactionData }, 201);
     } catch (err: unknown) {
@@ -126,6 +132,10 @@ reactionRoutes.delete(
         }),
         'queue reaction.removed',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_reaction_removed', {
+        message_id: c.req.param('id'),
+        emoji: c.req.param('emoji'),
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {

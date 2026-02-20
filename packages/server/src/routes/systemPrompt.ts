@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as systemPromptEngine from '../engine/systemPrompt.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const systemPromptRoutes = new Hono<AppEnv>();
 
@@ -29,6 +30,9 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
 
     if (reset === true || prompt === null) {
       const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, null);
+      emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+        operation: 'reset',
+      });
       return c.json({ ok: true, data: result });
     }
 
@@ -40,6 +44,9 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
     }
 
     const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, prompt);
+    emitServerEvent(c, workspace.id, 'relaycast_server_system_prompt_updated', {
+      operation: 'set',
+    });
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };

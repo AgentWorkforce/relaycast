@@ -1,0 +1,53 @@
+{
+  "id": "traj_psb7y9q9bcpg",
+  "version": 1,
+  "task": {
+    "title": "Make SDK origin metadata internal-only and non-configurable"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T00:10:35.985Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T00:12:01.227Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_wammo5r13zj3",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T00:12:01.227Z",
+      "events": [
+        {
+          "ts": 1771546321227,
+          "type": "decision",
+          "content": "MCP now imports internal factory from @relaycast/sdk/internal: MCP now imports internal factory from @relaycast/sdk/internal",
+          "raw": {
+            "question": "MCP now imports internal factory from @relaycast/sdk/internal",
+            "chosen": "MCP now imports internal factory from @relaycast/sdk/internal",
+            "alternatives": [],
+            "reasoning": "Keeps origin injection internal and explicit at integration boundary without exposing it to standard SDK consumers."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T00:12:03.958Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-20T00:12:03.958Z",
+  "retrospective": {
+    "summary": "Made SDK origin metadata non-configurable for users by removing public origin options and limiting origin injection to internal path; MCP now uses @relaycast/sdk/internal. Verified with SDK/MCP build and tests.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  }
+}

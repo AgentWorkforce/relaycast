@@ -12,12 +12,17 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
+}));
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { searchRoutes } from '../../routes/search.js';
 import { getDb } from '../../db/index.js';
 import * as searchEngine from '../../engine/search.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
 import {
   createMockBindings, mockDbForAgentAuth, mockDbForWorkspaceAuth,
   agentAuthHeaders, wsAuthHeaders,
@@ -64,6 +69,14 @@ describe('GET /v1/search', () => {
     expect(body.data).toHaveLength(1);
     expect(body.data[0].text).toContain('deployment error');
     expect(body.data[0].relevance_score).toBe(0.85);
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'ws_123',
+      'relaycast_server_search_executed',
+      expect.objectContaining({
+        query_length: 'deployment error'.length,
+      }),
+    );
   });
 
   it('returns 400 when q is missing', async () => {

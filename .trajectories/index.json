@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-19T18:14:06.379Z",
+  "lastUpdated": "2026-02-20T01:42:34.863Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -609,6 +609,88 @@
       "startedAt": "2026-02-19T18:13:59.002Z",
       "completedAt": "2026-02-19T18:14:06.305Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lnkh9rtdn04z.json"
+    },
+    "traj_9gj8uce900eq": {
+      "title": "Define Relaycast telemetry event plan and audit current MCP server telemetry implementation",
+      "status": "completed",
+      "startedAt": "2026-02-19T21:59:54.539Z",
+      "completedAt": "2026-02-19T22:02:16.586Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_9gj8uce900eq.json"
+    },
+    "traj_1zx5j907bfz9": {
+      "title": "Create root TELEMETRY.md with Relaycast PostHog events table and naming conventions",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:07:29.319Z",
+      "completedAt": "2026-02-19T22:08:37.041Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_1zx5j907bfz9.json"
+    },
+    "traj_32weksbyao4m": {
+      "title": "Remove legacy docs/TELEMETRY.md pointer and add concrete telemetry implementation plan",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:09:21.278Z",
+      "completedAt": "2026-02-19T22:10:10.158Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_32weksbyao4m.json"
+    },
+    "traj_8ve1h3nihz9u": {
+      "title": "Audit and fix telemetry disclosure references to canonical TELEMETRY.md",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:37:01.506Z",
+      "completedAt": "2026-02-19T22:37:50.927Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8ve1h3nihz9u.json"
+    },
+    "traj_hx25e0ryz9vz": {
+      "title": "Add origin attribution parameters from SDK/MCP into server telemetry metadata",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:46:47.608Z",
+      "completedAt": "2026-02-19T22:46:58.050Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_hx25e0ryz9vz.json"
+    },
+    "traj_qyjiw6is57yx": {
+      "title": "Route client telemetry through server ingestion endpoint instead of direct PostHog calls",
+      "status": "completed",
+      "startedAt": "2026-02-19T22:54:46.371Z",
+      "completedAt": "2026-02-19T23:10:39.985Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_qyjiw6is57yx.json"
+    },
+    "traj_psb7y9q9bcpg": {
+      "title": "Make SDK origin metadata internal-only and non-configurable",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:10:35.985Z",
+      "completedAt": "2026-02-20T00:12:03.958Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_psb7y9q9bcpg.json"
+    },
+    "traj_7qgqustv0zzw": {
+      "title": "Simplify origin handling: hardcoded internal constants, no normalization functions",
+      "status": "active",
+      "startedAt": "2026-02-20T00:16:37.909Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_7qgqustv0zzw.json"
+    },
+    "traj_qit8f873kdm0": {
+      "title": "Finalize origin hardcoding refactor",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:21:42.885Z",
+      "completedAt": "2026-02-20T00:21:42.956Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_qit8f873kdm0.json"
+    },
+    "traj_kujdxi4a2dyo": {
+      "title": "Remove telemetry ingestion endpoint and send client telemetry directly to PostHog",
+      "status": "active",
+      "startedAt": "2026-02-20T00:34:19.822Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_kujdxi4a2dyo.json"
+    },
+    "traj_v99y9f14ixs6": {
+      "title": "Finalize direct PostHog telemetry switch",
+      "status": "completed",
+      "startedAt": "2026-02-20T00:38:21.608Z",
+      "completedAt": "2026-02-20T00:38:21.678Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_v99y9f14ixs6.json"
+    },
+    "traj_6vawys36wf3u": {
+      "title": "Expand server telemetry coverage across routes and align schema/docs/tests",
+      "status": "completed",
+      "startedAt": "2026-02-20T01:35:18.494Z",
+      "completedAt": "2026-02-20T01:42:34.786Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6vawys36wf3u.json"
     }
   }
 }

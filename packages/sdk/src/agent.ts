@@ -42,7 +42,7 @@ import type {
   WsReconnectingEvent,
 } from '@relaycast/types';
 import { HttpClient, type RequestOptions } from './client.js';
-import { WsClient } from './ws.js';
+import { WsClient, withInternalWsOrigin } from './ws.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -69,10 +69,17 @@ export class AgentClient {
 
   connect(): void {
     if (this.ws) return;
-    this.ws = new WsClient({
-      token: this.client.apiKey,
-      baseUrl: this.client.baseUrl,
-    });
+    this.ws = new WsClient(withInternalWsOrigin(
+      {
+        token: this.client.apiKey,
+        baseUrl: this.client.baseUrl,
+      },
+      {
+        surface: this.client.originSurface,
+        client: this.client.originClient,
+        version: this.client.originVersion,
+      },
+    ));
     this.ws.connect();
   }
 

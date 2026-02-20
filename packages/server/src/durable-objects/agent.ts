@@ -1,11 +1,23 @@
 import type { CloudflareBindings } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
+import { normalizeTelemetryOrigin, type TelemetryOrigin } from '@relaycast/types';
+import { captureInternalTelemetry, workspaceDistinctId } from '../lib/telemetry.js';
 
 /**
  * Maximum number of recent events kept in DO storage for fast resync.
  * Events beyond this window require a D1 query.
  */
 const RESYNC_BUFFER_SIZE = 500;
+
+type AgentConnectionMeta = {
+  workspaceId?: string;
+  agentId?: string;
+  connectedAtMs?: number;
+  sessionScope?: string;
+  origin_surface?: string;
+  origin_client?: string;
+  origin_version?: string;
+};
 
 /**
  * AgentDO — the single client-facing WebSocket actor per agent.
@@ -297,7 +309,22 @@ export class AgentDO implements DurableObject {
   /*  GET /ws — WebSocket upgrade (hibernation)                          */
   /* ------------------------------------------------------------------ */
 
-  private handleWebSocketUpgrade(_request: Request): Response {
+  private handleWebSocketUpgrade(request: Request): Response {
+    const url = new URL(request.url);
+    const connectionMeta: AgentConnectionMeta = {
+      workspaceId: url.searchParams.get('workspace_id') ?? undefined,
+      agentId: url.searchParams.get('agent_id') ?? undefined,
+      connectedAtMs: Date.now(),
+      sessionScope: url.searchParams.get('session_scope') ?? 'agent',
+      ...normalizeTelemetryOrigin({
+        origin_surface: url.searchParams.get('origin_surface') ?? undefined,
+        origin_client: url.searchParams.get('origin_client') ?? undefined,
+        origin_version: url.searchParams.get('origin_version') ?? undefined,
+      }),
+    };
+
+    void this.state.storage.put('meta', connectionMeta);
+
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
 
@@ -318,10 +345,12 @@ export class AgentDO implements DurableObject {
     // Persist agent identity for ping/disconnect presence updates.
     // This can arrive before message traffic (e.g. presence fanout), so keep it current.
     if (event.workspaceId && event.agentId) {
+      const currentMeta = (await this.state.storage.get<AgentConnectionMeta>('meta')) ?? {};
       await this.state.storage.put('meta', {
+        ...currentMeta,
         workspaceId: event.workspaceId as string,
         agentId: event.agentId as string,
-      });
+      } satisfies AgentConnectionMeta);
     }
 
     const seq = await this.incrementAgentSeq();
@@ -408,15 +437,41 @@ export class AgentDO implements DurableObject {
     // If no sockets remain, notify PresenceDO so the agent goes offline immediately.
     const remaining = this.state.getWebSockets();
     if (remaining.length === 0) {
-      const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
+      const meta = await this.state.storage.get<AgentConnectionMeta>('meta');
       if (meta) {
-        const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
-        const stub = this.env.PRESENCE_DO.get(doId);
-        stub.fetch(new Request('http://do/disconnect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
-        })).catch(() => {});
+        const workspaceId = meta.workspaceId;
+        const agentId = meta.agentId;
+        if (workspaceId && agentId) {
+          const doId = this.env.PRESENCE_DO.idFromName(workspaceId);
+          const stub = this.env.PRESENCE_DO.get(doId);
+          stub.fetch(new Request('http://do/disconnect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId, workspaceId }),
+          })).catch(() => {});
+        }
+
+        const origin: TelemetryOrigin = normalizeTelemetryOrigin({
+          origin_surface: meta.origin_surface,
+          origin_client: meta.origin_client,
+          origin_version: meta.origin_version,
+        });
+        const resolvedWorkspaceId = workspaceId ?? 'unknown_workspace';
+        const connectedAt = meta.connectedAtMs ?? Date.now();
+        const durationMs = Math.max(Date.now() - connectedAt, 0);
+
+        await captureInternalTelemetry(this.env, {
+          event: 'relaycast_server_ws_session_ended',
+          distinct_id: workspaceDistinctId(resolvedWorkspaceId),
+          origin,
+          properties: {
+            workspace_id: resolvedWorkspaceId,
+            session_scope: meta.sessionScope ?? 'agent',
+            duration_ms: durationMs,
+            close_code: _code,
+            was_clean: _wasClean,
+          },
+        });
       }
     }
   }
