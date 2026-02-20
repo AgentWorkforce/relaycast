@@ -73,7 +73,7 @@ class WsClient:
 
     async def _connect_once(self) -> None:
         url = (
-            f"{self._base_url}/v1/stream"
+            f"{self._base_url}/v1/ws"
             f"?token={quote(self._token, safe='')}"
             f"&origin_surface={quote(self._origin_surface, safe='')}"
             f"&origin_client={quote(self._origin_client, safe='')}"
