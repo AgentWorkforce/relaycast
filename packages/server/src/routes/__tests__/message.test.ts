@@ -26,6 +26,10 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
+}));
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
@@ -33,6 +37,7 @@ import { messageRoutes } from '../../routes/message.js';
 import { getDb } from '../../db/index.js';
 import * as messageEngine from '../../engine/message.js';
 import * as channelEngine from '../../engine/channel.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
 import {
   createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
@@ -95,6 +100,14 @@ describe('POST /v1/channels/:name/messages', () => {
       workspaceId: FAKE_WORKSPACE.id,
       data: expect.objectContaining({ channel_name: 'general' }),
     }));
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'relaycast_server_message_created',
+      expect.objectContaining({
+        channel_id: 'ch_789',
+      }),
+    );
   });
 
   it('returns 400 when text is missing', async () => {

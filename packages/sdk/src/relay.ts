@@ -39,6 +39,7 @@ import { AgentClient } from './agent.js';
 import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
 import { SDK_VERSION } from './version.js';
+import { SDK_ORIGIN } from './origin.js';
 
 export interface RelayCastOptions {
   apiKey: string;
@@ -70,6 +71,9 @@ export class RelayCast {
       headers: {
         'Content-Type': 'application/json',
         'X-SDK-Version': SDK_VERSION,
+        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
+        'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
+        'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
       },
       body: JSON.stringify({ name }),
     });
@@ -265,10 +269,7 @@ export class RelayCast {
   };
 
   as(agentToken: string): AgentClient {
-    const agentHttpClient = new HttpClient({
-      apiKey: agentToken,
-      baseUrl: this.client.baseUrl,
-    });
+    const agentHttpClient = this.client.withApiKey(agentToken);
     return new AgentClient(agentHttpClient);
   }
 }

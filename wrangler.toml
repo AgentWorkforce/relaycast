@@ -5,6 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
+# APP_SEMVER / APP_VERSION / SDK_SEMVER can be injected at deploy time for observability metadata.
+# POSTHOG_HOST is optional and defaults to https://us.i.posthog.com in the server logger.
 
 # D1 Database
 [[d1_databases]]
@@ -177,3 +179,4 @@ crons = []
 # R2_ACCESS_KEY_ID
 # R2_SECRET_ACCESS_KEY
 # CF_ACCOUNT_ID
+# POSTHOG_API_KEY

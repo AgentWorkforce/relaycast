@@ -175,7 +175,7 @@ jobs:
               `| API | ${url} |\n` +
               `| Health | ${url}/health |\n` +
               `| Observer | ${observerUrl} |\n\n` +
-              `This preview shares the staging database and will be cleaned up when the PR is closed.\n\n` +
+              `This preview shares the staging database and will be cleaned up when the PR is merged or closed.\n\n` +
               `### Run E2E tests\n` +
               `\`\`\`bash\n` +
               `npm run e2e -- ${url} --ci\n` +
@@ -201,7 +201,7 @@ jobs:
 
   cleanup-preview:
     name: Cleanup Preview
-    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.action == 'closed' && (github.event.pull_request.merged == true || github.event.pull_request.state == 'closed') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -210,5 +210,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npx wrangler delete --name "relaycast-pr-${{ github.event.pull_request.number }}" --force
-      - run: npx wrangler delete --name "relaycast-observer-pr-${{ github.event.pull_request.number }}" --force || true
+      - name: Delete preview workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          for worker in "relaycast-pr-${PR_NUM}" "relaycast-observer-pr-${PR_NUM}"; do
+            echo "Deleting ${worker}"
+            if ! npx wrangler delete --name "${worker}" --force; then
+              echo "Unable to delete ${worker} (already removed or not found)."
+            fi
+          done

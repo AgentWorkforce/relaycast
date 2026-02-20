@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env.js';
 import { dbMiddleware } from './middleware/db.js';
+import { loggerMiddleware } from './middleware/logger.js';
 import { MCP_VERSION } from '@relaycast/mcp';
 
 // Route imports
@@ -27,6 +28,9 @@ import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
+import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
+import { requiredOriginInfo } from './lib/origin.js';
+import { emitServerEvent } from './lib/serverTelemetry.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -40,6 +44,7 @@ const app = new Hono<AppEnv>();
 
 // Global middleware
 app.use('*', cors());
+app.use('*', loggerMiddleware);
 app.use('*', dbMiddleware);
 
 // MCP server card — before secureHeaders to avoid cross-origin policy issues
@@ -174,6 +179,7 @@ app.get('/v1/ws', async (c) => {
 
     const workspaceId = agent.workspaceId;
     const agentId = agent.id;
+    const origin = requiredOriginInfo(c.req.raw);
 
     // Register the agent as online in PresenceDO (fire-and-forget)
     const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
@@ -186,7 +192,21 @@ app.get('/v1/ws', async (c) => {
 
     const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
     const stub = c.env.AGENT_DO.get(doId);
-    return stub.fetch(new Request(url.toString(), c.req.raw));
+    url.searchParams.set('workspace_id', workspaceId);
+    url.searchParams.set('agent_id', agentId);
+    url.searchParams.set('session_scope', 'agent');
+    url.searchParams.set('origin_surface', origin.origin_surface);
+    url.searchParams.set('origin_client', origin.origin_client);
+    url.searchParams.set('origin_version', origin.origin_version);
+
+    const response = await stub.fetch(new Request(url.toString(), c.req.raw));
+    if (response.status === 101) {
+      emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
+        agent_id: agentId,
+        session_scope: 'agent',
+      });
+    }
+    return response;
   }
 
   if (token.startsWith('rk_live_')) {
@@ -203,7 +223,20 @@ app.get('/v1/ws', async (c) => {
 
     const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspace.id);
     const stub = c.env.WORKSPACE_STREAM_DO.get(doId);
-    return stub.fetch(new Request(url.toString(), c.req.raw));
+    const origin = requiredOriginInfo(c.req.raw);
+    url.searchParams.set('workspace_id', workspace.id);
+    url.searchParams.set('session_scope', 'workspace');
+    url.searchParams.set('origin_surface', origin.origin_surface);
+    url.searchParams.set('origin_client', origin.origin_client);
+    url.searchParams.set('origin_version', origin.origin_version);
+
+    const response = await stub.fetch(new Request(url.toString(), c.req.raw));
+    if (response.status === 101) {
+      emitServerEvent(c, workspace.id, 'relaycast_server_ws_session_started', {
+        session_scope: 'workspace',
+      });
+    }
+    return response;
   }
 
   return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
@@ -241,6 +274,15 @@ app.notFound((c) => {
 // Global error handler
 app.onError((err, c) => {
   const error = err as Error & { code?: string; status?: number };
+  const logger = getRequestLogger(c, 'worker.on_error');
+  logger.error('Unhandled request error', {
+    error_code: error.code ?? 'internal_error',
+    error_status: error.status ?? 500,
+    path: c.req.path,
+    method: c.req.method,
+    ...toErrorDetails(error),
+  });
+
   if (error.message?.includes('JSON')) {
     return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
   }
@@ -259,35 +301,48 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const { deliverEvent } = await import('./engine/eventDelivery.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env, { source: 'worker.queue' });
 
   for (const msg of batch.messages) {
     try {
       const event = msg.body as { type: string; workspaceId: string; data: Record<string, unknown> };
       const result = await deliverEvent(db, event.workspaceId, event.type, event.data);
       if (result.failed > 0) {
-        console.warn(
-          `[queue] Non-retryable webhook delivery failures for event ${event.type}: ${result.failed}/${result.attempted}`,
-        );
+        logger.warn('Non-retryable webhook delivery failures', {
+          event_type: event.type,
+          workspace_id: event.workspaceId,
+          failed: result.failed,
+          attempted: result.attempted,
+        });
       }
       msg.ack();
-    } catch {
+    } catch (error) {
+      logger.error('Webhook queue message processing failed; retrying', {
+        ...toErrorDetails(error),
+      });
       msg.retry();
     }
   }
+  await logger.flush();
 }
 
 // Scheduled handler for cleanup tasks
 async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
   const { getDb } = await import('./db/index.js');
   const db = getDb(env.DB);
+  const logger = createLogger(env, { source: 'worker.scheduled' });
 
   // Clean up expired idempotency keys
   try {
     const { sql } = await import('drizzle-orm');
     await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
-  } catch {
-    // Table may not exist yet
+  } catch (error) {
+    logger.warn('Failed to clean expired idempotency keys', {
+      ...toErrorDetails(error),
+      schedule: event.cron ?? 'unknown',
+    });
   }
+  await logger.flush();
 }
 
 export default {

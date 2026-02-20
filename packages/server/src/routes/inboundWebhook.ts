@@ -6,6 +6,7 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
@@ -44,6 +45,10 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
       ch.id,
       { name },
     );
+    emitServerEvent(c, workspace.id, 'relaycast_server_inbound_webhook_created', {
+      webhook_id: result.webhook_id,
+      channel_name: channel,
+    });
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -86,6 +91,9 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
         error: { code: 'webhook_not_found', message: 'Webhook not found' },
       }, 404);
     }
+    emitServerEvent(c, workspace.id, 'relaycast_server_inbound_webhook_deleted', {
+      webhook_id: c.req.param('id'),
+    });
     return c.body(null, 204);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -117,7 +125,11 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
 
     const eventData = { ...responseData, channel_id };
     if (channel_id) {
-      runInBackground(c, fanoutToChannel(c, channel_id, 'webhook.received', eventData), 'fanout webhook.received');
+      runInBackground(
+        c,
+        fanoutToChannel(c, channel_id, 'webhook.received', eventData, undefined, workspace_id),
+        'fanout webhook.received',
+      );
     }
     runInBackground(
       c,
@@ -128,6 +140,12 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       }),
       'queue webhook.received',
     );
+    emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
+      webhook_id: result.webhook_id,
+      message_id: result.message_id,
+      channel_id,
+      source: source ?? null,
+    });
 
     return c.json({ ok: true, data: responseData }, 201);
   } catch (err: unknown) {

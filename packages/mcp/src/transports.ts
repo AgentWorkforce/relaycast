@@ -52,7 +52,11 @@ export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: Ses
       }
 
       // New session — create fresh MCP server + transport + telemetry
-      const telemetry = createMcpTelemetry(MCP_VERSION);
+      const telemetry = createMcpTelemetry(MCP_VERSION, {
+        originSurface: 'mcp',
+        originClient: '@relaycast/mcp',
+        originVersion: MCP_VERSION,
+      });
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),

@@ -1,4 +1,15 @@
 import type { CloudflareBindings } from '../env.js';
+import { normalizeTelemetryOrigin } from '@relaycast/types';
+import { captureInternalTelemetry, workspaceDistinctId } from '../lib/telemetry.js';
+
+type WorkspaceConnectionMeta = {
+  workspaceId?: string;
+  connectedAtMs?: number;
+  sessionScope?: string;
+  origin_surface?: string;
+  origin_client?: string;
+  origin_version?: string;
+};
 
 /**
  * WorkspaceStreamDO — workspace-level websocket fanout.
@@ -19,7 +30,7 @@ export class WorkspaceStreamDO implements DurableObject {
     const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/ws') {
-      return this.handleWebSocketUpgrade();
+      return this.handleWebSocketUpgrade(request);
     }
 
     if (request.method === 'POST' && url.pathname === '/deliver') {
@@ -29,7 +40,20 @@ export class WorkspaceStreamDO implements DurableObject {
     return new Response('Not Found', { status: 404 });
   }
 
-  private handleWebSocketUpgrade(): Response {
+  private handleWebSocketUpgrade(request: Request): Response {
+    const url = new URL(request.url);
+    const meta: WorkspaceConnectionMeta = {
+      workspaceId: url.searchParams.get('workspace_id') ?? undefined,
+      connectedAtMs: Date.now(),
+      sessionScope: url.searchParams.get('session_scope') ?? 'workspace',
+      ...normalizeTelemetryOrigin({
+        origin_surface: url.searchParams.get('origin_surface') ?? undefined,
+        origin_client: url.searchParams.get('origin_client') ?? undefined,
+        origin_version: url.searchParams.get('origin_version') ?? undefined,
+      }),
+    };
+    void this.state.storage.put('meta', meta);
+
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.state.acceptWebSocket(server);
@@ -60,5 +84,41 @@ export class WorkspaceStreamDO implements DurableObject {
     } catch {
       // Ignore malformed frames.
     }
+  }
+
+  async webSocketClose(
+    _ws: WebSocket,
+    code: number,
+    _reason: string,
+    wasClean: boolean,
+  ): Promise<void> {
+    const remaining = this.state.getWebSockets();
+    if (remaining.length > 0) return;
+
+    const meta = await this.state.storage.get<WorkspaceConnectionMeta>('meta');
+    const workspaceId = meta?.workspaceId ?? 'unknown_workspace';
+    const connectedAt = meta?.connectedAtMs ?? Date.now();
+    const durationMs = Math.max(Date.now() - connectedAt, 0);
+
+    await captureInternalTelemetry(this._env, {
+      event: 'relaycast_server_ws_session_ended',
+      distinct_id: workspaceDistinctId(workspaceId),
+      origin: normalizeTelemetryOrigin({
+        origin_surface: meta?.origin_surface,
+        origin_client: meta?.origin_client,
+        origin_version: meta?.origin_version,
+      }),
+      properties: {
+        workspace_id: workspaceId,
+        session_scope: meta?.sessionScope ?? 'workspace',
+        duration_ms: durationMs,
+        close_code: code,
+        was_clean: wasClean,
+      },
+    });
+  }
+
+  async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
+    // Same as close — hibernation handles removal.
   }
 }

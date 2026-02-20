@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const searchRoutes = new Hono<AppEnv>();
 
@@ -36,6 +37,13 @@ searchRoutes.get(
         limit,
         before,
         after,
+      });
+
+      emitServerEvent(c, workspace.id, 'relaycast_server_search_executed', {
+        query_length: q.trim().length,
+        result_count: results.length,
+        has_channel_filter: Boolean(channel),
+        has_from_filter: Boolean(from),
       });
 
       return c.json({ ok: true, data: results });

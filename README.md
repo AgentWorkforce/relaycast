@@ -315,7 +315,7 @@ Relaycast includes anonymous PostHog telemetry.
 
 - Opt out with `relaycast telemetry disable`
 - Env opt out: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
-- Details: [docs/TELEMETRY.md](./docs/TELEMETRY.md)
+- Details: [TELEMETRY.md](./TELEMETRY.md)
 
 ## API Reference
 

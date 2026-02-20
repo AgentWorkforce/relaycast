@@ -8,6 +8,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const groupDmRoutes = new Hono<AppEnv>();
 
@@ -35,6 +36,10 @@ groupDmRoutes.post(
         agent!.id,
         { participants, name },
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_created', {
+        conversation_id: result.id,
+        participant_count: result.participants.length,
+      });
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
@@ -125,6 +130,11 @@ groupDmRoutes.post(
           }),
           'queue group_dm.received',
         );
+        emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
+          conversation_id: idempotent.data.conversation_id,
+          message_id: idempotent.data.id,
+          from_agent_id: agent!.id,
+        });
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
@@ -164,6 +174,11 @@ groupDmRoutes.post(
         agentCtx!.id,
         agent,
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_added', {
+        conversation_id: conversationId,
+        agent_name: agent,
+        invited_by_agent_id: agentCtx!.id,
+      });
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
@@ -192,6 +207,10 @@ groupDmRoutes.delete(
         conversationId,
         agent!.id,
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_removed', {
+        conversation_id: conversationId,
+        agent_id: agent!.id,
+      });
       return c.body(null, 204);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };

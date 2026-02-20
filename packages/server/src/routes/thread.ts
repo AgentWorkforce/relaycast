@@ -6,6 +6,7 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as threadEngine from '../engine/thread.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const threadRoutes = new Hono<AppEnv>();
 
@@ -81,6 +82,11 @@ threadRoutes.post(
           }),
           'queue thread.reply',
         );
+        emitServerEvent(c, workspace.id, 'relaycast_server_thread_reply_created', {
+          message_id: idempotent.data.id,
+          parent_message_id: parentId,
+          channel_id: idempotent.data.channel_id ?? null,
+        });
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const receiptRoutes = new Hono<AppEnv>();
 
@@ -55,6 +56,10 @@ receiptRoutes.post(
         }),
         'queue message.read',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_message_read_marked', {
+        message_id: result.message_id,
+        agent_id: result.agent_id,
+      });
 
       return c.json({ ok: true, data: result }, 200);
     } catch (err: unknown) {

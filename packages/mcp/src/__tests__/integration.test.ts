@@ -139,6 +139,14 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(captured[0].headers['authorization']).toBe('Bearer at_test_integration');
   });
 
+  it('sends mcp origin headers on relay API requests', async () => {
+    await client.callTool({ name: 'list_channels', arguments: {} });
+    const req = lastReq();
+    expect(req.headers['x-relaycast-origin-surface']).toBe('mcp');
+    expect(req.headers['x-relaycast-origin-client']).toBe('@relaycast/mcp');
+    expect(req.headers['x-relaycast-origin-version']).toBeDefined();
+  });
+
   // ─── Channels ──────────────────────────────────────────
 
   it('create_channel → POST /v1/channels', async () => {

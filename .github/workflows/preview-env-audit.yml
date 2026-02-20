@@ -1,0 +1,160 @@
+name: Preview Environment Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      remove_stale:
+        description: Delete stale preview workers after audit
+        required: true
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      remove_stale:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit-preview-environments:
+    name: Audit Preview Environments
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Audit and optionally remove stale preview workers
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          REMOVE_STALE: ${{ inputs.remove_stale }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
+            echo "Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID secret."
+            exit 1
+          fi
+
+          if [ -z "${REMOVE_STALE}" ]; then
+            REMOVE_STALE="false"
+          fi
+
+          echo "Loading open PRs for ${GH_REPO}..."
+          OPEN_PRS=()
+          page=1
+          while :; do
+            resp="$(curl -fsS \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}")"
+
+            count="$(echo "${resp}" | jq 'length')"
+            if [ "${count}" -eq 0 ]; then
+              break
+            fi
+
+            while IFS= read -r pr; do
+              OPEN_PRS+=("${pr}")
+            done < <(echo "${resp}" | jq -r --arg repo "${GH_REPO}" '.[] | select(.head.repo.full_name == $repo) | .number')
+
+            page="$((page + 1))"
+          done
+
+          declare -A KEEP=()
+          for pr in "${OPEN_PRS[@]}"; do
+            KEEP["relaycast-pr-${pr}"]=1
+            KEEP["relaycast-observer-pr-${pr}"]=1
+          done
+
+          echo "Loading worker scripts from Cloudflare account..."
+          workers_resp="$(curl -fsS \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts")"
+
+          mapfile -t PREVIEW_WORKERS < <(
+            echo "${workers_resp}" \
+              | jq -r '.result[] | (.id // .name // empty)' \
+              | grep -E '^relaycast(-observer)?-pr-[0-9]+$' \
+              | sort -u || true
+          )
+
+          ACTIVE=()
+          STALE=()
+          for worker in "${PREVIEW_WORKERS[@]}"; do
+            if [ -n "${KEEP[$worker]:-}" ]; then
+              ACTIVE+=("${worker}")
+            else
+              STALE+=("${worker}")
+            fi
+          done
+
+          echo "Open PR count: ${#OPEN_PRS[@]}"
+          echo "Preview workers found: ${#PREVIEW_WORKERS[@]}"
+          echo "Stale workers: ${#STALE[@]}"
+
+          {
+            echo "## Preview Environment Audit"
+            echo ""
+            echo "- Repository: \`${GH_REPO}\`"
+            echo "- Mode: \`$([ "${REMOVE_STALE}" = "true" ] && echo "remove" || echo "audit")\`"
+            echo "- Open PRs: ${#OPEN_PRS[@]}"
+            echo "- Preview workers found: ${#PREVIEW_WORKERS[@]}"
+            echo "- Stale workers: ${#STALE[@]}"
+            echo ""
+
+            echo "### Stale Preview Workers"
+            if [ "${#STALE[@]}" -eq 0 ]; then
+              echo "_None_"
+            else
+              for worker in "${STALE[@]}"; do
+                echo "- \`${worker}\`"
+              done
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${REMOVE_STALE}" != "true" ]; then
+            exit 0
+          fi
+
+          if [ "${#STALE[@]}" -eq 0 ]; then
+            echo "No stale workers to remove."
+            exit 0
+          fi
+
+          deleted=0
+          failed=0
+          for worker in "${STALE[@]}"; do
+            echo "Deleting stale worker: ${worker}"
+            delete_resp="$(curl -sS -X DELETE \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${worker}")"
+            if [ "$(echo "${delete_resp}" | jq -r '.success')" = "true" ]; then
+              deleted="$((deleted + 1))"
+            else
+              failed="$((failed + 1))"
+              echo "Failed deleting ${worker}:"
+              echo "${delete_resp}" | jq -r '.errors[]?.message // "Unknown API error"'
+            fi
+          done
+
+          {
+            echo ""
+            echo "### Remove Results"
+            echo "- Deleted: ${deleted}"
+            echo "- Failed: ${failed}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${failed}" -gt 0 ]; then
+            exit 1
+          fi

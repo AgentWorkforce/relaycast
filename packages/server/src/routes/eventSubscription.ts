@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as eventSubscriptionEngine from '../engine/eventSubscription.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const eventSubscriptionRoutes = new Hono<AppEnv>();
 
@@ -31,6 +32,10 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
       workspace.id,
       { events, filter, url, secret },
     );
+    emitServerEvent(c, workspace.id, 'relaycast_server_subscription_created', {
+      subscription_id: result.id,
+      event_count: result.events.length,
+    });
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -99,6 +104,9 @@ eventSubscriptionRoutes.delete('/subscriptions/:id', requireAuth, rateLimit, asy
         error: { code: 'subscription_not_found', message: 'Subscription not found' },
       }, 404);
     }
+    emitServerEvent(c, workspace.id, 'relaycast_server_subscription_deleted', {
+      subscription_id: c.req.param('id'),
+    });
     return c.body(null, 204);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };

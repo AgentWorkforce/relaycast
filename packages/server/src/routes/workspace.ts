@@ -10,6 +10,8 @@ import {
   getWorkspaceStreamConfig,
   setWorkspaceStreamOverride,
 } from '../lib/workspaceStream.js';
+import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -22,6 +24,9 @@ workspaceRoutes.post('/workspaces', async (c) => {
     }
     const db = c.get('db');
     const result = await workspaceEngine.createWorkspace(db, name);
+    emitServerEvent(c, result.workspace_id, 'relaycast_server_workspace_created', {
+      created_via: 'api',
+    });
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -48,11 +53,16 @@ workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
 workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
+    const workspace = c.get('workspace');
     const body = await c.req.json();
-    const updated = await workspaceEngine.updateWorkspace(db, c.get('workspace').id, body);
+    const updated = await workspaceEngine.updateWorkspace(db, workspace.id, body);
     if (!updated) {
       return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
     }
+    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
+      changed_name: typeof body?.name === 'string',
+      changed_system_prompt: typeof body?.system_prompt === 'string',
+    });
     return c.json({ ok: true, data: updated });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -64,7 +74,11 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
 workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
-    await workspaceEngine.deleteWorkspace(db, c.get('workspace').id);
+    const workspace = c.get('workspace');
+    await workspaceEngine.deleteWorkspace(db, workspace.id);
+    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+      deleted_via: 'api',
+    });
     return c.body(null, 204);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -141,6 +155,9 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
       workspace.id,
       c.req.param('name'),
     );
+    emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
+      agent_name: c.req.param('name'),
+    });
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -153,6 +170,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
 
 // GET /workspace/stream - get workspace stream effective config
 workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.stream.get');
   const workspaceId = c.get('workspace').id;
   try {
     const config = await getWorkspaceStreamConfig(c.env, workspaceId);
@@ -166,11 +184,11 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    console.error('[workspace/stream] Failed to get stream config', {
+    logger.error('Failed to get stream config', {
       workspaceId,
       code: error.code,
       status: error.status,
-      message: error.message,
+      ...toErrorDetails(error),
     });
     return c.json({
       ok: false,
@@ -181,6 +199,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
 
 // PUT /workspace/stream - set workspace stream override
 workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.stream.put');
   const workspaceId = c.get('workspace').id;
   try {
     const body = await c.req.json() as { enabled?: unknown; mode?: unknown };
@@ -199,6 +218,9 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
 
     await setWorkspaceStreamOverride(c.env, workspaceId, override);
     const config = await getWorkspaceStreamConfig(c.env, workspaceId);
+    emitServerEvent(c, workspaceId, 'relaycast_server_workspace_stream_updated', {
+      stream_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
+    });
 
     return c.json({
       ok: true,
@@ -210,11 +232,11 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    console.error('[workspace/stream] Failed to update stream config', {
+    logger.error('Failed to update stream config', {
       workspaceId,
       code: error.code,
       status: error.status,
-      message: error.message,
+      ...toErrorDetails(error),
     });
     return c.json({
       ok: false,

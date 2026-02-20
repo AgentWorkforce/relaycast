@@ -8,6 +8,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -87,6 +88,12 @@ dmRoutes.post(
           }),
           'queue dm.received',
         );
+        emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
+          conversation_id: idempotent.data.conversation_id,
+          message_id: idempotent.data.id,
+          from_agent_id: agent!.id,
+          to_agent_name: to,
+        });
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

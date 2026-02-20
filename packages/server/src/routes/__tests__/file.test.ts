@@ -17,12 +17,17 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
+}));
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { fileRoutes } from '../../routes/file.js';
 import * as fileEngine from '../../engine/file.js';
 import { getDb } from '../../db/index.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
 import {
   mockDbForAgentAuth,
   mockDbForWorkspaceAuth,
@@ -67,6 +72,14 @@ describe('POST /v1/files/upload', () => {
     expect(body.ok).toBe(true);
     expect(body.data.id).toBe('file_001');
     expect(body.data.upload_url).toBe('https://minio.local/presigned-put');
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'relaycast_server_file_upload_requested',
+      expect.objectContaining({
+        file_id: 'file_001',
+      }),
+    );
   });
 
   it('returns 400 when filename missing', async () => {
@@ -142,6 +155,14 @@ describe('POST /v1/files/:id/complete', () => {
       workspaceId: FAKE_WORKSPACE.id,
       data: expect.objectContaining({ id: 'file_001' }),
     }));
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'relaycast_server_file_upload_completed',
+      expect.objectContaining({
+        file_id: 'file_001',
+      }),
+    );
   });
 
   it('returns 404 when file not found', async () => {

@@ -7,6 +7,7 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -88,6 +89,12 @@ messageRoutes.post(
           c.env.WEBHOOK_QUEUE.send({ type: 'message.created', workspaceId: workspace.id, data: eventData }),
           'queue message.created',
         );
+        emitServerEvent(c, workspace.id, 'relaycast_server_message_created', {
+          channel_id: channel.id,
+          message_id: String(idempotent.data.id),
+          message_kind: idempotent.data.thread_id ? 'thread_reply' : 'channel_message',
+          has_attachments: Boolean(idempotent.data.has_attachments),
+        });
       }
 
       return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);

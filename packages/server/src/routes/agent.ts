@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -30,6 +31,11 @@ agentRoutes.post(
         type,
         persona,
         metadata,
+      });
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_registered', {
+        agent_id: result.id,
+        agent_name: result.name,
+        agent_type: type ?? 'agent',
       });
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
@@ -111,6 +117,11 @@ agentRoutes.patch(
           error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
         }, 404);
       }
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
+        agent_name: name,
+        changed_status: typeof body?.status === 'string',
+        changed_persona: typeof body?.persona === 'string',
+      });
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
@@ -139,6 +150,9 @@ agentRoutes.delete(
           error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
         }, 404);
       }
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_deleted', {
+        agent_name: name,
+      });
       return c.body(null, 204);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
@@ -218,6 +232,12 @@ agentRoutes.post(
         }),
         'queue agent.spawn_requested',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_spawn_requested', {
+        agent_id: result.id,
+        agent_name: result.name,
+        cli: result.cli,
+        already_existed: result.already_existed,
+      });
 
       return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as any);
     } catch (err: unknown) {
@@ -277,6 +297,10 @@ agentRoutes.post(
         }),
         'queue agent.release_requested',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_release_requested', {
+        agent_name: result.name,
+        deleted: result.deleted,
+      });
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
