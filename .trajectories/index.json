@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T20:45:37.641Z",
+  "lastUpdated": "2026-02-20T21:00:55.621Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -861,6 +861,12 @@
       "startedAt": "2026-02-20T20:39:00.212Z",
       "completedAt": "2026-02-20T20:45:37.568Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_73pkmovcleoq.json"
+    },
+    "traj_i7rxdq93vs61": {
+      "title": "Fix e2e create workspace undefined workspace key after billing cleanup",
+      "status": "active",
+      "startedAt": "2026-02-20T20:59:18.440Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_i7rxdq93vs61.json"
     }
   }
 }
