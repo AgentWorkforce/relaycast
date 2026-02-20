@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T14:56:38.950Z",
+  "lastUpdated": "2026-02-20T15:52:06.042Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -719,6 +719,33 @@
       "startedAt": "2026-02-20T14:56:11.358Z",
       "completedAt": "2026-02-20T14:56:38.877Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_41voodt0ty32.json"
+    },
+    "traj_mcpcredfallback": {
+      "title": "Add credential file fallback to MCP stdio entry point",
+      "status": "completed",
+      "startedAt": "2026-02-19T17:00:00.000Z",
+      "completedAt": "2026-02-19T17:15:00.000Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/completed/2026-02/traj_mcpcredfallback.json"
+    },
+    "traj_nck4ip3pfbfz": {
+      "title": "Update Python SDK WebSocket endpoint to /v1/ws",
+      "status": "completed",
+      "startedAt": "2026-02-20T14:14:09.112Z",
+      "completedAt": "2026-02-20T14:15:19.338Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_nck4ip3pfbfz.json"
+    },
+    "traj_vwrhp5hvaml2": {
+      "title": "Remove stale root-level test-prod-ws.mjs script",
+      "status": "completed",
+      "startedAt": "2026-02-20T14:23:42.546Z",
+      "completedAt": "2026-02-20T14:23:52.308Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_vwrhp5hvaml2.json"
+    },
+    "traj_8tyqp3fg0c6p": {
+      "title": "Resolve current merge conflicts",
+      "status": "active",
+      "startedAt": "2026-02-20T15:52:06.015Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_8tyqp3fg0c6p.json"
     }
   }
 }
