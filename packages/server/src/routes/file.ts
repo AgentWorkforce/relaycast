@@ -6,6 +6,7 @@ import * as fileEngine from '../engine/file.js';
 import { getS3Client } from '../engine/file.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const fileRoutes = new Hono<AppEnv>();
 
@@ -44,6 +45,12 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
       agent.id,
       { filename, content_type, size_bytes },
     );
+
+    emitServerEvent(c, workspace.id, 'relaycast_server_file_upload_requested', {
+      file_id: result.id,
+      size_bytes,
+      content_type,
+    });
 
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
@@ -88,6 +95,11 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
       }),
       'queue file.uploaded',
     );
+    emitServerEvent(c, workspace.id, 'relaycast_server_file_upload_completed', {
+      file_id: result.id,
+      size_bytes: result.size_bytes,
+      content_type: result.content_type,
+    });
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {

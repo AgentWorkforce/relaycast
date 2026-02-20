@@ -32,6 +32,9 @@ describe('RelayCast', () => {
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBe('Bearer rk_live_test123');
       expect(init.headers['X-SDK-Version']).toBeDefined();
+      expect(init.headers['X-Relaycast-Origin-Surface']).toBe('sdk');
+      expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
+      expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     });
 
     it('update() calls PATCH /v1/workspace with JSON body', async () => {
@@ -47,6 +50,22 @@ describe('RelayCast', () => {
       expect(init.method).toBe('PATCH');
       expect(init.headers['Content-Type']).toBe('application/json');
       expect(init.body).toBe(JSON.stringify({ name: 'new' }));
+    });
+
+    it('ignores user-supplied origin metadata and keeps sdk defaults', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        origin: { surface: 'mcp', client: '@relaycast/mcp', version: '0.1.2' },
+      } as any);
+
+      mockFetch.mockImplementation(() => mockResponse({ id: 'ws_1' }));
+      await relay.workspace.info();
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Relaycast-Origin-Surface']).toBe('sdk');
+      expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
+      expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     });
   });
 
@@ -257,6 +276,9 @@ describe('RelayCast', () => {
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
       expect(init.headers.Authorization).toBeUndefined();
+      expect(init.headers['X-Relaycast-Origin-Surface']).toBe('sdk');
+      expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
+      expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
       expect(result.workspace_id).toBe('ws_1');
     });
 
@@ -486,4 +508,3 @@ describe('RelayCast', () => {
     });
   });
 });
-

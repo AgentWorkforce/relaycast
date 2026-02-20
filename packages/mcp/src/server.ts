@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { RelayCast, AgentClient, WsClient } from '@relaycast/sdk';
+import { AgentClient } from '@relaycast/sdk';
+import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';
@@ -25,7 +26,16 @@ export interface McpServerOptions {
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const session: SessionState = createInitialSession(options.apiKey ?? null);
-  const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION);
+  const mcpOrigin = {
+    surface: 'mcp' as const,
+    client: '@relaycast/mcp',
+    version: MCP_VERSION,
+  };
+  const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION, {
+    originSurface: mcpOrigin.surface,
+    originClient: mcpOrigin.client,
+    originVersion: mcpOrigin.version,
+  });
 
   const mcpServer = new McpServer(
     { name: 'agent-relay', version: MCP_VERSION },
@@ -51,7 +61,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
       );
     }
-    return new RelayCast({ apiKey: workspaceKey, baseUrl: options.baseUrl });
+    return createInternalRelayCast({
+      apiKey: workspaceKey,
+      baseUrl: options.baseUrl,
+    }, mcpOrigin);
   };
   const setSession = (partial: Partial<SessionState>) => {
     const nextAgentToken =
@@ -74,10 +87,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     if (nextAgentToken && !session.wsBridge && !session.wsInitAttempted) {
       try {
         const subscriptions = new SubscriptionManager();
-        const wsClient = new WsClient({
+        const wsClient = createInternalWsClient({
           token: nextAgentToken,
           baseUrl: options.baseUrl,
-        });
+        }, mcpOrigin);
         const wsBridge = new WsBridge(
           wsClient,
           subscriptions,
@@ -115,7 +128,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "register" tool first.');
     }
-    return new RelayCast({ apiKey: session.agentToken, baseUrl: options.baseUrl }).as(
+    return createInternalRelayCast({
+      apiKey: session.agentToken,
+      baseUrl: options.baseUrl,
+    }, mcpOrigin).as(
       session.agentToken,
     );
   };

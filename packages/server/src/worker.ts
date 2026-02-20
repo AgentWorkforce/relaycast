@@ -29,6 +29,8 @@ import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
+import { requiredOriginInfo } from './lib/origin.js';
+import { emitServerEvent } from './lib/serverTelemetry.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -177,6 +179,7 @@ app.get('/v1/ws', async (c) => {
 
     const workspaceId = agent.workspaceId;
     const agentId = agent.id;
+    const origin = requiredOriginInfo(c.req.raw);
 
     // Register the agent as online in PresenceDO (fire-and-forget)
     const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
@@ -189,7 +192,21 @@ app.get('/v1/ws', async (c) => {
 
     const doId = c.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
     const stub = c.env.AGENT_DO.get(doId);
-    return stub.fetch(new Request(url.toString(), c.req.raw));
+    url.searchParams.set('workspace_id', workspaceId);
+    url.searchParams.set('agent_id', agentId);
+    url.searchParams.set('session_scope', 'agent');
+    url.searchParams.set('origin_surface', origin.origin_surface);
+    url.searchParams.set('origin_client', origin.origin_client);
+    url.searchParams.set('origin_version', origin.origin_version);
+
+    const response = await stub.fetch(new Request(url.toString(), c.req.raw));
+    if (response.status === 101) {
+      emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
+        agent_id: agentId,
+        session_scope: 'agent',
+      });
+    }
+    return response;
   }
 
   if (token.startsWith('rk_live_')) {
@@ -206,7 +223,20 @@ app.get('/v1/ws', async (c) => {
 
     const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspace.id);
     const stub = c.env.WORKSPACE_STREAM_DO.get(doId);
-    return stub.fetch(new Request(url.toString(), c.req.raw));
+    const origin = requiredOriginInfo(c.req.raw);
+    url.searchParams.set('workspace_id', workspace.id);
+    url.searchParams.set('session_scope', 'workspace');
+    url.searchParams.set('origin_surface', origin.origin_surface);
+    url.searchParams.set('origin_client', origin.origin_client);
+    url.searchParams.set('origin_version', origin.origin_version);
+
+    const response = await stub.fetch(new Request(url.toString(), c.req.raw));
+    if (response.status === 101) {
+      emitServerEvent(c, workspace.id, 'relaycast_server_ws_session_started', {
+        session_scope: 'workspace',
+      });
+    }
+    return response;
   }
 
   return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);

@@ -14,20 +14,36 @@ SDK_VERSION = "0.1.0"
 
 _DEFAULT_BASE_URL = "https://api.agentrelay.dev"
 _RETRY_BACKOFFS = [0.2, 0.4, 0.8]
+_DEFAULT_ORIGIN_SURFACE = "sdk"
+_DEFAULT_ORIGIN_CLIENT = "@relaycast/python-sdk"
 
 
 class HttpClient:
     """Synchronous HTTP client for the Relay REST API."""
 
-    def __init__(self, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        *,
+        origin_surface: str | None = None,
+        origin_client: str | None = None,
+        origin_version: str | None = None,
+    ) -> None:
         self.api_key = api_key
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self.origin_surface = (origin_surface or _DEFAULT_ORIGIN_SURFACE).strip()[:32]
+        self.origin_client = (origin_client or _DEFAULT_ORIGIN_CLIENT).strip()[:80]
+        self.origin_version = (origin_version or SDK_VERSION).strip()[:48]
         self._client = httpx.Client(timeout=30.0)
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
+            "X-Relaycast-Origin-Surface": self.origin_surface,
+            "X-Relaycast-Origin-Client": self.origin_client,
+            "X-Relaycast-Origin-Version": self.origin_version,
         }
         if with_body:
             headers["Content-Type"] = "application/json"
@@ -103,15 +119,29 @@ class HttpClient:
 class AsyncHttpClient:
     """Asynchronous HTTP client for the Relay REST API."""
 
-    def __init__(self, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        *,
+        origin_surface: str | None = None,
+        origin_client: str | None = None,
+        origin_version: str | None = None,
+    ) -> None:
         self.api_key = api_key
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self.origin_surface = (origin_surface or _DEFAULT_ORIGIN_SURFACE).strip()[:32]
+        self.origin_client = (origin_client or _DEFAULT_ORIGIN_CLIENT).strip()[:80]
+        self.origin_version = (origin_version or SDK_VERSION).strip()[:48]
         self._client = httpx.AsyncClient(timeout=30.0)
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "X-SDK-Version": SDK_VERSION,
+            "X-Relaycast-Origin-Surface": self.origin_surface,
+            "X-Relaycast-Origin-Client": self.origin_client,
+            "X-Relaycast-Origin-Version": self.origin_version,
         }
         if with_body:
             headers["Content-Type"] = "application/json"

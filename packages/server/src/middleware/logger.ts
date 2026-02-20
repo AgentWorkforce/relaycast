@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
 import { createRequestLogger } from '../lib/logger.js';
+import { deriveClientName, extractOriginInfo } from '../lib/origin.js';
 
 type WaitUntilContext = {
   executionCtx?: {
@@ -52,15 +53,6 @@ function routeGroupForPath(path: string): string {
   if (path.startsWith('/.well-known/')) return 'well_known';
   if (path.startsWith('/health')) return 'health';
   return 'other';
-}
-
-function deriveClientName(headers: Headers): string | undefined {
-  const explicit = headers.get('x-client-name') ?? headers.get('x-relaycast-client');
-  if (explicit) return explicit.trim().slice(0, 80);
-  const ua = headers.get('user-agent');
-  if (!ua) return undefined;
-  const family = ua.split(/[\/\s;]/)[0];
-  return family ? family.trim().slice(0, 80) : undefined;
 }
 
 function classifyAuthScheme(authHeader: string | undefined, queryToken: string | undefined): string {
@@ -115,8 +107,15 @@ function statusClass(statusCode: number): string {
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestId = crypto.randomUUID();
   c.set('requestId', requestId);
+  const requestHeaders = c.req.raw.headers;
+  const clientName = deriveClientName(requestHeaders);
+  const originInfo = extractOriginInfo(c.req.raw, clientName);
 
-  const logger = createRequestLogger(c, 'request', { request_id: requestId });
+  const logger = createRequestLogger(c, 'request', {
+    request_id: requestId,
+    ...(clientName ? { client_name: clientName } : {}),
+    ...originInfo,
+  });
   c.set('logger', logger);
 
   const startedAt = Date.now();
@@ -124,13 +123,11 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
 
   const durationMs = Date.now() - startedAt;
   const statusCode = c.res.status;
-  const requestHeaders = c.req.raw.headers;
   const authHeader = requestHeaders.get('authorization') ?? undefined;
   const queryToken = c.req.query('token');
   const bearerToken = parseBearerToken(authHeader);
   const presentedToken = bearerToken ?? queryToken;
   const authScheme = classifyAuthScheme(authHeader, queryToken);
-  const clientName = deriveClientName(requestHeaders);
   const contentType = requestHeaders.get('content-type');
   const accept = requestHeaders.get('accept');
   const connectingIp = requestHeaders.get('cf-connecting-ip');
@@ -149,6 +146,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     ...(presentedToken ? { actor_fingerprint: hashIdentifier(presentedToken) } : {}),
     ...(connectingIp ? { ip_hash: hashIdentifier(connectingIp) } : {}),
     ...(userAgent ? { ua_hash: hashIdentifier(userAgent) } : {}),
+    ...originInfo,
     ...errorInfo,
   };
 

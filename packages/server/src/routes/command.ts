@@ -6,6 +6,7 @@ import * as commandEngine from '../engine/command.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const commandRoutes = new Hono<AppEnv>();
 
@@ -40,6 +41,10 @@ commandRoutes.post('/commands', requireAuth, rateLimit, async (c) => {
       description,
       handler_agent,
       parameters,
+    });
+    emitServerEvent(c, workspace.id, 'relaycast_server_command_registered', {
+      command: result.command,
+      handler_agent_name: handler_agent,
     });
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
@@ -83,6 +88,9 @@ commandRoutes.delete('/commands/:command', requireAuth, rateLimit, async (c) => 
         error: { code: 'command_not_found', message: 'Command not found' },
       }, 404);
     }
+    emitServerEvent(c, workspace.id, 'relaycast_server_command_deleted', {
+      command: c.req.param('command'),
+    });
     return c.body(null, 204);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -145,6 +153,12 @@ commandRoutes.post('/commands/:command/invoke', requireAuth, rateLimit, async (c
       }),
       'queue command.invoked',
     );
+    emitServerEvent(c, workspace.id, 'relaycast_server_command_invoked', {
+      command: result.command,
+      invocation_id: result.id,
+      channel_name: result.channel,
+      invoked_by_agent_id: agentId,
+    });
 
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {

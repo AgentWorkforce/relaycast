@@ -75,4 +75,22 @@ describe('telemetry config', () => {
     // The status should be enabled now and first-run should not have been captured yet
     expect(freshTelemetry.status().enabled).toBe(true);
   });
+
+  it('telemetry status output includes canonical docs URL', async () => {
+    const { registerTelemetryCommands } = await import('../commands/telemetry.js');
+    const { createCliTelemetry } = await import('../telemetry.js');
+    const program = new Command().exitOverride();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const telemetry = createCliTelemetry();
+
+    registerTelemetryCommands(program, telemetry);
+    await program.parseAsync(['telemetry', 'status'], { from: 'user' });
+
+    const lastOutput = logSpy.mock.calls.at(-1)?.[0];
+    expect(typeof lastOutput).toBe('string');
+    const parsed = JSON.parse(String(lastOutput)) as { documentation?: string };
+    expect(parsed.documentation).toBe(
+      'https://github.com/AgentWorkforce/relaycast/blob/main/TELEMETRY.md',
+    );
+  });
 });

@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as presenceEngine from '../engine/presence.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const presenceRoutes = new Hono<AppEnv>();
 
@@ -33,6 +34,10 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+    emitServerEvent(c, workspace.id, 'relaycast_server_presence_heartbeat', {
+      agent_id: agent.id,
+      agent_name: agent.name,
+    });
     return c.json({ ok: true });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
@@ -55,6 +60,10 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+    emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
+      agent_id: agent.id,
+      agent_name: agent.name,
+    });
     return c.json({ ok: true });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };

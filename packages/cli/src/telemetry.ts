@@ -4,6 +4,11 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {
+  parseTelemetryIngestionEvent,
+  sanitizeTelemetryProperties,
+  type ClientTelemetryEventName,
+} from '@relaycast/types';
 
 interface TelemetryState {
   anonymousId: string;
@@ -19,7 +24,7 @@ export interface TelemetryStatus {
 }
 
 export interface CliTelemetry {
-  capture: (event: string, properties?: Record<string, unknown>) => void;
+  capture: (event: ClientTelemetryEventName, properties?: Record<string, unknown>) => void;
   captureFirstRunIfNeeded: () => void;
   flush: (timeoutMs?: number) => Promise<void>;
   status: () => TelemetryStatus;
@@ -29,7 +34,7 @@ export interface CliTelemetry {
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-const DEFAULT_POSTHOG_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
+const DEFAULT_POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
@@ -37,18 +42,25 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function getPostHogKey(): string {
-  return process.env.POSTHOG_API_KEY ??
-    process.env.RELAYCAST_POSTHOG_KEY ??
-    process.env.POSTHOG_KEY ??
-    DEFAULT_POSTHOG_KEY;
+function normalizeHost(host: string | undefined): string {
+  const value = host?.trim();
+  if (!value) return DEFAULT_POSTHOG_HOST;
+  return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
-function getPostHogHost(): string {
-  const configured = process.env.POSTHOG_HOST ??
-    process.env.RELAYCAST_POSTHOG_HOST ??
-    DEFAULT_POSTHOG_HOST;
-  return configured.endsWith('/') ? configured.slice(0, -1) : configured;
+function getPosthogHost(): string {
+  return normalizeHost(
+    process.env.RELAYCAST_POSTHOG_HOST
+      ?? process.env.POSTHOG_HOST,
+  );
+}
+
+function getPosthogApiKey(): string {
+  return (
+    process.env.RELAYCAST_POSTHOG_API_KEY
+    ?? process.env.POSTHOG_API_KEY
+    ?? DEFAULT_POSTHOG_PUBLIC_KEY
+  );
 }
 
 function loadState(): TelemetryState {
@@ -117,7 +129,11 @@ function getStatus(state: TelemetryState): TelemetryStatus {
   };
 }
 
-function postJson(urlString: string, payload: Record<string, unknown>): Promise<void> {
+function postJson(
+  urlString: string,
+  payload: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<void> {
   return new Promise((resolve) => {
     let resolved = false;
     const finish = () => {
@@ -139,6 +155,7 @@ function postJson(urlString: string, payload: Record<string, unknown>): Promise<
           headers: {
             'content-type': 'application/json',
             'content-length': Buffer.byteLength(body),
+            ...headers,
           },
         },
         (res) => {
@@ -163,6 +180,8 @@ function postJson(urlString: string, payload: Record<string, unknown>): Promise<
 
 export function createCliTelemetry(cliVersion = 'unknown'): CliTelemetry {
   const state = loadState();
+  const posthogHost = getPosthogHost();
+  const posthogApiKey = getPosthogApiKey();
   const sessionId = randomUUID();
   const pending = new Set<Promise<void>>();
   const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
@@ -170,15 +189,14 @@ export function createCliTelemetry(cliVersion = 'unknown'): CliTelemetry {
     ? 'env'
     : 'generated';
 
-  const capture = (event: string, properties: Record<string, unknown> = {}) => {
+  const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
     const status = getStatus(state);
     if (!status.enabled) return;
 
-    const payload = {
-      api_key: getPostHogKey(),
+    const parsed = parseTelemetryIngestionEvent({
       event,
       distinct_id: distinctId,
-      properties: {
+      properties: sanitizeTelemetryProperties({
         surface: 'cli',
         cli_version: cliVersion,
         session_id: sessionId,
@@ -187,10 +205,26 @@ export function createCliTelemetry(cliVersion = 'unknown'): CliTelemetry {
         arch: process.arch,
         distinct_id_source: distinctIdSource,
         ...properties,
+      }),
+    });
+
+    const payload = {
+      api_key: posthogApiKey,
+      event: parsed.event,
+      distinct_id: parsed.distinct_id,
+      properties: {
+        ...parsed.properties,
+        origin_surface: 'cli',
+        origin_client: 'relaycast-cli',
+        origin_version: cliVersion,
       },
     };
 
-    const promise = postJson(`${getPostHogHost()}/capture/`, payload);
+    const promise = postJson(
+      `${posthogHost}/capture/`,
+      payload,
+      {},
+    );
     pending.add(promise);
     void promise.finally(() => pending.delete(promise));
   };

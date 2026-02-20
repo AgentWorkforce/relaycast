@@ -1,5 +1,6 @@
 import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from '@relaycast/types';
 import { ServerEventSchema } from '@relaycast/types';
+import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
@@ -8,6 +9,30 @@ export interface WsClientOptions {
   baseUrl?: string;
   /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
   debug?: boolean;
+}
+
+const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
+
+type WsClientOptionsWithInternalOrigin = WsClientOptions & {
+  [INTERNAL_WS_ORIGIN]?: InternalOrigin;
+};
+
+function readInternalWsOrigin(options: WsClientOptions): InternalOrigin | undefined {
+  return (options as WsClientOptionsWithInternalOrigin)[INTERNAL_WS_ORIGIN];
+}
+
+export function withInternalWsOrigin<T extends WsClientOptions>(
+  options: T,
+  origin: InternalOrigin,
+): T {
+  const copy = { ...options } as WsClientOptionsWithInternalOrigin;
+  Object.defineProperty(copy, INTERNAL_WS_ORIGIN, {
+    value: origin,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return copy as T;
 }
 
 export class WsClient {
@@ -24,12 +49,19 @@ export class WsClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private debug: boolean;
+  private originSurface: string;
+  private originClient: string;
+  private originVersion: string;
 
   constructor(options: WsClientOptions) {
+    const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
     this.token = options.token;
     this.debug = options.debug ?? false;
     const base = (options.baseUrl ?? 'https://api.relaycast.dev').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
+    this.originSurface = origin.surface;
+    this.originClient = origin.client;
+    this.originVersion = origin.version;
   }
 
   connect(): void {
@@ -38,6 +70,9 @@ export class WsClient {
 
     const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
     wsUrl.searchParams.set('token', this.token);
+    wsUrl.searchParams.set('origin_surface', this.originSurface);
+    wsUrl.searchParams.set('origin_client', this.originClient);
+    wsUrl.searchParams.set('origin_version', this.originVersion);
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;

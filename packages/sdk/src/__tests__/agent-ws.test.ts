@@ -68,9 +68,13 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'ws://localhost:8080/v1/ws?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('ws://localhost:8080');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('connect() normalizes trailing slash base URL', () => {
@@ -81,9 +85,13 @@ describe('AgentClient WebSocket integration', () => {
     const agent = new AgentClient(client);
     agent.connect();
 
-    expect(MockWebSocket.instances[0]!.url).toBe(
-      'wss://pr28-api.relaycast.dev/v1/ws?token=at_live_test',
-    );
+    const url = new URL(MockWebSocket.instances[0]!.url);
+    expect(url.origin).toBe('wss://pr28-api.relaycast.dev');
+    expect(url.pathname).toBe('/v1/ws');
+    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.searchParams.get('origin_surface')).toBe('sdk');
+    expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+    expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
   it('connect() is idempotent — second call does not create another WebSocket', () => {

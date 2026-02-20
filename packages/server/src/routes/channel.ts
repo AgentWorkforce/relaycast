@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers } from './fanout.js';
 import { runInBackground } from './background.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -53,6 +54,10 @@ channelRoutes.post(
         }),
         'queue channel.created',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_created', {
+        channel_id: result.id,
+        channel_name: result.name,
+      });
 
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
@@ -161,6 +166,10 @@ channelRoutes.patch(
         }),
         'queue channel.updated',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_updated', {
+        channel_id: updated.id,
+        channel_name: updated.name,
+      });
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -220,6 +229,10 @@ channelRoutes.patch(
         }),
         'queue channel.updated topic',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_topic_updated', {
+        channel_id: updated.id,
+        channel_name: updated.name,
+      });
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
@@ -271,6 +284,9 @@ channelRoutes.delete(
         }),
         'queue channel.archived',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_archived', {
+        channel_name: name,
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -323,6 +339,10 @@ channelRoutes.post(
         }),
         'queue member.joined',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_joined', {
+        channel_name: name,
+        agent_id: agent!.id,
+      });
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
@@ -384,6 +404,10 @@ channelRoutes.post(
         }),
         'queue member.left',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_left', {
+        channel_name: name,
+        agent_id: agent!.id,
+      });
 
       return c.body(null, 204);
     } catch (err: unknown) {
@@ -485,6 +509,10 @@ channelRoutes.post(
         }),
         'queue member.invited',
       );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_invited', {
+        channel_name: name,
+        invited_agent_name: agentName,
+      });
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {

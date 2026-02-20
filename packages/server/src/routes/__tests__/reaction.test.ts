@@ -14,12 +14,17 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
+}));
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { reactionRoutes } from '../../routes/reaction.js';
 import { getDb } from '../../db/index.js';
 import * as reactionEngine from '../../engine/reaction.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
 import {
   createMockBindings, mockDbForAgentAuth, mockDbForWorkspaceAuth,
   agentAuthHeaders, wsAuthHeaders,
@@ -71,6 +76,14 @@ describe('POST /v1/messages/:id/reactions', () => {
       workspaceId: FAKE_WORKSPACE.id,
       data: expect.objectContaining({ message_id: 'msg_001', emoji: 'eyes' }),
     }));
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'relaycast_server_reaction_added',
+      expect.objectContaining({
+        message_id: 'msg_001',
+      }),
+    );
   });
 
   it('is idempotent (same emoji twice returns 201)', async () => {
@@ -156,6 +169,14 @@ describe('DELETE /v1/messages/:id/reactions/:emoji', () => {
       workspaceId: FAKE_WORKSPACE.id,
       data: expect.objectContaining({ message_id: 'msg_001', emoji: 'eyes' }),
     }));
+    expect(emitServerEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'relaycast_server_reaction_removed',
+      expect.objectContaining({
+        message_id: 'msg_001',
+      }),
+    );
   });
 
   it('returns 404 when message not found', async () => {
