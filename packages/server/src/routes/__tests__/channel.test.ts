@@ -308,7 +308,7 @@ describe('POST /v1/channels/:name/invite', () => {
     const res = await app.request('/v1/channels/code-review/invite', {
       method: 'POST',
       headers: agentAuthHeaders(),
-      body: JSON.stringify({ agent: 'WorkerBot' }),
+      body: JSON.stringify({ agent_name: 'WorkerBot' }),
     }, bindings);
     expect(res.status).toBe(200);
     const body = await res.json() as any;

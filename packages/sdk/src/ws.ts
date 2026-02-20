@@ -1,6 +1,7 @@
-import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from '@relaycast/types';
+import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { camelizeKeys, decamelizeKey } from './casing.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
@@ -70,9 +71,9 @@ export class WsClient {
 
     const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
     wsUrl.searchParams.set('token', this.token);
-    wsUrl.searchParams.set('origin_surface', this.originSurface);
-    wsUrl.searchParams.set('origin_client', this.originClient);
-    wsUrl.searchParams.set('origin_version', this.originVersion);
+    wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
+    wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
+    wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;
@@ -105,14 +106,14 @@ export class WsClient {
         const parsed = JSON.parse(String(event.data));
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
-          this.emit(result.data.type, result.data);
+          this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
         } else if (
           parsed !== null &&
           typeof parsed === 'object' &&
           typeof parsed.type === 'string'
         ) {
           // Forward unrecognized event types so wildcard listeners still fire
-          this.emit(parsed.type, parsed as WsClientEvent);
+          this.emit(parsed.type, camelizeKeys(parsed) as WsClientEvent);
         } else if (this.debug) {
           console.warn('[relaycast] Dropped WebSocket message: missing or invalid "type" field', parsed);
         }

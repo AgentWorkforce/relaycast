@@ -67,6 +67,53 @@ describe('RelayCast', () => {
       expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     });
+
+    it('stream.get() maps default_enabled to defaultEnabled', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ enabled: true, default_enabled: false, override: null }),
+      );
+      const result = await relay.workspace.stream.get();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({ enabled: true, defaultEnabled: false, override: null });
+    });
+
+    it('stream.set() maps default_enabled to defaultEnabled', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ enabled: false, default_enabled: false, override: true }),
+      );
+      const result = await relay.workspace.stream.set(false);
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(init.method).toBe('PUT');
+      expect(init.body).toBe(JSON.stringify({ enabled: false }));
+      expect(result).toEqual({ enabled: false, defaultEnabled: false, override: true });
+    });
+
+    it('stream.inherit() maps default_enabled to defaultEnabled', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ enabled: true, default_enabled: true, override: null }),
+      );
+      const result = await relay.workspace.stream.inherit();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(init.method).toBe('PUT');
+      expect(init.body).toBe(JSON.stringify({ mode: 'inherit' }));
+      expect(result).toEqual({ enabled: true, defaultEnabled: true, override: null });
+    });
   });
 
   describe('agents', () => {
@@ -187,7 +234,7 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/workspace/system-prompt');
       expect(init.method).toBe('GET');
-      expect(result).toEqual({ prompt: 'Be helpful', is_default: false });
+      expect(result).toEqual({ prompt: 'Be helpful', isDefault: false });
     });
 
     it('set() calls PUT /v1/workspace/system-prompt', async () => {
@@ -242,14 +289,14 @@ describe('RelayCast', () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      const data = [{ agent_id: 'a_1', agent_name: 'Bot', status: 'online' }];
-      mockFetch.mockImplementation(() => mockResponse(data));
+      const rawData = [{ agent_id: 'a_1', agent_name: 'Bot', status: 'online' }];
+      mockFetch.mockImplementation(() => mockResponse(rawData));
       const result = await relay.agents.presence();
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/agents/presence');
       expect(init.method).toBe('GET');
-      expect(result).toEqual(data);
+      expect(result).toEqual([{ agentId: 'a_1', agentName: 'Bot', status: 'online' }]);
     });
   });
 
@@ -279,7 +326,7 @@ describe('RelayCast', () => {
       expect(init.headers['X-Relaycast-Origin-Surface']).toBe('sdk');
       expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
-      expect(result.workspace_id).toBe('ws_1');
+      expect(result.workspaceId).toBe('ws_1');
     });
 
     it('uses custom baseUrl', async () => {
@@ -332,7 +379,7 @@ describe('RelayCast', () => {
       mockFetch.mockImplementation(() => mockResponse(created));
 
       const result = await relay.agents.registerOrGet({ name: 'Bot' });
-      expect(result).toEqual(created);
+      expect(result).toEqual({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', createdAt: '2024-01-01' });
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
@@ -383,12 +430,12 @@ describe('RelayCast', () => {
       expect(init.method).toBe('GET');
     });
 
-    it('list() with include_archived adds query param', async () => {
+    it('list() with includeArchived adds query param', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mockResponse([]));
-      await relay.channels.list({ include_archived: true });
+      await relay.channels.list({ includeArchived: true });
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/channels?include_archived=true');
@@ -404,6 +451,39 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/channels/general');
       expect(init.method).toBe('GET');
+    });
+  });
+
+  describe('dmMessages', () => {
+    it('maps snake_case response fields to camelCase', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse([
+          {
+            id: 'm_1',
+            agent_id: 'a_1',
+            agent_name: 'Bot',
+            text: 'hello',
+            created_at: '2026-02-20T00:00:00.000Z',
+          },
+        ]),
+      );
+      const result = await relay.dmMessages('conv_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations/conv_1/messages');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual([
+        {
+          id: 'm_1',
+          agentId: 'a_1',
+          agentName: 'Bot',
+          text: 'hello',
+          createdAt: '2026-02-20T00:00:00.000Z',
+        },
+      ]);
     });
   });
 

@@ -281,10 +281,10 @@ describe('WsClient', () => {
     ws.simulateMessage({ type: 'typing.started', agent_name: 'Alice', channel: 'general' });
 
     expect(wildcardHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+      expect.objectContaining({ type: 'typing.started', agentName: 'Alice' }),
     );
     expect(typedHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'typing.started', agent_name: 'Alice' }),
+      expect.objectContaining({ type: 'typing.started', agentName: 'Alice' }),
     );
   });
 

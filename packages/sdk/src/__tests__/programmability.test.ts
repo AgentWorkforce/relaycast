@@ -163,7 +163,7 @@ describe('Programmability SDK', () => {
       await relay.commands.register({
         command: 'deploy',
         description: 'Deploy the app',
-        handler_agent: 'DeployBot',
+        handlerAgent: 'DeployBot',
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;

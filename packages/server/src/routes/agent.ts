@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -9,6 +10,34 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
+const registerAgentSchema = z.object({
+  name: z.string().min(1),
+  type: z.string().optional(),
+  persona: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const updateAgentSchema = z.object({
+  status: z.string().optional(),
+  persona: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const spawnAgentSchema = z.object({
+  name: z.string().min(1),
+  cli: z.string().min(1),
+  task: z.string().min(1),
+  channel: z.string().nullable().optional(),
+  persona: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const releaseAgentSchema = z.object({
+  name: z.string().min(1),
+  reason: z.string().nullable().optional(),
+  delete_agent: z.boolean().optional(),
+});
+
 // POST /v1/agents - register agent (workspace key required)
 agentRoutes.post(
   '/agents',
@@ -18,13 +47,14 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const { name, type, persona, metadata } = await c.req.json();
-      if (!name || typeof name !== 'string') {
+      const parsed = registerAgentSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
         }, 400);
       }
+      const { name, type, persona, metadata } = parsed.data;
 
       const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
@@ -109,7 +139,14 @@ agentRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const body = await c.req.json();
+      const parsed = updateAgentSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
+        return c.json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'invalid agent update body' },
+        }, 400);
+      }
+      const body = parsed.data;
       const updated = await agentEngine.updateAgent(db, workspace.id, name, body);
       if (!updated) {
         return c.json({
@@ -173,21 +210,24 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const { name, cli, task, channel, persona, metadata } = await c.req.json();
-
-      if (!name || typeof name !== 'string') {
+      const parsed = spawnAgentSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
+        const hasNameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'name');
+        const hasCliIssue = parsed.error.issues.some((issue) => issue.path[0] === 'cli');
+        const hasTaskIssue = parsed.error.issues.some((issue) => issue.path[0] === 'task');
+        const message = hasNameIssue
+          ? 'name is required'
+          : hasCliIssue
+            ? 'cli is required'
+            : hasTaskIssue
+              ? 'task is required'
+              : 'invalid spawn request';
         return c.json({
           ok: false,
-          error: { code: 'invalid_request', message: 'name is required' },
+          error: { code: 'invalid_request', message },
         }, 400);
       }
-
-      if (!cli || typeof cli !== 'string') {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'cli is required' },
-        }, 400);
-      }
+      const { name, cli, task, channel, persona, metadata } = parsed.data;
 
       const validClis = ['claude', 'codex', 'gemini', 'aider', 'goose'];
       if (!validClis.includes(cli)) {
@@ -197,19 +237,12 @@ agentRoutes.post(
         }, 400);
       }
 
-      if (!task || typeof task !== 'string') {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'task is required' },
-        }, 400);
-      }
-
       const result = await agentEngine.spawnAgent(db, workspace.id, {
         name,
         cli,
         task,
-        channel,
-        persona,
+        channel: channel ?? undefined,
+        persona: persona ?? undefined,
         metadata,
       });
 
@@ -259,18 +292,18 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const { name, reason, delete_agent } = await c.req.json();
-
-      if (!name || typeof name !== 'string') {
+      const parsed = releaseAgentSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
         }, 400);
       }
+      const { name, reason, delete_agent } = parsed.data;
 
       const result = await agentEngine.releaseAgent(db, workspace.id, {
         name,
-        reason,
+        reason: reason ?? undefined,
         delete_agent,
       });
 

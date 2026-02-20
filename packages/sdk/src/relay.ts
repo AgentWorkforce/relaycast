@@ -33,13 +33,13 @@ import type {
   SpawnAgentResponse,
   ReleaseAgentRequest,
   ReleaseAgentResponse,
-} from '@relaycast/types';
+} from './types.js';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
-import { BillingClient } from './billing.js';
 import { HttpClient, RelayError } from './client.js';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN } from './origin.js';
+import { camelizeKeys } from './casing.js';
 
 export interface RelayCastOptions {
   apiKey: string;
@@ -48,17 +48,34 @@ export interface RelayCastOptions {
 
 export interface WorkspaceStreamConfig {
   enabled: boolean;
-  default_enabled: boolean;
+  defaultEnabled: boolean;
   override: boolean | null;
+}
+
+interface ChannelListOptions {
+  includeArchived?: boolean;
+}
+
+interface CommandRegisterInput {
+  command: string;
+  description: string;
+  handlerAgent: string;
+  parameters?: CreateCommandRequest['parameters'];
+}
+
+interface WorkspaceDmMessage {
+  id: string;
+  agentId: string;
+  agentName: string;
+  text: string;
+  createdAt: string;
 }
 
 export class RelayCast {
   private client: HttpClient;
-  billing: BillingClient;
 
   constructor(options: RelayCastOptions) {
     this.client = new HttpClient(options);
-    this.billing = new BillingClient(this.client);
   }
 
   static async createWorkspace(
@@ -115,7 +132,7 @@ export class RelayCast {
     }
 
     const data = (parsed as { data: unknown }).data;
-    return CreateWorkspaceResponseSchema.parse(data);
+    return camelizeKeys(CreateWorkspaceResponseSchema.parse(data));
   }
 
   workspace = {
@@ -139,9 +156,9 @@ export class RelayCast {
   };
 
   channels = {
-    list: (opts?: { include_archived?: boolean }): Promise<Channel[]> => {
+    list: (opts?: ChannelListOptions): Promise<Channel[]> => {
       const query: Record<string, string> = {};
-      if (opts?.include_archived) query.include_archived = 'true';
+      if (opts?.includeArchived) query.includeArchived = 'true';
       return this.client.get('/v1/channels', query);
     },
     get: (name: string): Promise<Channel & { members: ChannelMemberInfo[] }> =>
@@ -200,7 +217,7 @@ export class RelayCast {
             name: agent.name,
             token,
             status: agent.status,
-            created_at: agent.created_at,
+            createdAt: agent.createdAt,
           };
         }
         throw err;
@@ -241,7 +258,7 @@ export class RelayCast {
   };
 
   commands = {
-    register: (data: CreateCommandRequest): Promise<CreateCommandResponse> =>
+    register: (data: CommandRegisterInput): Promise<CreateCommandResponse> =>
       this.client.post('/v1/commands', data),
 
     list: (): Promise<AgentCommand[]> =>
@@ -260,7 +277,7 @@ export class RelayCast {
   allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
     this.client.get('/v1/dm/conversations/all');
 
-  dmMessages = (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<Array<{ id: string; agent_id: string; agent_name: string; text: string; created_at: string }>> => {
+  dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<WorkspaceDmMessage[]> => {
     const query: Record<string, string> = {};
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;

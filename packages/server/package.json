@@ -16,7 +16,8 @@
     "@relaycast/mcp": "0.3.2",
     "@relaycast/types": "0.3.2",
     "drizzle-orm": "^0.45.1",
-    "hono": "^4.11.9"
+    "hono": "^4.11.9",
+    "zod": "^4.3.6"
   },
   "repository": {
     "type": "git",

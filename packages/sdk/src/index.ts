@@ -4,6 +4,6 @@ export type { RelayCastOptions, RelayCastOptions as RelayOptions } from './relay
 export { AgentClient } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
-export { BillingClient } from './billing.js';
 export { WsClient } from './ws.js';
 export type { WsClientOptions, EventHandler } from './ws.js';
+export type * from './types.js';

@@ -40,7 +40,7 @@ import type {
   WebhookReceivedEvent,
   CommandInvokedEvent,
   WsReconnectingEvent,
-} from '@relaycast/types';
+} from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
 import { WsClient, withInternalWsOrigin } from './ws.js';
 
@@ -50,6 +50,15 @@ function stripHash(channel: string): string {
 
 interface IdempotencyOption {
   idempotencyKey?: string;
+}
+
+interface ChannelListOptions {
+  includeArchived?: boolean;
+}
+
+interface FileListOptions {
+  uploadedBy?: string;
+  limit?: number;
 }
 
 function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions | undefined {
@@ -283,9 +292,9 @@ export class AgentClient {
     create: (data: CreateChannelRequest): Promise<Channel> =>
       this.client.post('/v1/channels', data),
 
-    list: (opts?: { include_archived?: boolean }): Promise<Channel[]> => {
+    list: (opts?: ChannelListOptions): Promise<Channel[]> => {
       const query: Record<string, string> = {};
-      if (opts?.include_archived) query.include_archived = 'true';
+      if (opts?.includeArchived) query.includeArchived = 'true';
       return this.client.get('/v1/channels', query);
     },
 
@@ -415,9 +424,9 @@ export class AgentClient {
     delete: (fileId: string): Promise<void> =>
       this.client.delete(`/v1/files/${encodeURIComponent(fileId)}`),
 
-    list: (opts?: { uploaded_by?: string; limit?: number }): Promise<FileInfo[]> => {
+    list: (opts?: FileListOptions): Promise<FileInfo[]> => {
       const query: Record<string, string> = {};
-      if (opts?.uploaded_by) query.uploaded_by = opts.uploaded_by;
+      if (opts?.uploadedBy) query.uploadedBy = opts.uploadedBy;
       if (opts?.limit) query.limit = String(opts.limit);
       return this.client.get('/v1/files', query);
     },

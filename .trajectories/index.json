@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T19:25:48.341Z",
+  "lastUpdated": "2026-02-20T20:45:37.641Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -805,6 +805,62 @@
       "startedAt": "2026-02-20T19:24:40.375Z",
       "completedAt": "2026-02-20T19:25:48.276Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_3srhy7vu4o6k.json"
+    },
+    "traj_l19f3hem4xev": {
+      "title": "Normalize SDK parameter casing style",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:30:59.030Z",
+      "completedAt": "2026-02-20T19:34:19.537Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_l19f3hem4xev.json"
+    },
+    "traj_uoyhn2vplbtz": {
+      "title": "Make SDK camelCase everywhere",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:35:11.645Z",
+      "completedAt": "2026-02-20T19:43:19.920Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_uoyhn2vplbtz.json"
+    },
+    "traj_e99hfhb1poy2": {
+      "title": "Make SDK camelCase consistent across inputs, outputs, and WS events",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:57:25.406Z",
+      "completedAt": "2026-02-20T19:57:34.046Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_e99hfhb1poy2.json"
+    },
+    "traj_211lh5royxmb": {
+      "title": "Audit server package casing consistency (snake_case)",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:11:19.970Z",
+      "completedAt": "2026-02-20T20:16:43.661Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_211lh5royxmb.json"
+    },
+    "traj_lcxu8ahosvu5": {
+      "title": "Enforce snake_case-only channel invite input: agent_name",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:18:18.395Z",
+      "completedAt": "2026-02-20T20:21:14.495Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lcxu8ahosvu5.json"
+    },
+    "traj_pvxzykt6pkhd": {
+      "title": "Audit server routes for missing Zod request schemas",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:22:14.825Z",
+      "completedAt": "2026-02-20T20:23:40.229Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_pvxzykt6pkhd.json"
+    },
+    "traj_modjf43n79gh": {
+      "title": "Migrate remaining server request-body validation to Zod schemas",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:31:11.605Z",
+      "completedAt": "2026-02-20T20:31:25.266Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_modjf43n79gh.json"
+    },
+    "traj_73pkmovcleoq": {
+      "title": "Remove billing functionality and references from repo",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:39:00.212Z",
+      "completedAt": "2026-02-20T20:45:37.568Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_73pkmovcleoq.json"
     }
   }
 }

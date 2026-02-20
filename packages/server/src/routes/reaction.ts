@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -11,6 +12,10 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
+const addReactionSchema = z.object({
+  emoji: z.string().min(1),
+});
+
 // POST /v1/messages/:id/reactions - add reaction (idempotent)
 reactionRoutes.post(
   '/messages/:id/reactions',
@@ -21,13 +26,14 @@ reactionRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { emoji } = await c.req.json();
-      if (!emoji || typeof emoji !== 'string') {
+      const parsed = addReactionSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'emoji is required' },
         }, 400);
       }
+      const { emoji } = parsed.data;
 
       const result = await reactionEngine.addReaction(
         db,

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 
 export interface ClientOptions {
   apiKey: string;
@@ -119,11 +120,11 @@ export class HttpClient {
     body?: unknown,
     query?: Record<string, string>,
     options?: RequestOptions,
-  ): Promise<T> {
+  ): Promise<Camelize<T>> {
     const url = new URL(path, this._baseUrl);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
-        if (v !== undefined) url.searchParams.set(k, v);
+        if (v !== undefined) url.searchParams.set(decamelizeKey(k), v);
       }
     }
 
@@ -138,6 +139,7 @@ export class HttpClient {
 
     const hasBody = body !== undefined && method.toUpperCase() !== 'GET';
     if (hasBody) headers['Content-Type'] = 'application/json';
+    const wireBody = hasBody ? decamelizeKeys(body) : undefined;
 
     const retryBackoffsMs = [200, 400, 800];
     let attempt = 0;
@@ -146,7 +148,7 @@ export class HttpClient {
       const res = await fetch(url.toString(), {
         method,
         headers,
-        body: hasBody ? JSON.stringify(body) : undefined,
+        body: hasBody ? JSON.stringify(wireBody) : undefined,
       });
 
       // Retry on 5xx with exponential backoff.
@@ -159,7 +161,7 @@ export class HttpClient {
 
       // 204 No Content — return undefined (used by DELETE endpoints)
       if (res.status === 204) {
-        return undefined as T;
+        return undefined as Camelize<T>;
       }
 
       const json: unknown = await res.json();
@@ -178,27 +180,24 @@ export class HttpClient {
 
       const data = envelope.data.data;
 
-      if (options?.schema) {
-        return options.schema.parse(data) as T;
-      }
-
-      return data as T;
+      const parsedData = options?.schema ? options.schema.parse(data) : data;
+      return camelizeKeys(parsedData) as Camelize<T>;
     }
   }
 
-  get<T>(path: string, query?: Record<string, string>, options?: RequestOptions): Promise<T> {
+  get<T>(path: string, query?: Record<string, string>, options?: RequestOptions): Promise<Camelize<T>> {
     return this.request<T>('GET', path, undefined, query, options);
   }
 
-  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<Camelize<T>> {
     return this.request<T>('POST', path, body, undefined, options);
   }
 
-  patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<Camelize<T>> {
     return this.request<T>('PATCH', path, body, undefined, options);
   }
 
-  put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<Camelize<T>> {
     return this.request<T>('PUT', path, body, undefined, options);
   }
 

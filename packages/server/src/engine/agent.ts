@@ -141,7 +141,7 @@ export async function updateAgent(
   name: string,
   updates: {
     status?: string;
-    persona?: string;
+    persona?: string | null;
     metadata?: Record<string, unknown>;
   },
 ) {

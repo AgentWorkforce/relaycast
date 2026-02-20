@@ -168,7 +168,7 @@ export async function updateChannel(
   db: Db,
   workspaceId: string,
   name: string,
-  updates: { topic?: string },
+  updates: { topic?: string | null },
 ) {
   const [channel] = await db
     .select()

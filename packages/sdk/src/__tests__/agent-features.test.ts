@@ -46,9 +46,9 @@ describe('AgentClient features', () => {
       expect(init.method).toBe('GET');
     });
 
-    it('list() passes include_archived', async () => {
+    it('list() passes includeArchived', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));
-      await me.channels.list({ include_archived: true });
+      await me.channels.list({ includeArchived: true });
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
@@ -195,15 +195,19 @@ describe('AgentClient features', () => {
 
   describe('inbox', () => {
     it('inbox() gets /v1/inbox', async () => {
-      const data = {
+      const rawData = {
         unread_channels: [],
         mentions: [],
         unread_dms: [],
       };
-      mockFetch.mockImplementation(() => mockResponse(data));
+      mockFetch.mockImplementation(() => mockResponse(rawData));
       const res = await me.inbox();
 
-      expect(res).toEqual(data);
+      expect(res).toEqual({
+        unreadChannels: [],
+        mentions: [],
+        unreadDms: [],
+      });
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/inbox');
       expect(init.method).toBe('GET');
@@ -257,13 +261,20 @@ describe('AgentClient features', () => {
       );
       await me.files.upload({
         filename: 'log.txt',
-        content_type: 'text/plain',
-        size_bytes: 1024,
+        contentType: 'text/plain',
+        sizeBytes: 1024,
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/files/upload');
       expect(init.method).toBe('POST');
+      expect(init.body).toBe(
+        JSON.stringify({
+          filename: 'log.txt',
+          content_type: 'text/plain',
+          size_bytes: 1024,
+        }),
+      );
     });
 
     it('complete() posts to /v1/files/:id/complete', async () => {
@@ -304,12 +315,13 @@ describe('AgentClient features', () => {
 
     it('list() passes query params', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));
-      await me.files.list({ uploaded_by: 'Bot', limit: 10 });
+      await me.files.list({ uploadedBy: 'Bot', limit: 10 });
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
         'https://api.relaycast.dev/v1/files?uploaded_by=Bot&limit=10',
       );
     });
+
   });
 });

@@ -20,8 +20,6 @@ const fakeWorkspace = {
   apiKeyHash: '',
   systemPrompt: null,
   plan: 'free' as const,
-  stripeCustomerId: null,
-  stripeSubscriptionId: null,
   createdAt: new Date(),
   metadata: {},
 };

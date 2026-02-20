@@ -14,8 +14,6 @@ export interface CloudflareBindings {
   MCP_SESSION_DO: DurableObjectNamespace;
   RATE_LIMIT_DO: DurableObjectNamespace;
   KV: KVNamespace;
-  STRIPE_SECRET_KEY: string;
-  STRIPE_WEBHOOK_SECRET: string;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   CF_ACCOUNT_ID: string;

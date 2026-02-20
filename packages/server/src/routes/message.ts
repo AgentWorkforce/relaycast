@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -11,6 +12,14 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
+const postMessageSchema = z.object({
+  text: z.string().min(1),
+  blocks: z.array(z.unknown()).nullable().optional(),
+  attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
+  content_type: z.string().optional(),
+});
+
 // POST /v1/channels/:name/messages - post a message
 messageRoutes.post(
   '/channels/:name/messages',
@@ -21,13 +30,14 @@ messageRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { text, blocks, attachments, data, content_type } = await c.req.json();
-      if (!text || typeof text !== 'string') {
+      const parsed = postMessageSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
+      const { text, blocks, attachments, data, content_type } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {

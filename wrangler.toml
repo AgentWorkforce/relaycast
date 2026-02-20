@@ -174,8 +174,6 @@ id = "PLACEHOLDER_PREVIEW_KV_ID"
 crons = []
 
 # Secrets (set via `wrangler secret put`):
-# STRIPE_SECRET_KEY
-# STRIPE_WEBHOOK_SECRET
 # R2_ACCESS_KEY_ID
 # R2_SECRET_ACCESS_KEY
 # CF_ACCOUNT_ID

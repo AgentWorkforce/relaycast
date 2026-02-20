@@ -183,7 +183,7 @@ describe('AgentClient WebSocket integration', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'dm.received', conversation_id: 'conv_1' }),
+      expect.objectContaining({ type: 'dm.received', conversationId: 'conv_1' }),
     );
   });
 
