@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T21:00:55.621Z",
+  "lastUpdated": "2026-02-20T22:20:44.709Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -864,9 +864,73 @@
     },
     "traj_i7rxdq93vs61": {
       "title": "Fix e2e create workspace undefined workspace key after billing cleanup",
-      "status": "active",
+      "status": "completed",
       "startedAt": "2026-02-20T20:59:18.440Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_i7rxdq93vs61.json"
+      "completedAt": "2026-02-20T21:00:58.456Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_i7rxdq93vs61.json"
+    },
+    "traj_chk7i7o1m0mk": {
+      "title": "Fix @relaycast/react build errors after camelCase normalization",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:01:42.799Z",
+      "completedAt": "2026-02-20T21:12:19.320Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_chk7i7o1m0mk.json"
+    },
+    "traj_nfevo2c0al5k": {
+      "title": "Rename packages/dashboard to packages/observer-dashboard and update references",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:13:31.591Z",
+      "completedAt": "2026-02-20T21:17:57.412Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_nfevo2c0al5k.json"
+    },
+    "traj_8bdcvc6tro40": {
+      "title": "Rename package name @relaycast/dashboard to @relaycast/observer-dashboard and update refs",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:18:22.384Z",
+      "completedAt": "2026-02-20T21:19:25.772Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8bdcvc6tro40.json"
+    },
+    "traj_dgjuzp2as44w": {
+      "title": "Remove packages/cli and all references",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:20:06.840Z",
+      "completedAt": "2026-02-20T21:36:43.108Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dgjuzp2as44w.json"
+    },
+    "traj_x0m77z3zwqqq": {
+      "title": "Refresh CLAUDE.md, AGENTS.md, and GEMINI.md so they are current and consistent",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:38:19.039Z",
+      "completedAt": "2026-02-20T21:40:36.520Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_x0m77z3zwqqq.json"
+    },
+    "traj_v8eetn0y8mxk": {
+      "title": "Remove all agent-relay snippet end comments",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:42:21.549Z",
+      "completedAt": "2026-02-20T21:42:42.148Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_v8eetn0y8mxk.json"
+    },
+    "traj_s07f6zim89mz": {
+      "title": "Reset agent-instruction markdown files for a clean rewrite",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:52:48.918Z",
+      "completedAt": "2026-02-20T21:59:32.981Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_s07f6zim89mz.json"
+    },
+    "traj_zz7cqzqvzyt9": {
+      "title": "Recreate AGENTS.md, CLAUDE.md, and GEMINI.md with minimal current guidance",
+      "status": "completed",
+      "startedAt": "2026-02-20T22:05:06.268Z",
+      "completedAt": "2026-02-20T22:05:29.055Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zz7cqzqvzyt9.json"
+    },
+    "traj_fifafx4z1erv": {
+      "title": "Delete obsolete MCP push notifications doc",
+      "status": "completed",
+      "startedAt": "2026-02-20T22:19:56.023Z",
+      "completedAt": "2026-02-20T22:20:44.633Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_fifafx4z1erv.json"
     }
   }
 }

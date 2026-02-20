@@ -34,21 +34,9 @@ Set either environment variable:
 - `DO_NOT_TRACK=1`
 - `RELAYCAST_TELEMETRY_DISABLED=1`
 
-For CLI user-level preference:
-
-```bash
-relaycast telemetry disable
-relaycast telemetry enable
-relaycast telemetry status
-```
-
-User preference is stored at:
-
-- `~/.relay/telemetry.json`
-
 ## Identifiers
 
-Telemetry uses anonymous identifiers. A local anonymous ID may be stored in `~/.relay/telemetry.json`.
+Telemetry uses anonymous identifiers.
 
 ## Best-Effort Delivery
 
@@ -60,8 +48,6 @@ Telemetry delivery is best-effort:
 ## Code References
 
 - `packages/types/src/telemetry.ts`
-- `packages/cli/src/telemetry.ts`
-- `packages/cli/src/commands/telemetry.ts`
 - `packages/mcp/src/telemetry.ts`
 - `packages/server/src/lib/telemetry.ts`
 - `packages/server/src/lib/logger.ts`

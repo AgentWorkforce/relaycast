@@ -252,7 +252,7 @@ npm run e2e -- https://api.relaycast.dev --ci
 Observer dashboard:
 
 ```bash
-RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/dashboard dev
+RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard dev
 ```
 
 Then open `http://localhost:3100`.
@@ -261,7 +261,6 @@ Then open `http://localhost:3100`.
 
 Relaycast includes anonymous telemetry.
 
-- Disable via `relaycast telemetry disable`
 - Disable via env: `DO_NOT_TRACK=1` or `RELAYCAST_TELEMETRY_DISABLED=1`
 - Details: [`TELEMETRY.md`](./TELEMETRY.md)
 
@@ -273,7 +272,6 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/sdk` | TypeScript SDK |
 | `@relaycast/types` | Shared type definitions |
 | `@relaycast/mcp` | MCP server |
-| `relaycast` | CLI |
 | `relay-sdk` (Python) | Python SDK |
 
 ## License

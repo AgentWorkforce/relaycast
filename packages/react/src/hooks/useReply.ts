@@ -1,6 +1,6 @@
 import { useContext, useState, useCallback } from 'react';
 import { ClientContext, StoreContext } from '../context.js';
-import type { MessageWithMeta } from '@relaycast/types';
+import type { MessageWithMeta } from '@relaycast/sdk';
 import type { UseReplyReturn } from '../types.js';
 
 export function useReply(): UseReplyReturn {

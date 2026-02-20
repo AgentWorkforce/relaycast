@@ -88,9 +88,9 @@ export function enablePiggyback(
         const inbox = await client.inbox();
 
         const hasUnread =
-          (inbox.unread_channels?.length ?? 0) > 0 ||
+          (inbox.unreadChannels?.length ?? 0) > 0 ||
           (inbox.mentions?.length ?? 0) > 0 ||
-          (inbox.unread_dms?.length ?? 0) > 0;
+          (inbox.unreadDms?.length ?? 0) > 0;
 
         if (hasUnread && Array.isArray(result?.content)) {
           const selfName = getSession().agentName;
@@ -114,9 +114,9 @@ export function enablePiggyback(
 }
 
 function formatInbox(inbox: {
-  unread_channels?: Array<{ channel_name: string; unread_count: number }>;
-  mentions?: Array<{ agent_name: string; channel_name: string; text: string }>;
-  unread_dms?: Array<{ from: string; unread_count: number }>;
+  unreadChannels?: Array<{ channelName: string; unreadCount: number }>;
+  mentions?: Array<{ agentName: string; channelName: string; text: string }>;
+  unreadDms?: Array<{ from: string; unreadCount: number }>;
 }, selfName?: string | null): string {
   const norm = (s: string) => s.trim().replace(/^@/, '').toLowerCase();
   const selfNorm = selfName ? norm(selfName) : null;
@@ -124,30 +124,30 @@ function formatInbox(inbox: {
 
   const lines: string[] = ['--- Pending Messages ---'];
 
-  if (inbox.unread_channels?.length) {
+  if (inbox.unreadChannels?.length) {
     lines.push('Unread channels:');
-    for (const ch of inbox.unread_channels) {
-      lines.push(`  #${ch.channel_name}: ${ch.unread_count} unread`);
+    for (const ch of inbox.unreadChannels) {
+      lines.push(`  #${ch.channelName}: ${ch.unreadCount} unread`);
     }
   }
 
   const mentions = selfNorm
-    ? inbox.mentions?.filter((m) => !isSelf(m.agent_name))
+    ? inbox.mentions?.filter((m) => !isSelf(m.agentName))
     : inbox.mentions;
   if (mentions?.length) {
     lines.push('Mentions:');
     for (const m of mentions) {
-      lines.push(`  @${m.agent_name} in #${m.channel_name}: "${m.text}"`);
+      lines.push(`  @${m.agentName} in #${m.channelName}: "${m.text}"`);
     }
   }
 
   const dms = selfNorm
-    ? inbox.unread_dms?.filter((dm) => !isSelf(dm.from))
-    : inbox.unread_dms;
+    ? inbox.unreadDms?.filter((dm) => !isSelf(dm.from))
+    : inbox.unreadDms;
   if (dms?.length) {
     lines.push('Unread DMs:');
     for (const dm of dms) {
-      lines.push(`  From ${dm.from}: ${dm.unread_count} unread`);
+      lines.push(`  From ${dm.from}: ${dm.unreadCount} unread`);
     }
   }
 

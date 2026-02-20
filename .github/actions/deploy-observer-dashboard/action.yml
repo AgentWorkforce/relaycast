@@ -57,7 +57,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cd packages/dashboard
+        cd packages/observer-dashboard
         npx @cloudflare/next-on-pages@1
         npx wrangler pages deploy .vercel/output/static --project-name="${{ inputs.project-name }}" --branch="${{ inputs.branch }}"
       env:

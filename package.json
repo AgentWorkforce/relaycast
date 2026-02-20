@@ -10,7 +10,7 @@
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",
-    "dev": "turbo dev --parallel --filter=@relaycast/server --filter=@relaycast/dashboard",
+    "dev": "turbo dev --parallel --filter=@relaycast/server --filter=@relaycast/observer-dashboard",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply relaycast --local",
     "db:migrate:remote": "wrangler d1 migrations apply relaycast --remote",
