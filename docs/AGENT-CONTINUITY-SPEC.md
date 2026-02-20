@@ -96,7 +96,54 @@ On agent spawn with `--continue-from <agent-name>`:
 1. Broker queries relaycast for a different agent's continuity
 2. Useful for knowledge transfer — new worker inherits context from predecessor with a different name
 
+When CLI-native resume is available (Claude, Codex), the broker uses that instead of relaycast message-summary injection. This provides full conversation transcript restoration rather than a summary. See "CLI-Native Resume" below.
+
 Without `--continue`, agents start fresh (default behavior).
+
+### CLI-Native Resume (Full Transcript Restoration)
+
+For CLIs that support session resume, the broker can restore the agent's **complete conversation history** — every tool call, file read, and decision — rather than just a message summary.
+
+#### Claude Code
+
+Claude Code supports pre-assigning session IDs and resuming by ID:
+
+**On first spawn:**
+```bash
+claude --session-id <uuid> -p "task description"
+```
+The broker generates a UUID and passes `--session-id` to Claude. This UUID is stored as the agent's resume token.
+
+**On re-spawn with `--continue`:**
+```bash
+claude --resume <uuid> -p "continue task"
+```
+Full conversation transcript is restored from `~/.claude/transcripts/`.
+
+#### Codex CLI
+
+Codex does not support pre-assigning session IDs, but sessions are scoped to the working directory. Since each spawned agent has a dedicated cwd, `resume --last` reliably picks the correct session.
+
+**On re-spawn with `--continue`:**
+```bash
+codex resume --last --cd <agent-cwd>
+```
+Full session history is restored from `~/.codex/sessions/`.
+
+For non-interactive workflow agents using `codex exec`, the thread ID can be captured from the `--json` output stream (first event: `{"type": "thread.started", "thread_id": "<uuid>"}`) and used with `codex exec resume <thread_id>`.
+
+#### Other CLIs (aider, goose, gemini)
+
+No native resume support. Falls back to relaycast message-summary injection (see Broker Integration above).
+
+#### Summary
+
+| CLI | On First Spawn | On Re-spawn (`--continue`) | Context Quality |
+|-----|----------------|---------------------------|-----------------|
+| Claude | `--session-id <uuid>` | `--resume <uuid>` | Full transcript |
+| Codex (interactive) | Normal spawn | `resume --last --cd <cwd>` | Full transcript |
+| Codex (exec/workflow) | `exec --json` | `exec resume <thread_id>` | Full transcript |
+| Others | Normal spawn | Relaycast message-summary | Last 10 messages |
 
 ### Use Cases
 
