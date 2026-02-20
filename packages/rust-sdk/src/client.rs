@@ -8,7 +8,9 @@ use crate::error::{RelayError, Result};
 use crate::types::ApiResponse;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://api.agentrelay.dev";
+const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
 
 /// Options for creating an HTTP client.
@@ -16,8 +18,14 @@ const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
 pub struct ClientOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://api.agentrelay.dev).
+    /// The base URL for the API (defaults to https://api.relaycast.dev).
     pub base_url: Option<String>,
+    /// SDK origin surface metadata.
+    pub origin_surface: Option<String>,
+    /// SDK origin client metadata.
+    pub origin_client: Option<String>,
+    /// SDK origin version metadata.
+    pub origin_version: Option<String>,
 }
 
 impl ClientOptions {
@@ -26,12 +34,28 @@ impl ClientOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
+            origin_surface: None,
+            origin_client: None,
+            origin_version: None,
         }
     }
 
     /// Set a custom base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set origin metadata headers.
+    pub fn with_origin(
+        mut self,
+        origin_surface: impl Into<String>,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_surface = Some(origin_surface.into());
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
         self
     }
 }
@@ -61,19 +85,31 @@ pub struct HttpClient {
     client: Client,
     api_key: String,
     base_url: String,
+    origin_surface: String,
+    origin_client: String,
+    origin_version: String,
 }
 
 impl HttpClient {
     /// Create a new HTTP client with the given options.
     pub fn new(options: ClientOptions) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
         Ok(Self {
             client,
             api_key: options.api_key,
-            base_url: options.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            base_url: options
+                .base_url
+                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            origin_surface: options
+                .origin_surface
+                .unwrap_or_else(|| DEFAULT_ORIGIN_SURFACE.to_string()),
+            origin_client: options
+                .origin_client
+                .unwrap_or_else(|| DEFAULT_ORIGIN_CLIENT.to_string()),
+            origin_version: options
+                .origin_version
+                .unwrap_or_else(|| SDK_VERSION.to_string()),
         })
     }
 
@@ -85,6 +121,34 @@ impl HttpClient {
     /// Get the base URL.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Get the origin surface metadata value.
+    pub fn origin_surface(&self) -> &str {
+        &self.origin_surface
+    }
+
+    /// Get the origin client metadata value.
+    pub fn origin_client(&self) -> &str {
+        &self.origin_client
+    }
+
+    /// Get the origin version metadata value.
+    pub fn origin_version(&self) -> &str {
+        &self.origin_version
+    }
+
+    /// Return a cloned client with a different API key while preserving base URL and origin metadata.
+    pub fn with_api_key(&self, api_key: impl Into<String>) -> Result<Self> {
+        HttpClient::new(
+            ClientOptions::new(api_key)
+                .with_base_url(self.base_url.clone())
+                .with_origin(
+                    self.origin_surface.clone(),
+                    self.origin_client.clone(),
+                    self.origin_version.clone(),
+                ),
+        )
     }
 
     /// Make a request to the API.
@@ -142,7 +206,9 @@ impl HttpClient {
         }
 
         // This shouldn't be reached, but just in case
-        Err(RelayError::InvalidResponse("Max retries exceeded".to_string()))
+        Err(RelayError::InvalidResponse(
+            "Max retries exceeded".to_string(),
+        ))
     }
 
     fn build_request(&self, method: Method, url: &str, options: &RequestOptions) -> RequestBuilder {
@@ -150,7 +216,10 @@ impl HttpClient {
             .client
             .request(method, url)
             .bearer_auth(&self.api_key)
-            .header("X-SDK-Version", SDK_VERSION);
+            .header("X-SDK-Version", SDK_VERSION)
+            .header("X-Relaycast-Origin-Surface", &self.origin_surface)
+            .header("X-Relaycast-Origin-Client", &self.origin_client)
+            .header("X-Relaycast-Origin-Version", &self.origin_version);
 
         if let Some(ref key) = options.idempotency_key {
             request = request.header("Idempotency-Key", key);

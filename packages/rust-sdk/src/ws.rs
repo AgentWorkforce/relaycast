@@ -5,23 +5,32 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, warn};
+use url::Url;
 
 use crate::error::{RelayError, Result};
 use crate::types::WsEvent;
 
-const DEFAULT_BASE_URL: &str = "https://api.agentrelay.dev";
+const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
 const PING_INTERVAL_SECS: u64 = 30;
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
 /// Options for creating a WebSocket client.
 #[derive(Debug, Clone)]
 pub struct WsClientOptions {
     /// The agent token for authentication.
     pub token: String,
-    /// The base URL for the API (defaults to https://api.agentrelay.dev).
+    /// The base URL for the API (defaults to https://api.relaycast.dev).
     pub base_url: Option<String>,
     /// Enable debug logging for dropped/malformed messages.
     pub debug: bool,
+    /// SDK origin surface metadata.
+    pub origin_surface: Option<String>,
+    /// SDK origin client metadata.
+    pub origin_client: Option<String>,
+    /// SDK origin version metadata.
+    pub origin_version: Option<String>,
 }
 
 impl WsClientOptions {
@@ -31,6 +40,9 @@ impl WsClientOptions {
             token: token.into(),
             base_url: None,
             debug: false,
+            origin_surface: None,
+            origin_client: None,
+            origin_version: None,
         }
     }
 
@@ -45,6 +57,19 @@ impl WsClientOptions {
         self.debug = debug;
         self
     }
+
+    /// Set origin metadata query params for WebSocket handshake.
+    pub fn with_origin(
+        mut self,
+        origin_surface: impl Into<String>,
+        origin_client: impl Into<String>,
+        origin_version: impl Into<String>,
+    ) -> Self {
+        self.origin_surface = Some(origin_surface.into());
+        self.origin_client = Some(origin_client.into());
+        self.origin_version = Some(origin_version.into());
+        self
+    }
 }
 
 /// A handle for subscribing to WebSocket events.
@@ -55,6 +80,9 @@ pub struct WsClient {
     token: String,
     base_url: String,
     debug: bool,
+    origin_surface: String,
+    origin_client: String,
+    origin_version: String,
     event_tx: broadcast::Sender<WsEvent>,
     command_tx: Option<mpsc::Sender<WsCommand>>,
     is_connected: Arc<Mutex<bool>>,
@@ -79,8 +107,17 @@ impl WsClient {
 
         Self {
             token: options.token,
-            base_url,
+            base_url: base_url.trim_end_matches('/').to_string(),
             debug: options.debug,
+            origin_surface: options
+                .origin_surface
+                .unwrap_or_else(|| DEFAULT_ORIGIN_SURFACE.to_string()),
+            origin_client: options
+                .origin_client
+                .unwrap_or_else(|| DEFAULT_ORIGIN_CLIENT.to_string()),
+            origin_version: options
+                .origin_version
+                .unwrap_or_else(|| SDK_VERSION.to_string()),
             event_tx,
             command_tx: None,
             is_connected: Arc::new(Mutex::new(false)),
@@ -103,13 +140,16 @@ impl WsClient {
             return Ok(());
         }
 
-        let url = format!(
-            "{}/v1/stream?token={}",
-            self.base_url,
-            urlencoding::encode(&self.token)
-        );
+        let mut url = Url::parse(&format!("{}/v1/ws", self.base_url))?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("token", &self.token);
+            query.append_pair("origin_surface", &self.origin_surface);
+            query.append_pair("origin_client", &self.origin_client);
+            query.append_pair("origin_version", &self.origin_version);
+        }
 
-        let (ws_stream, _) = connect_async(&url).await?;
+        let (ws_stream, _) = connect_async(url.as_str()).await?;
         let (mut write, mut read) = ws_stream.split();
 
         let (command_tx, mut command_rx) = mpsc::channel::<WsCommand>(32);
@@ -123,7 +163,8 @@ impl WsClient {
 
         // Spawn the WebSocket handler task
         tokio::spawn(async move {
-            let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(PING_INTERVAL_SECS));
+            let mut ping_interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(PING_INTERVAL_SECS));
 
             loop {
                 tokio::select! {

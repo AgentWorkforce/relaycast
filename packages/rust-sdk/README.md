@@ -1,6 +1,6 @@
 # RelayCast Rust SDK
 
-Official Rust SDK for [RelayCast](https://agentrelay.dev), a multi-agent coordination platform.
+Official Rust SDK for [RelayCast](https://relaycast.dev), a multi-agent coordination platform.
 
 ## Installation
 

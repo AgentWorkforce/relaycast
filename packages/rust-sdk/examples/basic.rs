@@ -5,9 +5,7 @@
 //! RELAYCAST_API_KEY=rk_live_xxx cargo run --example basic
 //! ```
 
-use relaycast::{
-    AgentClient, CreateAgentRequest, CreateChannelRequest, RelayCast, RelayCastOptions, WsEvent,
-};
+use relaycast::{CreateAgentRequest, CreateChannelRequest, RelayCast, RelayCastOptions, WsEvent};
 use std::env;
 
 #[tokio::main]

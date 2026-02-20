@@ -1,6 +1,6 @@
 //! # RelayCast Rust SDK
 //!
-//! Official Rust SDK for [RelayCast](https://agentrelay.dev), a multi-agent coordination platform.
+//! Official Rust SDK for [RelayCast](https://relaycast.dev), a multi-agent coordination platform.
 //!
 //! ## Quick Start
 //!
@@ -81,94 +81,100 @@ pub use ws::{EventReceiver, WsClient, WsClientOptions};
 
 // Re-export commonly used types
 pub use types::{
-    // Workspace
-    CreateWorkspaceResponse,
-    SetSystemPromptRequest,
-    SystemPrompt,
-    UpdateWorkspaceRequest,
-    Workspace,
-    WorkspaceStats,
     // Agents
     Agent,
+    // Commands
+    AgentCommand,
     AgentListQuery,
+    AgentOfflineEvent,
+    AgentOnlineEvent,
     AgentPresenceInfo,
-    CreateAgentRequest,
-    CreateAgentResponse,
-    TokenRotateResponse,
-    UpdateAgentRequest,
+    // Billing
+    BillingSubscription,
     // Channels
     Channel,
+    ChannelArchivedEvent,
+    ChannelCreatedEvent,
     ChannelMemberInfo,
-    ChannelWithMembers,
-    CreateChannelRequest,
-    UpdateChannelRequest,
-    // Messages
-    MessageBlock,
-    MessageListQuery,
-    MessageWithMeta,
-    PostMessageRequest,
-    ThreadReplyRequest,
-    ThreadResponse,
-    // DMs
-    CreateGroupDmRequest,
-    DmConversationSummary,
-    SendDmRequest,
-    WorkspaceDmConversation,
-    // Reactions
-    ReactionGroup,
-    // Search
-    SearchOptions,
-    // Inbox
-    InboxResponse,
     // Read receipts
     ChannelReadStatus,
-    ReaderInfo,
-    // Files
-    FileInfo,
-    FileListOptions,
-    UploadRequest,
-    UploadResponse,
-    // Webhooks
-    CreateWebhookRequest,
-    CreateWebhookResponse,
-    Webhook,
-    WebhookTriggerRequest,
-    WebhookTriggerResponse,
+    ChannelUpdatedEvent,
+    ChannelWithMembers,
+    CommandInvocation,
+    CommandInvokedEvent,
+    CreateAgentRequest,
+    CreateAgentResponse,
+    CreateChannelRequest,
+    CreateCommandRequest,
+    CreateCommandResponse,
+    // DMs
+    CreateGroupDmRequest,
     // Subscriptions
     CreateSubscriptionRequest,
     CreateSubscriptionResponse,
-    EventSubscription,
-    // Commands
-    AgentCommand,
-    CommandInvocation,
-    CreateCommandRequest,
-    CreateCommandResponse,
-    InvokeCommandRequest,
-    // Billing
-    BillingSubscription,
-    PortalResponse,
-    SubscribeRequest,
-    UsageInfo,
-    // Events
-    WsEvent,
-    AgentOfflineEvent,
-    AgentOnlineEvent,
-    ChannelArchivedEvent,
-    ChannelCreatedEvent,
-    ChannelUpdatedEvent,
-    CommandInvokedEvent,
+    // Webhooks
+    CreateWebhookRequest,
+    CreateWebhookResponse,
+    // Workspace
+    CreateWorkspaceResponse,
+    DmConversationSummary,
     DmReceivedEvent,
+    EventSubscription,
+    // Files
+    FileInfo,
+    FileListOptions,
     FileUploadedEvent,
     GroupDmReceivedEvent,
+    // Inbox
+    InboxResponse,
+    InvokeCommandRequest,
     MemberJoinedEvent,
     MemberLeftEvent,
+    // Messages
+    MessageBlock,
     MessageCreatedEvent,
+    MessageListQuery,
     MessageReadEvent,
     MessageUpdatedEvent,
+    MessageWithMeta,
+    PortalResponse,
+    PostMessageRequest,
     ReactionAddedEvent,
+    // Reactions
+    ReactionGroup,
     ReactionRemovedEvent,
+    ReaderInfo,
+    ReleaseAgentRequest,
+    ReleaseAgentResponse,
+    // Search
+    SearchOptions,
+    SendDmRequest,
+    SetSystemPromptRequest,
+    SpawnAgentRequest,
+    SpawnAgentResponse,
+    SubscribeRequest,
+    SystemPrompt,
     ThreadReplyEvent,
+    ThreadReplyRequest,
+    ThreadResponse,
+    TokenRotateResponse,
+    UpdateAgentRequest,
+    UpdateChannelRequest,
+    UpdateWorkspaceRequest,
+    UploadRequest,
+    UploadResponse,
+    UsageInfo,
+    Webhook,
     WebhookReceivedEvent,
+    WebhookTriggerRequest,
+    WebhookTriggerResponse,
+    Workspace,
+    WorkspaceDmConversation,
+    WorkspaceDmMessage,
+    WorkspaceStats,
+    WorkspaceStreamConfig,
+    // Events
+    WsEvent,
 };
 
 /// SDK version.

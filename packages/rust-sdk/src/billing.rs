@@ -24,7 +24,9 @@ impl<'a> BillingClient<'a> {
 
     /// Get the current subscription.
     pub async fn subscription(&self) -> Result<BillingSubscription> {
-        self.client.get("/v1/billing/subscription", None, None).await
+        self.client
+            .get("/v1/billing/subscription", None, None)
+            .await
     }
 
     /// Get usage information.
@@ -50,7 +52,9 @@ impl<'a> BillingClient<'a> {
         } else {
             Some(query.as_slice())
         };
-        self.client.get("/v1/billing/invoices", query_ref, None).await
+        self.client
+            .get("/v1/billing/invoices", query_ref, None)
+            .await
     }
 
     /// Get the customer portal URL.

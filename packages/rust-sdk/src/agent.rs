@@ -46,15 +46,40 @@ impl AgentClient {
         }
 
         let options = WsClientOptions::new(self.client.api_key())
-            .with_base_url(self.client.base_url());
+            .with_base_url(self.client.base_url())
+            .with_origin(
+                self.client.origin_surface(),
+                self.client.origin_client(),
+                self.client.origin_version(),
+            );
         let mut ws = WsClient::new(options);
         ws.connect().await?;
         self.ws = Some(ws);
         Ok(())
     }
 
+    /// Send a REST heartbeat to keep this agent online without a WebSocket ping.
+    pub async fn heartbeat(&self) -> Result<()> {
+        self.client
+            .post::<serde_json::Value>("/v1/agents/heartbeat", Some(serde_json::json!({})), None)
+            .await?;
+        Ok(())
+    }
+
     /// Disconnect from the WebSocket server.
     pub async fn disconnect(&mut self) {
+        if self.ws.is_some() {
+            // Keep parity with TypeScript SDK: best-effort REST disconnect before socket close.
+            let _ = self
+                .client
+                .post::<serde_json::Value>(
+                    "/v1/agents/disconnect",
+                    Some(serde_json::json!({})),
+                    None,
+                )
+                .await;
+        }
+
         if let Some(ref mut ws) = self.ws {
             ws.disconnect().await;
         }
@@ -219,10 +244,7 @@ impl AgentClient {
 
         self.client
             .get(
-                &format!(
-                    "/v1/messages/{}/replies",
-                    urlencoding::encode(message_id)
-                ),
+                &format!("/v1/messages/{}/replies", urlencoding::encode(message_id)),
                 query_ref,
                 None,
             )
@@ -283,10 +305,7 @@ impl AgentClient {
 
         self.client
             .get(
-                &format!(
-                    "/v1/dm/{}/messages",
-                    urlencoding::encode(conversation_id)
-                ),
+                &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
                 query_ref,
                 None,
             )
@@ -294,7 +313,10 @@ impl AgentClient {
     }
 
     /// Create a group DM.
-    pub async fn create_group_dm(&self, request: CreateGroupDmRequest) -> Result<serde_json::Value> {
+    pub async fn create_group_dm(
+        &self,
+        request: CreateGroupDmRequest,
+    ) -> Result<serde_json::Value> {
         self.client.post("/v1/dm/group", Some(request), None).await
     }
 
@@ -309,10 +331,7 @@ impl AgentClient {
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
             .post(
-                &format!(
-                    "/v1/dm/{}/messages",
-                    urlencoding::encode(conversation_id)
-                ),
+                &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
                 Some(body),
                 options,
             )
@@ -339,17 +358,16 @@ impl AgentClient {
     }
 
     /// Remove a participant from a group DM.
-    pub async fn remove_dm_participant(
-        &self,
-        conversation_id: &str,
-        agent: &str,
-    ) -> Result<()> {
+    pub async fn remove_dm_participant(&self, conversation_id: &str, agent: &str) -> Result<()> {
         self.client
-            .delete(&format!(
-                "/v1/dm/{}/participants/{}",
-                urlencoding::encode(conversation_id),
-                urlencoding::encode(agent)
-            ), None)
+            .delete(
+                &format!(
+                    "/v1/dm/{}/participants/{}",
+                    urlencoding::encode(conversation_id),
+                    urlencoding::encode(agent)
+                ),
+                None,
+            )
             .await
     }
 
@@ -424,11 +442,7 @@ impl AgentClient {
     }
 
     /// Invite an agent to a channel.
-    pub async fn invite_to_channel(
-        &self,
-        channel: &str,
-        agent: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn invite_to_channel(&self, channel: &str, agent: &str) -> Result<serde_json::Value> {
         let body = serde_json::json!({ "agent": agent });
         self.client
             .post(
@@ -472,10 +486,7 @@ impl AgentClient {
         let body = serde_json::json!({ "emoji": emoji });
         self.client
             .post(
-                &format!(
-                    "/v1/messages/{}/reactions",
-                    urlencoding::encode(message_id)
-                ),
+                &format!("/v1/messages/{}/reactions", urlencoding::encode(message_id)),
                 Some(body),
                 None,
             )
@@ -485,11 +496,14 @@ impl AgentClient {
     /// Remove a reaction from a message.
     pub async fn unreact(&self, message_id: &str, emoji: &str) -> Result<()> {
         self.client
-            .delete(&format!(
-                "/v1/messages/{}/reactions/{}",
-                urlencoding::encode(message_id),
-                urlencoding::encode(emoji)
-            ), None)
+            .delete(
+                &format!(
+                    "/v1/messages/{}/reactions/{}",
+                    urlencoding::encode(message_id),
+                    urlencoding::encode(emoji)
+                ),
+                None,
+            )
             .await
     }
 
@@ -497,10 +511,7 @@ impl AgentClient {
     pub async fn reactions(&self, message_id: &str) -> Result<Vec<ReactionGroup>> {
         self.client
             .get(
-                &format!(
-                    "/v1/messages/{}/reactions",
-                    urlencoding::encode(message_id)
-                ),
+                &format!("/v1/messages/{}/reactions", urlencoding::encode(message_id)),
                 None,
                 None,
             )
@@ -568,10 +579,7 @@ impl AgentClient {
     pub async fn readers(&self, message_id: &str) -> Result<Vec<ReaderInfo>> {
         self.client
             .get(
-                &format!(
-                    "/v1/messages/{}/readers",
-                    urlencoding::encode(message_id)
-                ),
+                &format!("/v1/messages/{}/readers", urlencoding::encode(message_id)),
                 None,
                 None,
             )
@@ -583,10 +591,7 @@ impl AgentClient {
         let name = strip_hash(channel);
         self.client
             .get(
-                &format!(
-                    "/v1/channels/{}/read-status",
-                    urlencoding::encode(name)
-                ),
+                &format!("/v1/channels/{}/read-status", urlencoding::encode(name)),
                 None,
                 None,
             )

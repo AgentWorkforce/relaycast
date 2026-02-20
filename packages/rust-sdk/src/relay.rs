@@ -7,14 +7,20 @@ use crate::error::{RelayError, Result};
 use crate::types::*;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://api.agentrelay.dev";
+const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
+
+fn strip_hash(channel: &str) -> &str {
+    channel.strip_prefix('#').unwrap_or(channel)
+}
 
 /// Options for creating a RelayCast client.
 #[derive(Debug, Clone)]
 pub struct RelayCastOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://api.agentrelay.dev).
+    /// The base URL for the API (defaults to https://api.relaycast.dev).
     pub base_url: Option<String>,
 }
 
@@ -55,16 +61,16 @@ impl RelayCast {
         name: &str,
         base_url: Option<&str>,
     ) -> Result<CreateWorkspaceResponse> {
-        let url = format!(
-            "{}/v1/workspaces",
-            base_url.unwrap_or(DEFAULT_BASE_URL)
-        );
+        let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
 
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
+            .header("X-Relaycast-Origin-Surface", DEFAULT_ORIGIN_SURFACE)
+            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
+            .header("X-Relaycast-Origin-Version", SDK_VERSION)
             .json(&serde_json::json!({ "name": name }))
             .send()
             .await?;
@@ -80,9 +86,8 @@ impl RelayCast {
             return Err(RelayError::api(error.code, error.message, status));
         }
 
-        json.data.ok_or_else(|| {
-            RelayError::InvalidResponse("Response missing data field".to_string())
-        })
+        json.data
+            .ok_or_else(|| RelayError::InvalidResponse("Response missing data field".to_string()))
     }
 
     /// Get the billing client.
@@ -92,9 +97,7 @@ impl RelayCast {
 
     /// Create an agent client for the given agent token.
     pub fn as_agent(&self, agent_token: impl Into<String>) -> Result<AgentClient> {
-        let mut options = ClientOptions::new(agent_token);
-        options = options.with_base_url(self.client.base_url());
-        let client = HttpClient::new(options)?;
+        let client = self.client.with_api_key(agent_token)?;
         Ok(AgentClient::from_client(client))
     }
 
@@ -117,6 +120,33 @@ impl RelayCast {
         self.client.delete("/v1/workspace", None).await
     }
 
+    /// Get effective workspace stream configuration.
+    pub async fn workspace_stream_get(&self) -> Result<WorkspaceStreamConfig> {
+        self.client.get("/v1/workspace/stream", None, None).await
+    }
+
+    /// Set workspace stream override.
+    pub async fn workspace_stream_set(&self, enabled: bool) -> Result<WorkspaceStreamConfig> {
+        self.client
+            .put(
+                "/v1/workspace/stream",
+                Some(serde_json::json!({ "enabled": enabled })),
+                None,
+            )
+            .await
+    }
+
+    /// Clear workspace stream override and inherit default behavior.
+    pub async fn workspace_stream_inherit(&self) -> Result<WorkspaceStreamConfig> {
+        self.client
+            .put(
+                "/v1/workspace/stream",
+                Some(serde_json::json!({ "mode": "inherit" })),
+                None,
+            )
+            .await
+    }
+
     // === System Prompt ===
 
     /// Get the workspace system prompt.
@@ -130,6 +160,130 @@ impl RelayCast {
     pub async fn set_system_prompt(&self, request: SetSystemPromptRequest) -> Result<SystemPrompt> {
         self.client
             .put("/v1/workspace/system-prompt", Some(request), None)
+            .await
+    }
+
+    // === Channels ===
+
+    /// List channels in the workspace.
+    pub async fn list_channels(&self, include_archived: bool) -> Result<Vec<Channel>> {
+        let query = if include_archived {
+            Some([("include_archived", "true")].as_slice())
+        } else {
+            None
+        };
+        self.client.get("/v1/channels", query, None).await
+    }
+
+    /// Get a channel and its members by name.
+    pub async fn get_channel(&self, name: &str) -> Result<ChannelWithMembers> {
+        self.client
+            .get(
+                &format!("/v1/channels/{}", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    // === Messages ===
+
+    /// List messages in a channel.
+    pub async fn list_messages(
+        &self,
+        channel: &str,
+        opts: Option<MessageListQuery>,
+    ) -> Result<Vec<MessageWithMeta>> {
+        let name = strip_hash(channel);
+        let opts = opts.unwrap_or_default();
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        if let Some(limit) = opts.limit {
+            query_params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(before) = opts.before {
+            query_params.push(("before".to_string(), before));
+        }
+        if let Some(after) = opts.after {
+            query_params.push(("after".to_string(), after));
+        }
+
+        let query: Vec<(&str, &str)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let query_ref = if query.is_empty() {
+            None
+        } else {
+            Some(query.as_slice())
+        };
+
+        self.client
+            .get(
+                &format!("/v1/channels/{}/messages", urlencoding::encode(name)),
+                query_ref,
+                None,
+            )
+            .await
+    }
+
+    /// Get a single message by ID.
+    pub async fn get_message(&self, id: &str) -> Result<MessageWithMeta> {
+        self.client
+            .get(
+                &format!("/v1/messages/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Get a message thread (parent and replies).
+    pub async fn get_thread(
+        &self,
+        message_id: &str,
+        opts: Option<MessageListQuery>,
+    ) -> Result<ThreadResponse> {
+        let opts = opts.unwrap_or_default();
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        if let Some(limit) = opts.limit {
+            query_params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(before) = opts.before {
+            query_params.push(("before".to_string(), before));
+        }
+        if let Some(after) = opts.after {
+            query_params.push(("after".to_string(), after));
+        }
+
+        let query: Vec<(&str, &str)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let query_ref = if query.is_empty() {
+            None
+        } else {
+            Some(query.as_slice())
+        };
+
+        self.client
+            .get(
+                &format!("/v1/messages/{}/replies", urlencoding::encode(message_id)),
+                query_ref,
+                None,
+            )
+            .await
+    }
+
+    /// Get grouped reactions for a message.
+    pub async fn get_message_reactions(&self, id: &str) -> Result<Vec<ReactionGroup>> {
+        self.client
+            .get(
+                &format!("/v1/messages/{}/reactions", urlencoding::encode(id)),
+                None,
+                None,
+            )
             .await
     }
 
@@ -229,6 +383,23 @@ impl RelayCast {
         }
     }
 
+    /// Spawn an agent process (registering if needed).
+    pub async fn spawn_agent(&self, request: SpawnAgentRequest) -> Result<SpawnAgentResponse> {
+        self.client
+            .post("/v1/agents/spawn", Some(request), None)
+            .await
+    }
+
+    /// Release an agent process (optionally deleting the agent).
+    pub async fn release_agent(
+        &self,
+        request: ReleaseAgentRequest,
+    ) -> Result<ReleaseAgentResponse> {
+        self.client
+            .post("/v1/agents/release", Some(request), None)
+            .await
+    }
+
     // === Webhooks ===
 
     /// Create a webhook.
@@ -297,7 +468,10 @@ impl RelayCast {
     /// Delete an event subscription.
     pub async fn delete_subscription(&self, id: &str) -> Result<()> {
         self.client
-            .delete(&format!("/v1/subscriptions/{}", urlencoding::encode(id)), None)
+            .delete(
+                &format!("/v1/subscriptions/{}", urlencoding::encode(id)),
+                None,
+            )
             .await
     }
 
@@ -319,7 +493,10 @@ impl RelayCast {
     /// Delete a command.
     pub async fn delete_command(&self, command: &str) -> Result<()> {
         self.client
-            .delete(&format!("/v1/commands/{}", urlencoding::encode(command)), None)
+            .delete(
+                &format!("/v1/commands/{}", urlencoding::encode(command)),
+                None,
+            )
             .await
     }
 
@@ -351,6 +528,47 @@ impl RelayCast {
     pub async fn all_dm_conversations(&self) -> Result<Vec<WorkspaceDmConversation>> {
         self.client
             .get("/v1/dm/conversations/all", None, None)
+            .await
+    }
+
+    /// Get DM messages for a workspace conversation.
+    pub async fn dm_messages(
+        &self,
+        conversation_id: &str,
+        opts: Option<MessageListQuery>,
+    ) -> Result<Vec<WorkspaceDmMessage>> {
+        let opts = opts.unwrap_or_default();
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        if let Some(limit) = opts.limit {
+            query_params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(before) = opts.before {
+            query_params.push(("before".to_string(), before));
+        }
+        if let Some(after) = opts.after {
+            query_params.push(("after".to_string(), after));
+        }
+
+        let query: Vec<(&str, &str)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let query_ref = if query.is_empty() {
+            None
+        } else {
+            Some(query.as_slice())
+        };
+
+        self.client
+            .get(
+                &format!(
+                    "/v1/dm/conversations/{}/messages",
+                    urlencoding::encode(conversation_id)
+                ),
+                query_ref,
+                None,
+            )
             .await
     }
 }

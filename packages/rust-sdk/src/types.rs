@@ -54,6 +54,14 @@ pub struct SystemPrompt {
     pub updated_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceStreamConfig {
+    pub enabled: bool,
+    pub default_enabled: bool,
+    #[serde(rename = "override")]
+    pub override_value: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SetSystemPromptRequest {
     pub prompt: String,
@@ -133,6 +141,49 @@ pub struct AgentPresenceInfo {
     pub name: String,
     pub status: String,
     pub last_seen: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpawnAgentRequest {
+    pub name: String,
+    pub cli: String,
+    pub task: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentResponse {
+    pub id: String,
+    pub name: String,
+    pub token: String,
+    pub cli: String,
+    pub task: String,
+    pub channel: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub already_existed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseAgentRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_agent: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseAgentResponse {
+    pub name: String,
+    pub released: bool,
+    pub deleted: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +324,15 @@ pub struct WorkspaceDmConversation {
     pub is_group: bool,
     pub created_at: String,
     pub last_message_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDmMessage {
+    pub id: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub text: String,
+    pub created_at: String,
 }
 
 // === Reactions ===
