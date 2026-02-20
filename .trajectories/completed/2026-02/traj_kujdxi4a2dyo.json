@@ -4,7 +4,7 @@
   "task": {
     "title": "Remove telemetry ingestion endpoint and send client telemetry directly to PostHog"
   },
-  "status": "active",
+  "status": "abandoned",
   "startedAt": "2026-02-20T00:34:19.822Z",
   "agents": [
     {
@@ -31,8 +31,15 @@
             "reasoning": "Direct transport changed, but event shape, property sanitization, and event-name constraints still need to stay consistent."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1771612336178,
+          "type": "note",
+          "content": "Abandoned: Switching to a new cleanup task requested by user",
+          "significance": "high"
         }
-      ]
+      ],
+      "endedAt": "2026-02-20T18:32:16.175Z"
     }
   ],
   "commits": [],
@@ -42,11 +49,6 @@
   "_trace": {
     "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
     "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
-  }
-}st",
-  "tags": [],
-  "_trace": {
-    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
-    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
-  }
+  },
+  "completedAt": "2026-02-20T18:32:16.175Z"
 }

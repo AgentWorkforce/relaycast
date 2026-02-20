@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T15:52:06.042Z",
+  "lastUpdated": "2026-02-20T19:25:48.341Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -522,9 +522,10 @@
     },
     "traj_3jjknhkwxa7z": {
       "title": "Add semantic version and build SHA to /health",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-19T06:40:55.489Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_3jjknhkwxa7z.json"
+      "completedAt": "2026-02-20T18:32:29.238Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_3jjknhkwxa7z.json"
     },
     "traj_mhdyvbvq8uz4": {
       "title": "Finalize health endpoint with semver and build metadata",
@@ -661,9 +662,10 @@
     },
     "traj_7qgqustv0zzw": {
       "title": "Simplify origin handling: hardcoded internal constants, no normalization functions",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-20T00:16:37.909Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_7qgqustv0zzw.json"
+      "completedAt": "2026-02-20T18:32:26.411Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7qgqustv0zzw.json"
     },
     "traj_qit8f873kdm0": {
       "title": "Finalize origin hardcoding refactor",
@@ -674,9 +676,10 @@
     },
     "traj_kujdxi4a2dyo": {
       "title": "Remove telemetry ingestion endpoint and send client telemetry directly to PostHog",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-20T00:34:19.822Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_kujdxi4a2dyo.json"
+      "completedAt": "2026-02-20T18:32:16.175Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_kujdxi4a2dyo.json"
     },
     "traj_v99y9f14ixs6": {
       "title": "Finalize direct PostHog telemetry switch",
@@ -746,6 +749,62 @@
       "status": "active",
       "startedAt": "2026-02-20T15:52:06.015Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_8tyqp3fg0c6p.json"
+    },
+    "traj_0mq6stnedi9j": {
+      "title": "Clean up repository: remove stale markdown, one-time scripts, and old code for better startup clarity",
+      "status": "completed",
+      "startedAt": "2026-02-20T16:46:10.853Z",
+      "completedAt": "2026-02-20T16:49:04.709Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_0mq6stnedi9j.json"
+    },
+    "traj_8425rz030n9j": {
+      "title": "Aggressive cleanup: delete stale docs/scripts/infra files and align docs to current stack",
+      "status": "completed",
+      "startedAt": "2026-02-20T18:32:33.052Z",
+      "completedAt": "2026-02-20T18:33:35.095Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8425rz030n9j.json"
+    },
+    "traj_8pjeffhgpx5r": {
+      "title": "Bring openapi.yaml up to date with all mounted API routes",
+      "status": "completed",
+      "startedAt": "2026-02-20T18:47:23.382Z",
+      "completedAt": "2026-02-20T18:50:30.090Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8pjeffhgpx5r.json"
+    },
+    "traj_i7iupwmoi5np": {
+      "title": "Rewrite TELEMETRY.md to concise Wrangler-style format",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:05:27.376Z",
+      "completedAt": "2026-02-20T19:05:34.433Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_i7iupwmoi5np.json"
+    },
+    "traj_64roc1tyygsi": {
+      "title": "Simplify TELEMETRY.md wording to be less specific",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:08:02.693Z",
+      "completedAt": "2026-02-20T19:08:37.727Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_64roc1tyygsi.json"
+    },
+    "traj_7i0cvzddcnco": {
+      "title": "Refactor README for simple onboarding-first quick start",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:09:50.497Z",
+      "completedAt": "2026-02-20T19:11:21.930Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7i0cvzddcnco.json"
+    },
+    "traj_u2nlyaaa5pu3": {
+      "title": "Add websocket usage to README quick start example",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:15:32.623Z",
+      "completedAt": "2026-02-20T19:15:41.597Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_u2nlyaaa5pu3.json"
+    },
+    "traj_3srhy7vu4o6k": {
+      "title": "Make README quick start realtime-first multi-agent example",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:24:40.375Z",
+      "completedAt": "2026-02-20T19:25:48.276Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_3srhy7vu4o6k.json"
     }
   }
 }

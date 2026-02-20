@@ -1,4 +1,4 @@
-"""Pydantic models mirroring @relay-cloud-sdk-transport/types."""
+"""Pydantic models mirroring @relaycast/types."""
 
 from __future__ import annotations
 

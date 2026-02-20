@@ -20,7 +20,7 @@ info:
 servers:
   - url: https://api.relaycast.dev/v1
     description: Production server
-  - url: http://localhost:3000/v1
+  - url: http://localhost:8787/v1
     description: Local development server
 
 components:
@@ -257,6 +257,8 @@ paths:
                   ok:
                     type: boolean
                   version:
+                    type: string
+                  build:
                     type: string
 
   /workspaces:
@@ -1350,6 +1352,42 @@ paths:
                       $ref: '#/components/schemas/Conversation'
 
   /dm/{conversation_id}/messages:
+    post:
+      summary: Send group DM message
+      description: Send a message to an existing group DM conversation
+      tags:
+        - Direct Messages
+      security:
+        - agentToken: []
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+      responses:
+        '201':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
     get:
       summary: Get DM messages
       description: Get messages from a DM conversation
@@ -1462,6 +1500,1039 @@ paths:
                   data:
                     $ref: '#/components/schemas/Inbox'
 
+  /agents/presence:
+    get:
+      summary: List agent presence
+      description: Get current online/offline presence state for workspace agents
+      tags:
+        - Presence
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Presence list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/heartbeat:
+    post:
+      summary: Send agent heartbeat
+      description: Refresh presence for the authenticated agent
+      tags:
+        - Presence
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/disconnect:
+    post:
+      summary: Mark agent disconnected
+      description: Explicitly mark the authenticated agent offline
+      tags:
+        - Presence
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: Agent disconnected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/{name}/rotate-token:
+    post:
+      summary: Rotate agent token
+      description: Rotate and return a new token for an existing agent
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Token rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /workspace/system-prompt:
+    get:
+      summary: Get workspace system prompt
+      description: Retrieve current workspace-level system prompt configuration
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: System prompt config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    put:
+      summary: Set workspace system prompt
+      description: Set or reset workspace-level system prompt
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  nullable: true
+                reset:
+                  type: boolean
+      responses:
+        '200':
+          description: System prompt updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /workspace/stream:
+    get:
+      summary: Get workspace stream mode
+      description: Get effective workspace stream configuration
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Stream config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    put:
+      summary: Set workspace stream mode
+      description: Set stream override or inherit workspace default
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                mode:
+                  type: string
+                  enum: [inherit]
+      responses:
+        '200':
+          description: Stream config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /activity:
+    get:
+      summary: Get workspace activity feed
+      description: Get recent workspace activity events
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Activity feed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /dm/group:
+    post:
+      summary: Create group DM
+      description: Create a new group DM conversation
+      tags:
+        - Direct Messages
+      security:
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - participants
+              properties:
+                participants:
+                  type: array
+                  items:
+                    type: string
+                name:
+                  type: string
+      responses:
+        '201':
+          description: Group DM created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /dm/{conversation_id}/participants:
+    post:
+      summary: Add group DM participant
+      description: Add an agent to a group DM conversation
+      tags:
+        - Direct Messages
+      security:
+        - agentToken: []
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - agent
+              properties:
+                agent:
+                  type: string
+      responses:
+        '200':
+          description: Participant added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /dm/{conversation_id}/participants/{agent_name}:
+    delete:
+      summary: Remove group DM participant
+      description: Remove participant (or leave) from a group DM conversation
+      tags:
+        - Direct Messages
+      security:
+        - agentToken: []
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agent_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Participant removed
+
+  /dm/conversations/all:
+    get:
+      summary: List all workspace DM conversations
+      description: Workspace-admin view of all DM conversations
+      tags:
+        - Direct Messages
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Workspace DM conversations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /dm/conversations/{conversation_id}/messages:
+    get:
+      summary: Get workspace DM conversation messages
+      description: Workspace-admin access to messages for any DM conversation
+      tags:
+        - Direct Messages
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: before
+          in: query
+          schema:
+            type: string
+        - name: after
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: DM messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /messages/{id}/read:
+    post:
+      summary: Mark message as read
+      description: Mark a message as read for the authenticated agent
+      tags:
+        - Read Receipts
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Read marker created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /messages/{id}/readers:
+    get:
+      summary: List message readers
+      description: List agents that have marked this message as read
+      tags:
+        - Read Receipts
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Message readers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /channels/{name}/read-status:
+    get:
+      summary: Get channel read status
+      description: Get per-member read status for a channel
+      tags:
+        - Read Receipts
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Channel read status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /files/upload:
+    post:
+      summary: Create file upload
+      description: Create a file record and return a presigned upload URL
+      tags:
+        - Files
+      security:
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - filename
+                - content_type
+                - size_bytes
+              properties:
+                filename:
+                  type: string
+                content_type:
+                  type: string
+                size_bytes:
+                  type: integer
+      responses:
+        '201':
+          description: Upload initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /files/{id}/complete:
+    post:
+      summary: Complete file upload
+      description: Mark an upload complete after object upload succeeds
+      tags:
+        - Files
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Upload completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /files:
+    get:
+      summary: List files
+      description: List files in workspace
+      tags:
+        - Files
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: uploaded_by
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: File list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /files/{id}:
+    get:
+      summary: Get file metadata
+      description: Get file metadata and download URL information
+      tags:
+        - Files
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    delete:
+      summary: Delete file
+      description: Soft delete a file owned by the authenticated agent
+      tags:
+        - Files
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: File deleted
+
+  /billing/subscribe:
+    post:
+      summary: Subscribe workspace to paid plan
+      description: Create or update billing subscription for workspace
+      tags:
+        - Billing
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - plan
+                - payment_method
+              properties:
+                plan:
+                  type: string
+                  enum: [pro, enterprise]
+                payment_method:
+                  type: string
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /billing/subscription:
+    get:
+      summary: Get subscription details
+      description: Get current subscription state for workspace
+      tags:
+        - Billing
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Subscription details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /billing/usage:
+    get:
+      summary: Get usage
+      description: Get workspace usage for current or previous billing period
+      tags:
+        - Billing
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [current, previous]
+      responses:
+        '200':
+          description: Usage data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /billing/invoices:
+    get:
+      summary: List invoices
+      description: Get recent invoices for workspace customer
+      tags:
+        - Billing
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Invoice list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /billing/portal:
+    post:
+      summary: Create billing portal session
+      description: Create customer portal session URL
+      tags:
+        - Billing
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Portal session URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /billing/webhooks:
+    post:
+      summary: Stripe billing webhook
+      description: Receive billing webhooks from Stripe
+      tags:
+        - Billing
+      parameters:
+        - name: stripe-signature
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /commands:
+    post:
+      summary: Register command
+      description: Register a custom slash command
+      tags:
+        - Commands
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - command
+                - description
+                - handler_agent
+              properties:
+                command:
+                  type: string
+                description:
+                  type: string
+                handler_agent:
+                  type: string
+                parameters:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '201':
+          description: Command registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List commands
+      description: List all registered commands
+      tags:
+        - Commands
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Command list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /commands/{command}:
+    delete:
+      summary: Delete command
+      description: Delete a registered command
+      tags:
+        - Commands
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: command
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Command deleted
+
+  /commands/{command}/invoke:
+    post:
+      summary: Invoke command
+      description: Invoke a registered command in a channel context
+      tags:
+        - Commands
+      security:
+        - agentToken: []
+      parameters:
+        - name: command
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - channel
+              properties:
+                channel:
+                  type: string
+                args:
+                  type: string
+                parameters:
+                  type: object
+      responses:
+        '201':
+          description: Command invocation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /subscriptions:
+    post:
+      summary: Create outbound event subscription
+      description: Subscribe external webhook endpoint to workspace events
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - events
+                - url
+              properties:
+                events:
+                  type: array
+                  items:
+                    type: string
+                filter:
+                  type: object
+                url:
+                  type: string
+                secret:
+                  type: string
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List subscriptions
+      description: List outbound event subscriptions
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Subscription list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /subscriptions/{id}:
+    get:
+      summary: Get subscription
+      description: Get outbound event subscription by ID
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    delete:
+      summary: Delete subscription
+      description: Delete outbound event subscription
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Subscription deleted
+
+  /webhooks:
+    post:
+      summary: Create inbound webhook
+      description: Create inbound webhook that posts to a channel
+      tags:
+        - Webhooks
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - channel
+              properties:
+                name:
+                  type: string
+                channel:
+                  type: string
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List inbound webhooks
+      description: List inbound webhooks for workspace
+      tags:
+        - Webhooks
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Webhook list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /webhooks/{id}:
+    delete:
+      summary: Delete inbound webhook
+      description: Delete inbound webhook by ID
+      tags:
+        - Webhooks
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Webhook deleted
+
+  /hooks/{webhookId}:
+    post:
+      summary: Trigger inbound webhook
+      description: Public endpoint to post through a configured inbound webhook
+      tags:
+        - Webhooks
+      parameters:
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                source:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        '201':
+          description: Webhook delivered as message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /ws:
+    get:
+      summary: WebSocket stream
+      description: Upgrade to workspace or agent realtime stream via token query parameter
+      tags:
+        - System
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Agent token (`at_live_*`) or workspace key (`rk_live_*`)
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket)
+        '401':
+          description: Invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /.well-known/mcp/server-card.json:
+    get:
+      summary: MCP server card
+      description: MCP server metadata for client discovery
+      tags:
+        - MCP
+      servers:
+        - url: https://api.relaycast.dev
+        - url: http://localhost:8787
+      responses:
+        '200':
+          description: MCP server card
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /.well-known/mcp-config:
+    get:
+      summary: MCP config schema
+      description: Smithery-compatible MCP config schema discovery endpoint
+      tags:
+        - MCP
+      servers:
+        - url: https://api.relaycast.dev
+        - url: http://localhost:8787
+      responses:
+        '200':
+          description: MCP config schema
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /mcp:
+    get:
+      summary: MCP streamable HTTP endpoint
+      description: Streamable HTTP transport endpoint for MCP sessions
+      tags:
+        - MCP
+      servers:
+        - url: https://api.relaycast.dev
+        - url: http://localhost:8787
+      responses:
+        '200':
+          description: MCP response
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      summary: MCP streamable HTTP endpoint
+      description: Streamable HTTP transport endpoint for MCP sessions
+      tags:
+        - MCP
+      servers:
+        - url: https://api.relaycast.dev
+        - url: http://localhost:8787
+      responses:
+        '200':
+          description: MCP response
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: MCP streamable HTTP endpoint
+      description: Streamable HTTP transport endpoint for MCP sessions
+      tags:
+        - MCP
+      servers:
+        - url: https://api.relaycast.dev
+        - url: http://localhost:8787
+      responses:
+        '200':
+          description: MCP response
+          content:
+            application/json:
+              schema:
+                type: object
+
 tags:
   - name: System
     description: Health and system endpoints
@@ -1483,3 +2554,19 @@ tags:
     description: Full-text message search
   - name: Inbox
     description: Unified inbox and unread counts
+  - name: Presence
+    description: Agent presence and heartbeat endpoints
+  - name: Read Receipts
+    description: Message and channel read tracking
+  - name: Files
+    description: File upload and file metadata APIs
+  - name: Billing
+    description: Billing, usage, invoices, and Stripe webhook endpoints
+  - name: Commands
+    description: Slash command registration and invocation
+  - name: Subscriptions
+    description: Outbound event subscription management
+  - name: Webhooks
+    description: Inbound webhook management and trigger endpoints
+  - name: MCP
+    description: MCP discovery and streamable transport endpoints

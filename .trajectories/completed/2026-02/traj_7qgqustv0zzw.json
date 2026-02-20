@@ -4,7 +4,7 @@
   "task": {
     "title": "Simplify origin handling: hardcoded internal constants, no normalization functions"
   },
-  "status": "active",
+  "status": "abandoned",
   "startedAt": "2026-02-20T00:16:37.909Z",
   "agents": [
     {
@@ -31,8 +31,15 @@
             "reasoning": "Ensures MCP WebSocket-origin metadata is set through the same internal-only path as HTTP requests."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1771612346412,
+          "type": "note",
+          "content": "Abandoned: Stale active trajectory from previous task",
+          "significance": "high"
         }
-      ]
+      ],
+      "endedAt": "2026-02-20T18:32:26.411Z"
     }
   ],
   "commits": [],
@@ -42,12 +49,6 @@
   "_trace": {
     "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
     "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
-  }
-}Changed": [],
-  "projectId": "/Users/will/Projects/relaycast",
-  "tags": [],
-  "_trace": {
-    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
-    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
-  }
+  },
+  "completedAt": "2026-02-20T18:32:26.411Z"
 }

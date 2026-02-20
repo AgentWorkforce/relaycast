@@ -1,5 +1,5 @@
 {
-  "name": "relay-cloud-sdk-transport",
+  "name": "relaycast",
   "module": "packages/mcp/src/smithery.ts",
   "packageManager": "npm@10.9.4",
   "private": true,
