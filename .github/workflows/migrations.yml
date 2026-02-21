@@ -1,0 +1,111 @@
+name: Migrations
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/server/src/db/**'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/server/src/db/**'
+
+concurrency:
+  group: migrations-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+
+      # Create a minimal wrangler.toml for local D1 operations
+      - name: Create temporary wrangler config
+        run: |
+          cat > wrangler.toml <<'EOF'
+          name = "relaycast-migration-check"
+          compatibility_date = "2024-12-01"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "relaycast"
+          database_id = "local"
+          migrations_dir = "packages/server/src/db/migrations"
+          EOF
+
+      - name: Apply migrations to local D1
+        run: npx wrangler d1 migrations apply DB --local
+
+      # Verify no uncommitted migration changes from schema drift
+      - name: Check for uncommitted migration changes
+        run: |
+          cd packages/server
+          npx drizzle-kit generate
+          cd ../..
+          if [ -n "$(git status --porcelain packages/server/src/db/migrations/)" ]; then
+            echo "::error::Uncommitted migration changes detected. Run 'npx drizzle-kit generate' locally and commit the results."
+            git diff packages/server/src/db/migrations/
+            exit 1
+          fi
+          echo "No uncommitted migration changes."
+
+  migration-check:
+    name: Incremental Migration Check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Check out base branch and apply its migrations
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+
+      - name: Create temporary wrangler config (base)
+        run: |
+          cat > wrangler.toml <<'EOF'
+          name = "relaycast-migration-check"
+          compatibility_date = "2024-12-01"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "relaycast"
+          database_id = "local"
+          migrations_dir = "packages/server/src/db/migrations"
+          EOF
+
+      - name: Apply base branch migrations
+        run: npx wrangler d1 migrations apply DB --local
+
+      # Check out PR branch overtop, preserving the local D1 database
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - uses: ./.github/actions/setup
+        with:
+          build: 'true'
+
+      - name: Create temporary wrangler config (PR)
+        run: |
+          cat > wrangler.toml <<'EOF'
+          name = "relaycast-migration-check"
+          compatibility_date = "2024-12-01"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "relaycast"
+          database_id = "local"
+          migrations_dir = "packages/server/src/db/migrations"
+          EOF
+
+      - name: Apply PR migrations incrementally
+        run: npx wrangler d1 migrations apply DB --local

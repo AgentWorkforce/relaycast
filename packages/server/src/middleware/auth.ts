@@ -3,9 +3,11 @@ import { createMiddleware } from 'hono/factory';
 import { eq } from 'drizzle-orm';
 import { workspaces, agents } from '../db/schema.js';
 import { touchLastSeen } from '../engine/agent.js';
+import { touchWorkspaceActivity } from '../engine/eviction.js';
 import type { AppEnv } from '../env.js';
 
 const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
+const ACTIVITY_DEBOUNCE_MS = 5 * 60_000; // 5 minutes
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -44,6 +46,12 @@ export const requireWorkspaceKey = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   c.set('workspace', workspace);
+
+  // Touch workspace activity (debounced, fire-and-forget)
+  if (Date.now() - workspace.lastActivityAt.getTime() > ACTIVITY_DEBOUNCE_MS) {
+    touchWorkspaceActivity(db, workspace.id).catch(() => {});
+  }
+
   await next();
 });
 
@@ -104,6 +112,12 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
     );
   }
 
+  // Touch workspace activity (debounced, fire-and-forget)
+  const ws = c.get('workspace');
+  if (ws && Date.now() - ws.lastActivityAt.getTime() > ACTIVITY_DEBOUNCE_MS) {
+    touchWorkspaceActivity(db, ws.id).catch(() => {});
+  }
+
   await next();
 });
 
@@ -152,5 +166,11 @@ export const requireAgentToken = createMiddleware<AppEnv>(async (c, next) => {
     );
   }
   c.set('workspace', workspace);
+
+  // Touch workspace activity (debounced, fire-and-forget)
+  if (Date.now() - workspace.lastActivityAt.getTime() > ACTIVITY_DEBOUNCE_MS) {
+    touchWorkspaceActivity(db, workspace.id).catch(() => {});
+  }
+
   await next();
 });

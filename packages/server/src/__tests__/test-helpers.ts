@@ -38,6 +38,8 @@ export const FAKE_WORKSPACE = {
   systemPrompt: null,
   plan: 'free' as const,
   createdAt: new Date(),
+  lastActivityAt: new Date(),
+  suspendedAt: null,
   metadata: {},
 };
 

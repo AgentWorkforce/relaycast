@@ -19,6 +19,8 @@ export const workspaces = sqliteTable('workspaces', {
   systemPrompt: text('system_prompt'),
   plan: text('plan').notNull().default('free'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  lastActivityAt: integer('last_activity_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  suspendedAt: integer('suspended_at', { mode: 'timestamp' }),
   metadata: text('metadata', { mode: 'json' }).default('{}'),
 });
 

@@ -322,7 +322,35 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   await logger.flush();
 }
 
+// Cron handler for workspace eviction (two-phase: suspend → hard delete)
+async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings'], ctx: ExecutionContext) {
+  const { getDb } = await import('./db/index.js');
+  const { suspendInactiveWorkspaces, evictSuspendedWorkspaces } = await import('./engine/eviction.js');
+  const logger = createLogger(env, { source: 'worker.cron' });
+
+  try {
+    const db = getDb(env.DB);
+
+    // Phase 1: Suspend workspaces inactive for 30+ days
+    const suspended = await suspendInactiveWorkspaces(db);
+    if (suspended.length > 0) {
+      logger.info('Suspended inactive workspaces', { count: suspended.length, ids: suspended });
+    }
+
+    // Phase 2: Hard-delete workspaces suspended for 30+ days (60 days total)
+    const evicted = await evictSuspendedWorkspaces(db, env);
+    if (evicted.length > 0) {
+      logger.info('Evicted suspended workspaces', { count: evicted.length, ids: evicted });
+    }
+  } catch (error) {
+    logger.error('Workspace eviction failed', { ...toErrorDetails(error) });
+  }
+
+  ctx.waitUntil(logger.flush());
+}
+
 export default {
   fetch: app.fetch,
   queue: handleQueue,
+  scheduled: handleScheduled,
 };

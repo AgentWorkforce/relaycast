@@ -8,6 +8,20 @@
       "when": 1771360048665,
       "tag": "0000_broad_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1771360048666,
+      "tag": "0001_fts5_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1771360048667,
+      "tag": "0002_workspace_eviction",
+      "breakpoints": true
     }
   ]
 }

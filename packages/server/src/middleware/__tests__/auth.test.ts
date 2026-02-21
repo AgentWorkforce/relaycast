@@ -9,9 +9,12 @@ import {
   hashToken,
 } from '../auth.js';
 
-// Mock touchLastSeen to avoid DB calls
+// Mock touchLastSeen and touchWorkspaceActivity to avoid DB calls
 vi.mock('../../engine/agent.js', () => ({
   touchLastSeen: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../../engine/eviction.js', () => ({
+  touchWorkspaceActivity: vi.fn().mockResolvedValue(undefined),
 }));
 
 const fakeWorkspace = {
@@ -21,6 +24,8 @@ const fakeWorkspace = {
   systemPrompt: null,
   plan: 'free' as const,
   createdAt: new Date(),
+  lastActivityAt: new Date(),
+  suspendedAt: null,
   metadata: {},
 };
 
@@ -60,6 +65,11 @@ function mockDbReturning(...results: any[]) {
           callCount++;
           return Promise.resolve(result);
         }),
+      }),
+    }),
+    update: () => ({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
       }),
     }),
   } as any;

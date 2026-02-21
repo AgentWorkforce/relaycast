@@ -1,0 +1,95 @@
+{
+  "id": "traj_6wned2xdggug",
+  "version": 1,
+  "task": {
+    "title": "Workspace eviction: two-phase soft delete + hard delete"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-21T10:36:30.207Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-21T10:36:34.847Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_h3qh4b72l29j",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-21T10:36:34.847Z",
+      "events": [
+        {
+          "ts": 1771670194848,
+          "type": "decision",
+          "content": "Two-phase eviction: suspend at 30 days inactivity (soft delete), hard delete at 60 days (30 days after suspend). This replaces the single-pass hard delete at 30 days.: Two-phase eviction: suspend at 30 days inactivity (soft delete), hard delete at 60 days (30 days after suspend). This replaces the single-pass hard delete at 30 days.",
+          "raw": {
+            "question": "Two-phase eviction: suspend at 30 days inactivity (soft delete), hard delete at 60 days (30 days after suspend). This replaces the single-pass hard delete at 30 days.",
+            "chosen": "Two-phase eviction: suspend at 30 days inactivity (soft delete), hard delete at 60 days (30 days after suspend). This replaces the single-pass hard delete at 30 days.",
+            "alternatives": [],
+            "reasoning": ""
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771670200789,
+          "type": "decision",
+          "content": "Added suspendedAt column to workspaces table. touchWorkspaceActivity now clears suspendedAt to revive suspended workspaces on any activity.: Added suspendedAt column to workspaces table. touchWorkspaceActivity now clears suspendedAt to revive suspended workspaces on any activity.",
+          "raw": {
+            "question": "Added suspendedAt column to workspaces table. touchWorkspaceActivity now clears suspendedAt to revive suspended workspaces on any activity.",
+            "chosen": "Added suspendedAt column to workspaces table. touchWorkspaceActivity now clears suspendedAt to revive suspended workspaces on any activity.",
+            "alternatives": [],
+            "reasoning": ""
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771670204868,
+          "type": "decision",
+          "content": "Added touchWorkspaceActivity to requireWorkspaceKey and requireAgentToken middleware (debounced, fire-and-forget) to fix missing activity tracking on those auth paths.: Added touchWorkspaceActivity to requireWorkspaceKey and requireAgentToken middleware (debounced, fire-and-forget) to fix missing activity tracking on those auth paths.",
+          "raw": {
+            "question": "Added touchWorkspaceActivity to requireWorkspaceKey and requireAgentToken middleware (debounced, fire-and-forget) to fix missing activity tracking on those auth paths.",
+            "chosen": "Added touchWorkspaceActivity to requireWorkspaceKey and requireAgentToken middleware (debounced, fire-and-forget) to fix missing activity tracking on those auth paths.",
+            "alternatives": [],
+            "reasoning": ""
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771670211558,
+          "type": "decision",
+          "content": "R2 cleanup before hard delete: purgeWorkspaceR2 lists objects with workspace prefix and deletes in batches. Runs per-workspace during eviction phase 2.: R2 cleanup before hard delete: purgeWorkspaceR2 lists objects with workspace prefix and deletes in batches. Runs per-workspace during eviction phase 2.",
+          "raw": {
+            "question": "R2 cleanup before hard delete: purgeWorkspaceR2 lists objects with workspace prefix and deletes in batches. Runs per-workspace during eviction phase 2.",
+            "chosen": "R2 cleanup before hard delete: purgeWorkspaceR2 lists objects with workspace prefix and deletes in batches. Runs per-workspace during eviction phase 2.",
+            "alternatives": [],
+            "reasoning": ""
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771670218924,
+          "type": "reflection",
+          "content": "All changes implemented and verified. Build passes, all 349 tests pass. Files modified: schema.ts (added suspendedAt), 0002_workspace_eviction.sql (added suspended_at column + index), eviction.ts (rewritten with two-phase logic + R2 cleanup), auth.ts (added touch to requireWorkspaceKey and requireAgentToken), worker.ts (updated cron to call both phases), test-helpers.ts and auth.test.ts (added lastActivityAt/suspendedAt to mocks).",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-21T10:37:19.394Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/agent-workforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e36eb38ae271ddf374dfb10309e1dd0f7524e5b9",
+    "endRef": "e36eb38ae271ddf374dfb10309e1dd0f7524e5b9"
+  },
+  "completedAt": "2026-02-21T10:37:19.394Z",
+  "retrospective": {
+    "summary": "Implemented two-phase workspace eviction: soft delete (suspend) at 30 days, hard delete with R2 cleanup at 60 days. Fixed activity tracking gaps in requireWorkspaceKey and requireAgentToken middleware.",
+    "approach": "Schema-first: added suspendedAt column, updated migration SQL, rewrote eviction engine with suspend/evict/purge functions, patched auth middleware, updated cron handler. Fixed test mocks for new fields.",
+    "confidence": 0.95
+  }
+}
