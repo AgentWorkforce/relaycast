@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SubscriptionManager } from '../resources/subscriptions.js';
 import { eventToResourceUris } from '../resources/ws-bridge.js';
-import type { ServerEvent } from '@relaycast/types';
+import type { WsClientEvent } from '@relaycast/sdk';
 
 describe('Resource subscription integration', () => {
   let manager: SubscriptionManager;
@@ -12,7 +12,7 @@ describe('Resource subscription integration', () => {
     notified = [];
   });
 
-  function simulateEvent(event: ServerEvent) {
+  function simulateEvent(event: WsClientEvent) {
     const uris = eventToResourceUris(event);
     const matched = manager.getMatchingSubscriptions(uris);
     for (const uri of matched) {
@@ -25,8 +25,8 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm1', agent_name: 'bot', text: 'hi', attachments: [] },
-    } as ServerEvent);
+      message: { id: 'm1', agentName: 'bot', text: 'hi', attachments: [] },
+    } as WsClientEvent);
     expect(notified).toEqual(['relay://inbox']);
   });
 
@@ -35,8 +35,8 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm1', agent_name: 'bot', text: 'hi', attachments: [] },
-    } as ServerEvent);
+      message: { id: 'm1', agentName: 'bot', text: 'hi', attachments: [] },
+    } as WsClientEvent);
     expect(notified).toEqual(['relay://channels/general/messages']);
   });
 
@@ -46,8 +46,8 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm1', agent_name: 'bot', text: 'hi', attachments: [] },
-    } as ServerEvent);
+      message: { id: 'm1', agentName: 'bot', text: 'hi', attachments: [] },
+    } as WsClientEvent);
     expect(notified).toEqual([
       'relay://inbox',
       'relay://channels/general/messages',
@@ -59,8 +59,8 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm1', agent_name: 'bot', text: 'hi', attachments: [] },
-    } as ServerEvent);
+      message: { id: 'm1', agentName: 'bot', text: 'hi', attachments: [] },
+    } as WsClientEvent);
     expect(notified).toEqual([]);
   });
 
@@ -70,8 +70,8 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'message.created',
       channel: 'general',
-      message: { id: 'm1', agent_name: 'bot', text: 'hi', attachments: [] },
-    } as ServerEvent);
+      message: { id: 'm1', agentName: 'bot', text: 'hi', attachments: [] },
+    } as WsClientEvent);
     expect(notified).toEqual([]);
   });
 
@@ -79,9 +79,9 @@ describe('Resource subscription integration', () => {
     manager.subscribe('relay://dm/conv1');
     simulateEvent({
       type: 'dm.received',
-      conversation_id: 'conv1',
-      message: { id: 'd1', agent_name: 'bot', text: 'hey' },
-    } as ServerEvent);
+      conversationId: 'conv1',
+      message: { id: 'd1', agentName: 'bot', text: 'hey' },
+    } as WsClientEvent);
     expect(notified).toEqual(['relay://dm/conv1']);
   });
 
@@ -89,9 +89,9 @@ describe('Resource subscription integration', () => {
     manager.subscribe('relay://messages/p1/thread');
     simulateEvent({
       type: 'thread.reply',
-      parent_id: 'p1',
-      message: { id: 'r1', agent_name: 'bot', text: 'reply' },
-    } as ServerEvent);
+      parentId: 'p1',
+      message: { id: 'r1', agentName: 'bot', text: 'reply' },
+    } as WsClientEvent);
     expect(notified).toEqual(['relay://messages/p1/thread']);
   });
 
@@ -100,11 +100,11 @@ describe('Resource subscription integration', () => {
     simulateEvent({
       type: 'agent.online',
       agent: { name: 'bot1' },
-    } as ServerEvent);
+    } as WsClientEvent);
     simulateEvent({
       type: 'agent.offline',
       agent: { name: 'bot1' },
-    } as ServerEvent);
+    } as WsClientEvent);
     expect(notified).toEqual(['relay://agents', 'relay://agents']);
   });
 });
