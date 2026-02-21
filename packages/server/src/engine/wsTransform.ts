@@ -192,6 +192,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         command: d.command as string,
         channel: d.channel as string,
         invoked_by: d.invoked_by as string,
+        handler_agent_id: d.handler_agent_id as string,
         args: (d.args as string | null) ?? null,
         parameters: (d.parameters as Record<string, unknown> | null) ?? null,
       };

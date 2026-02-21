@@ -183,6 +183,7 @@ export const CommandInvokedEventSchema = z.object({
   command: z.string(),
   channel: z.string(),
   invoked_by: z.string(),
+  handler_agent_id: z.string(),
   args: z.string().nullable(),
   parameters: z.record(z.string(), z.unknown()).nullable(),
 });

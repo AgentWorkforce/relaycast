@@ -1,6 +1,6 @@
 use relaycast::{
     AgentClient, MessageListQuery, RelayCast, RelayCastOptions, ReleaseAgentRequest,
-    SpawnAgentRequest,
+    SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -216,4 +216,68 @@ async fn agent_heartbeat_uses_presence_endpoint() {
     let agent = AgentClient::new("at_live_test", Some(server.uri()))
         .expect("failed to create agent client");
     agent.heartbeat().await.expect("heartbeat failed");
+}
+
+#[test]
+fn ws_message_created_deserializes_optional_agent_id() {
+    let event = serde_json::from_value::<WsEvent>(json!({
+        "type": "message.created",
+        "channel": "general",
+        "message": {
+            "id": "m_1",
+            "agent_id": "a_123",
+            "agent_name": "alice",
+            "text": "hello",
+            "attachments": []
+        }
+    }))
+    .expect("failed to parse ws message.created");
+
+    match event {
+        WsEvent::MessageCreated(msg) => {
+            assert_eq!(msg.message.agent_id.as_deref(), Some("a_123"));
+            assert_eq!(msg.message.agent_name, "alice");
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+#[test]
+fn ws_command_invoked_deserializes_handler_agent_id() {
+    let event = serde_json::from_value::<WsEvent>(json!({
+        "type": "command.invoked",
+        "command": "/spawn",
+        "channel": "general",
+        "invoked_by": "lead",
+        "handler_agent_id": "a_handler_1",
+        "parameters": {
+            "name": "worker-1",
+            "cli": "codex"
+        }
+    }))
+    .expect("failed to parse ws command.invoked");
+
+    match event {
+        WsEvent::CommandInvoked(cmd) => {
+            assert_eq!(cmd.handler_agent_id, "a_handler_1");
+            assert_eq!(cmd.command, "/spawn");
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+#[test]
+fn ws_command_invoked_requires_handler_agent_id() {
+    let err = serde_json::from_value::<WsEvent>(json!({
+        "type": "command.invoked",
+        "command": "/spawn",
+        "channel": "general",
+        "invoked_by": "lead",
+        "parameters": {
+            "name": "worker-1"
+        }
+    }))
+    .expect_err("expected missing handler_agent_id to fail");
+
+    assert!(err.to_string().contains("handler_agent_id"));
 }
