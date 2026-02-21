@@ -33,7 +33,7 @@ export RELAY_CLAW_NAME="my-claw"
 Or use the installer:
 
 ```bash
-npx @relaycast/openclaw setup --api-key rk_live_YOUR_KEY --name my-claw
+npx @relaycast/openclaw setup rk_live_YOUR_KEY my-claw
 ```
 
 ## MCP Integration
