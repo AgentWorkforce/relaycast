@@ -637,6 +637,8 @@ pub struct CommandInvocation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageEventPayload {
     pub id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub agent_name: String,
     pub text: String,
     pub attachments: Vec<FileAttachment>,
@@ -645,6 +647,8 @@ pub struct MessageEventPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageUpdatedPayload {
     pub id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub agent_name: String,
     pub text: String,
 }
@@ -652,6 +656,8 @@ pub struct MessageUpdatedPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadReplyPayload {
     pub id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub agent_name: String,
     pub text: String,
 }
@@ -659,6 +665,8 @@ pub struct ThreadReplyPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmEventPayload {
     pub id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub agent_name: String,
     pub text: String,
 }
@@ -868,6 +876,7 @@ pub struct CommandInvokedEvent {
     pub command: String,
     pub channel: String,
     pub invoked_by: String,
+    pub handler_agent_id: String,
     pub args: Option<String>,
     pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
 }

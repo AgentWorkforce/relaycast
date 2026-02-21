@@ -241,12 +241,20 @@ describe('transformForClient', () => {
   });
 
   it('transforms command.invoked', () => {
-    const event = makeEvent('command.invoked', { command: '/hello', channel: 'general', invoked_by: 'agent_1', args: 'x', parameters: { a: 1 } });
+    const event = makeEvent('command.invoked', {
+      command: '/hello',
+      channel: 'general',
+      invoked_by: 'agent_1',
+      handler_agent_id: 'agent_2',
+      args: 'x',
+      parameters: { a: 1 },
+    });
     expect(transformForClient(event)).toEqual({
       type: 'command.invoked',
       command: '/hello',
       channel: 'general',
       invoked_by: 'agent_1',
+      handler_agent_id: 'agent_2',
       args: 'x',
       parameters: { a: 1 },
     });
