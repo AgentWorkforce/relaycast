@@ -4,8 +4,7 @@ import pytest
 import httpx
 import respx
 
-from relay_sdk import Relay, AsyncRelay, AgentClient, AsyncAgentClient, BillingClient
-from relay_sdk.billing import AsyncBillingClient
+from relay_sdk import Relay, AsyncRelay, AgentClient, AsyncAgentClient
 
 BASE = "https://test.relay.dev"
 KEY = "rk_test_abc"
@@ -19,10 +18,7 @@ WORKSPACE_DATA = {
     "id": "w1",
     "name": "TestWS",
     "api_key_hash": "hash",
-    "plan": "free",
     "system_prompt": None,
-    "stripe_customer_id": None,
-    "stripe_subscription_id": None,
     "created_at": "2025-01-01T00:00:00Z",
     "metadata": {},
 }
@@ -55,17 +51,12 @@ class TestRelay:
         assert r._client.api_key == KEY
         assert r._client.base_url == BASE
 
-    def test_has_billing(self):
-        r = Relay(KEY, base_url=BASE)
-        assert isinstance(r.billing, BillingClient)
-
     @respx.mock
     def test_workspace_info(self):
         respx.get(f"{BASE}/v1/workspace").mock(return_value=ok(WORKSPACE_DATA))
         r = Relay(KEY, base_url=BASE)
         ws = r.workspace.info()
         assert ws.name == "TestWS"
-        assert ws.plan == "free"
 
     @respx.mock
     def test_workspace_update(self):
@@ -161,8 +152,3 @@ class TestAsyncRelay:
         async with AsyncRelay(KEY, base_url=BASE) as r:
             ac = r.as_agent("at_xxx")
             assert isinstance(ac, AsyncAgentClient)
-
-    @pytest.mark.asyncio
-    async def test_has_async_billing(self):
-        async with AsyncRelay(KEY, base_url=BASE) as r:
-            assert isinstance(r.billing, AsyncBillingClient)

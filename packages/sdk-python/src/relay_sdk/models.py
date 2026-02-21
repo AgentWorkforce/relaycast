@@ -13,8 +13,6 @@ AgentType = Literal["agent", "human"]
 AgentStatus = Literal["online", "offline", "away"]
 FileStatus = Literal["pending", "complete", "deleted"]
 DmType = Literal["1:1", "group"]
-PlanType = Literal["free", "pro", "enterprise"]
-SubscriptionStatus = Literal["active", "canceled", "past_due", "trialing"]
 
 
 # ── Agent ─────────────────────────────────────────────────────────
@@ -64,9 +62,6 @@ class Workspace(BaseModel):
     name: str
     api_key_hash: str
     system_prompt: str | None = None
-    plan: PlanType
-    stripe_customer_id: str | None = None
-    stripe_subscription_id: str | None = None
     created_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -322,58 +317,6 @@ class InboxResponse(BaseModel):
     unread_channels: list[UnreadChannel]
     mentions: list[InboxMention]
     unread_dms: list[UnreadDm]
-
-
-# ── Billing ───────────────────────────────────────────────────────
-
-class BillingSubscription(BaseModel):
-    subscription_id: str
-    plan: PlanType
-    status: SubscriptionStatus
-    current_period_end: str
-
-
-class UsageInfo(BaseModel):
-    messages_sent: int
-    messages_stored: int
-    files_uploaded: int
-    file_storage_bytes: int
-    agents_registered: int
-    api_calls: int
-    websocket_minutes: int
-    period_start: str
-    period_end: str
-
-
-class UsageRecord(BaseModel):
-    id: str
-    workspace_id: str
-    period_start: str
-    period_end: str
-    messages_sent: int
-    api_calls: int
-    files_uploaded: int
-    file_bytes: int
-    ws_minutes: int
-    created_at: str
-
-
-class SubscribeRequest(BaseModel):
-    plan: PlanType
-    payment_method: str
-
-
-class PlanLimits(BaseModel):
-    messages_per_month: int
-    agents: int
-    file_storage_bytes: int
-    message_retention_days: int
-    channels: int
-    api_rate_per_minute: int
-
-
-class PortalResponse(BaseModel):
-    url: str
 
 
 # ── API Response Wrappers ────────────────────────────────────────

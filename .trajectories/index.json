@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-21T00:31:58.195Z",
+  "lastUpdated": "2026-02-21T00:57:30.181Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -952,6 +952,20 @@
       "startedAt": "2026-02-21T00:30:28.042Z",
       "completedAt": "2026-02-21T00:31:58.123Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6o1toa368j17.json"
+    },
+    "traj_yzv0pqhuya7e": {
+      "title": "Rename SDK directories to sdk-typescript and sdk-python",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:36:59.363Z",
+      "completedAt": "2026-02-21T00:48:17.671Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yzv0pqhuya7e.json"
+    },
+    "traj_bic0crrp84gw": {
+      "title": "Remove billing SDK surface from Python SDK",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:55:51.809Z",
+      "completedAt": "2026-02-21T00:57:30.112Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_bic0crrp84gw.json"
     }
   }
 }

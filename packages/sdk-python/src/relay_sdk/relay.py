@@ -6,7 +6,6 @@ from typing import Any
 from urllib.parse import quote
 
 from .agent import AgentClient, AsyncAgentClient
-from .billing import AsyncBillingClient, BillingClient
 from .client import AsyncHttpClient, HttpClient
 from .models import Agent, CreateAgentRequest, CreateAgentResponse, Workspace
 
@@ -99,7 +98,6 @@ class Relay:
         )
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
-        self.billing = BillingClient(self._client)
 
     def as_agent(self, agent_token: str) -> AgentClient:
         agent_client = HttpClient(
@@ -211,7 +209,6 @@ class AsyncRelay:
         )
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
-        self.billing = AsyncBillingClient(self._client)
 
     def as_agent(self, agent_token: str) -> AsyncAgentClient:
         agent_client = AsyncHttpClient(

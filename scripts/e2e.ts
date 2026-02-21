@@ -12,7 +12,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient } from '../packages/sdk/src/index.js';
+import { RelayCast, AgentClient } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config

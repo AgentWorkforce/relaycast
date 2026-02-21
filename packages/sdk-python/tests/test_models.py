@@ -8,7 +8,6 @@ from relay_sdk.models import (
     AgentOnlineEvent,
     ApiError,
     ApiSuccess,
-    BillingSubscription,
     Channel,
     ChannelArchivedEvent,
     ChannelCreatedEvent,
@@ -33,7 +32,6 @@ from relay_sdk.models import (
     ThreadResponse,
     UnreadChannel,
     UnreadDm,
-    UsageInfo,
     Workspace,
 )
 
@@ -161,12 +159,9 @@ def test_workspace_model_creation():
         name="Test",
         api_key_hash="akh_1",
         system_prompt=None,
-        plan="free",
-        stripe_customer_id=None,
-        stripe_subscription_id=None,
         created_at="2026-02-08T00:00:00Z",
     )
-    assert ws.plan == "free"
+    assert ws.name == "Test"
     assert ws.metadata == {}
 
 
@@ -175,14 +170,12 @@ def test_workspace_metadata_default_factory_is_not_shared():
         id="ws_1",
         name="Test",
         api_key_hash="akh_1",
-        plan="free",
         created_at="2026-02-08T00:00:00Z",
     )
     ws2 = Workspace(
         id="ws_2",
         name="Test2",
         api_key_hash="akh_2",
-        plan="free",
         created_at="2026-02-08T00:00:00Z",
     )
     ws1.metadata["x"] = 1
@@ -282,48 +275,6 @@ def test_unread_dm_populate_by_name_allows_from_():
     dm = UnreadDm(conversation_id="dm_1", from_="ag_2", unread_count=1)
     assert dm.from_ == "ag_2"
     assert dm.model_dump(by_alias=True)["from"] == "ag_2"
-
-
-def test_billing_subscription_and_usage_info_creation():
-    sub = BillingSubscription(
-        subscription_id="sub_1",
-        plan="pro",
-        status="active",
-        current_period_end="2026-03-01T00:00:00Z",
-    )
-    usage = UsageInfo(
-        messages_sent=1,
-        messages_stored=2,
-        files_uploaded=3,
-        file_storage_bytes=4,
-        agents_registered=5,
-        api_calls=6,
-        websocket_minutes=7,
-        period_start="2026-02-01T00:00:00Z",
-        period_end="2026-03-01T00:00:00Z",
-    )
-    assert sub.plan == "pro"
-    assert usage.api_calls == 6
-
-
-def test_billing_subscription_rejects_invalid_plan():
-    with pytest.raises(ValidationError):
-        BillingSubscription(
-            subscription_id="sub_1",
-            plan="starter",
-            status="active",
-            current_period_end="2026-03-01T00:00:00Z",
-        )
-
-
-def test_billing_subscription_rejects_invalid_subscription_status():
-    with pytest.raises(ValidationError):
-        BillingSubscription(
-            subscription_id="sub_1",
-            plan="free",
-            status="paused",
-            current_period_end="2026-03-01T00:00:00Z",
-        )
 
 
 def test_api_success_ok_literal_is_enforced():

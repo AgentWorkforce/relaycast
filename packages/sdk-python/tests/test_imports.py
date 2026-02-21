@@ -15,7 +15,5 @@ def test_exports():
     assert hasattr(relay_sdk, "AsyncAgentClient")
     assert hasattr(relay_sdk, "HttpClient")
     assert hasattr(relay_sdk, "AsyncHttpClient")
-    assert hasattr(relay_sdk, "BillingClient")
-    assert hasattr(relay_sdk, "AsyncBillingClient")
     assert hasattr(relay_sdk, "WsClient")
     assert hasattr(relay_sdk, "RelayError")
