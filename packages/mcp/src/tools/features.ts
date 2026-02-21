@@ -141,7 +141,7 @@ export function registerFeatureTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ filename, content_type, size_bytes }) => {
     const client = getAgentClient();
-    const upload = await client.files.upload({ filename, content_type, size_bytes });
+    const upload = await client.files.upload({ filename, contentType: content_type, sizeBytes: size_bytes });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(upload, null, 2) }],
       structuredContent: upload as unknown as Record<string, unknown>,

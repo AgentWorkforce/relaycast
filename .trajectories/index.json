@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-20T15:52:06.042Z",
+  "lastUpdated": "2026-02-21T00:57:30.181Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -522,9 +522,10 @@
     },
     "traj_3jjknhkwxa7z": {
       "title": "Add semantic version and build SHA to /health",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-19T06:40:55.489Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_3jjknhkwxa7z.json"
+      "completedAt": "2026-02-20T18:32:29.238Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_3jjknhkwxa7z.json"
     },
     "traj_mhdyvbvq8uz4": {
       "title": "Finalize health endpoint with semver and build metadata",
@@ -661,9 +662,10 @@
     },
     "traj_7qgqustv0zzw": {
       "title": "Simplify origin handling: hardcoded internal constants, no normalization functions",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-20T00:16:37.909Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_7qgqustv0zzw.json"
+      "completedAt": "2026-02-20T18:32:26.411Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7qgqustv0zzw.json"
     },
     "traj_qit8f873kdm0": {
       "title": "Finalize origin hardcoding refactor",
@@ -674,9 +676,10 @@
     },
     "traj_kujdxi4a2dyo": {
       "title": "Remove telemetry ingestion endpoint and send client telemetry directly to PostHog",
-      "status": "active",
+      "status": "abandoned",
       "startedAt": "2026-02-20T00:34:19.822Z",
-      "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_kujdxi4a2dyo.json"
+      "completedAt": "2026-02-20T18:32:16.175Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_kujdxi4a2dyo.json"
     },
     "traj_v99y9f14ixs6": {
       "title": "Finalize direct PostHog telemetry switch",
@@ -746,6 +749,223 @@
       "status": "active",
       "startedAt": "2026-02-20T15:52:06.015Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/active/traj_8tyqp3fg0c6p.json"
+    },
+    "traj_0mq6stnedi9j": {
+      "title": "Clean up repository: remove stale markdown, one-time scripts, and old code for better startup clarity",
+      "status": "completed",
+      "startedAt": "2026-02-20T16:46:10.853Z",
+      "completedAt": "2026-02-20T16:49:04.709Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_0mq6stnedi9j.json"
+    },
+    "traj_8425rz030n9j": {
+      "title": "Aggressive cleanup: delete stale docs/scripts/infra files and align docs to current stack",
+      "status": "completed",
+      "startedAt": "2026-02-20T18:32:33.052Z",
+      "completedAt": "2026-02-20T18:33:35.095Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8425rz030n9j.json"
+    },
+    "traj_8pjeffhgpx5r": {
+      "title": "Bring openapi.yaml up to date with all mounted API routes",
+      "status": "completed",
+      "startedAt": "2026-02-20T18:47:23.382Z",
+      "completedAt": "2026-02-20T18:50:30.090Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8pjeffhgpx5r.json"
+    },
+    "traj_i7iupwmoi5np": {
+      "title": "Rewrite TELEMETRY.md to concise Wrangler-style format",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:05:27.376Z",
+      "completedAt": "2026-02-20T19:05:34.433Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_i7iupwmoi5np.json"
+    },
+    "traj_64roc1tyygsi": {
+      "title": "Simplify TELEMETRY.md wording to be less specific",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:08:02.693Z",
+      "completedAt": "2026-02-20T19:08:37.727Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_64roc1tyygsi.json"
+    },
+    "traj_7i0cvzddcnco": {
+      "title": "Refactor README for simple onboarding-first quick start",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:09:50.497Z",
+      "completedAt": "2026-02-20T19:11:21.930Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_7i0cvzddcnco.json"
+    },
+    "traj_u2nlyaaa5pu3": {
+      "title": "Add websocket usage to README quick start example",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:15:32.623Z",
+      "completedAt": "2026-02-20T19:15:41.597Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_u2nlyaaa5pu3.json"
+    },
+    "traj_3srhy7vu4o6k": {
+      "title": "Make README quick start realtime-first multi-agent example",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:24:40.375Z",
+      "completedAt": "2026-02-20T19:25:48.276Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_3srhy7vu4o6k.json"
+    },
+    "traj_l19f3hem4xev": {
+      "title": "Normalize SDK parameter casing style",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:30:59.030Z",
+      "completedAt": "2026-02-20T19:34:19.537Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_l19f3hem4xev.json"
+    },
+    "traj_uoyhn2vplbtz": {
+      "title": "Make SDK camelCase everywhere",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:35:11.645Z",
+      "completedAt": "2026-02-20T19:43:19.920Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_uoyhn2vplbtz.json"
+    },
+    "traj_e99hfhb1poy2": {
+      "title": "Make SDK camelCase consistent across inputs, outputs, and WS events",
+      "status": "completed",
+      "startedAt": "2026-02-20T19:57:25.406Z",
+      "completedAt": "2026-02-20T19:57:34.046Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_e99hfhb1poy2.json"
+    },
+    "traj_211lh5royxmb": {
+      "title": "Audit server package casing consistency (snake_case)",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:11:19.970Z",
+      "completedAt": "2026-02-20T20:16:43.661Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_211lh5royxmb.json"
+    },
+    "traj_lcxu8ahosvu5": {
+      "title": "Enforce snake_case-only channel invite input: agent_name",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:18:18.395Z",
+      "completedAt": "2026-02-20T20:21:14.495Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_lcxu8ahosvu5.json"
+    },
+    "traj_pvxzykt6pkhd": {
+      "title": "Audit server routes for missing Zod request schemas",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:22:14.825Z",
+      "completedAt": "2026-02-20T20:23:40.229Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_pvxzykt6pkhd.json"
+    },
+    "traj_modjf43n79gh": {
+      "title": "Migrate remaining server request-body validation to Zod schemas",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:31:11.605Z",
+      "completedAt": "2026-02-20T20:31:25.266Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_modjf43n79gh.json"
+    },
+    "traj_73pkmovcleoq": {
+      "title": "Remove billing functionality and references from repo",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:39:00.212Z",
+      "completedAt": "2026-02-20T20:45:37.568Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_73pkmovcleoq.json"
+    },
+    "traj_i7rxdq93vs61": {
+      "title": "Fix e2e create workspace undefined workspace key after billing cleanup",
+      "status": "completed",
+      "startedAt": "2026-02-20T20:59:18.440Z",
+      "completedAt": "2026-02-20T21:00:58.456Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_i7rxdq93vs61.json"
+    },
+    "traj_chk7i7o1m0mk": {
+      "title": "Fix @relaycast/react build errors after camelCase normalization",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:01:42.799Z",
+      "completedAt": "2026-02-20T21:12:19.320Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_chk7i7o1m0mk.json"
+    },
+    "traj_nfevo2c0al5k": {
+      "title": "Rename packages/dashboard to packages/observer-dashboard and update references",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:13:31.591Z",
+      "completedAt": "2026-02-20T21:17:57.412Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_nfevo2c0al5k.json"
+    },
+    "traj_8bdcvc6tro40": {
+      "title": "Rename package name @relaycast/dashboard to @relaycast/observer-dashboard and update refs",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:18:22.384Z",
+      "completedAt": "2026-02-20T21:19:25.772Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8bdcvc6tro40.json"
+    },
+    "traj_dgjuzp2as44w": {
+      "title": "Remove packages/cli and all references",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:20:06.840Z",
+      "completedAt": "2026-02-20T21:36:43.108Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_dgjuzp2as44w.json"
+    },
+    "traj_x0m77z3zwqqq": {
+      "title": "Refresh CLAUDE.md, AGENTS.md, and GEMINI.md so they are current and consistent",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:38:19.039Z",
+      "completedAt": "2026-02-20T21:40:36.520Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_x0m77z3zwqqq.json"
+    },
+    "traj_v8eetn0y8mxk": {
+      "title": "Remove all agent-relay snippet end comments",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:42:21.549Z",
+      "completedAt": "2026-02-20T21:42:42.148Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_v8eetn0y8mxk.json"
+    },
+    "traj_s07f6zim89mz": {
+      "title": "Reset agent-instruction markdown files for a clean rewrite",
+      "status": "completed",
+      "startedAt": "2026-02-20T21:52:48.918Z",
+      "completedAt": "2026-02-20T21:59:32.981Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_s07f6zim89mz.json"
+    },
+    "traj_zz7cqzqvzyt9": {
+      "title": "Recreate AGENTS.md, CLAUDE.md, and GEMINI.md with minimal current guidance",
+      "status": "completed",
+      "startedAt": "2026-02-20T22:05:06.268Z",
+      "completedAt": "2026-02-20T22:05:29.055Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_zz7cqzqvzyt9.json"
+    },
+    "traj_fifafx4z1erv": {
+      "title": "Delete obsolete MCP push notifications doc",
+      "status": "completed",
+      "startedAt": "2026-02-20T22:19:56.023Z",
+      "completedAt": "2026-02-20T22:20:44.633Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_fifafx4z1erv.json"
+    },
+    "traj_8c1wyo8aq009": {
+      "title": "Fix failures from GitHub Actions job 64352928104 (PR #45)",
+      "status": "completed",
+      "startedAt": "2026-02-20T22:58:17.162Z",
+      "completedAt": "2026-02-20T23:12:30.839Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_8c1wyo8aq009.json"
+    },
+    "traj_j2pyo7fuxivt": {
+      "title": "Fix CI test failures after snake_case to camelCase normalization",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:04:52.187Z",
+      "completedAt": "2026-02-21T00:06:09.735Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_j2pyo7fuxivt.json"
+    },
+    "traj_6o1toa368j17": {
+      "title": "Review openclaw implementation and verify it is working",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:30:28.042Z",
+      "completedAt": "2026-02-21T00:31:58.123Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_6o1toa368j17.json"
+    },
+    "traj_yzv0pqhuya7e": {
+      "title": "Rename SDK directories to sdk-typescript and sdk-python",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:36:59.363Z",
+      "completedAt": "2026-02-21T00:48:17.671Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_yzv0pqhuya7e.json"
+    },
+    "traj_bic0crrp84gw": {
+      "title": "Remove billing SDK surface from Python SDK",
+      "status": "completed",
+      "startedAt": "2026-02-21T00:55:51.809Z",
+      "completedAt": "2026-02-21T00:57:30.112Z",
+      "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_bic0crrp84gw.json"
     }
   }
 }

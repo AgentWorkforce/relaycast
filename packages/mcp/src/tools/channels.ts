@@ -47,7 +47,7 @@ export function registerChannelTools(
     async ({ include_archived }) => {
       const client = getAgentClient();
       const channels = await client.channels.list(
-        include_archived ? { include_archived } : undefined,
+        include_archived ? { includeArchived: include_archived } : undefined,
       );
       return {
         content: [{ type: 'text', text: JSON.stringify(channels, null, 2) }],

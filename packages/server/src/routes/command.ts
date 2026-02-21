@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -10,31 +11,49 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const commandRoutes = new Hono<AppEnv>();
 
+const registerCommandSchema = z.object({
+  command: z.string().min(1),
+  description: z.string().min(1),
+  handler_agent: z.string().min(1),
+  parameters: z.array(
+    z.object({
+      name: z.string().min(1),
+      description: z.string().optional(),
+      type: z.string().min(1),
+      required: z.boolean().optional(),
+    }).passthrough(),
+  ).optional(),
+});
+
+const invokeCommandSchema = z.object({
+  channel: z.string().min(1),
+  args: z.string().optional(),
+  parameters: z.record(z.string(), z.unknown()).optional(),
+});
+
 // POST /v1/commands - register a command
 commandRoutes.post('/commands', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const { command, description, handler_agent, parameters } = await c.req.json();
-
-    if (!command || typeof command !== 'string') {
+    const parsed = registerCommandSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      const hasCommandIssue = parsed.error.issues.some((issue) => issue.path[0] === 'command');
+      const hasDescriptionIssue = parsed.error.issues.some((issue) => issue.path[0] === 'description');
+      const hasHandlerAgentIssue = parsed.error.issues.some((issue) => issue.path[0] === 'handler_agent');
+      const message = hasCommandIssue
+        ? 'command is required'
+        : hasDescriptionIssue
+          ? 'description is required'
+          : hasHandlerAgentIssue
+            ? 'handler_agent is required'
+            : 'invalid command registration body';
       return c.json({
         ok: false,
-        error: { code: 'invalid_request', message: 'command is required' },
+        error: { code: 'invalid_request', message },
       }, 400);
     }
-    if (!description || typeof description !== 'string') {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'description is required' },
-      }, 400);
-    }
-    if (!handler_agent || typeof handler_agent !== 'string') {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'handler_agent is required' },
-      }, 400);
-    }
+    const { command, description, handler_agent, parameters } = parsed.data;
 
     const result = await commandEngine.registerCommand(db, workspace.id, {
       command,
@@ -107,14 +126,14 @@ commandRoutes.post('/commands/:command/invoke', requireAuth, rateLimit, async (c
     const db = c.get('db');
     const workspace = c.get('workspace');
     const agent = c.get('agent');
-    const { channel, args, parameters } = await c.req.json();
-
-    if (!channel || typeof channel !== 'string') {
+    const parsed = invokeCommandSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
       return c.json({
         ok: false,
         error: { code: 'invalid_request', message: 'channel is required' },
       }, 400);
     }
+    const { channel, args, parameters } = parsed.data;
 
     const agentId = agent?.id;
     if (!agentId) {

@@ -1,50 +1,50 @@
 import { describe, it, expect } from 'vitest';
 import { createStore } from '../store.js';
 import { handleServerEvent } from '../reducer.js';
-import type { MessageWithMeta } from '@relaycast/types';
+import type { MessageWithMeta } from '@relaycast/sdk';
 
 function makeMessage(overrides: Partial<MessageWithMeta> = {}): MessageWithMeta {
   return {
     id: 'msg1',
-    agent_name: 'Alice',
-    agent_id: 'a1',
+    agentName: 'Alice',
+    agentId: 'a1',
     text: 'hello',
     blocks: null,
     attachments: [],
-    created_at: '2026-01-01T00:00:00Z',
-    reply_count: 0,
+    createdAt: '2026-01-01T00:00:00Z',
+    replyCount: 0,
     reactions: [],
-    read_by_count: 0,
+    readByCount: 0,
     ...overrides,
   };
 }
 
-function makeChannel(overrides: Partial<{ id: string; workspace_id: string; name: string; channel_type: number; topic: string | null; created_by: string | null; created_at: string; is_archived: boolean }> = {}) {
+function makeChannel(overrides: Partial<{ id: string; workspaceId: string; name: string; channelType: number; topic: string | null; createdBy: string | null; createdAt: string; isArchived: boolean }> = {}) {
   return {
     id: 'ch1',
-    workspace_id: 'ws1',
+    workspaceId: 'ws1',
     name: 'general',
-    channel_type: 0,
+    channelType: 0,
     topic: null,
-    created_by: null,
-    created_at: '2026-01-01T00:00:00Z',
-    is_archived: false,
+    createdBy: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    isArchived: false,
     ...overrides,
   };
 }
 
-function makeAgent(overrides: Partial<{ id: string; workspace_id: string; name: string; type: 'agent' | 'human'; token_hash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; created_at: string; last_seen: string }> = {}) {
+function makeAgent(overrides: Partial<{ id: string; workspaceId: string; name: string; type: 'agent' | 'human'; tokenHash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; createdAt: string; lastSeen: string }> = {}) {
   return {
     id: 'ag1',
-    workspace_id: 'ws1',
+    workspaceId: 'ws1',
     name: 'Alice',
     type: 'agent' as const,
-    token_hash: '',
+    tokenHash: '',
     status: 'online' as const,
     persona: null,
     metadata: {},
-    created_at: '2026-01-01T00:00:00Z',
-    last_seen: '2026-01-01T00:00:00Z',
+    createdAt: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
     ...overrides,
   };
 }
@@ -59,13 +59,13 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'message.created',
         channel: 'general',
-        message: { id: 'msg1', agent_name: 'Alice', text: 'hello', attachments: [] },
+        message: { id: 'msg1', agentName: 'Alice', text: 'hello', attachments: [] },
       });
 
       const state = store.getState();
       expect(state.channelMessages['general'].messages).toHaveLength(1);
       expect(state.channelMessages['general'].messages[0].id).toBe('msg1');
-      expect(state.channelMessages['general'].messages[0].agent_name).toBe('Alice');
+      expect(state.channelMessages['general'].messages[0].agentName).toBe('Alice');
       expect(state.channelMessages['general'].messages[0].text).toBe('hello');
     });
 
@@ -75,12 +75,12 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'message.created',
         channel: 'general',
-        message: { id: 'msg1', agent_name: 'Alice', text: 'hello', attachments: [] },
+        message: { id: 'msg1', agentName: 'Alice', text: 'hello', attachments: [] },
       });
       handleServerEvent(store, {
         type: 'message.created',
         channel: 'general',
-        message: { id: 'msg1', agent_name: 'Alice', text: 'hello again', attachments: [] },
+        message: { id: 'msg1', agentName: 'Alice', text: 'hello again', attachments: [] },
       });
 
       const state = store.getState();
@@ -103,7 +103,7 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'message.updated',
         channel: 'general',
-        message: { id: 'msg1', agent_name: 'Alice', text: 'edited' },
+        message: { id: 'msg1', agentName: 'Alice', text: 'edited' },
       });
 
       const state = store.getState();
@@ -121,7 +121,7 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'message.updated',
         channel: 'general',
-        message: { id: 'msg999', agent_name: 'Alice', text: 'edited' },
+        message: { id: 'msg999', agentName: 'Alice', text: 'edited' },
       });
 
       const state = store.getState();
@@ -138,8 +138,8 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'thread.reply',
-        parent_id: 'msg1',
-        message: { id: 'reply1', agent_name: 'Bob', text: 'reply text' },
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text' },
       });
 
       const state = store.getState();
@@ -153,13 +153,13 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'thread.reply',
-        parent_id: 'msg1',
-        message: { id: 'reply1', agent_name: 'Bob', text: 'reply text' },
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text' },
       });
       handleServerEvent(store, {
         type: 'thread.reply',
-        parent_id: 'msg1',
-        message: { id: 'reply1', agent_name: 'Bob', text: 'reply text duplicate' },
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text duplicate' },
       });
 
       const state = store.getState();
@@ -167,22 +167,22 @@ describe('handleServerEvent', () => {
       expect(state.threads['msg1'].replies[0].text).toBe('reply text');
     });
 
-    it('increments parent reply_count in channel messages', () => {
+    it('increments parent replyCount in channel messages', () => {
       const store = createStore();
       store.updateChannelMessages('general', () => ({
-        messages: [makeMessage({ id: 'msg1', reply_count: 0 })],
+        messages: [makeMessage({ id: 'msg1', replyCount: 0 })],
         loading: false,
         error: null,
       }));
 
       handleServerEvent(store, {
         type: 'thread.reply',
-        parent_id: 'msg1',
-        message: { id: 'reply1', agent_name: 'Bob', text: 'reply text' },
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text' },
       });
 
       const state = store.getState();
-      expect(state.channelMessages['general'].messages[0].reply_count).toBe(1);
+      expect(state.channelMessages['general'].messages[0].replyCount).toBe(1);
     });
   });
 
@@ -199,9 +199,9 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'reaction.added',
-        message_id: 'msg1',
+        messageId: 'msg1',
         emoji: 'thumbsup',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
@@ -223,9 +223,9 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'reaction.added',
-        message_id: 'msg1',
+        messageId: 'msg1',
         emoji: 'thumbsup',
-        agent_name: 'Bob',
+        agentName: 'Bob',
       });
 
       const state = store.getState();
@@ -248,9 +248,9 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'reaction.added',
-        message_id: 'msg1',
+        messageId: 'msg1',
         emoji: 'thumbsup',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
@@ -277,9 +277,9 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'reaction.removed',
-        message_id: 'msg1',
+        messageId: 'msg1',
         emoji: 'thumbsup',
-        agent_name: 'Bob',
+        agentName: 'Bob',
       });
 
       const state = store.getState();
@@ -302,9 +302,9 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'reaction.removed',
-        message_id: 'msg1',
+        messageId: 'msg1',
         emoji: 'thumbsup',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
@@ -363,7 +363,7 @@ describe('handleServerEvent', () => {
       expect(state.channels.data).toHaveLength(1);
       expect(state.channels.data[0].name).toBe('new-channel');
       expect(state.channels.data[0].topic).toBe('A new channel');
-      expect(state.channels.data[0].is_archived).toBe(false);
+      expect(state.channels.data[0].isArchived).toBe(false);
     });
 
     it('deduplicates by name', () => {
@@ -404,10 +404,10 @@ describe('handleServerEvent', () => {
   // ─── channel.archived ──────────────────────────────────────────
 
   describe('channel.archived', () => {
-    it('sets is_archived true', () => {
+    it('sets isArchived true', () => {
       const store = createStore();
       store.setState({
-        channels: { data: [makeChannel({ name: 'general', is_archived: false })], loading: false, error: null },
+        channels: { data: [makeChannel({ name: 'general', isArchived: false })], loading: false, error: null },
       });
 
       handleServerEvent(store, {
@@ -416,7 +416,7 @@ describe('handleServerEvent', () => {
       });
 
       const state = store.getState();
-      expect(state.channels.data[0].is_archived).toBe(true);
+      expect(state.channels.data[0].isArchived).toBe(true);
     });
   });
 
@@ -429,20 +429,20 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'member.joined',
         channel: 'general',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
       expect(state.channelDetails['general'].members).toHaveLength(1);
-      expect(state.channelDetails['general'].members[0].agent_name).toBe('Alice');
+      expect(state.channelDetails['general'].members[0].agentName).toBe('Alice');
       expect(state.channelDetails['general'].members[0].role).toBe('member');
     });
 
-    it('deduplicates by agent_name', () => {
+    it('deduplicates by agentName', () => {
       const store = createStore();
       store.updateChannelDetail('general', () => ({
         channel: null,
-        members: [{ agent_id: '', agent_name: 'Alice', role: 'member' as const, joined_at: '2026-01-01T00:00:00Z' }],
+        members: [{ agentId: '', agentName: 'Alice', role: 'member' as const, joinedAt: '2026-01-01T00:00:00Z' }],
         loading: false,
         error: null,
       }));
@@ -450,7 +450,7 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'member.joined',
         channel: 'general',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
@@ -466,8 +466,8 @@ describe('handleServerEvent', () => {
       store.updateChannelDetail('general', () => ({
         channel: null,
         members: [
-          { agent_id: '', agent_name: 'Alice', role: 'member' as const, joined_at: '2026-01-01T00:00:00Z' },
-          { agent_id: '', agent_name: 'Bob', role: 'member' as const, joined_at: '2026-01-01T00:00:00Z' },
+          { agentId: '', agentName: 'Alice', role: 'member' as const, joinedAt: '2026-01-01T00:00:00Z' },
+          { agentId: '', agentName: 'Bob', role: 'member' as const, joinedAt: '2026-01-01T00:00:00Z' },
         ],
         loading: false,
         error: null,
@@ -476,12 +476,12 @@ describe('handleServerEvent', () => {
       handleServerEvent(store, {
         type: 'member.left',
         channel: 'general',
-        agent_name: 'Alice',
+        agentName: 'Alice',
       });
 
       const state = store.getState();
       expect(state.channelDetails['general'].members).toHaveLength(1);
-      expect(state.channelDetails['general'].members[0].agent_name).toBe('Bob');
+      expect(state.channelDetails['general'].members[0].agentName).toBe('Bob');
     });
   });
 
@@ -494,8 +494,8 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'dm.received',
-        conversation_id: 'conv1',
-        message: { id: 'dm1', agent_name: 'Alice', text: 'hi' },
+        conversationId: 'conv1',
+        message: { id: 'dm1', agentName: 'Alice', text: 'hi' },
       });
 
       const state = store.getState();
@@ -512,8 +512,8 @@ describe('handleServerEvent', () => {
 
       handleServerEvent(store, {
         type: 'group_dm.received',
-        conversation_id: 'conv1',
-        message: { id: 'dm1', agent_name: 'Alice', text: 'hi group' },
+        conversationId: 'conv1',
+        message: { id: 'dm1', agentName: 'Alice', text: 'hi group' },
       });
 
       const state = store.getState();

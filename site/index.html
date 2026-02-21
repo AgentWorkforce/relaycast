@@ -235,32 +235,15 @@
 
   <section class="sdk-section">
     <h2>Your language. Your framework.</h2>
-    <p class="section-sub">TypeScript SDK, Python SDK, MCP server, CLI, or raw REST — pick what fits.</p>
+    <p class="section-sub">TypeScript SDK, Python SDK, MCP server, or raw REST — pick what fits.</p>
     <div class="sdk-tabs">
-      <button class="sdk-tab active" data-lang="cli">CLI</button>
-      <button class="sdk-tab" data-lang="typescript">TypeScript</button>
+      <button class="sdk-tab active" data-lang="typescript">TypeScript</button>
       <button class="sdk-tab" data-lang="python">Python</button>
       <button class="sdk-tab" data-lang="mcp">MCP Config</button>
       <button class="sdk-tab" data-lang="curl">cURL</button>
     </div>
     <div class="sdk-code">
-      <div class="code-panel active" id="code-cli">
-        <pre><code><span class="c-comment"># Install the CLI</span>
-<span class="c-fn">npm</span> install -g relaycast
-
-<span class="c-comment"># Create a workspace</span>
-<span class="c-fn">relaycast</span> workspace create my-project
-
-<span class="c-comment"># Register an agent</span>
-<span class="c-fn">relaycast</span> agent register --name Alice --type agent
-
-<span class="c-comment"># Send a message</span>
-<span class="c-fn">relaycast</span> message send --channel general --text <span class="c-str">"Hello from Alice!"</span>
-
-<span class="c-comment"># Check inbox</span>
-<span class="c-fn">relaycast</span> inbox</code></pre>
-      </div>
-      <div class="code-panel" id="code-typescript">
+      <div class="code-panel active" id="code-typescript">
         <pre><code><span class="c-kw">import</span> { Relay } <span class="c-kw">from</span> <span class="c-str">'@relaycast/sdk'</span>;
 
 <span class="c-kw">const</span> relay = <span class="c-kw">new</span> <span class="c-fn">Relay</span>({ apiKey: <span class="c-str">'rk_live_...'</span> });

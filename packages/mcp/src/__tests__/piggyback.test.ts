@@ -48,9 +48,9 @@ describe('piggyback unread messages', () => {
 
   it('appends unread channels to tool response', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [{ channel_name: 'general', unread_count: 3 }],
+      unreadChannels: [{ channelName: 'general', unreadCount: 3 }],
       mentions: [],
-      unread_dms: [],
+      unreadDms: [],
     });
 
     const result = await client.callTool({
@@ -67,9 +67,9 @@ describe('piggyback unread messages', () => {
 
   it('appends unread DMs to tool response', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [],
-      unread_dms: [{ from: 'alice', unread_count: 2 }],
+      unreadDms: [{ from: 'alice', unreadCount: 2 }],
     });
 
     const result = await client.callTool({
@@ -85,11 +85,11 @@ describe('piggyback unread messages', () => {
 
   it('appends mentions to tool response', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [
-        { agent_name: 'bob', channel_name: 'dev', text: 'hey @bot1' },
+        { agentName: 'bob', channelName: 'dev', text: 'hey @bot1' },
       ],
-      unread_dms: [],
+      unreadDms: [],
     });
 
     const result = await client.callTool({
@@ -105,9 +105,9 @@ describe('piggyback unread messages', () => {
 
   it('does not append when inbox is empty', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [],
-      unread_dms: [],
+      unreadDms: [],
     });
 
     const result = await client.callTool({
@@ -157,9 +157,9 @@ describe('piggyback unread messages', () => {
     session.agentToken = null;
 
     mockInbox.mockResolvedValue({
-      unread_channels: [{ channel_name: 'general', unread_count: 1 }],
+      unreadChannels: [{ channelName: 'general', unreadCount: 1 }],
       mentions: [],
-      unread_dms: [],
+      unreadDms: [],
     });
 
     const result = await client.callTool({
@@ -173,11 +173,11 @@ describe('piggyback unread messages', () => {
 
   it('filters out self-sent DMs from piggyback', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [],
-      unread_dms: [
-        { from: 'bot1', unread_count: 1 },
-        { from: 'alice', unread_count: 2 },
+      unreadDms: [
+        { from: 'bot1', unreadCount: 1 },
+        { from: 'alice', unreadCount: 2 },
       ],
     });
 
@@ -194,12 +194,12 @@ describe('piggyback unread messages', () => {
 
   it('filters out self-mentions from piggyback', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [
-        { agent_name: 'bot1', channel_name: 'general', text: 'my own msg' },
-        { agent_name: 'alice', channel_name: 'dev', text: 'hey there' },
+        { agentName: 'bot1', channelName: 'general', text: 'my own msg' },
+        { agentName: 'alice', channelName: 'dev', text: 'hey there' },
       ],
-      unread_dms: [],
+      unreadDms: [],
     });
 
     const result = await client.callTool({
@@ -215,15 +215,15 @@ describe('piggyback unread messages', () => {
 
   it('filters self-sent DMs with case and @ prefix differences', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [
-        { agent_name: '@Bot1', channel_name: 'general', text: 'echo' },
-        { agent_name: 'alice', channel_name: 'dev', text: 'real mention' },
+        { agentName: '@Bot1', channelName: 'general', text: 'echo' },
+        { agentName: 'alice', channelName: 'dev', text: 'real mention' },
       ],
-      unread_dms: [
-        { from: 'BOT1', unread_count: 1 },
-        { from: ' @bot1 ', unread_count: 1 },
-        { from: 'carol', unread_count: 3 },
+      unreadDms: [
+        { from: 'BOT1', unreadCount: 1 },
+        { from: ' @bot1 ', unreadCount: 1 },
+        { from: 'carol', unreadCount: 3 },
       ],
     });
 
@@ -243,9 +243,9 @@ describe('piggyback unread messages', () => {
 
   it('suppresses piggyback entirely when all messages are self-sent', async () => {
     mockInbox.mockResolvedValue({
-      unread_channels: [],
+      unreadChannels: [],
       mentions: [],
-      unread_dms: [{ from: 'bot1', unread_count: 3 }],
+      unreadDms: [{ from: 'bot1', unreadCount: 3 }],
     });
 
     const result = await client.callTool({

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -10,25 +11,37 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
+const createInboundWebhookSchema = z.object({
+  name: z.string().min(1),
+  channel: z.string().min(1),
+});
+
+const triggerInboundWebhookSchema = z.object({
+  text: z.string().optional(),
+  source: z.string().optional(),
+  payload: z.unknown().optional(),
+}).passthrough();
+
 // POST /v1/webhooks - create an inbound webhook
 inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const { name, channel } = await c.req.json();
-
-    if (!name || typeof name !== 'string') {
+    const parsed = createInboundWebhookSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      const hasNameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'name');
+      const hasChannelIssue = parsed.error.issues.some((issue) => issue.path[0] === 'channel');
+      const message = hasNameIssue
+        ? 'name is required'
+        : hasChannelIssue
+          ? 'channel is required'
+          : 'invalid webhook body';
       return c.json({
         ok: false,
-        error: { code: 'invalid_request', message: 'name is required' },
+        error: { code: 'invalid_request', message },
       }, 400);
     }
-    if (!channel || typeof channel !== 'string') {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'channel is required' },
-      }, 400);
-    }
+    const { name, channel } = parsed.data;
 
     // Resolve channel name to ID
     const ch = await channelEngine.getChannel(db, workspace.id, channel);
@@ -108,12 +121,18 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
 inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
-    const body = await c.req.json();
-    const { text, source, payload } = body || {};
+    const parsed = triggerInboundWebhookSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'invalid webhook payload' },
+      }, 400);
+    }
+    const { text, source, payload } = parsed.data;
     const result = await inboundWebhookEngine.triggerWebhook(
       db,
       c.req.param('webhookId'),
-      { text, source, payload },
+      { text, source, payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined },
     );
     if (!result) {
       return c.json({

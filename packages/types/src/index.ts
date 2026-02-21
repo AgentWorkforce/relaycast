@@ -6,7 +6,6 @@ export * from './reaction.js';
 export * from './file.js';
 export * from './receipt.js';
 export * from './dm.js';
-export * from './billing.js';
 export * from './events.js';
 export * from './api.js';
 export * from './webhook.js';

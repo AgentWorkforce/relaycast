@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -15,13 +16,28 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
+const createWorkspaceSchema = z.object({
+  name: z.string().min(1),
+});
+
+const updateWorkspaceSchema = z.object({
+  name: z.string().optional(),
+  system_prompt: z.string().nullable().optional(),
+});
+
+const updateWorkspaceStreamSchema = z.object({
+  enabled: z.boolean().optional(),
+  mode: z.string().optional(),
+}).passthrough();
+
 // POST /workspaces - create workspace (no auth required)
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
-    const { name } = await c.req.json();
-    if (!name || typeof name !== 'string') {
+    const parsed = createWorkspaceSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
       return c.json({ ok: false, error: { code: 'invalid_request', message: 'name is required' } }, 400);
     }
+    const { name } = parsed.data;
     const db = c.get('db');
     const result = await workspaceEngine.createWorkspace(db, name);
     emitServerEvent(c, result.workspace_id, 'relaycast_server_workspace_created', {
@@ -54,7 +70,11 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const body = await c.req.json();
+    const parsed = updateWorkspaceSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ ok: false, error: { code: 'invalid_request', message: 'invalid workspace update body' } }, 400);
+    }
+    const body = parsed.data;
     const updated = await workspaceEngine.updateWorkspace(db, workspace.id, body);
     if (!updated) {
       return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
@@ -202,7 +222,14 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
   const logger = getRequestLogger(c, 'workspace.stream.put');
   const workspaceId = c.get('workspace').id;
   try {
-    const body = await c.req.json() as { enabled?: unknown; mode?: unknown };
+    const parsed = updateWorkspaceStreamSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
+      }, 400);
+    }
+    const body = parsed.data;
 
     let override: boolean | null;
     if (body?.mode === 'inherit') {

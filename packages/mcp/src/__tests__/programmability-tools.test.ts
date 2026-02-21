@@ -192,7 +192,7 @@ describe('programmability tools', () => {
     expect(mockRelay.commands.register).toHaveBeenCalledWith({
       command: 'deploy',
       description: 'Deploy the app',
-      handler_agent: 'DeployBot',
+      handlerAgent: 'DeployBot',
       parameters: undefined,
     });
   });

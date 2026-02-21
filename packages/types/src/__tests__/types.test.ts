@@ -36,12 +36,6 @@ import type {
   SendDmRequest,
   CreateGroupDmRequest,
   DmConversationSummary,
-  BillingSubscription,
-  PlanType,
-  UsageRecord,
-  UsageInfo,
-  PlanLimits,
-  SubscribeRequest,
   ApiSuccess,
   ApiError,
   ApiResponse,
@@ -64,7 +58,6 @@ describe('Type definitions', () => {
     expectTypeOf<Workspace>().toHaveProperty('api_key_hash');
     expectTypeOf<Workspace>().toHaveProperty('system_prompt');
     expectTypeOf<Workspace>().toHaveProperty('plan');
-    expectTypeOf<Workspace>().toHaveProperty('stripe_customer_id');
     expectTypeOf<Workspace>().toHaveProperty('created_at');
     expectTypeOf<Workspace>().toHaveProperty('metadata');
   });
@@ -225,36 +218,6 @@ describe('Type definitions', () => {
   it('DmConversationSummary has unread info', () => {
     expectTypeOf<DmConversationSummary>().toHaveProperty('unread_count');
     expectTypeOf<DmConversationSummary>().toHaveProperty('participants');
-  });
-
-  // ============================================
-  // Billing types
-  // ============================================
-  it('PlanType union', () => {
-    expectTypeOf<'free'>().toMatchTypeOf<PlanType>();
-    expectTypeOf<'pro'>().toMatchTypeOf<PlanType>();
-    expectTypeOf<'enterprise'>().toMatchTypeOf<PlanType>();
-  });
-
-  it('BillingSubscription has required fields', () => {
-    expectTypeOf<BillingSubscription>().toHaveProperty('subscription_id');
-    expectTypeOf<BillingSubscription>().toHaveProperty('plan');
-    expectTypeOf<BillingSubscription>().toHaveProperty('status');
-  });
-
-  it('UsageRecord has metric fields', () => {
-    expectTypeOf<UsageRecord>().toHaveProperty('messages_sent');
-    expectTypeOf<UsageRecord>().toHaveProperty('api_calls');
-    expectTypeOf<UsageRecord>().toHaveProperty('files_uploaded');
-    expectTypeOf<UsageRecord>().toHaveProperty('file_bytes');
-    expectTypeOf<UsageRecord>().toHaveProperty('ws_minutes');
-  });
-
-  it('PlanLimits has all limit fields', () => {
-    expectTypeOf<PlanLimits>().toHaveProperty('messages_per_month');
-    expectTypeOf<PlanLimits>().toHaveProperty('agents');
-    expectTypeOf<PlanLimits>().toHaveProperty('file_storage_bytes');
-    expectTypeOf<PlanLimits>().toHaveProperty('api_rate_per_minute');
   });
 
   // ============================================

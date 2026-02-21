@@ -6,7 +6,7 @@ import type {
   InboxResponse,
   DmConversationSummary,
   MessageBlock,
-} from '@relaycast/types';
+} from '@relaycast/sdk';
 
 // === Connection status ===
 

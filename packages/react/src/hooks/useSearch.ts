@@ -1,6 +1,6 @@
 import { useState, useEffect, useContext, useRef } from 'react';
 import { ClientContext } from '../context.js';
-import type { MessageWithMeta } from '@relaycast/types';
+import type { MessageWithMeta } from '@relaycast/sdk';
 import type { UseSearchReturn } from '../types.js';
 
 export interface UseSearchOptions {

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -12,6 +13,11 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
+const sendDmSchema = z.object({
+  to: z.string().min(1),
+  text: z.string().min(1),
+});
+
 // POST /v1/dm - send a DM
 dmRoutes.post(
   '/dm',
@@ -22,22 +28,24 @@ dmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { to, text } = await c.req.json();
-      if (!to || typeof to !== 'string') {
+      const parsed = sendDmSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
+        const hasToIssue = parsed.error.issues.some((issue) => issue.path[0] === 'to');
+        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
+        const message = hasToIssue
+          ? '"to" agent name is required'
+          : hasTextIssue
+            ? 'text is required'
+            : 'invalid dm body';
         return c.json({
           ok: false,
           error: {
             code: 'invalid_request',
-            message: '"to" agent name is required',
+            message,
           },
         }, 400);
       }
-      if (!text || typeof text !== 'string') {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
-        }, 400);
-      }
+      const { to, text } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {

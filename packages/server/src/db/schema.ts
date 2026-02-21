@@ -18,8 +18,6 @@ export const workspaces = sqliteTable('workspaces', {
   apiKeyHash: text('api_key_hash').notNull().unique(),
   systemPrompt: text('system_prompt'),
   plan: text('plan').notNull().default('free'),
-  stripeCustomerId: text('stripe_customer_id'),
-  stripeSubscriptionId: text('stripe_subscription_id'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   metadata: text('metadata', { mode: 'json' }).default('{}'),
 });

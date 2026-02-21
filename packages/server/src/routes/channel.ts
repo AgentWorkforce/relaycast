@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -8,6 +9,23 @@ import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const channelRoutes = new Hono<AppEnv>();
+
+const createChannelSchema = z.object({
+  name: z.string().min(1),
+  topic: z.string().nullable().optional(),
+});
+
+const updateChannelSchema = z.object({
+  topic: z.string().nullable().optional(),
+});
+
+const updateChannelTopicSchema = z.object({
+  topic: z.string(),
+});
+
+const inviteChannelSchema = z.object({
+  agent_name: z.string().min(1),
+});
 
 // POST /v1/channels - create channel
 channelRoutes.post(
@@ -19,18 +37,19 @@ channelRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { name, topic } = await c.req.json();
-      if (!name || typeof name !== 'string') {
+      const parsed = createChannelSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'name is required' },
         }, 400);
       }
+      const { name, topic } = parsed.data;
 
       const result = await channelEngine.createChannel(
         db,
         workspace.id,
-        { name, topic },
+        { name, topic: topic ?? undefined },
         agent?.id,
       );
 
@@ -138,7 +157,14 @@ channelRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const body = await c.req.json();
+      const parsed = updateChannelSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
+        return c.json({
+          ok: false,
+          error: { code: 'invalid_request', message: 'invalid channel update body' },
+        }, 400);
+      }
+      const body = parsed.data;
       const updated = await channelEngine.updateChannel(
         db,
         workspace.id,
@@ -193,14 +219,14 @@ channelRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const body = await c.req.json();
-      const { topic } = body ?? {};
-      if (topic === undefined || typeof topic !== 'string') {
+      const parsed = updateChannelTopicSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'topic is required' },
         }, 400);
       }
+      const { topic } = parsed.data;
 
       const updated = await channelEngine.updateChannel(
         db,
@@ -457,15 +483,14 @@ channelRoutes.post(
       const workspace = c.get('workspace');
       const agent = c.get('agent');
       const name = c.req.param('name');
-      const body = await c.req.json();
-      const agentName =
-        body?.agent ?? body?.agent_name ?? body?.agentName;
-      if (!agentName || typeof agentName !== 'string') {
+      const parsed = inviteChannelSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
-          error: { code: 'invalid_request', message: 'agent is required' },
+          error: { code: 'invalid_request', message: 'agent_name is required' },
         }, 400);
       }
+      const { agent_name: agentName } = parsed.data;
 
       // For invite, we need to know who's doing the inviting
       const inviterAgentId = agent?.id;

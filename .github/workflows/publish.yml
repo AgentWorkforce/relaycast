@@ -13,7 +13,6 @@ on:
           - server
           - sdk
           - mcp
-          - cli
           - react
           - openclaw
         default: "all"
@@ -183,7 +182,6 @@ jobs:
           - server
           - sdk
           - mcp
-          - cli
           - react
           - openclaw
 
@@ -312,7 +310,6 @@ jobs:
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
             npm install @relaycast/openclaw@${{ needs.build.outputs.new_version }}
-            npm install -g relaycast@${{ needs.build.outputs.new_version }}
             ```
 
             ### Packages
@@ -324,7 +321,6 @@ jobs:
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
             | @relaycast/react | ${{ needs.build.outputs.new_version }} |
             | @relaycast/openclaw | ${{ needs.build.outputs.new_version }} |
-            | relaycast (CLI) | ${{ needs.build.outputs.new_version }} |
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
