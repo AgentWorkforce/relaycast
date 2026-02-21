@@ -15,7 +15,9 @@
 //!     // Register an agent
 //!     let agent = relay.register_agent(CreateAgentRequest {
 //!         name: "my-agent".to_string(),
-//!         description: Some("My first agent".to_string()),
+//!         persona: Some("My first agent".to_string()),
+//!         agent_type: Some("agent".to_string()),
+//!         metadata: None,
 //!     }).await?;
 //!
 //!     // Create an agent client
@@ -53,7 +55,7 @@
 //!                 println!("New message: {}", e.message.text);
 //!             }
 //!             WsEvent::AgentOnline(e) => {
-//!                 println!("Agent online: {}", e.agent);
+//!                 println!("Agent online: {}", e.agent.name);
 //!             }
 //!             _ => {}
 //!         }
@@ -64,7 +66,6 @@
 //! ```
 
 pub mod agent;
-pub mod billing;
 pub mod client;
 pub mod error;
 pub mod relay;
@@ -73,7 +74,6 @@ pub mod ws;
 
 // Re-export main types
 pub use agent::AgentClient;
-pub use billing::BillingClient;
 pub use client::{ClientOptions, HttpClient, RequestOptions};
 pub use error::{RelayError, Result};
 pub use relay::{RelayCast, RelayCastOptions};
@@ -89,8 +89,6 @@ pub use types::{
     AgentOfflineEvent,
     AgentOnlineEvent,
     AgentPresenceInfo,
-    // Billing
-    BillingSubscription,
     // Channels
     Channel,
     ChannelArchivedEvent,
@@ -137,7 +135,6 @@ pub use types::{
     MessageReadEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
-    PortalResponse,
     PostMessageRequest,
     ReactionAddedEvent,
     // Reactions
@@ -152,7 +149,6 @@ pub use types::{
     SetSystemPromptRequest,
     SpawnAgentRequest,
     SpawnAgentResponse,
-    SubscribeRequest,
     SystemPrompt,
     ThreadReplyEvent,
     ThreadReplyRequest,
@@ -163,7 +159,6 @@ pub use types::{
     UpdateWorkspaceRequest,
     UploadRequest,
     UploadResponse,
-    UsageInfo,
     Webhook,
     WebhookReceivedEvent,
     WebhookTriggerRequest,

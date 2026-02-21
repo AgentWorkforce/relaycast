@@ -1,7 +1,6 @@
 //! Main RelayCast client for workspace-level operations.
 
 use crate::agent::AgentClient;
-use crate::billing::BillingClient;
 use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
@@ -9,7 +8,7 @@ use crate::types::*;
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
-const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
@@ -88,11 +87,6 @@ impl RelayCast {
 
         json.data
             .ok_or_else(|| RelayError::InvalidResponse("Response missing data field".to_string()))
-    }
-
-    /// Get the billing client.
-    pub fn billing(&self) -> BillingClient<'_> {
-        BillingClient::new(&self.client)
     }
 
     /// Create an agent client for the given agent token.

@@ -13,7 +13,7 @@ use crate::types::WsEvent;
 const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
-const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const PING_INTERVAL_SECS: u64 = 30;
 
 /// Options for creating a WebSocket client.

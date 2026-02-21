@@ -180,10 +180,6 @@ let options = RelayCastOptions::new("rk_live_xxx")
 let relay = RelayCast::new(options)?;
 ```
 
-## API Reference
-
-See the [documentation](https://docs.rs/relaycast) for complete API reference.
-
 ## License
 
 Apache-2.0

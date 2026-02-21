@@ -10,7 +10,7 @@ use crate::types::ApiResponse;
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
-const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/rust-sdk";
+const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
 
 /// Options for creating an HTTP client.
@@ -178,7 +178,7 @@ impl HttpClient {
             let status = response.status().as_u16();
 
             // Retry on 5xx errors
-            if status >= 500 && status <= 599 && attempt < RETRY_BACKOFFS_MS.len() - 1 {
+            if status >= 500 && status <= 599 && attempt < RETRY_BACKOFFS_MS.len() {
                 tokio::time::sleep(Duration::from_millis(*backoff)).await;
                 continue;
             }

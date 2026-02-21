@@ -185,10 +185,9 @@ async fn create_workspace_sends_origin_headers() {
         .and(header("content-type", "application/json"))
         .and(header("x-sdk-version", env!("CARGO_PKG_VERSION")))
         .and(header("x-relaycast-origin-surface", "sdk"))
-        .and(header("x-relaycast-origin-client", "@relaycast/rust-sdk"))
+        .and(header("x-relaycast-origin-client", "@relaycast/sdk-rust"))
         .respond_with(ok(json!({
-            "id": "ws_123",
-            "name": "Parity Test",
+            "workspace_id": "ws_123",
             "api_key": "rk_live_new",
             "created_at": "2026-01-01T00:00:00.000Z"
         })))
@@ -200,7 +199,7 @@ async fn create_workspace_sends_origin_headers() {
         .await
         .expect("create_workspace failed");
 
-    assert_eq!(created.id, "ws_123");
+    assert_eq!(created.workspace_id, "ws_123");
 }
 
 #[tokio::test]

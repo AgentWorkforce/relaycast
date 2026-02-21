@@ -30,28 +30,40 @@ pub struct Cursor {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    pub api_key_hash: String,
+    pub system_prompt: Option<String>,
+    pub plan: String,
     pub created_at: String,
-    pub updated_at: Option<String>,
+    pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorkspaceResponse {
-    pub id: String,
-    pub name: String,
+    pub workspace_id: String,
     pub api_key: String,
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateWorkspaceRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemPrompt {
+    pub prompt: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SetSystemPromptRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,11 +72,6 @@ pub struct WorkspaceStreamConfig {
     pub default_enabled: bool,
     #[serde(rename = "override")]
     pub override_value: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SetSystemPromptRequest {
-    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,13 +100,46 @@ pub struct ChannelStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityItem {
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub id: String,
+    pub channel_name: Option<String>,
+    pub conversation_id: Option<String>,
+    pub agent_name: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDmLastMessage {
+    pub text: String,
+    pub agent_name: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDmConversation {
     pub id: String,
     #[serde(rename = "type")]
-    pub event_type: String,
-    pub agent: Option<String>,
-    pub channel: Option<String>,
-    pub message_id: Option<String>,
+    pub dm_type: String,
+    pub participants: Vec<String>,
+    pub last_message: Option<WorkspaceDmLastMessage>,
+    pub message_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDmMessage {
+    pub id: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub text: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenRotateResponse {
+    pub name: String,
+    pub token: String,
 }
 
 // === Agents ===
@@ -107,18 +147,27 @@ pub struct ActivityItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
+    pub workspace_id: String,
     pub name: String,
+    #[serde(rename = "type")]
+    pub agent_type: String,
+    pub token_hash: String,
     pub status: String,
-    pub description: Option<String>,
+    pub persona: Option<String>,
+    pub metadata: serde_json::Map<String, serde_json::Value>,
     pub created_at: String,
-    pub last_seen: Option<String>,
+    pub last_seen: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateAgentRequest {
     pub name: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub persona: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,17 +179,21 @@ pub struct CreateAgentResponse {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPresenceInfo {
-    pub name: String,
+    pub agent_id: String,
+    pub agent_name: String,
     pub status: String,
-    pub last_seen: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,11 +239,6 @@ pub struct ReleaseAgentResponse {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenRotateResponse {
-    pub token: String,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct AgentListQuery {
     pub status: Option<String>,
@@ -201,12 +249,14 @@ pub struct AgentListQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub id: String,
+    pub workspace_id: String,
     pub name: String,
+    pub channel_type: i64,
     pub topic: Option<String>,
-    pub is_private: bool,
-    pub is_archived: bool,
-    pub created_by: String,
+    pub created_by: Option<String>,
     pub created_at: String,
+    pub is_archived: bool,
+    pub member_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -214,21 +264,19 @@ pub struct CreateChannelRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_private: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_private: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMemberInfo {
-    pub agent: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub role: String,
     pub joined_at: String,
 }
 
@@ -242,17 +290,11 @@ pub struct ChannelWithMembers {
 // === Messages ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageWithMeta {
-    pub id: String,
-    pub channel: String,
-    pub sender: String,
-    pub text: String,
-    pub thread_ts: Option<String>,
-    pub reply_count: Option<i32>,
-    pub attachments: Option<Vec<String>>,
-    pub blocks: Option<Vec<MessageBlock>>,
-    pub created_at: String,
-    pub updated_at: Option<String>,
+pub struct FileAttachment {
+    pub file_id: String,
+    pub filename: String,
+    pub url: String,
+    pub size: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,13 +305,38 @@ pub struct MessageBlock {
     pub data: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionGroup {
+    pub emoji: String,
+    pub count: i64,
+    pub agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageWithMeta {
+    pub id: String,
+    pub agent_name: String,
+    pub agent_id: String,
+    pub text: String,
+    pub blocks: Option<Vec<MessageBlock>>,
+    #[serde(default)]
+    pub attachments: Vec<FileAttachment>,
+    pub created_at: String,
+    #[serde(default)]
+    pub reply_count: i64,
+    #[serde(default)]
+    pub reactions: Vec<ReactionGroup>,
+    #[serde(default)]
+    pub read_by_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PostMessageRequest {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachments: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<MessageBlock>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -305,43 +372,18 @@ pub struct CreateGroupDmRequest {
     pub participants: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmConversationSummary {
     pub id: String,
-    pub participants: Vec<String>,
+    #[serde(rename = "type")]
+    pub dm_type: String,
     pub name: Option<String>,
-    pub is_group: bool,
-    pub last_message_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceDmConversation {
-    pub id: String,
     pub participants: Vec<String>,
-    pub name: Option<String>,
-    pub is_group: bool,
-    pub created_at: String,
-    pub last_message_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceDmMessage {
-    pub id: String,
-    pub agent_id: String,
-    pub agent_name: String,
-    pub text: String,
-    pub created_at: String,
-}
-
-// === Reactions ===
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactionGroup {
-    pub emoji: String,
-    pub count: i32,
-    pub users: Vec<String>,
+    pub last_message: Option<String>,
+    pub unread_count: i64,
 }
 
 // === Search ===
@@ -358,35 +400,48 @@ pub struct SearchOptions {
 // === Inbox ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InboxResponse {
-    pub unread_channels: Vec<UnreadChannel>,
-    pub unread_dms: Vec<UnreadDm>,
+pub struct UnreadChannel {
+    pub channel_name: String,
+    pub unread_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnreadChannel {
-    pub channel: String,
-    pub unread_count: i32,
+pub struct InboxMention {
+    pub id: String,
+    pub channel_name: String,
+    pub agent_name: String,
+    pub text: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnreadDm {
     pub conversation_id: String,
-    pub unread_count: i32,
+    pub from: String,
+    pub unread_count: i64,
+    pub last_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxResponse {
+    pub unread_channels: Vec<UnreadChannel>,
+    pub mentions: Vec<InboxMention>,
+    pub unread_dms: Vec<UnreadDm>,
 }
 
 // === Read Receipts ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReaderInfo {
-    pub agent: String,
+    pub agent_name: String,
+    pub agent_id: String,
     pub read_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelReadStatus {
-    pub agent: String,
-    pub last_read_message_id: Option<String>,
+    pub agent_name: String,
+    pub last_read_id: Option<String>,
     pub last_read_at: Option<String>,
 }
 
@@ -396,23 +451,24 @@ pub struct ChannelReadStatus {
 pub struct UploadRequest {
     pub filename: String,
     pub content_type: String,
-    pub size: i64,
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadResponse {
     pub file_id: String,
     pub upload_url: String,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {
-    pub id: String,
+    pub file_id: String,
     pub filename: String,
     pub content_type: String,
     pub size: i64,
+    pub url: String,
     pub uploaded_by: String,
-    pub url: Option<String>,
     pub created_at: String,
 }
 
@@ -427,14 +483,14 @@ pub struct FileListOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateWebhookRequest {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub channel: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWebhookResponse {
-    pub id: String,
+    pub webhook_id: String,
     pub name: String,
+    pub channel: String,
     pub url: String,
     pub created_at: String,
 }
@@ -442,28 +498,62 @@ pub struct CreateWebhookResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Webhook {
     pub id: String,
+    pub workspace_id: String,
     pub name: String,
-    pub description: Option<String>,
+    pub channel_id: String,
+    pub channel_name: String,
     pub url: String,
+    pub created_by: Option<String>,
     pub created_at: String,
+    pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct WebhookTriggerRequest {
-    pub payload: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookTriggerResponse {
-    pub received: bool,
+    pub message_id: String,
+    pub channel: String,
+    pub text: String,
+    pub created_at: String,
 }
 
 // === Subscriptions ===
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionFilter {
+    pub channel: Option<String>,
+    pub mentions: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventSubscription {
+    pub id: String,
+    pub workspace_id: String,
+    pub events: Vec<String>,
+    pub filter: Option<SubscriptionFilter>,
+    pub url: String,
+    pub secret: Option<String>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSubscriptionRequest {
-    pub url: String,
     pub events: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<SubscriptionFilter>,
+    pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
@@ -471,95 +561,137 @@ pub struct CreateSubscriptionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSubscriptionResponse {
     pub id: String,
-    pub url: String,
     pub events: Vec<String>,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventSubscription {
-    pub id: String,
+    pub filter: Option<SubscriptionFilter>,
     pub url: String,
-    pub events: Vec<String>,
+    pub is_active: bool,
     pub created_at: String,
 }
 
 // === Commands ===
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandParameter {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(rename = "type")]
+    pub parameter_type: String,
+    pub required: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateCommandRequest {
     pub command: String,
+    pub description: String,
+    pub handler_agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<String>,
+    pub parameters: Option<Vec<CommandParameter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCommandResponse {
+    pub id: String,
     pub command: String,
-    pub description: Option<String>,
-    pub usage: Option<String>,
+    pub description: String,
+    pub handler_agent: String,
+    pub parameters: Vec<CommandParameter>,
     pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCommand {
+    pub id: String,
+    pub workspace_id: String,
     pub command: String,
-    pub description: Option<String>,
-    pub usage: Option<String>,
-    pub agent: String,
+    pub description: String,
+    pub handler_agent_id: String,
+    pub handler_agent_name: String,
+    pub parameters: Vec<CommandParameter>,
     pub created_at: String,
+    pub is_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InvokeCommandRequest {
+    pub channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
-    pub channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandInvocation {
     pub id: String,
     pub command: String,
-    pub args: Option<String>,
+    pub channel: String,
     pub invoked_by: String,
-    pub channel: Option<String>,
+    pub args: Option<String>,
+    pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
+    pub response_message_id: Option<String>,
     pub created_at: String,
 }
 
-// === Billing ===
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SubscribeRequest {
-    pub plan: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payment_method_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BillingSubscription {
-    pub plan: String,
-    pub status: String,
-    pub current_period_start: Option<String>,
-    pub current_period_end: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageInfo {
-    pub messages: i64,
-    pub agents: i64,
-    pub storage_bytes: i64,
-    pub period_start: String,
-    pub period_end: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PortalResponse {
-    pub url: String,
-}
-
 // === WebSocket Events ===
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEventPayload {
+    pub id: String,
+    pub agent_name: String,
+    pub text: String,
+    pub attachments: Vec<FileAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageUpdatedPayload {
+    pub id: String,
+    pub agent_name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadReplyPayload {
+    pub id: String,
+    pub agent_name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DmEventPayload {
+    pub id: String,
+    pub agent_name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentEventPayload {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelEventPayload {
+    pub name: String,
+    pub topic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelArchivedPayload {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEventPayload {
+    pub file_id: String,
+    pub filename: String,
+    pub uploaded_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookMessagePayload {
+    pub id: String,
+    pub text: String,
+    pub source: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -570,8 +702,6 @@ pub enum WsEvent {
     MessageUpdated(MessageUpdatedEvent),
     #[serde(rename = "thread.reply")]
     ThreadReply(ThreadReplyEvent),
-    #[serde(rename = "message.read")]
-    MessageRead(MessageReadEvent),
     #[serde(rename = "reaction.added")]
     ReactionAdded(ReactionAddedEvent),
     #[serde(rename = "reaction.removed")]
@@ -584,6 +714,10 @@ pub enum WsEvent {
     AgentOnline(AgentOnlineEvent),
     #[serde(rename = "agent.offline")]
     AgentOffline(AgentOfflineEvent),
+    #[serde(rename = "agent.spawn_requested")]
+    AgentSpawnRequested(AgentSpawnRequestedEvent),
+    #[serde(rename = "agent.release_requested")]
+    AgentReleaseRequested(AgentReleaseRequestedEvent),
     #[serde(rename = "channel.created")]
     ChannelCreated(ChannelCreatedEvent),
     #[serde(rename = "channel.updated")]
@@ -594,6 +728,8 @@ pub enum WsEvent {
     MemberJoined(MemberJoinedEvent),
     #[serde(rename = "member.left")]
     MemberLeft(MemberLeftEvent),
+    #[serde(rename = "message.read")]
+    MessageRead(MessageReadEvent),
     #[serde(rename = "file.uploaded")]
     FileUploaded(FileUploadedEvent),
     #[serde(rename = "webhook.received")]
@@ -608,102 +744,130 @@ pub enum WsEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageCreatedEvent {
-    pub message: MessageWithMeta,
+    pub channel: String,
+    pub message: MessageEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageUpdatedEvent {
-    pub message: MessageWithMeta,
+    pub channel: String,
+    pub message: MessageUpdatedPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadReplyEvent {
     pub parent_id: String,
-    pub reply: MessageWithMeta,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageReadEvent {
-    pub message_id: String,
-    pub reader: String,
-    pub read_at: String,
+    pub message: ThreadReplyPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactionAddedEvent {
     pub message_id: String,
     pub emoji: String,
-    pub user: String,
+    pub agent_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactionRemovedEvent {
     pub message_id: String,
     pub emoji: String,
-    pub user: String,
+    pub agent_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmReceivedEvent {
     pub conversation_id: String,
-    pub message: MessageWithMeta,
+    pub message: DmEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupDmReceivedEvent {
     pub conversation_id: String,
-    pub message: MessageWithMeta,
+    pub message: DmEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOnlineEvent {
-    pub agent: String,
+    pub agent: AgentEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOfflineEvent {
-    pub agent: String,
+    pub agent: AgentEventPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSpawnRequestedEvent {
+    pub agent: AgentSpawnRequestedPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSpawnRequestedPayload {
+    pub name: String,
+    pub cli: String,
+    pub task: String,
+    pub channel: Option<String>,
+    pub already_existed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentReleaseRequestedEvent {
+    pub agent: AgentEventPayload,
+    pub reason: Option<String>,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelCreatedEvent {
-    pub channel: Channel,
+    pub channel: ChannelEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelUpdatedEvent {
-    pub channel: Channel,
+    pub channel: ChannelEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelArchivedEvent {
-    pub channel: String,
+    pub channel: ChannelArchivedPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberJoinedEvent {
     pub channel: String,
-    pub agent: String,
+    pub agent_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberLeftEvent {
     pub channel: String,
-    pub agent: String,
+    pub agent_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageReadEvent {
+    pub message_id: String,
+    pub agent_name: String,
+    pub read_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileUploadedEvent {
-    pub file: FileInfo,
+    pub file: FileEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookReceivedEvent {
     pub webhook_id: String,
-    pub payload: serde_json::Value,
+    pub channel: String,
+    pub message: WebhookMessagePayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandInvokedEvent {
-    pub invocation: CommandInvocation,
+    pub command: String,
+    pub channel: String,
+    pub invoked_by: String,
+    pub args: Option<String>,
+    pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
 }

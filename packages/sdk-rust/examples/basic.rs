@@ -33,7 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent_response = relay
         .register_or_get_agent(CreateAgentRequest {
             name: "rust-example-agent".to_string(),
-            description: Some("Example agent from Rust SDK".to_string()),
+            persona: Some("Example agent from Rust SDK".to_string()),
+            agent_type: Some("agent".to_string()),
+            metadata: None,
         })
         .await?;
     println!("Agent registered: {}", agent_response.name);
@@ -46,13 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Found {} channels", channels.len());
 
     // Create a test channel if it doesn't exist
-    let channel_name = "rust-sdk-test";
+    let channel_name = "sdk-rust-test";
     if !channels.iter().any(|c| c.name == channel_name) {
         agent
             .create_channel(CreateChannelRequest {
                 name: channel_name.to_string(),
                 topic: Some("Test channel for Rust SDK".to_string()),
-                is_private: Some(false),
             })
             .await?;
         println!("Created channel: #{}", channel_name);
@@ -94,19 +95,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Ok(event) = events.recv().await {
         match event {
             WsEvent::MessageCreated(e) => {
-                println!(
-                    "📨 New message in #{}: {}",
-                    e.message.channel, e.message.text
-                );
+                println!("📨 New message in #{}: {}", e.channel, e.message.text);
             }
             WsEvent::ReactionAdded(e) => {
                 println!("👍 Reaction added: {} on message {}", e.emoji, e.message_id);
             }
             WsEvent::AgentOnline(e) => {
-                println!("🟢 Agent online: {}", e.agent);
+                println!("🟢 Agent online: {}", e.agent.name);
             }
             WsEvent::AgentOffline(e) => {
-                println!("🔴 Agent offline: {}", e.agent);
+                println!("🔴 Agent offline: {}", e.agent.name);
             }
             WsEvent::Pong => {
                 // Heartbeat pong, ignore
