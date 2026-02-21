@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from 'react';
 import { RelayCast, WsClient } from '@relaycast/sdk';
-import type { ServerEvent } from '@relaycast/types';
+import type { WsClientEvent } from '@relaycast/sdk';
 import { ClientContext, StoreContext } from './context.js';
 import { createStore } from './store.js';
 import { handleServerEvent } from './reducer.js';
@@ -48,7 +48,7 @@ export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, 
       const t = event.type as string;
       // Filter out client-only events and pong
       if (t !== 'pong' && t !== 'open' && t !== 'close' && t !== 'error' && t !== 'reconnecting') {
-        handleServerEvent(store, event as ServerEvent);
+        handleServerEvent(store, event as WsClientEvent);
       }
     });
 

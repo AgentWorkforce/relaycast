@@ -1,11 +1,10 @@
-import type { ServerEvent, WsClientEvent } from '@relaycast/types';
-import type { WsClient } from '@relaycast/sdk';
+import type { WsClient, WsClientEvent } from '@relaycast/sdk';
 import type { SubscriptionManager } from './subscriptions.js';
 
 /**
  * Maps a WebSocket ServerEvent to the relay:// resource URIs it affects.
  */
-export function eventToResourceUris(event: ServerEvent): string[] {
+export function eventToResourceUris(event: WsClientEvent): string[] {
   switch (event.type) {
     case 'message.created':
       return [
@@ -17,17 +16,17 @@ export function eventToResourceUris(event: ServerEvent): string[] {
     case 'thread.reply':
       return [
         'relay://inbox',
-        `relay://messages/${(event as any).parent_id}/thread`,
+        `relay://messages/${(event as any).parentId}/thread`,
       ];
     case 'dm.received':
       return [
         'relay://inbox',
-        `relay://dm/${(event as any).conversation_id}`,
+        `relay://dm/${(event as any).conversationId}`,
       ];
     case 'group_dm.received':
       return [
         'relay://inbox',
-        `relay://dm/${(event as any).conversation_id}`,
+        `relay://dm/${(event as any).conversationId}`,
       ];
     case 'agent.online':
     case 'agent.offline':
@@ -85,7 +84,7 @@ export class WsBridge {
    * Start listening to WebSocket events and dispatching resource notifications.
    */
   start(): void {
-    this.unsubscribeFn = this.wsClient.on('*', (event: WsClientEvent) => {
+    this.unsubscribeFn = this.wsClient.on('*', (event) => {
       // Filter out client-only events (open, close, error, reconnecting)
       // Only process server events that affect resources
       if (event.type === 'open' || event.type === 'close' || event.type === 'error' || event.type === 'reconnecting') {

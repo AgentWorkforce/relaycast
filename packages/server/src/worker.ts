@@ -20,8 +20,6 @@ import { searchRoutes } from './routes/search.js';
 import { inboxRoutes } from './routes/inbox.js';
 import { receiptRoutes } from './routes/receipt.js';
 import { fileRoutes } from './routes/file.js';
-import { billingRoutes } from './routes/billing.js';
-import { webhookRoutes } from './routes/webhooks.js';
 import { presenceRoutes } from './routes/presence.js';
 import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
@@ -258,8 +256,6 @@ v1.route('/', searchRoutes);
 v1.route('/', inboxRoutes);
 v1.route('/', receiptRoutes);
 v1.route('/', fileRoutes);
-v1.route('/', billingRoutes);
-v1.route('/', webhookRoutes);
 v1.route('/', inboundWebhookRoutes);
 v1.route('/', eventSubscriptionRoutes);
 v1.route('/', commandRoutes);
@@ -326,27 +322,7 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   await logger.flush();
 }
 
-// Scheduled handler for cleanup tasks
-async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings']) {
-  const { getDb } = await import('./db/index.js');
-  const db = getDb(env.DB);
-  const logger = createLogger(env, { source: 'worker.scheduled' });
-
-  // Clean up expired idempotency keys
-  try {
-    const { sql } = await import('drizzle-orm');
-    await db.run(sql`DELETE FROM idempotency_keys WHERE expires_at < unixepoch()`);
-  } catch (error) {
-    logger.warn('Failed to clean expired idempotency keys', {
-      ...toErrorDetails(error),
-      schedule: event.cron ?? 'unknown',
-    });
-  }
-  await logger.flush();
-}
-
 export default {
   fetch: app.fetch,
   queue: handleQueue,
-  scheduled: handleScheduled,
 };

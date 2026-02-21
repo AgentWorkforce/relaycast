@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "id": "trace_sjhgtjrjm0kb",
+  "timestamp": "2026-02-20T21:00:58.524Z",
+  "trajectory": "traj_i7rxdq93vs61",
+  "files": [
+    {
+      "path": ".trajectories/active/traj_i7rxdq93vs61.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 46,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".trajectories/index.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 861,
+              "end_line": 872,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/e2e.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "agent",
+            "model": "unknown"
+          },
+          "ranges": [
+            {
+              "start_line": 215,
+              "end_line": 221,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 314,
+              "end_line": 321,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 482,
+              "end_line": 488,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 503,
+              "end_line": 509,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 542,
+              "end_line": 549,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 649,
+              "end_line": 659,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            },
+            {
+              "start_line": 667,
+              "end_line": 675,
+              "revision": "408a4595facfbe405fff48ae340265a269d6b3f1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

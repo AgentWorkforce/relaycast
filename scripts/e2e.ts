@@ -12,7 +12,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient } from '../packages/sdk/src/index.js';
+import { RelayCast, AgentClient } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -215,7 +215,7 @@ ${B}${CYAN}╔══════════════════════
   await run('Create workspace', async () => {
     const wsName = `e2e-${Date.now()}`;
     const res = await RelayCast.createWorkspace(wsName, BASE_URL);
-    workspaceKey = res.api_key;
+    workspaceKey = res.apiKey;
     relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);
   });
@@ -314,8 +314,8 @@ ${B}${CYAN}╔══════════════════════
 
     // Listen for events on all agents
     for (const [name, client] of Object.entries(agentMap)) {
-      client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
-      client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.agent_name}${R}: "${e.message.text}"`); });
+      client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
+      client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
       client.on.reactionAdded((e) => { wsEvents++; ws(name, 'reaction.added', `${e.emoji}`); });
       client.on.channelUpdated(() => { wsEvents++; ws(name, 'channel.updated', ''); });
     }
@@ -482,7 +482,7 @@ ${B}${CYAN}╔══════════════════════
 
   await run('Agent presence', async () => {
     const presence = await relay.agents.presence();
-    log('📋', `Presence: ${presence.map((p) => `${p.agent_name}=${p.status}`).join(', ')}`);
+    log('📋', `Presence: ${presence.map((p) => `${p.agentName}=${p.status}`).join(', ')}`);
   });
   await pause();
 
@@ -503,7 +503,7 @@ ${B}${CYAN}╔══════════════════════
     await relay.commands.register({
       command: 'deploy',
       description: 'Deploy the application to staging or production',
-      handler_agent: LEAD,
+      handlerAgent: LEAD,
       parameters: [
         { name: 'env', type: 'string' as const, required: true, description: 'Target environment' },
       ],
@@ -542,8 +542,8 @@ ${B}${CYAN}╔══════════════════════
       name: 'CI Pipeline',
       channel: channelName,
     });
-    webhookId = wh.webhook_id;
-    log('🔗', `Created webhook ${B}${wh.webhook_id}${R} → #${channelName}`);
+    webhookId = wh.webhookId;
+    log('🔗', `Created webhook ${B}${wh.webhookId}${R} → #${channelName}`);
   });
   await pause();
 
@@ -649,11 +649,11 @@ ${B}${CYAN}╔══════════════════════
     log('📋', `#${channelName} is not in active channel list (correct)`);
   });
 
-  await run('Archived channel visible with include_archived', async () => {
-    const channels = await lead.channels.list({ include_archived: true });
+  await run('Archived channel visible with includeArchived', async () => {
+    const channels = await lead.channels.list({ includeArchived: true });
     const found = channels.find((c) => c.name === channelName);
     if (!found) throw new Error(`Expected #${channelName} in archived list`);
-    log('📋', `#${channelName} found with include_archived=true`);
+    log('📋', `#${channelName} found with includeArchived=true`);
   });
   await pause();
 
@@ -667,9 +667,9 @@ ${B}${CYAN}╔══════════════════════
     for (let attempt = 0; attempt < 10; attempt++) {
       await sleep(1000);
       const presence = await relay.agents.presence();
-      const statuses = Object.fromEntries(presence.map((p) => [p.agent_name, p.status]));
+      const statuses = Object.fromEntries(presence.map((p) => [p.agentName, p.status]));
       const allOffline = [LEAD, INFRA, BACKEND].every((name) => statuses[name] === 'offline');
-      log('📋', `Presence: ${presence.map((p) => `${p.agent_name}=${p.status}`).join(', ')}`);
+      log('📋', `Presence: ${presence.map((p) => `${p.agentName}=${p.status}`).join(', ')}`);
       if (allOffline) return;
       if (attempt === 9) {
         throw new Error(`Expected all agents offline, got: ${JSON.stringify(statuses)}`);

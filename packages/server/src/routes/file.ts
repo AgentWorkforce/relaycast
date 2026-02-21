@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -10,6 +11,12 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const fileRoutes = new Hono<AppEnv>();
 
+const fileUploadSchema = z.object({
+  filename: z.string().min(1),
+  content_type: z.string().min(1),
+  size_bytes: z.number().finite().refine((value) => value !== 0),
+});
+
 // POST /v1/files/upload — Returns presigned PUT URL
 fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
   try {
@@ -17,26 +24,24 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
     const workspace = c.get('workspace');
     const agent = c.get('agent')!;
     const s3 = getS3Client(c.env.CF_ACCOUNT_ID, c.env.R2_ACCESS_KEY_ID, c.env.R2_SECRET_ACCESS_KEY);
-    const { filename, content_type, size_bytes } = await c.req.json();
-
-    if (!filename || typeof filename !== 'string') {
+    const parsed = fileUploadSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      const hasFilenameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'filename');
+      const hasContentTypeIssue = parsed.error.issues.some((issue) => issue.path[0] === 'content_type');
+      const hasSizeBytesIssue = parsed.error.issues.some((issue) => issue.path[0] === 'size_bytes');
+      const message = hasFilenameIssue
+        ? 'filename is required'
+        : hasContentTypeIssue
+          ? 'content_type is required'
+          : hasSizeBytesIssue
+            ? 'size_bytes is required'
+            : 'invalid upload body';
       return c.json({
         ok: false,
-        error: { code: 'invalid_request', message: 'filename is required' },
+        error: { code: 'invalid_request', message },
       }, 400);
     }
-    if (!content_type || typeof content_type !== 'string') {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'content_type is required' },
-      }, 400);
-    }
-    if (!size_bytes || typeof size_bytes !== 'number') {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'size_bytes is required' },
-      }, 400);
-    }
+    const { filename, content_type, size_bytes } = parsed.data;
 
     const result = await fileEngine.createUpload(
       db,

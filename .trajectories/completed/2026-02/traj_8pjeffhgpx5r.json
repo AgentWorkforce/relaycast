@@ -1,0 +1,53 @@
+{
+  "id": "traj_8pjeffhgpx5r",
+  "version": 1,
+  "task": {
+    "title": "Bring openapi.yaml up to date with all mounted API routes"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T18:47:23.382Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T18:50:25.976Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_h4ykknt4z29f",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T18:50:25.976Z",
+      "events": [
+        {
+          "ts": 1771613425977,
+          "type": "decision",
+          "content": "Expanded OpenAPI coverage to match mounted worker routes: Expanded OpenAPI coverage to match mounted worker routes",
+          "raw": {
+            "question": "Expanded OpenAPI coverage to match mounted worker routes",
+            "chosen": "Expanded OpenAPI coverage to match mounted worker routes",
+            "alternatives": [],
+            "reasoning": "Spec previously covered only core messaging APIs and missed active billing/file/webhook/command/presence/stream/read-receipt endpoints"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T18:50:30.090Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "85fa8cad78650cbb35305c0283ea48e810c99b16",
+    "endRef": "85fa8cad78650cbb35305c0283ea48e810c99b16"
+  },
+  "completedAt": "2026-02-20T18:50:30.090Z",
+  "retrospective": {
+    "summary": "Updated openapi.yaml to include all currently mounted API routes, added missing methods, documented MCP discovery/transport and websocket stream, and validated YAML + route coverage",
+    "approach": "Standard approach",
+    "confidence": 0.91
+  }
+}

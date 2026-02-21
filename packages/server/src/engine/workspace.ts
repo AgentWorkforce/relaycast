@@ -70,7 +70,7 @@ export async function getWorkspace(db: Db, workspaceId: string) {
 export async function updateWorkspace(
   db: Db,
   workspaceId: string,
-  updates: { name?: string; system_prompt?: string },
+  updates: { name?: string; system_prompt?: string | null },
 ) {
   const setClause: Record<string, unknown> = {};
   if (updates.name !== undefined) setClause.name = updates.name;

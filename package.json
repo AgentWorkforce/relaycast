@@ -1,5 +1,5 @@
 {
-  "name": "relay-cloud-sdk-transport",
+  "name": "relaycast",
   "module": "packages/mcp/src/smithery.ts",
   "packageManager": "npm@10.9.4",
   "private": true,
@@ -10,7 +10,7 @@
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",
-    "dev": "turbo dev --parallel --filter=@relaycast/server --filter=@relaycast/dashboard",
+    "dev": "turbo dev --parallel --filter=@relaycast/server --filter=@relaycast/observer-dashboard",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply relaycast --local",
     "db:migrate:remote": "wrangler d1 migrations apply relaycast --remote",
@@ -21,9 +21,15 @@
     "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
     "eslint": "^9.39.2",
+    "local-pkg": "^1.1.1",
+    "loupe": "^3.1.4",
+    "strip-literal": "^3.1.0",
+    "tinypool": "^1.1.1",
+    "tinyspy": "^4.0.4",
     "turbo": "^2.4.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",
+    "vite-node": "^3.2.4",
     "vitest": "^4.0.18"
   }
 }

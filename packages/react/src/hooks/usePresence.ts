@@ -22,7 +22,7 @@ export function usePresence(): UsePresenceReturn {
 
       const presenceByName = new Map<string, 'online' | 'offline'>();
       if (presence) {
-        for (const item of presence) presenceByName.set(item.agent_name, item.status);
+        for (const item of presence) presenceByName.set(item.agentName, item.status);
       }
 
       const merged = list.map((agent) => ({

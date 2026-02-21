@@ -102,8 +102,8 @@ describe('feature tools', () => {
     });
     expect(mockAgentClient.files.upload).toHaveBeenCalledWith({
       filename: 'test.txt',
-      content_type: 'text/plain',
-      size_bytes: 100,
+      contentType: 'text/plain',
+      sizeBytes: 100,
     });
   });
 });

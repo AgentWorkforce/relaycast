@@ -198,7 +198,7 @@ export function registerProgrammabilityTools(
     const result = await relay.commands.register({
       command,
       description,
-      handler_agent,
+      handlerAgent: handler_agent,
       parameters,
     });
     return {
@@ -317,7 +317,7 @@ export function registerProgrammabilityTools(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ name, reason, delete_agent }) => {
     const relay = getRelay();
-    const result = await relay.agents.release({ name, reason, delete_agent });
+    const result = await relay.agents.release({ name, reason, deleteAgent: delete_agent });
     // Transform 'released' to 'removed' for agent-facing consistency
     const transformed = {
       name: result.name,

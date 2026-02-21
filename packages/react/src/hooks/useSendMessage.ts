@@ -1,6 +1,6 @@
 import { useContext, useState, useCallback } from 'react';
 import { ClientContext, StoreContext } from '../context.js';
-import type { MessageWithMeta, MessageBlock } from '@relaycast/types';
+import type { MessageWithMeta, MessageBlock } from '@relaycast/sdk';
 import type { UseSendMessageReturn } from '../types.js';
 
 export function useSendMessage(): UseSendMessageReturn {

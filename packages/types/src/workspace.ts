@@ -6,8 +6,6 @@ export const WorkspaceSchema = z.object({
   api_key_hash: z.string(),
   system_prompt: z.string().nullable(),
   plan: z.enum(['free', 'pro', 'enterprise']),
-  stripe_customer_id: z.string().nullable(),
-  stripe_subscription_id: z.string().nullable(),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
 });

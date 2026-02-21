@@ -57,7 +57,7 @@ describe('setupSkill', () => {
     );
     expect(skillMdCall).toBeDefined();
     expect(skillMdCall[1]).toContain('Relaycast');
-    expect(skillMdCall[1]).toContain('npx relaycast send');
+    expect(skillMdCall[1]).toContain('@relaycast/mcp');
 
     // Should write .env with correct values
     const envCall = mocks.writeFile.mock.calls.find(

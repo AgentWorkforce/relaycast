@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -12,6 +13,19 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const groupDmRoutes = new Hono<AppEnv>();
 
+const createGroupDmSchema = z.object({
+  participants: z.array(z.string()).min(1),
+  name: z.string().optional(),
+});
+
+const postGroupDmMessageSchema = z.object({
+  text: z.string().min(1),
+});
+
+const addGroupDmParticipantSchema = z.object({
+  agent_name: z.string().min(1),
+});
+
 // POST /v1/dm/group - create a group DM
 groupDmRoutes.post(
   '/dm/group',
@@ -22,13 +36,14 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { participants, name } = await c.req.json();
-      if (!participants || !Array.isArray(participants) || participants.length < 1) {
+      const parsed = createGroupDmSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'participants array is required with at least 1 member' },
         }, 400);
       }
+      const { participants, name } = parsed.data;
 
       const result = await groupDmEngine.createGroupDm(
         db,
@@ -61,13 +76,14 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const { text } = await c.req.json();
-      if (!text || typeof text !== 'string') {
+      const parsed = postGroupDmMessageSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
+      const { text } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -158,13 +174,14 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agentCtx = c.get('agent');
-      const { agent } = await c.req.json();
-      if (!agent || typeof agent !== 'string') {
+      const parsed = addGroupDmParticipantSchema.safeParse(await c.req.json());
+      if (!parsed.success) {
         return c.json({
           ok: false,
-          error: { code: 'invalid_request', message: 'agent name is required' },
+          error: { code: 'invalid_request', message: 'agent_name is required' },
         }, 400);
       }
+      const { agent_name: agentName } = parsed.data;
 
       const conversationId = c.req.param('conversation_id');
       const result = await groupDmEngine.addParticipant(
@@ -172,11 +189,11 @@ groupDmRoutes.post(
         workspace.id,
         conversationId,
         agentCtx!.id,
-        agent,
+        agentName,
       );
       emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_participant_added', {
         conversation_id: conversationId,
-        agent_name: agent,
+        agent_name: agentName,
         invited_by_agent_id: agentCtx!.id,
       });
       return c.json({ ok: true, data: result });

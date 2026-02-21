@@ -145,7 +145,7 @@ describe('POST /v1/dm/:conversation_id/participants', () => {
     const res = await app.request('/v1/dm/conv_group_1/participants', {
       method: 'POST',
       headers: agentAuthHeaders(),
-      body: JSON.stringify({ agent: 'NewBot' }),
+      body: JSON.stringify({ agent_name: 'NewBot' }),
     }, bindings);
 
     expect(res.status).toBe(200);

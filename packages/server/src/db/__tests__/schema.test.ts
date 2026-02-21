@@ -49,8 +49,6 @@ describe('Database Schema', () => {
     expect(cols.apiKeyHash).toBeDefined();
     expect(cols.systemPrompt).toBeDefined();
     expect(cols.plan).toBeDefined();
-    expect(cols.stripeCustomerId).toBeDefined();
-    expect(cols.stripeSubscriptionId).toBeDefined();
     expect(cols.createdAt).toBeDefined();
     expect(cols.metadata).toBeDefined();
   });

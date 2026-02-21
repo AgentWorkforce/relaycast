@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -6,6 +7,11 @@ import * as systemPromptEngine from '../engine/systemPrompt.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const systemPromptRoutes = new Hono<AppEnv>();
+
+const updateSystemPromptSchema = z.object({
+  prompt: z.unknown().optional(),
+  reset: z.boolean().optional(),
+}).passthrough();
 
 systemPromptRoutes.get('/workspace/system-prompt', requireAuth, rateLimit, async (c) => {
   try {
@@ -26,7 +32,14 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const { prompt, reset } = await c.req.json();
+    const parsed = updateSystemPromptSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'invalid system prompt body' },
+      }, 400);
+    }
+    const { prompt, reset } = parsed.data;
 
     if (reset === true || prompt === null) {
       const result = await systemPromptEngine.setSystemPrompt(db, workspace.id, null);
