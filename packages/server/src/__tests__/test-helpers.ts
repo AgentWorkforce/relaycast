@@ -31,12 +31,24 @@ export const TEST_API_KEY_HASH = _apiKeyHash;
 export const TEST_AGENT_TOKEN = _agentToken;
 export const TEST_AGENT_TOKEN_HASH = _agentTokenHash;
 
+export const FAKE_ORGANIZATION = {
+  id: 'org_123',
+  name: 'test-org',
+  plan: 'free',
+  billingSource: null,
+  stripeCustomerId: null,
+  subscriptionStatus: null,
+  orgApiKeyHash: null,
+  createdAt: new Date(),
+};
+
 export const FAKE_WORKSPACE = {
   id: 'ws_123',
   name: 'test-workspace',
   apiKeyHash: TEST_API_KEY_HASH,
   systemPrompt: null,
   plan: 'free' as const,
+  organizationId: 'org_123',
   createdAt: new Date(),
   metadata: {},
 };
@@ -72,10 +84,16 @@ export function createMockKV(): KVNamespace {
  * Create a mock DB that returns the fake workspace for workspace-key auth.
  */
 export function mockDbForWorkspaceAuth() {
+  let callCount = 0;
   return {
     select: () => ({
       from: () => ({
-        where: vi.fn().mockResolvedValue([FAKE_WORKSPACE]),
+        where: vi.fn().mockImplementation(() => {
+          callCount++;
+          // Auth middleware queries: 1=workspace, 2=organization
+          if (callCount % 2 === 1) return Promise.resolve([FAKE_WORKSPACE]);
+          return Promise.resolve([FAKE_ORGANIZATION]);
+        }),
       }),
     }),
     insert: () => ({
@@ -110,8 +128,11 @@ export function mockDbForAgentAuth() {
       from: () => ({
         where: vi.fn().mockImplementation(() => {
           callCount++;
-          if (callCount % 2 === 1) return Promise.resolve([FAKE_AGENT]);
-          return Promise.resolve([FAKE_WORKSPACE]);
+          // Auth middleware queries: 1=agent, 2=workspace, 3=organization, then repeats
+          const phase = ((callCount - 1) % 3) + 1;
+          if (phase === 1) return Promise.resolve([FAKE_AGENT]);
+          if (phase === 2) return Promise.resolve([FAKE_WORKSPACE]);
+          return Promise.resolve([FAKE_ORGANIZATION]);
         }),
       }),
     }),

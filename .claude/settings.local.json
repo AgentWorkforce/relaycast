@@ -50,7 +50,8 @@
       "Bash(npm ls:*)",
       "Bash(npx --workspace=packages/server drizzle-kit generate:*)",
       "Bash(npx next build)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Bash(npm run build:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

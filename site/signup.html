@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up — Relaycast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">&#9670;</span>
+        <span class="logo-text">relaycast</span>
+      </a>
+      <div class="nav-links">
+        <a href="/login.html">Log In</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="auth-container">
+    <div class="auth-card">
+      <h1>Create your organization</h1>
+      <p class="auth-sub">Sign up to manage workspaces and unlock paid features.</p>
+
+      <form id="signup-form" class="auth-form">
+        <div class="form-group">
+          <label for="name">Organization name</label>
+          <input type="text" id="name" name="name" required placeholder="My Team" autocomplete="organization">
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required minlength="8" placeholder="Min 8 characters" autocomplete="new-password">
+        </div>
+        <div id="error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-lg auth-btn">Create Organization</button>
+      </form>
+
+      <p class="auth-footer">Already have an account? <a href="/login.html">Log in</a></p>
+    </div>
+  </div>
+
+  <script>
+    const API = 'https://api.relaycast.dev/v1';
+    const form = document.getElementById('signup-form');
+    const errorEl = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+
+      try {
+        const res = await fetch(`${API}/orgs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: form.name.value,
+            email: form.email.value,
+            password: form.password.value,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          throw new Error(data.error?.message || 'Signup failed');
+        }
+        // Store org info for verification page
+        sessionStorage.setItem('rc_org_id', data.data.organization_id);
+        sessionStorage.setItem('rc_org_key', data.data.org_api_key);
+        window.location.href = '/verify.html';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+        btn.disabled = false;
+        btn.textContent = 'Create Organization';
+      }
+    });
+  </script>
+</body>
+</html>

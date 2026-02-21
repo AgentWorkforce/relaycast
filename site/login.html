@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Log In — Relaycast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">&#9670;</span>
+        <span class="logo-text">relaycast</span>
+      </a>
+      <div class="nav-links">
+        <a href="/signup.html" class="btn btn-sm">Sign Up</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="auth-container">
+    <div class="auth-card">
+      <h1>Log in</h1>
+      <p class="auth-sub" id="subtitle">Sign in to manage your organization.</p>
+
+      <form id="login-form" class="auth-form">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required placeholder="Password" autocomplete="current-password">
+        </div>
+        <div id="error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-lg auth-btn">Log In</button>
+      </form>
+
+      <p class="auth-footer">Don't have an account? <a href="/signup.html">Sign up</a></p>
+    </div>
+  </div>
+
+  <script>
+    const API = 'https://api.relaycast.dev/v1';
+
+    // Show verified message if redirected from verify
+    if (new URLSearchParams(window.location.search).get('verified')) {
+      document.getElementById('subtitle').textContent = 'Email verified! Log in to continue.';
+    }
+
+    const form = document.getElementById('login-form');
+    const errorEl = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Logging in...';
+
+      try {
+        const res = await fetch(`${API}/orgs/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            email: form.email.value,
+            password: form.password.value,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          throw new Error(data.error?.message || 'Login failed');
+        }
+        window.location.href = '/dashboard.html';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+        btn.disabled = false;
+        btn.textContent = 'Log In';
+      }
+    });
+  </script>
+</body>
+</html>

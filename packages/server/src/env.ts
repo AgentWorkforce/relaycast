@@ -1,4 +1,4 @@
-import type { workspaces, agents } from './db/schema.js';
+import type { workspaces, agents, organizations, users } from './db/schema.js';
 import type { Logger } from './lib/logger.js';
 
 /** Cloudflare Worker bindings */
@@ -25,11 +25,17 @@ export interface CloudflareBindings {
   RELAYCAST_TELEMETRY_DISABLED?: string;
   POSTHOG_API_KEY?: string;
   POSTHOG_HOST?: string;
+  RESEND_API_KEY?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  ADMIN_SECRET?: string;
 }
 
 /** Hono context variables set by middleware */
 export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
+  organization: typeof organizations.$inferSelect;
+  user: typeof users.$inferSelect | undefined;
   agent: typeof agents.$inferSelect | undefined;
   db: ReturnType<typeof import('./db/index.js').getDb>;
   logger: Logger;

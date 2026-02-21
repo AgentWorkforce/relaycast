@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { workspaces, channels } from '../db/schema.js';
+import { workspaces, channels, organizations } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { createShadowOrg } from './organization.js';
 
 type Db = ReturnType<typeof getDb>;
 
-export async function createWorkspace(db: Db, name: string) {
+export async function createWorkspace(db: Db, name: string, organizationId?: string) {
   // Check for duplicate name
   const [existing] = await db
     .select()
@@ -17,6 +18,9 @@ export async function createWorkspace(db: Db, name: string) {
     Object.assign(err, { code: 'workspace_already_exists', status: 409 });
     throw err;
   }
+
+  // If no org provided, create a shadow org
+  const orgId = organizationId ?? await createShadowOrg(db, name);
 
   const workspaceId = generateId();
   const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
@@ -29,8 +33,10 @@ export async function createWorkspace(db: Db, name: string) {
     .insert(workspaces)
     .values({
       id: workspaceId,
+      organizationId: orgId,
       name,
       apiKeyHash,
+      lastActivityAt: new Date(),
     })
     .returning();
 
@@ -57,10 +63,17 @@ export async function getWorkspace(db: Db, workspaceId: string) {
     .where(eq(workspaces.id, workspaceId));
   if (!workspace) return null;
 
+  // Get plan from org
+  const [org] = await db
+    .select()
+    .from(organizations)
+    .where(eq(organizations.id, workspace.organizationId));
+
   return {
     id: workspace.id,
+    organization_id: workspace.organizationId,
     name: workspace.name,
-    plan: workspace.plan,
+    plan: (org?.plan ?? 'free') as string,
     system_prompt: workspace.systemPrompt,
     created_at: workspace.createdAt.toISOString(),
     metadata: workspace.metadata,
@@ -81,24 +94,21 @@ export async function updateWorkspace(
     return getWorkspace(db, workspaceId);
   }
 
-  const [updated] = await db
+  await db
     .update(workspaces)
     .set(setClause)
-    .where(eq(workspaces.id, workspaceId))
-    .returning();
+    .where(eq(workspaces.id, workspaceId));
 
-  if (!updated) return null;
-
-  return {
-    id: updated.id,
-    name: updated.name,
-    plan: updated.plan,
-    system_prompt: updated.systemPrompt,
-    created_at: updated.createdAt.toISOString(),
-    metadata: updated.metadata,
-  };
+  return getWorkspace(db, workspaceId);
 }
 
 export async function deleteWorkspace(db: Db, workspaceId: string) {
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+}
+
+export async function touchLastActivity(db: Db, workspaceId: string) {
+  await db
+    .update(workspaces)
+    .set({ lastActivityAt: new Date() })
+    .where(eq(workspaces.id, workspaceId));
 }

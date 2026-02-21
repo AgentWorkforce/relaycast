@@ -5,7 +5,6 @@ import type { AppEnv } from '../env.js';
 const RATE_LIMITS: Record<string, number> = {
   free: 60,
   pro: 300,
-  enterprise: 1000,
 };
 
 // Per-route rate limit multipliers (fraction of global limit)
@@ -66,7 +65,10 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     return;
   }
 
-  const globalLimit = RATE_LIMITS[workspace.plan] || RATE_LIMITS.free;
+  // Read plan from org (set by auth middleware), fall back to workspace.plan for compat
+  const org = c.get('organization');
+  const plan = org?.plan || workspace.plan || 'free';
+  const globalLimit = RATE_LIMITS[plan] || RATE_LIMITS.free;
 
   // Apply route-specific multiplier if applicable
   const routeKey = getRouteKey(c.req.method, c.req.path);
@@ -116,7 +118,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
           ok: false,
           error: {
             code: 'rate_limit_exceeded',
-            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`,
+            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${plan} plan.`,
           },
         },
         429,
@@ -134,7 +136,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
           ok: false,
           error: {
             code: 'rate_limit_exceeded',
-            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`,
+            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${plan} plan.`,
           },
         },
         429,

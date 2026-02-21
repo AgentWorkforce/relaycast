@@ -25,6 +25,11 @@ import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
+import { userRoutes } from './routes/user.js';
+import { organizationRoutes } from './routes/organization.js';
+import { billingRoutes } from './routes/billing.js';
+import { stripeWebhookRoutes } from './routes/stripeWebhook.js';
+import { adminRoutes } from './routes/admin.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { requiredOriginInfo } from './lib/origin.js';
@@ -240,8 +245,17 @@ app.get('/v1/ws', async (c) => {
   return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
 });
 
+// Stripe webhook — outside v1, raw body needed for signature verification
+app.route('/', stripeWebhookRoutes);
+
+// Admin routes — outside v1 prefix
+app.route('/v1', adminRoutes);
+
 // API v1 routes — specific routes before parameterized routes
 const v1 = new Hono<AppEnv>();
+v1.route('/', userRoutes);
+v1.route('/', organizationRoutes);
+v1.route('/', billingRoutes);
 v1.route('/', presenceRoutes);
 v1.route('/', systemPromptRoutes);
 v1.route('/', workspaceRoutes);
@@ -322,7 +336,25 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   await logger.flush();
 }
 
+// Scheduled cron handler for TTL cleanup
+async function handleScheduled(event: ScheduledEvent, env: AppEnv['Bindings'], ctx: ExecutionContext) {
+  const { getDb } = await import('./db/index.js');
+  const { runTtlCleanup } = await import('./engine/ttl.js');
+  const db = getDb(env.DB);
+  const logger = createLogger(env, { source: 'worker.scheduled' });
+
+  try {
+    await runTtlCleanup(db, logger);
+    logger.info('TTL cleanup completed');
+  } catch (error) {
+    logger.error('TTL cleanup failed', toErrorDetails(error));
+  }
+
+  await logger.flush();
+}
+
 export default {
   fetch: app.fetch,
   queue: handleQueue,
+  scheduled: handleScheduled,
 };

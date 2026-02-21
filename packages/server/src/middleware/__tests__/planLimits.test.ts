@@ -21,6 +21,10 @@ function makeApp(options: {
         name: 'test-workspace',
         plan: options.plan || 'free',
       } as any);
+      c.set('organization', {
+        id: 'org_123',
+        plan: options.plan || 'free',
+      } as any);
     }
     await next();
   });

@@ -2,10 +2,11 @@ import { z } from 'zod';
 
 export const WorkspaceSchema = z.object({
   id: z.string(),
+  organization_id: z.string(),
   name: z.string(),
   api_key_hash: z.string(),
   system_prompt: z.string().nullable(),
-  plan: z.enum(['free', 'pro', 'enterprise']),
+  plan: z.enum(['free', 'pro']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
 });

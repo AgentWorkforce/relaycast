@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify Email — Relaycast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">&#9670;</span>
+        <span class="logo-text">relaycast</span>
+      </a>
+    </div>
+  </nav>
+
+  <div class="auth-container">
+    <div class="auth-card">
+      <h1>Check your email</h1>
+      <p class="auth-sub">We sent a 6-digit verification code to your email address.</p>
+
+      <form id="verify-form" class="auth-form">
+        <div class="form-group">
+          <label for="code">Verification code</label>
+          <input type="text" id="code" name="code" required maxlength="6" pattern="[0-9]{6}" placeholder="000000" class="code-input" autocomplete="one-time-code" inputmode="numeric">
+        </div>
+        <div id="error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-lg auth-btn">Verify</button>
+      </form>
+
+      <div id="success" class="auth-success" hidden>
+        <p>Email verified! Redirecting to dashboard...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'https://api.relaycast.dev/v1';
+    const orgId = sessionStorage.getItem('rc_org_id');
+    const orgKey = sessionStorage.getItem('rc_org_key');
+
+    if (!orgId) {
+      window.location.href = '/signup.html';
+    }
+
+    const form = document.getElementById('verify-form');
+    const errorEl = document.getElementById('error');
+    const successEl = document.getElementById('success');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+
+      try {
+        const res = await fetch(`${API}/orgs/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organization_id: orgId,
+            code: form.code.value,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          throw new Error(data.error?.message || 'Verification failed');
+        }
+
+        // Now log in to get a session cookie
+        form.hidden = true;
+        successEl.hidden = false;
+
+        // Auto-login: we have the org key, but we need a session for the dashboard.
+        // The user should log in properly.
+        window.location.href = '/login.html?verified=true';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+        btn.disabled = false;
+        btn.textContent = 'Verify';
+      }
+    });
+  </script>
+</body>
+</html>

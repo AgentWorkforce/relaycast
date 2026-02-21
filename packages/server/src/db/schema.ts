@@ -10,14 +10,108 @@ import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 // ============================================
+// Users
+// ============================================
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
+  passwordHash: text('password_hash').notNull(),
+  name: text('name').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+});
+
+// ============================================
+// Organizations
+// ============================================
+export const organizations = sqliteTable('organizations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  plan: text('plan').notNull().default('free'),
+  billingSource: text('billing_source'), // 'stripe' | 'external' | null
+  stripeCustomerId: text('stripe_customer_id'),
+  subscriptionStatus: text('subscription_status'), // 'active' | 'past_due' | 'canceled' | null
+  orgApiKeyHash: text('org_api_key_hash').unique(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+});
+
+// ============================================
+// Org Memberships
+// ============================================
+export const orgMemberships = sqliteTable(
+  'org_memberships',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member'), // 'owner' | 'admin' | 'member'
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.organizationId] }),
+    index('idx_org_memberships_org').on(table.organizationId),
+    index('idx_org_memberships_user').on(table.userId),
+  ],
+);
+
+// ============================================
+// Sessions (user auth)
+// ============================================
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    activeOrgId: text('active_org_id')
+      .references(() => organizations.id),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_sessions_user').on(table.userId),
+    index('idx_sessions_expires').on(table.expiresAt),
+  ],
+);
+
+// ============================================
+// Email Verifications
+// ============================================
+export const emailVerifications = sqliteTable(
+  'email_verifications',
+  {
+    id: text('id').primaryKey(),
+    email: text('email').notNull(),
+    code: text('code').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_email_verifications_user').on(table.userId),
+  ],
+);
+
+// ============================================
 // Workspaces
 // ============================================
 export const workspaces = sqliteTable('workspaces', {
   id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
   name: text('name').notNull().unique(),
   apiKeyHash: text('api_key_hash').notNull().unique(),
   systemPrompt: text('system_prompt'),
-  plan: text('plan').notNull().default('free'),
+  plan: text('plan').notNull().default('free'), // deprecated: read from org
+  lastActivityAt: integer('last_activity_at', { mode: 'timestamp' }),
+  deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   metadata: text('metadata', { mode: 'json' }).default('{}'),
 });

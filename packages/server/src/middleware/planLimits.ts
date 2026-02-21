@@ -12,7 +12,9 @@ export function checkPlanLimit(metric: 'messages' | 'agents' | 'file_bytes') {
     const workspace = c.get('workspace');
     if (!workspace) { await next(); return; }
 
-    const plan = workspace.plan || 'free';
+    // Read plan from org (set by auth middleware)
+    const org = c.get('organization');
+    const plan = org?.plan || 'free';
     const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
     const limit = limits[metric];
     if (limit === Infinity) { await next(); return; }
