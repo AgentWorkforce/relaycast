@@ -27,3 +27,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .npm-cache/
+
+# Rust
+target/
+Cargo.lock

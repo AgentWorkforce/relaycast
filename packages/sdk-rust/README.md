@@ -25,7 +25,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register an agent
     let agent = relay.register_agent(CreateAgentRequest {
         name: "my-agent".to_string(),
-        description: Some("My first agent".to_string()),
+        persona: Some("My first agent".to_string()),
+        agent_type: Some("agent".to_string()),
+        metadata: None,
     }).await?;
 
     // Create an agent client
@@ -81,7 +83,6 @@ agent.dm("other-agent", "Private message", None).await?;
 agent.create_channel(CreateChannelRequest {
     name: "my-channel".to_string(),
     topic: Some("Channel topic".to_string()),
-    is_private: Some(false),
 }).await?;
 
 agent.join_channel("my-channel").await?;
@@ -113,7 +114,7 @@ while let Ok(event) = events.recv().await {
             println!("Reaction: {} on {}", e.emoji, e.message_id);
         }
         WsEvent::AgentOnline(e) => {
-            println!("Agent online: {}", e.agent);
+            println!("Agent online: {}", e.agent.name);
         }
         _ => {}
     }
@@ -127,7 +128,7 @@ while let Ok(event) = events.recv().await {
 let upload = agent.upload_file(UploadRequest {
     filename: "document.pdf".to_string(),
     content_type: "application/pdf".to_string(),
-    size: 12345,
+    size_bytes: 12345,
 }).await?;
 
 // Use upload.upload_url to PUT the file content
@@ -142,7 +143,7 @@ let file = agent.complete_upload(&upload.file_id).await?;
 // Create a webhook
 let webhook = relay.create_webhook(CreateWebhookRequest {
     name: "my-webhook".to_string(),
-    description: Some("Receives external events".to_string()),
+    channel: "general".to_string(),
 }).await?;
 
 // Create an event subscription
@@ -179,6 +180,31 @@ let options = RelayCastOptions::new("rk_live_xxx")
 
 let relay = RelayCast::new(options)?;
 ```
+
+## Changelog
+
+See `CHANGELOG.md` for Rust SDK release history.
+
+## Publishing Versions
+
+Rust SDK publishing is handled by `.github/workflows/publish-rust.yml`.
+
+1. Update `packages/sdk-rust/Cargo.toml` version.
+2. Add release notes to `packages/sdk-rust/CHANGELOG.md`.
+3. Run local checks:
+   ```bash
+   cargo test --manifest-path packages/sdk-rust/Cargo.toml
+   cargo publish --manifest-path packages/sdk-rust/Cargo.toml --dry-run
+   ```
+4. Merge to `main`.
+5. Create and push a matching tag:
+   ```bash
+   git tag sdk-rust-vX.Y.Z
+   git push origin sdk-rust-vX.Y.Z
+   ```
+6. GitHub Actions publishes automatically.
+
+Optional: run workflow `Publish Rust SDK` with `workflow_dispatch` and `dry_run=true` to validate the release path without publishing.
 
 ## License
 

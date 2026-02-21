@@ -1,0 +1,53 @@
+{
+  "id": "traj_oywwwocj9nko",
+  "version": 1,
+  "task": {
+    "title": "Add Rust SDK publish workflow and document manual first-publish process"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-21T03:02:25.912Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-21T03:02:34.779Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_9p9mpqrqsr1e",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-21T03:02:34.779Z",
+      "events": [
+        {
+          "ts": 1771642954780,
+          "type": "decision",
+          "content": "Use separate publish-rust workflow with tag gate sdk-rust-v* and workflow_dispatch dry-run: Use separate publish-rust workflow with tag gate sdk-rust-v* and workflow_dispatch dry-run",
+          "raw": {
+            "question": "Use separate publish-rust workflow with tag gate sdk-rust-v* and workflow_dispatch dry-run",
+            "chosen": "Use separate publish-rust workflow with tag gate sdk-rust-v* and workflow_dispatch dry-run",
+            "alternatives": [],
+            "reasoning": "Keeps Rust release lifecycle independent from npm publish automation and prevents accidental publish with explicit version-tag matching"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-21T03:02:49.536Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "b77120c6dd303ce33134ad8c6c4fcd5e3ef1dbdb",
+    "endRef": "b77120c6dd303ce33134ad8c6c4fcd5e3ef1dbdb"
+  },
+  "completedAt": "2026-02-21T03:02:49.536Z",
+  "retrospective": {
+    "summary": "Added a dedicated Rust SDK publish workflow with tag/version guard, CI tests, workflow_dispatch dry-run, and crates.io OIDC auth action.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  }
+}
