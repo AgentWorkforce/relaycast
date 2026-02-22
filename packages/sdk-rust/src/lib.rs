@@ -77,7 +77,7 @@ pub use agent::AgentClient;
 pub use client::{ClientOptions, HttpClient, RequestOptions};
 pub use error::{RelayError, Result};
 pub use relay::{RelayCast, RelayCastOptions};
-pub use ws::{EventReceiver, WsClient, WsClientOptions};
+pub use ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions, WsLifecycleEvent};
 
 // Re-export commonly used types
 pub use types::{
@@ -116,6 +116,7 @@ pub use types::{
     // Workspace
     CreateWorkspaceResponse,
     DmConversationSummary,
+    DmSendResponse,
     DmReceivedEvent,
     EventSubscription,
     // Files
@@ -123,6 +124,10 @@ pub use types::{
     FileListOptions,
     FileUploadedEvent,
     GroupDmReceivedEvent,
+    GroupDmConversationResponse,
+    GroupDmMessageResponse,
+    GroupDmParticipantRef,
+    GroupDmParticipantResponse,
     // Inbox
     InboxResponse,
     InvokeCommandRequest,

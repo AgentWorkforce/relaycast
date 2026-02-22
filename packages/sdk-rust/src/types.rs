@@ -381,9 +381,112 @@ pub struct DmConversationSummary {
     #[serde(rename = "type")]
     pub dm_type: String,
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_dm_participants")]
     pub participants: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_dm_last_message")]
     pub last_message: Option<String>,
     pub unread_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DmSendResponse {
+    pub id: String,
+    pub conversation_id: String,
+    pub from_agent_id: String,
+    pub to: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupDmParticipantRef {
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupDmConversationResponse {
+    pub id: String,
+    pub channel_id: String,
+    pub dm_type: String,
+    pub name: Option<String>,
+    pub participants: Vec<GroupDmParticipantRef>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupDmMessageResponse {
+    pub id: String,
+    pub conversation_id: String,
+    pub agent_id: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupDmParticipantResponse {
+    pub conversation_id: String,
+    pub agent: String,
+    pub already_member: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum DmParticipantValue {
+    Name(String),
+    Object {
+        agent_name: Option<String>,
+        agent_id: Option<String>,
+    },
+}
+
+fn deserialize_dm_participants<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<DmParticipantValue>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|item| match item {
+            DmParticipantValue::Name(name) if !name.is_empty() => Some(name),
+            DmParticipantValue::Object {
+                agent_name: Some(name),
+                ..
+            } if !name.is_empty() => Some(name),
+            DmParticipantValue::Object {
+                agent_id: Some(id), ..
+            } if !id.is_empty() => Some(id),
+            _ => None,
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum DmLastMessageValue {
+    Text(String),
+    Object {
+        text: Option<String>,
+        body: Option<String>,
+    },
+}
+
+fn deserialize_dm_last_message<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<DmLastMessageValue>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(DmLastMessageValue::Text(text)) if !text.is_empty() => Some(text),
+        Some(DmLastMessageValue::Object { text: Some(text), .. }) if !text.is_empty() => {
+            Some(text)
+        }
+        Some(DmLastMessageValue::Object { body: Some(body), .. }) if !body.is_empty() => {
+            Some(body)
+        }
+        _ => None,
+    })
 }
 
 // === Search ===

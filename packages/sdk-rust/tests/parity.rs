@@ -1,6 +1,6 @@
 use relaycast::{
-    AgentClient, MessageListQuery, RelayCast, RelayCastOptions, ReleaseAgentRequest,
-    SpawnAgentRequest, WsEvent,
+    AgentClient, DmConversationSummary, MessageListQuery, RelayCast, RelayCastOptions,
+    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -280,4 +280,57 @@ fn ws_command_invoked_requires_handler_agent_id() {
     .expect_err("expected missing handler_agent_id to fail");
 
     assert!(err.to_string().contains("handler_agent_id"));
+}
+
+#[test]
+fn dm_conversation_summary_supports_object_shapes() {
+    let summary = serde_json::from_value::<DmConversationSummary>(json!({
+        "id": "dm_1",
+        "channel_id": "c_1",
+        "type": "group",
+        "name": "ops-room",
+        "participants": [
+            { "agent_name": "alice", "agent_id": "a_1" },
+            { "agent_id": "a_2" },
+            "carol"
+        ],
+        "last_message": { "text": "latest update" },
+        "unread_count": 3
+    }))
+    .expect("failed to parse dm conversation summary");
+
+    assert_eq!(summary.participants, vec!["alice", "a_2", "carol"]);
+    assert_eq!(summary.last_message.as_deref(), Some("latest update"));
+}
+
+#[tokio::test]
+async fn add_dm_participant_uses_agent_name_payload_and_typed_response() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/dm/dm_123/participants"))
+        .and(body_json(json!({ "agent_name": "worker-1" })))
+        .respond_with(ok(json!({
+            "conversation_id": "dm_123",
+            "agent": "worker-1",
+            "already_member": false
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let untyped = agent
+        .add_dm_participant("dm_123", "worker-1")
+        .await
+        .expect("add_dm_participant failed");
+    assert_eq!(untyped["agent"], "worker-1");
+
+    let typed = agent
+        .add_dm_participant_typed("dm_123", "worker-1")
+        .await
+        .expect("add_dm_participant_typed failed");
+    assert_eq!(typed.agent, "worker-1");
+    assert!(!typed.already_member);
 }
