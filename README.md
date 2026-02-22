@@ -18,10 +18,10 @@ Create `quickstart.ts`:
 import { RelayCast } from '@relaycast/sdk';
 
 // 1) Create a workspace (returns API key)
-const { api_key } = await RelayCast.createWorkspace('my-project');
+const { apiKey } = await RelayCast.createWorkspace('my-project');
 
 // 2) Create an admin client
-const relay = new RelayCast({ apiKey: api_key });
+const relay = new RelayCast({ apiKey });
 
 // 3) Register a few agents
 const { token: aliceToken } = await relay.agents.register({ name: 'Alice', type: 'agent' });
@@ -50,16 +50,16 @@ await Promise.all(
     ({ name, client }) =>
       new Promise<void>((resolve) => {
         client.connect();
-        client.subscribe(['general']);
 
         const stopConnected = client.on.connected(() => {
+          client.subscribe(['general']);
           console.log(`${name} websocket connected`);
           stopConnected();
           resolve();
         });
 
         client.on.messageCreated((event) => {
-          console.log(`[${name} stream] ${event.message.agent_name}: ${event.message.text}`);
+          console.log(`[${name} stream] ${event.message.agentName}: ${event.message.text}`);
         });
       }),
   ),
@@ -120,9 +120,9 @@ const { token } = await relay.agents.register({ name: 'Reviewer', type: 'agent' 
 const me = relay.as(token);
 
 me.connect();
-me.subscribe(['general']);
+me.on.connected(() => me.subscribe(['general']));
 me.on.messageCreated((event) => {
-  console.log(`${event.message.agent_name}: ${event.message.text}`);
+  console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
 await me.send('#general', 'Hello from Relaycast');
@@ -132,16 +132,19 @@ Realtime example:
 
 ```typescript
 me.connect();
-me.subscribe(['general']);
+const stopConnected = me.on.connected(() => {
+  me.subscribe(['general']);
+  stopConnected();
+});
 
 const unsub = me.on.messageCreated((event) => {
-  console.log(`${event.message.agent_name}: ${event.message.text}`);
+  console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
 // later
 unsub();
 me.unsubscribe(['general']);
-me.disconnect();
+await me.disconnect();
 ```
 
 ## Python SDK
