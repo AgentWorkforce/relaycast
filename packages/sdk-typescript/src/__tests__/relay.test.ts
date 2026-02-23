@@ -6,8 +6,9 @@ vi.stubGlobal('fetch', mockFetch);
 
 function mockResponse(data: unknown, apiOk = true, status = 200) {
   return Promise.resolve({
-    ok: true,
+    ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(),
     json: () => Promise.resolve(apiOk ? { ok: true, data } : { ok: false, error: data }),
   });
 }
@@ -182,10 +183,19 @@ describe('RelayCast', () => {
       });
     });
 
-    it('retries on 5xx with exponential backoff (200ms, 400ms, 800ms)', async () => {
+    it('retries on configured 5xx policy with deterministic backoff', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 3,
+          backoffMs: 200,
+          backoffMultiplier: 2,
+          jitter: false,
+          retryOn: [500, 502, 503],
+        },
+      });
 
       mockFetch
         .mockImplementationOnce(() => mockResponse({ code: 'e', message: 'x' }, false, 500))
@@ -202,6 +212,70 @@ describe('RelayCast', () => {
 
       await expect(promise).resolves.toEqual({ id: 'ws_1' });
       expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it('uses Retry-After for 429 responses', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 1,
+          backoffMs: 25,
+          backoffMultiplier: 1,
+          jitter: false,
+          retryOn: [429],
+        },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          Promise.resolve({
+            ok: false,
+            status: 429,
+            headers: new Headers({ 'Retry-After': '2' }),
+            json: () =>
+              Promise.resolve({
+                ok: false,
+                error: { code: 'rate_limited', message: 'slow down' },
+              }),
+          }),
+        )
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts retry policy overrides via RelayCast constructor options', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 1,
+          backoffMs: 10,
+          backoffMultiplier: 1,
+          jitter: false,
+          retryOn: [418],
+        },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() => mockResponse({ code: 'teapot', message: 'brew' }, false, 418))
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -410,7 +484,7 @@ describe('RelayCast', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ code: 'internal_error', message: 'boom' }, false, 500),
+        mockResponse({ code: 'internal_error', message: 'boom' }, false, 400),
       );
 
       await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);

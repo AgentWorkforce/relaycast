@@ -6,6 +6,7 @@ import type {
   ThreadReplyRequest,
   SendDmRequest,
   CreateGroupDmRequest,
+  DmConversation,
   DmConversationSummary,
   CreateChannelRequest,
   UpdateChannelRequest,
@@ -19,7 +20,8 @@ import type {
   UploadResponse,
   FileInfo,
   InvokeCommandRequest,
-  CommandInvocation,
+  CommandInvokeResult,
+  SearchResult,
   WsClientEvent,
   MessageCreatedEvent,
   MessageUpdatedEvent,
@@ -61,9 +63,22 @@ interface FileListOptions {
   limit?: number;
 }
 
-function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions | undefined {
-  if (!opts?.idempotencyKey) return undefined;
-  return { headers: { 'Idempotency-Key': opts.idempotencyKey } };
+function generateIdempotencyKey(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (typeof randomUuid === 'string' && randomUuid.length > 0) {
+    return randomUuid;
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
+
+function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions {
+  const key = opts?.idempotencyKey?.trim() || generateIdempotencyKey();
+  return {
+    headers: {
+      'Idempotency-Key': key,
+      'X-Idempotency-Key': key,
+    },
+  };
 }
 
 export class AgentClient {
@@ -231,7 +246,7 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<unknown> {
+  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<MessageWithMeta> {
     const body: SendDmRequest = { to: agent, text };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -254,14 +269,17 @@ export class AgentClient {
       );
     },
 
-    createGroup: (opts: CreateGroupDmRequest): Promise<unknown> =>
-      this.client.post('/v1/dm/group', opts),
+    createGroup: (
+      opts: CreateGroupDmRequest,
+      idempotency?: IdempotencyOption,
+    ): Promise<DmConversation> =>
+      this.client.post('/v1/dm/group', opts, idempotencyHeaders(idempotency)),
 
     sendMessage: (
       conversationId: string,
       text: string,
       opts?: IdempotencyOption,
-    ): Promise<unknown> =>
+    ): Promise<MessageWithMeta> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         { text },
@@ -359,7 +377,7 @@ export class AgentClient {
       before?: string;
       after?: string;
     },
-  ): Promise<unknown[]> {
+  ): Promise<SearchResult[]> {
     const params: Record<string, string> = { q: query };
     if (opts?.channel) params.channel = opts.channel;
     if (opts?.from) params.from = opts.from;
@@ -402,7 +420,7 @@ export class AgentClient {
     invoke: (
       command: string,
       data: InvokeCommandRequest,
-    ): Promise<CommandInvocation> =>
+    ): Promise<CommandInvokeResult> =>
       this.client.post(
         `/v1/commands/${encodeURIComponent(command)}/invoke`,
         data,

@@ -36,7 +36,7 @@ import type {
 } from './types.js';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
 import { AgentClient } from './agent.js';
-import { HttpClient, RelayError } from './client.js';
+import { HttpClient, RelayError, type RetryPolicyInput } from './client.js';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN } from './origin.js';
 import { camelizeKeys } from './casing.js';
@@ -44,6 +44,7 @@ import { camelizeKeys } from './casing.js';
 export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
+  retryPolicy?: RetryPolicyInput;
 }
 
 export interface WorkspaceStreamConfig {
