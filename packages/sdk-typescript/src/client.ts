@@ -3,6 +3,7 @@ import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
+import { RelayError, relayErrorFromApi } from './errors.js';
 
 export interface ClientOptions {
   apiKey: string;
@@ -38,17 +39,7 @@ export function withInternalOrigin<T extends ClientOptions>(
   return copy as T;
 }
 
-export class RelayError extends Error {
-  code: string;
-  status: number;
-
-  constructor(code: string, message: string, status: number) {
-    super(message);
-    this.name = 'RelayError';
-    this.code = code;
-    this.status = status;
-  }
-}
+export { RelayError } from './errors.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,11 +136,26 @@ export class HttpClient {
     let attempt = 0;
 
     while (true) {
-      const res = await fetch(url.toString(), {
-        method,
-        headers,
-        body: hasBody ? JSON.stringify(wireBody) : undefined,
-      });
+      let res: Response;
+      try {
+        res = await fetch(url.toString(), {
+          method,
+          headers,
+          body: hasBody ? JSON.stringify(wireBody) : undefined,
+        });
+      } catch (err) {
+        if (attempt < retryBackoffsMs.length) {
+          const backoff = retryBackoffsMs[attempt]!;
+          attempt += 1;
+          await sleep(backoff);
+          continue;
+        }
+        throw new RelayError(
+          'transport_error',
+          `Network request failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+          { retryable: true, cause: err },
+        );
+      }
 
       // Retry on 5xx with exponential backoff.
       if (res.status >= 500 && res.status <= 599 && attempt < retryBackoffsMs.length) {
@@ -164,18 +170,30 @@ export class HttpClient {
         return undefined as Camelize<T>;
       }
 
-      const json: unknown = await res.json();
+      let json: unknown;
+      try {
+        json = await res.json();
+      } catch (err) {
+        throw new RelayError(
+          'transport_error',
+          `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
+          { statusCode: res.status, retryable: false, cause: err },
+        );
+      }
       const envelope = apiEnvelopeSchema.safeParse(json);
 
       if (!envelope.success) {
-        throw new RelayError('invalid_response', 'Invalid API response', res.status);
+        throw new RelayError('transport_error', 'Invalid API response', {
+          statusCode: res.status,
+          retryable: false,
+        });
       }
 
       if (!envelope.data.ok) {
         const errParsed = ApiErrorSchema.safeParse(json);
         const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
         const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
-        throw new RelayError(code, message, res.status);
+        throw relayErrorFromApi(code, message, res.status);
       }
 
       const data = envelope.data.data;

@@ -172,13 +172,15 @@ describe('RelayCast', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ code: 'bad_request', message: 'Nope' }, false, 400),
+        mockResponse({ code: 'unauthorized', message: 'Nope' }, false, 401),
       );
 
       await expect(relay.workspace.info()).rejects.toBeInstanceOf(RelayError);
       await expect(relay.workspace.info()).rejects.toMatchObject({
-        code: 'bad_request',
-        status: 400,
+        code: 'unauthorized',
+        retryable: false,
+        statusCode: 401,
+        status: 401,
       });
     });
 
@@ -414,6 +416,64 @@ describe('RelayCast', () => {
       );
 
       await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+    });
+  });
+
+  describe('agents strict identity', () => {
+    it('registerAgent({ strict: true }) registers without suffix fallback', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' }),
+      );
+
+      const result = await relay.agents.registerAgent({ name: 'Bot', strict: true });
+      expect(result).toMatchObject({ id: 'a_1', name: 'Bot', token: 'at_live_new' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(init.body).toBe(JSON.stringify({ name: 'Bot' }));
+    });
+
+    it('registerAgent({ strict: true }) throws name_conflict on collision', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
+
+      await expect(relay.agents.registerAgent({ name: 'Bot', strict: true })).rejects.toMatchObject({
+        code: 'name_conflict',
+        retryable: false,
+        statusCode: 409,
+      });
+    });
+
+    it('resolveIdentity() returns { agentId, name, workspaceId } after register/rotate', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          mockResponse({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' }),
+        )
+        .mockImplementationOnce(() =>
+          mockResponse({ id: 'ws_1', name: 'Workspace', metadata: {}, created_at: '2024-01-01' }),
+        );
+
+      await relay.agents.registerOrRotate({ name: 'Bot' });
+      const identity = await relay.agents.resolveIdentity();
+
+      expect(identity).toEqual({
+        agentId: 'a_1',
+        name: 'Bot',
+        workspaceId: 'ws_1',
+      });
+
+      const [workspaceUrl] = mockFetch.mock.calls[1]!;
+      expect(workspaceUrl).toBe('https://api.relaycast.dev/v1/workspace');
     });
   });
 
