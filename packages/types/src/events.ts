@@ -206,6 +206,12 @@ export const WsReconnectingEventSchema = z.object({
 });
 export type WsReconnectingEvent = z.infer<typeof WsReconnectingEventSchema>;
 
+export const WsPermanentlyDisconnectedEventSchema = z.object({
+  type: z.literal('permanently_disconnected'),
+  attempt: z.number(),
+});
+export type WsPermanentlyDisconnectedEvent = z.infer<typeof WsPermanentlyDisconnectedEventSchema>;
+
 export const WsCloseEventSchema = z.object({
   type: z.literal('close'),
 });
@@ -267,6 +273,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   WsOpenEventSchema,
   WsErrorEventSchema,
   WsReconnectingEventSchema,
+  WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;

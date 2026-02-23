@@ -35,7 +35,7 @@ import type {
   ReleaseAgentResponse,
 } from './types.js';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
-import { AgentClient } from './agent.js';
+import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 import {
@@ -373,8 +373,8 @@ export class RelayCast {
     return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
   };
 
-  as(agentToken: string): AgentClient {
+  as(agentToken: string, options?: AgentClientOptions): AgentClient {
     const agentHttpClient = this.client.withApiKey(agentToken);
-    return new AgentClient(agentHttpClient);
+    return new AgentClient(agentHttpClient, options);
   }
 }
