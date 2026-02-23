@@ -42,9 +42,10 @@ import type {
   WebhookReceivedEvent,
   CommandInvokedEvent,
   WsReconnectingEvent,
+  WsPermanentlyDisconnectedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
-import { WsClient, withInternalWsOrigin } from './ws.js';
+import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -61,6 +62,14 @@ interface ChannelListOptions {
 interface FileListOptions {
   uploadedBy?: string;
   limit?: number;
+}
+
+function normalizeAutoHeartbeatMs(value?: number | false): number | false {
+  if (value === false) return false;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return 30_000;
 }
 
 function generateIdempotencyKey(): string {
@@ -81,12 +90,55 @@ function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions {
   };
 }
 
+export interface AgentClientOptions {
+  autoHeartbeatMs?: number | false;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+}
+
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
+  private autoHeartbeatMs: number | false;
+  private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 
-  constructor(client: HttpClient) {
+  constructor(client: HttpClient, options: AgentClientOptions = {}) {
     this.client = client;
+    this.autoHeartbeatMs = normalizeAutoHeartbeatMs(options.autoHeartbeatMs);
+    this.wsOptions = options.ws ?? {};
+  }
+
+  /**
+   * Presence lifecycle ownership:
+   * - worker identities should call `markOnline`/`heartbeat`/`markOffline`.
+   * - broker identities should signal presence only when they directly own worker lifecycle.
+   * - reader identities should not publish presence.
+   */
+  presence = {
+    markOnline: async (): Promise<void> => {
+      await this.client.post('/v1/agents/heartbeat', {});
+    },
+    heartbeat: async (): Promise<void> => {
+      await this.client.post('/v1/agents/heartbeat', {});
+    },
+    markOffline: async (): Promise<void> => {
+      await this.client.post('/v1/agents/disconnect', {});
+    },
+  };
+
+  private startAutoHeartbeat(): void {
+    this.stopAutoHeartbeat();
+    if (this.autoHeartbeatMs === false) return;
+    this.autoHeartbeatTimer = setInterval(() => {
+      void this.presence.heartbeat().catch(() => {});
+    }, this.autoHeartbeatMs);
+  }
+
+  private stopAutoHeartbeat(): void {
+    if (this.autoHeartbeatTimer) {
+      clearInterval(this.autoHeartbeatTimer);
+      this.autoHeartbeatTimer = null;
+    }
   }
 
   // === WebSocket ===
@@ -97,6 +149,7 @@ export class AgentClient {
       {
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
+        ...this.wsOptions,
       },
       {
         surface: this.client.originSurface,
@@ -104,19 +157,30 @@ export class AgentClient {
         version: this.client.originVersion,
       },
     ));
+    this.ws.on('open', () => {
+      void this.presence.markOnline().catch(() => {});
+      this.startAutoHeartbeat();
+    });
+    this.ws.on('close', () => {
+      this.stopAutoHeartbeat();
+    });
+    this.ws.on('permanently_disconnected', () => {
+      this.stopAutoHeartbeat();
+    });
     this.ws.connect();
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
   async heartbeat(): Promise<void> {
-    await this.client.post('/v1/agents/heartbeat', {});
+    await this.presence.heartbeat();
   }
 
   async disconnect(): Promise<void> {
+    this.stopAutoHeartbeat();
     if (this.ws) {
       // Notify the server before closing the WebSocket so presence
       // updates immediately (works around local DO hibernation issues).
-      await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
+      await this.presence.markOffline().catch(() => {});
       this.ws.disconnect();
       this.ws = null;
     }
@@ -165,6 +229,13 @@ export class AgentClient {
         throw new Error('WebSocket not connected. Call connect() first.');
       }
       return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
+    },
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
+      if (!this.ws) {
+        throw new Error('WebSocket not connected. Call connect() first.');
+      }
+      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt));
     },
     // Wildcard
     any: (handler: (e: WsClientEvent) => void): (() => void) => {
