@@ -73,4 +73,5 @@ export type WsClientEvent = Camelize<Raw.WsClientEvent>;
 export type WsCloseEvent = Camelize<Raw.WsCloseEvent>;
 export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;
 export type WsOpenEvent = Camelize<Raw.WsOpenEvent>;
+export type WsPermanentlyDisconnectedEvent = Camelize<Raw.WsPermanentlyDisconnectedEvent>;
 export type WsReconnectingEvent = Camelize<Raw.WsReconnectingEvent>;
