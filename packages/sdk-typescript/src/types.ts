@@ -69,6 +69,7 @@ export type WebhookTriggerRequest = Camelize<Raw.WebhookTriggerRequest>;
 export type WebhookTriggerResponse = Camelize<Raw.WebhookTriggerResponse>;
 export type Workspace = Camelize<Raw.Workspace>;
 export type WorkspaceDmConversation = Camelize<Raw.WorkspaceDmConversation>;
+export type WorkspaceDmMessage = Camelize<Raw.WorkspaceDmMessage>;
 export type WsClientEvent = Camelize<Raw.WsClientEvent>;
 export type WsCloseEvent = Camelize<Raw.WsCloseEvent>;
 export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;
