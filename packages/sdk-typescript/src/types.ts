@@ -79,6 +79,7 @@ export interface SearchResult {
   createdAt: string;
   relevanceScore: number;
 }
+export type WorkspaceDmMessage = Camelize<Raw.WorkspaceDmMessage>;
 export type WsClientEvent = Camelize<Raw.WsClientEvent>;
 export type WsCloseEvent = Camelize<Raw.WsCloseEvent>;
 export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;

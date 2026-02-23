@@ -67,6 +67,15 @@ export const WorkspaceDmConversationSchema = z.object({
 });
 export type WorkspaceDmConversation = z.infer<typeof WorkspaceDmConversationSchema>;
 
+export const WorkspaceDmMessageSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type WorkspaceDmMessage = z.infer<typeof WorkspaceDmMessageSchema>;
+
 export const TokenRotateResponseSchema = z.object({
   name: z.string(),
   token: z.string(),

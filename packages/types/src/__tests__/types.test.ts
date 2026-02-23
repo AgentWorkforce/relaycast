@@ -1,6 +1,8 @@
 import { describe, it, expectTypeOf } from 'vitest';
 import type {
   Workspace,
+  WorkspaceDmConversation,
+  WorkspaceDmMessage,
   CreateWorkspaceRequest,
   CreateWorkspaceResponse,
   UpdateWorkspaceRequest,
@@ -66,6 +68,13 @@ describe('Type definitions', () => {
     expectTypeOf<'free'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'pro'>().toMatchTypeOf<Workspace['plan']>();
     expectTypeOf<'enterprise'>().toMatchTypeOf<Workspace['plan']>();
+  });
+
+  it('Workspace DM helper types expose expected fields', () => {
+    expectTypeOf<WorkspaceDmConversation>().toHaveProperty('participants');
+    expectTypeOf<WorkspaceDmConversation>().toHaveProperty('message_count');
+    expectTypeOf<WorkspaceDmMessage>().toHaveProperty('agent_name');
+    expectTypeOf<WorkspaceDmMessage>().toHaveProperty('created_at');
   });
 
   it('CreateWorkspaceRequest has name', () => {
