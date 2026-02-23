@@ -67,7 +67,22 @@ describe('AgentClient', () => {
       await me.send('#general', 'hello', { idempotencyKey: 'msg-key-1' });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('msg-key-1');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Idempotency-Key']).toBe('msg-key-1');
+      expect(headers['X-Idempotency-Key']).toBe('msg-key-1');
+    });
+
+    it('auto-generates idempotency headers when key is not provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello');
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      const headers = init.headers as Record<string, string>;
+      const generated = headers['Idempotency-Key'];
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+      expect(headers['X-Idempotency-Key']).toBe(generated);
     });
   });
 
@@ -134,7 +149,22 @@ describe('AgentClient', () => {
       await me.reply('m_1', 'reply', { idempotencyKey: 'reply-key-1' });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('reply-key-1');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Idempotency-Key']).toBe('reply-key-1');
+      expect(headers['X-Idempotency-Key']).toBe('reply-key-1');
+    });
+
+    it('auto-generates idempotency headers when key is not provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.reply('m_1', 'reply');
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      const headers = init.headers as Record<string, string>;
+      const generated = headers['Idempotency-Key'];
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+      expect(headers['X-Idempotency-Key']).toBe(generated);
     });
   });
 
@@ -179,7 +209,22 @@ describe('AgentClient', () => {
       await me.dm('Worker-1', 'hi', { idempotencyKey: 'dm-key-1' });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('dm-key-1');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Idempotency-Key']).toBe('dm-key-1');
+      expect(headers['X-Idempotency-Key']).toBe('dm-key-1');
+    });
+
+    it('auto-generates idempotency headers when key is not provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi');
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      const headers = init.headers as Record<string, string>;
+      const generated = headers['Idempotency-Key'];
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+      expect(headers['X-Idempotency-Key']).toBe(generated);
     });
   });
 
@@ -224,6 +269,22 @@ describe('AgentClient', () => {
       expect(url).toBe('https://api.relaycast.dev/v1/dm/group');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ participants: ['a', 'b'] }));
+      const headers = init.headers as Record<string, string>;
+      const generated = headers['Idempotency-Key'];
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+      expect(headers['X-Idempotency-Key']).toBe(generated);
+    });
+
+    it('createGroup() forwards Idempotency-Key when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'c_2' }));
+
+      await me.dms.createGroup({ participants: ['a', 'b'] } as any, { idempotencyKey: 'group-key-1' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Idempotency-Key']).toBe('group-key-1');
+      expect(headers['X-Idempotency-Key']).toBe('group-key-1');
     });
 
     it('sendMessage() sends to conversation', async () => {
@@ -235,6 +296,11 @@ describe('AgentClient', () => {
       expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
+      const headers = init.headers as Record<string, string>;
+      const generated = headers['Idempotency-Key'];
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+      expect(headers['X-Idempotency-Key']).toBe(generated);
     });
 
     it('sendMessage() forwards Idempotency-Key when provided', async () => {
@@ -243,7 +309,9 @@ describe('AgentClient', () => {
       await me.dms.sendMessage('c_1', 'hello', { idempotencyKey: 'gdm-key-1' });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('gdm-key-1');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Idempotency-Key']).toBe('gdm-key-1');
+      expect(headers['X-Idempotency-Key']).toBe('gdm-key-1');
     });
 
     it('addParticipant() adds agent', async () => {

@@ -8,12 +8,25 @@ import { RelayError, relayErrorFromApi } from './errors.js';
 export interface ClientOptions {
   apiKey: string;
   baseUrl?: string;
+  retryPolicy?: RetryPolicyInput;
 }
 
 export interface RequestOptions {
   headers?: Record<string, string>;
   schema?: z.ZodType;
 }
+
+export interface RetryPolicy {
+  maxRetries: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  jitter: boolean;
+  retryOn: number[];
+}
+
+export type RetryPolicyInput = Partial<Omit<RetryPolicy, 'retryOn'>> & {
+  retryOn?: number[];
+};
 
 const INTERNAL_ORIGIN = Symbol('relaycast.internal.origin');
 
@@ -45,6 +58,49 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const DEFAULT_RETRY_POLICY: RetryPolicy = {
+  maxRetries: 3,
+  backoffMs: 1000,
+  backoffMultiplier: 2,
+  jitter: true,
+  retryOn: [429, 500, 502, 503, 504],
+};
+
+function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
+  return {
+    maxRetries: Number.isFinite(input?.maxRetries) ? Math.max(0, Math.floor(input!.maxRetries!)) : DEFAULT_RETRY_POLICY.maxRetries,
+    backoffMs: Number.isFinite(input?.backoffMs) ? Math.max(0, Math.floor(input!.backoffMs!)) : DEFAULT_RETRY_POLICY.backoffMs,
+    backoffMultiplier: Number.isFinite(input?.backoffMultiplier)
+      ? Math.max(1, input!.backoffMultiplier!)
+      : DEFAULT_RETRY_POLICY.backoffMultiplier,
+    jitter: typeof input?.jitter === 'boolean' ? input.jitter : DEFAULT_RETRY_POLICY.jitter,
+    retryOn: Array.isArray(input?.retryOn) && input.retryOn.length > 0
+      ? input.retryOn.filter((status): status is number => Number.isInteger(status) && status >= 100)
+      : [...DEFAULT_RETRY_POLICY.retryOn],
+  };
+}
+
+function computeBackoffMs(policy: RetryPolicy, retryAttempt: number): number {
+  const exponential = policy.backoffMs * (policy.backoffMultiplier ** retryAttempt);
+  if (!policy.jitter) return Math.max(0, Math.round(exponential));
+  const jitterFactor = 0.5 + Math.random();
+  return Math.max(0, Math.round(exponential * jitterFactor));
+}
+
+function parseRetryAfterMs(res: Response): number | null {
+  const header = res.headers.get('Retry-After');
+  if (!header) return null;
+
+  const asSeconds = Number(header);
+  if (Number.isFinite(asSeconds)) {
+    return Math.max(0, Math.round(asSeconds * 1000));
+  }
+
+  const asDate = Date.parse(header);
+  if (Number.isNaN(asDate)) return null;
+  return Math.max(0, asDate - Date.now());
+}
+
 const apiEnvelopeSchema = z.object({
   ok: z.boolean(),
   data: z.unknown().optional(),
@@ -64,6 +120,7 @@ export class HttpClient {
   private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
+  private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
@@ -72,6 +129,7 @@ export class HttpClient {
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
+    this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
   get apiKey(): string {
@@ -94,9 +152,13 @@ export class HttpClient {
     return this._originVersion;
   }
 
+  get retryPolicy(): RetryPolicy {
+    return this._retryPolicy;
+  }
+
   withApiKey(apiKey: string): HttpClient {
     return new HttpClient(withInternalOrigin(
-      { apiKey, baseUrl: this._baseUrl },
+      { apiKey, baseUrl: this._baseUrl, retryPolicy: this._retryPolicy },
       {
         surface: this._originSurface,
         client: this._originClient,
@@ -132,7 +194,6 @@ export class HttpClient {
     if (hasBody) headers['Content-Type'] = 'application/json';
     const wireBody = hasBody ? decamelizeKeys(body) : undefined;
 
-    const retryBackoffsMs = [200, 400, 800];
     let attempt = 0;
 
     while (true) {
@@ -144,10 +205,10 @@ export class HttpClient {
           body: hasBody ? JSON.stringify(wireBody) : undefined,
         });
       } catch (err) {
-        if (attempt < retryBackoffsMs.length) {
-          const backoff = retryBackoffsMs[attempt]!;
+        if (attempt < this._retryPolicy.maxRetries) {
+          const waitMs = computeBackoffMs(this._retryPolicy, attempt);
           attempt += 1;
-          await sleep(backoff);
+          await sleep(waitMs);
           continue;
         }
         throw new RelayError(
@@ -157,11 +218,12 @@ export class HttpClient {
         );
       }
 
-      // Retry on 5xx with exponential backoff.
-      if (res.status >= 500 && res.status <= 599 && attempt < retryBackoffsMs.length) {
-        const backoff = retryBackoffsMs[attempt]!;
+      if (this._retryPolicy.retryOn.includes(res.status) && attempt < this._retryPolicy.maxRetries) {
+        const waitMs = res.status === 429
+          ? parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt)
+          : computeBackoffMs(this._retryPolicy, attempt);
         attempt += 1;
-        await sleep(backoff);
+        await sleep(waitMs);
         continue;
       }
 
