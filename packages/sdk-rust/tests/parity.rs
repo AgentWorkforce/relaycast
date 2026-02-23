@@ -6,6 +6,14 @@ use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[test]
+fn local_options_builder_sets_expected_defaults() {
+    let options = RelayCastOptions::local("rk_live_local");
+    assert!(options.local);
+    assert_eq!(options.api_key, "rk_live_local");
+    assert_eq!(options.base_url.as_deref(), Some("http://127.0.0.1:7528"));
+}
+
 fn ok(data: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
 }

@@ -23,6 +23,17 @@ msgs = me.messages("#general", limit=20)
 inbox = me.inbox()
 ```
 
+Local mode:
+
+By default, this SDK talks to hosted Relaycast.
+Use `local=True` when you want traffic and state to stay on your machine while keeping the same API shape for most workflows.
+
+```python
+from relay_sdk import Relay
+
+relay = Relay(api_key="rk_live_...", local=True)
+```
+
 ## Async
 
 ```python

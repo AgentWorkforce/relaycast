@@ -6,20 +6,26 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e -- http://localhost:8787          # interactive — pauses after workspace creation
- *   npm run e2e -- http://localhost:8787 --ci     # auto mode — no pauses, for CI
+ *   npm run e2e                                   # defaults to npm run dev server (http://localhost:8787)
+ *   npm run e2e -- --local                        # SDK local mode (http://127.0.0.1:7528)
+ *   npm run e2e -- --local --ci                   # SDK local mode in CI
+ *   npm run e2e -- --local http://127.0.0.1:7529 # SDK local mode with custom port
+ *   npm run e2e -- --continue-on-failure          # keep running after step failures
  *   npm run e2e -- https://relaycast.dev --ci
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient } from '../packages/sdk-typescript/src/index.js';
+import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
-const BASE_URL = (args[0] ?? 'http://localhost:8787').replace(/\/+$/, '');
+const LOCAL = flags.has('--local');
+const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
+const DEFAULT_BASE_URL = LOCAL ? 'http://127.0.0.1:7528' : 'http://localhost:8787';
+const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
 function isLocalHost(host: string): boolean {
@@ -148,7 +154,9 @@ ${B}${CYAN}╔══════════════════════
 ╚══════════════════════════════════════════════╝${R}
 `);
   log('🌐', `Server: ${B}${BASE_URL}${R}`);
+  log('🏁', `Target: ${B}${LOCAL ? 'SDK local mode' : 'HTTP base URL mode'}${R}`);
   log('⚙️ ', `Mode:   ${B}${CI ? 'CI (auto)' : 'Interactive'}${R}`);
+  log('🧭', `Flow:   ${B}${CONTINUE_ON_FAILURE ? 'Continue on failure' : 'Fail fast (default)'}${R}`);
 
   let workspaceKey = '';
   let relay!: RelayCast;
@@ -168,6 +176,9 @@ ${B}${CYAN}╔══════════════════════
       const msg = err instanceof Error ? err.message : String(err);
       log('❌', `${RED}${name}: ${msg}${R}`);
       failed.push(name);
+      if (!CONTINUE_ON_FAILURE) {
+        throw new Error(`${name} failed: ${msg}`);
+      }
     }
   }
 
@@ -213,10 +224,30 @@ ${B}${CYAN}╔══════════════════════
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
+    if (LOCAL) {
+      const host = new URL(BASE_URL).hostname.toLowerCase();
+      if (!isLocalHost(host)) {
+        throw new Error(`--local requires a local base URL, got: ${BASE_URL}`);
+      }
+    }
+
     const wsName = `e2e-${Date.now()}`;
-    const res = await RelayCast.createWorkspace(wsName, BASE_URL);
+    const res = LOCAL
+      ? await RelayCast.createWorkspace(wsName, {
+        local: true,
+        baseUrl: BASE_URL,
+      })
+      : await RelayCast.createWorkspace(wsName, BASE_URL);
     workspaceKey = res.apiKey;
-    relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
+    relay = LOCAL
+      ? new RelayCast({
+        apiKey: workspaceKey,
+        connection: {
+          local: true,
+          baseUrl: BASE_URL,
+        },
+      })
+      : new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);
   });
 
@@ -332,6 +363,15 @@ ${B}${CYAN}╔══════════════════════
   // ── 5. Hello world in #general ─────────────────────────────────────
   step('Post to #general');
   await run(`${LEAD} says hello in #general`, async () => {
+    try {
+      await lead.channels.create({ name: 'general', topic: 'General discussion' });
+      log('📢', `Channel ${B}#general${R} created by ${LEAD}`);
+    } catch (err) {
+      if (!(err instanceof RelayError) || err.code !== 'channel_already_exists') {
+        throw err;
+      }
+    }
+
     await lead.channels.join('general');
     await infra.channels.join('general');
     await backend.channels.join('general');

@@ -18,6 +18,11 @@ describe('RelayCast', () => {
     vi.useRealTimers();
   });
 
+  it('requires apiKey when local mode is not enabled', async () => {
+    const { RelayCast } = await import('../relay.js');
+    expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
+  });
+
   describe('workspace', () => {
     it('info() calls GET /v1/workspace', async () => {
       const { RelayCast } = await import('../relay.js');
@@ -348,6 +353,27 @@ describe('RelayCast', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe('http://localhost:3000/v1/workspaces');
+    });
+
+    it('uses connection object baseUrl', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('Test', { baseUrl: 'http://localhost:3001' });
+
+      const [url] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('http://localhost:3001/v1/workspaces');
     });
 
     it('throws RelayError on failure', async () => {

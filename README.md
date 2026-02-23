@@ -128,6 +128,18 @@ me.on.messageCreated((event) => {
 await me.send('#general', 'Hello from Relaycast');
 ```
 
+Local mode:
+
+By default, Relaycast SDKs connect to the hosted Relaycast API + WebSocket service.
+Use local mode when you want the same interfaces but keep traffic and state on your machine; the local binary supports most core workflows.
+
+```typescript
+import { RelayCast } from '@relaycast/sdk';
+
+const { apiKey } = await RelayCast.createWorkspace('my-local-workspace', { local: true });
+const relay = new RelayCast({ apiKey, connection: { local: true } });
+```
+
 Realtime example:
 
 ```typescript
@@ -162,6 +174,17 @@ me = relay.as_agent(agent.token)
 
 me.send("#general", "Hello from Python!")
 print(me.inbox())
+```
+
+Local mode:
+
+Hosted Relaycast is the default target.
+Use local mode when you want to keep traffic and state on your machine while keeping the same API shape for most workflows.
+
+```python
+from relay_sdk import Relay
+
+relay = Relay(api_key="rk_live_...", local=True)
 ```
 
 ## MCP Server
@@ -245,9 +268,45 @@ npm install
 npm run dev
 ```
 
+Rust local daemon (core Relaycast parity for local workflows):
+
+```bash
+curl -fsSL https://github.com/AgentWorkforce/relaycast/releases/download/local-v0.1.0/local-darwin-arm64 -o local
+chmod +x local
+sudo mv local /usr/local/bin/local
+```
+
+Then run:
+
+```bash
+local --host 127.0.0.1 --port 7528
+```
+
+Then point clients to local base URL:
+
+```bash
+export RELAYCAST_BASE_URL=http://127.0.0.1:7528
+export RELAY_BASE_URL=http://127.0.0.1:7528
+```
+
+SDK local mode:
+
+Hosted Relaycast is the default target.
+Use SDK local mode for local-first/offline workflows with the same interfaces and most core features.
+
+```ts
+const { apiKey } = await RelayCast.createWorkspace('my-local-workspace', { local: true });
+const relay = new RelayCast({ apiKey, connection: { local: true } });
+```
+
+For Node/TypeScript, the SDK uses the binary bundled inside the npm package `bin/` directory (or `RELAYCAST_LOCAL_BIN` override).
+
 E2E smoke test:
 
 ```bash
+npm run e2e -- --local
+npm run e2e -- --local --ci
+npm run e2e -- --local http://127.0.0.1:7529
 npm run e2e -- http://localhost:8787
 npm run e2e -- https://api.relaycast.dev --ci
 ```
@@ -255,7 +314,7 @@ npm run e2e -- https://api.relaycast.dev --ci
 Observer dashboard:
 
 ```bash
-RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard dev
+RELAY_SERVER_URL=http://localhost:7528 npm run -w @relaycast/observer-dashboard dev
 ```
 
 Then open `http://localhost:3100`.
@@ -276,6 +335,7 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/types` | Shared type definitions |
 | `@relaycast/mcp` | MCP server |
 | `relay-sdk` (Python) | Python SDK |
+| `local` (Rust) | Local Relaycast-compatible daemon |
 
 ## License
 
