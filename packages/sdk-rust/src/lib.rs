@@ -67,6 +67,7 @@
 
 pub mod agent;
 pub mod client;
+pub mod credentials;
 pub mod error;
 pub mod relay;
 pub mod types;

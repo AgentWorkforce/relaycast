@@ -59,6 +59,42 @@ impl RelayError {
             _ => false,
         }
     }
+
+    /// Check if this is a rate-limit error (HTTP 429).
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::Api { status: 429, .. })
+    }
+
+    /// Check if this is a not-found error (HTTP 404).
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Api { status: 404, .. })
+    }
+
+    /// Check if this is an authentication/authorization rejection (HTTP 401 or 403).
+    pub fn is_auth_rejection(&self) -> bool {
+        matches!(self, Self::Api { status: 401 | 403, .. })
+    }
+
+    /// Check if this is a conflict error (HTTP 409).
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, Self::Api { status: 409, .. })
+    }
+
+    /// Get the HTTP status code, if this is an API error.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Api { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Get the API error code, if this is an API error.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Api { code, .. } => Some(code),
+            _ => None,
+        }
+    }
 }
 
 /// Result type alias for RelayCast operations.
