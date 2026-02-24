@@ -21,8 +21,10 @@ export { useSendDM } from './hooks/useSendDM.js';
 // Utility hooks
 export { useRelay } from './hooks/useRelay.js';
 export { useAgent } from './hooks/useAgent.js';
+export { useRelayClient } from './hooks/useRelayClient.js';
 export { useWebSocket } from './hooks/useWebSocket.js';
 export { useEvent } from './hooks/useEvent.js';
+export type { ClientContextValue } from './context.js';
 
 // Types
 export type {
