@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
+import { resolveEmoji } from '@relaycast/types';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -22,8 +23,9 @@ export function registerFeatureTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
-    await client.react(message_id, emoji);
-    const message = `Reacted with ${emoji}`;
+    const resolved = resolveEmoji(emoji);
+    await client.react(message_id, resolved);
+    const message = `Reacted with ${resolved}`;
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
@@ -43,8 +45,9 @@ export function registerFeatureTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
-    await client.unreact(message_id, emoji);
-    const message = `Removed reaction ${emoji}`;
+    const resolved = resolveEmoji(emoji);
+    await client.unreact(message_id, resolved);
+    const message = `Removed reaction ${resolved}`;
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },

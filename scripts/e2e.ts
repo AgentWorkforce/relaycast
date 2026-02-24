@@ -306,9 +306,10 @@ ${B}${CYAN}╔══════════════════════
   await run('registerOrRotate returns valid token', async () => {
     const res = await relay.registerOrRotate({ name: LEAD, type: 'agent' });
     if (!res.token) throw new Error('Expected token from registerOrRotate');
-    // Verify rotated token works by making an API call
-    const rotatedClient = relay.as(res.token);
-    const channels = await rotatedClient.channels.list();
+    // Update lead client with rotated token (old token is now invalid)
+    lead = relay.as(res.token);
+    agentMap[LEAD] = lead;
+    const channels = await lead.channels.list();
     log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
   });
 

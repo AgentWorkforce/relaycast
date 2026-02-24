@@ -279,17 +279,7 @@ export function registerProgrammabilityTools(
       channel: z.string().optional().describe('Channel name to automatically join the agent to (e.g. "general", "dev-team")'),
       persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role'),
     },
-    outputSchema: {
-      id: z.string().describe('Unique identifier of the added agent'),
-      name: z.string().describe('Name of the added agent'),
-      token: z.string().describe('Authentication token for the agent to use when connecting'),
-      cli: z.string().describe('The CLI tool specified for this agent'),
-      task: z.string().describe('The task assigned to this agent'),
-      channel: z.string().nullable().describe('Channel the agent was joined to, or null if none specified'),
-      status: z.string().describe('Current status of the agent (online)'),
-      created_at: z.string().optional().describe('ISO timestamp when the agent was created'),
-      already_existed: z.boolean().optional().describe('True if the agent already existed and was reactivated'),
-    },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ name, cli, task, channel, persona }) => {
     const relay = getRelay();

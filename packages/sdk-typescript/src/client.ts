@@ -74,7 +74,7 @@ function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
       ? Math.max(1, input!.backoffMultiplier!)
       : DEFAULT_RETRY_POLICY.backoffMultiplier,
     jitter: typeof input?.jitter === 'boolean' ? input.jitter : DEFAULT_RETRY_POLICY.jitter,
-    retryOn: Array.isArray(input?.retryOn) && input.retryOn.length > 0
+    retryOn: Array.isArray(input?.retryOn)
       ? input.retryOn.filter((status): status is number => Number.isInteger(status) && status >= 100)
       : [...DEFAULT_RETRY_POLICY.retryOn],
   };
