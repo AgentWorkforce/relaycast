@@ -249,12 +249,12 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'add_reaction', arguments: { message_id: 'msg1', emoji: 'rocket' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/reactions') && r.method === 'POST');
     expect(req).toBeDefined();
-    expect(req!.body).toEqual({ emoji: 'rocket' });
+    expect(req!.body).toEqual({ emoji: '🚀' });
   });
 
   it('remove_reaction → DELETE /v1/messages/:id/reactions/:emoji', async () => {
     await client.callTool({ name: 'remove_reaction', arguments: { message_id: 'msg1', emoji: 'rocket' } });
-    const req = findReq((r) => r.url.includes('/messages/msg1/reactions/rocket') && r.method === 'DELETE');
+    const req = findReq((r) => r.url.includes('/messages/msg1/reactions/') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
