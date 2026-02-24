@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare } from 'lucide-react';
-import { useMessages } from '@relaycast/react';
+import { useMessages, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
@@ -62,9 +62,7 @@ function ChannelMessages({
   const bottomRef = useRef<HTMLDivElement>(null);
   const { messages, loading } = useMessages(channel);
 
-  const sorted = [...messages].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
+  const sorted = sortMessagesChronologically(messages);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -138,9 +136,7 @@ function DmMessages({ conversationId }: { conversationId: string }) {
       .finally(() => setLoading(false));
   }, [conversationId]);
 
-  const sorted = [...messages].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
+  const sorted = sortMessagesChronologically(messages);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
