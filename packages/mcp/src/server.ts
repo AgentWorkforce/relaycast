@@ -20,12 +20,24 @@ export const MCP_VERSION = '0.1.2';
 export interface McpServerOptions {
   apiKey?: string;
   baseUrl?: string;
+  /** Pre-registered agent token for auto-bootstrap (skips explicit `register` call). */
+  agentToken?: string;
+  /** Agent name associated with the pre-registered token. */
+  agentName?: string;
+  /** Agent type associated with the pre-registered identity. */
+  agentType?: 'agent' | 'human';
+  /** When true, the `register` tool enforces the pre-registered agentName. */
+  strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
 }
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
-  const session: SessionState = createInitialSession(options.apiKey ?? null);
+  const session: SessionState = createInitialSession({
+    workspaceKey: options.apiKey ?? null,
+    agentToken: options.agentToken ?? null,
+    agentName: options.agentName ?? null,
+  });
   const mcpOrigin = {
     surface: 'mcp' as const,
     client: '@relaycast/mcp',
@@ -149,6 +161,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     getSession,
     setSession,
     options.baseUrl,
+    options.strictAgentName,
+    options.agentName,
+    options.agentType,
   );
   registerChannelTools(mcpServer, getAgentClient);
   registerMessagingTools(mcpServer, getAgentClient);
@@ -157,6 +172,13 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
   // Register system prompt
   registerSystemPrompt(mcpServer);
+
+  // If pre-bootstrapped with an agent token, initialize the WS bridge now.
+  // This runs setSession to trigger the same WS bridge setup that happens
+  // when an agent calls the `register` tool explicitly.
+  if (session.agentToken && !session.wsBridge) {
+    setSession({ agentToken: session.agentToken, agentName: session.agentName });
+  }
 
   // Override tools/list to strip fields that break Smithery's scanner:
   // - `execution` (SDK v1.26+ experimental tasks feature)

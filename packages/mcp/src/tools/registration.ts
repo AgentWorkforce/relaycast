@@ -55,6 +55,9 @@ export function registerRegistrationTools(
   getSession: () => SessionState,
   setSession: (state: Partial<SessionState>) => void,
   baseUrl?: string,
+  strictAgentName?: boolean,
+  preferredAgentName?: string,
+  forcedAgentType?: 'agent' | 'human',
 ): void {
   // Tool 1: create_workspace
   server.registerTool(
@@ -142,14 +145,62 @@ export function registerRegistrationTools(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ name, type, persona }) => {
-      requireWorkspaceKey(getSession());
+      const session = getSession();
+      requireWorkspaceKey(session);
+
+      const configuredName = session.agentName
+        ?? preferredAgentName?.trim()
+        ?? null;
+      const warnings: string[] = [];
+
+      // In strict mode, enforce the pre-registered name from the broker.
+      // This prevents spawned agents from re-registering under a different name.
+      const effectiveName =
+        strictAgentName && configuredName ? configuredName : name;
+      if (strictAgentName && configuredName && name.trim() !== configuredName) {
+        warnings.push(
+          `Strict worker identity is enabled; ignoring requested name "${name}" and using "${configuredName}".`,
+        );
+      }
+
+      const effectiveType = forcedAgentType ?? type;
+      if (forcedAgentType && type && type !== forcedAgentType) {
+        warnings.push(
+          `Forced worker type is enabled; ignoring requested type "${type}" and using "${forcedAgentType}".`,
+        );
+      }
+
+      // If already pre-registered with a token, skip the API call and return
+      // the existing registration to avoid overwriting the pre-registered identity.
+      if (session.agentToken && effectiveName && strictAgentName) {
+        const existing = {
+          name: effectiveName,
+          token: session.agentToken,
+          registered_name: effectiveName,
+          warnings,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(existing, null, 2) }],
+          structuredContent: existing as unknown as Record<string, unknown>,
+        };
+      }
+
       const relay = getRelay();
-      const result = await relay.agents.register({ name, type, persona });
+      const result = await relay.agents.register({
+        name: effectiveName,
+        type: effectiveType,
+        persona,
+      });
       // Store the agent token in session state
-      setSession({ agentToken: result.token, agentName: name });
+      setSession({ agentToken: result.token, agentName: effectiveName });
+      const payload = {
+        ...result,
+        registered_name: effectiveName,
+        warnings,
+      };
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        structuredContent: result as unknown as Record<string, unknown>,
+        content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload as unknown as Record<string, unknown>,
       };
     },
   );

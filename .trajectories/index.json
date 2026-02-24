@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-02-23T21:04:28.589Z",
+  "lastUpdated": "2026-02-23T20:54:17.075Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -1009,12 +1009,12 @@
       "completedAt": "2026-02-21T03:36:59.494Z",
       "path": "/Users/will/Projects/relaycast/.trajectories/completed/2026-02/traj_mfei9gd909p2.json"
     },
-    "traj_0bsgi3039qpn": {
-      "title": "Implement SDK workspace reader methods",
+    "traj_vkmadqd76vbc": {
+      "title": "CxSDKPresence: presence lifecycle helpers, auto heartbeat, reconnect circuit breaker",
       "status": "completed",
-      "startedAt": "2026-02-23T21:02:38.858Z",
-      "completedAt": "2026-02-23T21:04:28.459Z",
-      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast-sdk-readers/.trajectories/completed/2026-02/traj_0bsgi3039qpn.json"
+      "startedAt": "2026-02-23T20:48:49.729Z",
+      "completedAt": "2026-02-23T20:54:16.664Z",
+      "path": "/Users/khaliqgant/Projects/agent-workforce/relaycast/.trajectories/completed/2026-02/traj_vkmadqd76vbc.json"
     }
   }
 }

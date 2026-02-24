@@ -25,7 +25,6 @@ import type {
   AgentCommand,
   ActivityItem,
   WorkspaceDmConversation,
-  WorkspaceDmMessage,
   TokenRotateResponse,
   MessageListQuery,
   MessageWithMeta,
@@ -67,15 +66,19 @@ interface ChannelListOptions {
   includeArchived?: boolean;
 }
 
-interface WorkspaceDmConversationListOptions {
-  limit?: number;
-}
-
 interface CommandRegisterInput {
   command: string;
   description: string;
   handlerAgent: string;
   parameters?: CreateCommandRequest['parameters'];
+}
+
+interface WorkspaceDmMessage {
+  id: string;
+  agentId: string;
+  agentName: string;
+  text: string;
+  createdAt: string;
 }
 
 export class RelayCast {
@@ -228,36 +231,6 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
-    listAgents: (query?: AgentListQuery): Promise<Agent[]> => {
-      const params: Record<string, string> = {};
-      if (query?.status) params.status = query.status;
-      return this.client.get('/v1/agents', params);
-    },
-    listChannels: (opts?: ChannelListOptions): Promise<Channel[]> => {
-      const query: Record<string, string> = {};
-      if (opts?.includeArchived) query.includeArchived = 'true';
-      return this.client.get('/v1/channels', query);
-    },
-    listChannelMessages: (channel: string, opts?: MessageListQuery): Promise<MessageWithMeta[]> => {
-      const name = channel.startsWith('#') ? channel.slice(1) : channel;
-      const query: Record<string, string> = {};
-      if (opts?.limit != null) query.limit = String(opts.limit);
-      if (opts?.before) query.before = opts.before;
-      if (opts?.after) query.after = opts.after;
-      return this.client.get(`/v1/channels/${encodeURIComponent(name)}/messages`, query);
-    },
-    listDmConversations: async (opts?: WorkspaceDmConversationListOptions): Promise<WorkspaceDmConversation[]> => {
-      const conversations = await this.client.get<WorkspaceDmConversation[]>('/v1/dm/conversations/all');
-      if (opts?.limit == null) return conversations;
-      return conversations.slice(0, Math.max(0, opts.limit));
-    },
-    listDmMessages: (conversationId: string, opts?: MessageListQuery): Promise<WorkspaceDmMessage[]> => {
-      const query: Record<string, string> = {};
-      if (opts?.limit != null) query.limit = String(opts.limit);
-      if (opts?.before) query.before = opts.before;
-      if (opts?.after) query.after = opts.after;
-      return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
-    },
     stream: {
       get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
       set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
@@ -389,11 +362,16 @@ export class RelayCast {
     return this.client.get('/v1/activity', params);
   };
 
-  allDmConversations = (opts?: WorkspaceDmConversationListOptions): Promise<WorkspaceDmConversation[]> =>
-    this.workspace.listDmConversations(opts);
+  allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
+    this.client.get('/v1/dm/conversations/all');
 
-  dmMessages = (conversationId: string, opts?: MessageListQuery): Promise<WorkspaceDmMessage[]> =>
-    this.workspace.listDmMessages(conversationId, opts);
+  dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<WorkspaceDmMessage[]> => {
+    const query: Record<string, string> = {};
+    if (opts?.limit !== undefined) query.limit = String(opts.limit);
+    if (opts?.before) query.before = opts.before;
+    if (opts?.after) query.after = opts.after;
+    return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
+  };
 
   as(agentToken: string, options?: AgentClientOptions): AgentClient {
     const agentHttpClient = this.client.withApiKey(agentToken);
