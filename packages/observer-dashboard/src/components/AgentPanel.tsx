@@ -1,6 +1,6 @@
 'use client';
 
-import { X, Bot, User, Clock, Cpu, CircleDot } from 'lucide-react';
+import { X, Bot, User, Clock, Cpu, CircleDot, Sparkles } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
 import type { Agent } from '@relaycast/sdk';
 
@@ -16,8 +16,11 @@ function relativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
-function formatDate(timestamp: string): string {
-  return new Date(timestamp).toLocaleDateString(undefined, {
+function formatDate(timestamp: string | undefined | null): string {
+  if (!timestamp) return 'Unknown';
+  const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -45,11 +48,12 @@ interface AgentPanelProps {
 export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const status = statusLabel(agent.status);
   const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
+  const model = (agent.metadata?.model as string) || '';
   const currentTask = (agent.metadata?.current_task as string) || '';
 
   // Collect metadata entries to display (excluding known fields)
   const extraMeta = Object.entries(agent.metadata || {}).filter(
-    ([key]) => !['cli', 'current_task'].includes(key)
+    ([key]) => !['cli', 'current_task', 'model'].includes(key)
   );
 
   return (
@@ -106,6 +110,13 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
             label="CLI"
             value={cli}
           />
+          {model && (
+            <InfoRow
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+              label="Model"
+              value={model}
+            />
+          )}
           <InfoRow
             icon={<Clock className="h-3.5 w-3.5" />}
             label="Last seen"

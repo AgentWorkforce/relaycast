@@ -140,11 +140,12 @@ export function registerRegistrationTools(
         name: z.string().describe('Unique agent name within the workspace, used as the display name in messages and mentions'),
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
         persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role and capabilities'),
+        metadata: z.record(z.string(), z.unknown()).optional().describe('Key-value metadata to attach to the agent (e.g. { "cli": "claude", "model": "claude-sonnet-4-6" }). Use "model" to indicate which AI model powers this agent.'),
       },
       outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ name, type, persona }) => {
+    async ({ name, type, persona, metadata }) => {
       const session = getSession();
       requireWorkspaceKey(session);
 
@@ -190,6 +191,7 @@ export function registerRegistrationTools(
         name: effectiveName,
         type: effectiveType,
         persona,
+        metadata,
       });
       // Store the agent token in session state
       setSession({ agentToken: result.token, agentName: effectiveName });
@@ -221,7 +223,7 @@ export function registerRegistrationTools(
       outputSchema: {
         agents: z.array(z.object({}).passthrough()).describe('Array of registered agent objects with name, type, persona, and status'),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ status }) => {
       requireWorkspaceKey(getSession());
