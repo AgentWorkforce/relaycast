@@ -287,8 +287,8 @@ export function registerProgrammabilityTools(
       task: z.string().describe('The task assigned to this agent'),
       channel: z.string().nullable().describe('Channel the agent was joined to, or null if none specified'),
       status: z.string().describe('Current status of the agent (online)'),
-      created_at: z.string().describe('ISO timestamp when the agent was created'),
-      already_existed: z.boolean().describe('True if the agent already existed and was reactivated'),
+      created_at: z.string().optional().describe('ISO timestamp when the agent was created'),
+      already_existed: z.boolean().optional().describe('True if the agent already existed and was reactivated'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ name, cli, task, channel, persona }) => {
