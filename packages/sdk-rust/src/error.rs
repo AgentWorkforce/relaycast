@@ -30,7 +30,7 @@ pub enum RelayError {
 
     /// A WebSocket error.
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
 
     /// The response was invalid or malformed.
     #[error("Invalid response: {0}")]
@@ -94,6 +94,12 @@ impl RelayError {
             Self::Api { code, .. } => Some(code),
             _ => None,
         }
+    }
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for RelayError {
+    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(err))
     }
 }
 
