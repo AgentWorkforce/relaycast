@@ -752,6 +752,8 @@ ${B}${CYAN}╔══════════════════════
     const testChannel = 'general';
     const idempotencyKey = `e2e-idem-${Date.now()}`;
     const msg1 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
+    // Allow KV eventual consistency to propagate the idempotency record
+    await sleep(1500);
     const msg2 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
     if (msg1.id !== msg2.id) throw new Error(`Expected same message ID, got ${msg1.id} and ${msg2.id}`);
     log('🔁', `Same idempotency key → same message ID: ${B}${msg1.id}${R}`);
