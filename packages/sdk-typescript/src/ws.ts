@@ -208,6 +208,7 @@ export class WsClient {
 
   reconnect(): void {
     this.closed = false;
+    this.isOpen = false;
     this.permanentlyDisconnected = false;
     this.reconnectAttempt = 0;
     this.clearConnectTimer();

@@ -52,6 +52,7 @@ export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
 export const ThreadReplyEventSchema = z.object({
   type: z.literal('thread.reply'),
+  channel: z.string(),
   parent_id: z.string(),
   message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
 });
