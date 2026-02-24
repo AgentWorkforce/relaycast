@@ -12,7 +12,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient } from '../packages/sdk-typescript/src/index.js';
+import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -278,6 +278,49 @@ ${B}${CYAN}╔══════════════════════
     [INFRA]: infra,
     [BACKEND]: backend,
   };
+
+  // ── 2a. Strict identity & error normalization ───────────────────────
+  step('Strict identity & error normalization');
+
+  await run('Duplicate registration with strict mode throws name_conflict', async () => {
+    try {
+      await relay.registerAgent({ name: LEAD, strict: true });
+      throw new Error('Expected RelayError but registration succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'name_conflict') throw new Error(`Expected code 'name_conflict', got '${err.code}'`);
+      log('🛡️ ', `Strict duplicate correctly threw RelayError(code=${err.code}, rawCode=${err.rawCode})`);
+    }
+  });
+
+  await run('registerAgent non-strict appends suffix', async () => {
+    const res = await relay.registerAgent({ name: LEAD, strict: false });
+    if (res.name === LEAD) throw new Error(`Expected suffixed name, got exact '${LEAD}'`);
+    if (!res.name.startsWith(LEAD)) throw new Error(`Expected name starting with '${LEAD}', got '${res.name}'`);
+    log('🛡️ ', `Non-strict duplicate registered as ${B}${res.name}${R} (suffix appended)`);
+  });
+
+  // ── 2b. registerOrRotate + resolveIdentity ─────────────────────────
+  step('registerOrRotate + resolveIdentity');
+
+  await run('registerOrRotate returns valid token', async () => {
+    const res = await relay.registerOrRotate({ name: LEAD, type: 'agent' });
+    if (!res.token) throw new Error('Expected token from registerOrRotate');
+    // Verify rotated token works by making an API call
+    const rotatedClient = relay.as(res.token);
+    const channels = await rotatedClient.channels.list();
+    log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
+  });
+
+  await run('resolveIdentity returns identity fields', async () => {
+    const identity = await relay.resolveIdentity();
+    if (!identity.agentId) throw new Error('Expected agentId in resolved identity');
+    if (!identity.name) throw new Error('Expected name in resolved identity');
+    if (!identity.workspaceId) throw new Error('Expected workspaceId in resolved identity');
+    log('🔑', `Resolved identity: ${B}${identity.name}${R} (agent=${identity.agentId}, ws=${identity.workspaceId})`);
+  });
+
+  await pause();
 
   // ── 3. Create channel + join ─────────────────────────────────────────
   step('Create channel');
@@ -654,6 +697,100 @@ ${B}${CYAN}╔══════════════════════
     const found = channels.find((c) => c.name === channelName);
     if (!found) throw new Error(`Expected #${channelName} in archived list`);
     log('📋', `#${channelName} found with includeArchived=true`);
+  });
+  await pause();
+
+  // ── 19a. Presence lifecycle ──────────────────────────────────────────
+  step('Presence lifecycle');
+
+  await run('Heartbeat keeps agent online', async () => {
+    await lead.presence.heartbeat();
+    const presence = await relay.agents.presence();
+    const leadPresence = presence.find((p) => p.agentName === LEAD);
+    if (!leadPresence) throw new Error(`${LEAD} not found in presence list`);
+    if (leadPresence.status !== 'online') throw new Error(`Expected ${LEAD} online after heartbeat, got ${leadPresence.status}`);
+    log('💓', `${YELLOW}${B}${LEAD}${R} heartbeat sent — status: online`);
+  });
+
+  await run('markOffline transitions agent to offline', async () => {
+    await infra.presence.markOffline();
+    // Poll for offline status
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(500);
+      const presence = await relay.agents.presence();
+      const infraPresence = presence.find((p) => p.agentName === INFRA);
+      if (infraPresence?.status === 'offline') {
+        log('💤', `${GREEN}${B}${INFRA}${R} marked offline — status: offline`);
+        return;
+      }
+    }
+    throw new Error(`${INFRA} did not transition to offline after markOffline`);
+  });
+
+  await run('markOnline brings agent back online', async () => {
+    await infra.presence.markOnline();
+    // Poll for online status
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(500);
+      const presence = await relay.agents.presence();
+      const infraPresence = presence.find((p) => p.agentName === INFRA);
+      if (infraPresence?.status === 'online') {
+        log('🟢', `${GREEN}${B}${INFRA}${R} marked online — status: online`);
+        return;
+      }
+    }
+    throw new Error(`${INFRA} did not transition to online after markOnline`);
+  });
+  await pause();
+
+  // ── 19b. Idempotency ───────────────────────────────────────────────
+  step('Idempotency');
+
+  await run('Duplicate send with same idempotency key returns same message', async () => {
+    // Unarchive channel so we can post to it, or use #general
+    const testChannel = 'general';
+    const idempotencyKey = `e2e-idem-${Date.now()}`;
+    const msg1 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
+    const msg2 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
+    if (msg1.id !== msg2.id) throw new Error(`Expected same message ID, got ${msg1.id} and ${msg2.id}`);
+    log('🔁', `Same idempotency key → same message ID: ${B}${msg1.id}${R}`);
+  });
+
+  await run('Different idempotency keys create different messages', async () => {
+    const testChannel = 'general';
+    const key1 = `e2e-idem-a-${Date.now()}`;
+    const key2 = `e2e-idem-b-${Date.now()}`;
+    const msg1 = await lead.send(testChannel, 'Idempotency distinct test', { idempotencyKey: key1 });
+    const msg2 = await lead.send(testChannel, 'Idempotency distinct test', { idempotencyKey: key2 });
+    if (msg1.id === msg2.id) throw new Error(`Expected different message IDs, got same: ${msg1.id}`);
+    log('🔁', `Different keys → different messages: ${B}${msg1.id}${R} vs ${B}${msg2.id}${R}`);
+  });
+  await pause();
+
+  // ── 19c. Error handling ────────────────────────────────────────────
+  step('Error handling');
+
+  await run('Invalid workspace key throws unauthorized', async () => {
+    const badRelay = new RelayCast({ apiKey: 'rk_live_bogus_key_12345', baseUrl: BASE_URL });
+    try {
+      await badRelay.agents.list();
+      throw new Error('Expected RelayError but call succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'unauthorized') throw new Error(`Expected code 'unauthorized', got '${err.code}'`);
+      log('🔒', `Invalid API key correctly threw RelayError(code=${err.code})`);
+    }
+  });
+
+  await run('Non-existent channel throws not_found', async () => {
+    try {
+      await lead.messages('nonexistent-channel-xyz-' + Date.now());
+      throw new Error('Expected RelayError but call succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'not_found') throw new Error(`Expected code 'not_found', got '${err.code}'`);
+      log('🔒', `Non-existent channel correctly threw RelayError(code=${err.code})`);
+    }
   });
   await pause();
 
