@@ -59,14 +59,13 @@ cargo run --manifest-path packages/local/Cargo.toml -- --host 127.0.0.1 --port 7
 Hosted Relaycast is the default target.
 SDK local mode switches clients to this daemon for local-first workflows with most core features.
 
-SDKs can run local mode directly:
+Start the daemon, then point any SDK at its base URL:
 
-- TypeScript: `new RelayCast({ apiKey: "rk_live_...", connection: { local: true } })`
+- TypeScript: `new RelayCast({ apiKey: "rk_live_...", baseUrl: "http://127.0.0.1:7528" })`
 - Python: `Relay(api_key="rk_live_...", local=True)`
 - Rust: `RelayCast::new(RelayCastOptions::local("rk_live_..."))`
 
-In local mode, SDKs auto-start the daemon and require an `api_key` just like hosted mode.
-TypeScript uses the binary bundled in the npm package `bin/` directory (or `RELAYCAST_LOCAL_BIN` override).
+An `api_key` is required just like hosted mode.
 
 ## Implemented interface surface
 

@@ -30,11 +30,9 @@ export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
 export const EventSubscriptionSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
-  secret: z.string().nullable(),
   is_active: z.boolean(),
   created_at: z.string(),
 });

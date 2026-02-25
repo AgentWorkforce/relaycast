@@ -110,7 +110,7 @@ describe('AgentClient features', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/invite');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ agent: 'Bot' }));
+      expect(init.body).toBe(JSON.stringify({ agent_name: 'Bot' }));
     });
 
     it('update() patches /v1/channels/:name', async () => {

@@ -15,17 +15,17 @@ function mockWorkspaceResponse() {
   });
 }
 
-describe('RelayCast connection options', () => {
+describe('RelayCast baseUrl options', () => {
   beforeEach(() => {
     mockFetch.mockReset();
     vi.resetModules();
   });
 
-  it('constructor supports connection.baseUrl', async () => {
+  it('constructor supports baseUrl', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({
       apiKey: 'rk_live_test123',
-      connection: { baseUrl: 'http://localhost:3200' },
+      baseUrl: 'http://localhost:3200',
     });
 
     mockFetch.mockImplementation(() => mockWorkspaceResponse());
@@ -35,30 +35,23 @@ describe('RelayCast connection options', () => {
     expect(url).toBe('http://localhost:3200/v1/workspace');
   });
 
-  it('createWorkspace local mode uses local base URL', async () => {
+  it('createWorkspace with baseUrl string', async () => {
     const { RelayCast } = await import('../relay.js');
     mockFetch.mockImplementation(() => mockWorkspaceResponse());
 
-    await RelayCast.createWorkspace('Local Workspace', {
-      baseUrl: 'http://127.0.0.1:7528',
-      local: { autoStart: false },
-    });
+    await RelayCast.createWorkspace('Test Workspace', 'http://127.0.0.1:7528');
 
     const [url] = mockFetch.mock.calls[0]!;
     expect(url).toBe('http://127.0.0.1:7528/v1/workspaces');
   });
 
-  it('constructor local mode uses default local base URL', async () => {
+  it('createWorkspace defaults to hosted API', async () => {
     const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({
-      apiKey: 'rk_live_test123',
-      connection: { local: true },
-    });
-
     mockFetch.mockImplementation(() => mockWorkspaceResponse());
-    await relay.workspace.info();
+
+    await RelayCast.createWorkspace('Test Workspace');
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('http://127.0.0.1:7528/v1/workspace');
+    expect(url).toBe('https://api.relaycast.dev/v1/workspaces');
   });
 });

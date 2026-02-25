@@ -17,8 +17,7 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "lint": "eslint src/",
-    "prepack": "node ./scripts/prepack-local-bin.mjs"
+    "lint": "eslint src/"
   },
   "dependencies": {
     "@relaycast/types": "0.3.2",
@@ -35,7 +34,6 @@
     "directory": "packages/sdk-typescript"
   },
   "files": [
-    "dist",
-    "bin"
+    "dist"
   ]
 }

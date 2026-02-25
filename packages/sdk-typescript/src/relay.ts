@@ -41,21 +41,9 @@ import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN } from './origin.js';
 import { camelizeKeys } from './casing.js';
 
-export interface LocalRuntimeOptions {
-  binaryPath?: string;
-  autoStart?: boolean;
-}
-
-export interface RelayCastConnection {
-  baseUrl?: string;
-  local?: boolean | LocalRuntimeOptions;
-}
-
 export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
-  local?: boolean | LocalRuntimeOptions;
-  connection?: RelayCastConnection;
 }
 
 export interface WorkspaceStreamConfig {
@@ -91,47 +79,14 @@ export class RelayCast {
       throw new Error('RelayCast apiKey is required');
     }
 
-    const connection = normalizeConnection(
-      options.baseUrl,
-      options.local,
-      options.connection,
-    );
-
-    const localOptions = connection.localOptions;
-    if (localOptions) {
-      this.client = new HttpClient(
-        buildClientOptions(options, options.apiKey, resolveLocalBaseUrl(connection.baseUrl)),
-      );
-      return;
-    }
-
-    this.client = new HttpClient(
-      buildClientOptions(options, options.apiKey, connection.baseUrl),
-    );
+    this.client = new HttpClient({ apiKey: options.apiKey, baseUrl: options.baseUrl });
   }
 
   static async createWorkspace(
     name: string,
     baseUrl?: string,
-  ): Promise<CreateWorkspaceResponse>;
-  static async createWorkspace(
-    name: string,
-    connection?: RelayCastConnection,
-  ): Promise<CreateWorkspaceResponse>;
-  static async createWorkspace(
-    name: string,
-    baseUrlOrConnection?: string | RelayCastConnection,
   ): Promise<CreateWorkspaceResponse> {
-    const connection = resolveCreateWorkspaceConnection(baseUrlOrConnection);
-    let requestBaseUrl = connection.baseUrl ?? 'https://api.relaycast.dev';
-    if (connection.localOptions) {
-      const localRuntime = await loadLocalRuntimeModule();
-      const local = localRuntime.ensureLocalServer({
-        baseUrl: connection.baseUrl,
-        ...connection.localOptions,
-      });
-      requestBaseUrl = local.baseUrl;
-    }
+    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -262,6 +217,13 @@ export class RelayCast {
       } catch (err) {
         if (err instanceof RelayError && err.code === 'agent_already_exists') {
           const agent = await this.agents.get(data.name);
+          if (!agent.createdAt) {
+            throw new RelayError(
+              'invalid_response',
+              'Agent record is missing createdAt',
+              500,
+            );
+          }
           const { token } = await this.agents.rotateToken(agent.name);
           return {
             id: agent.id,
@@ -340,86 +302,4 @@ export class RelayCast {
     const agentHttpClient = this.client.withApiKey(agentToken);
     return new AgentClient(agentHttpClient);
   }
-}
-
-function normalizeLocalOptions(
-  local: RelayCastConnection['local'],
-): LocalRuntimeOptions | null {
-  if (!local) return null;
-  if (local === true) return {};
-  return local;
-}
-
-interface ResolvedConnection {
-  baseUrl?: string;
-  localOptions: LocalRuntimeOptions | null;
-}
-
-interface LocalServerResolved {
-  baseUrl: string;
-}
-
-interface LocalRuntimeModule {
-  ensureLocalServer(input?: {
-    baseUrl?: string;
-    binaryPath?: string;
-    autoStart?: boolean;
-  }): LocalServerResolved;
-}
-
-const LOCAL_RUNTIME_MODULE = './local-runtime.js';
-let localRuntimeModulePromise: Promise<LocalRuntimeModule> | null = null;
-
-function normalizeConnection(
-  baseUrl?: string,
-  local?: RelayCastConnection['local'],
-  connection?: RelayCastConnection,
-): ResolvedConnection {
-  const resolvedBaseUrl = connection?.baseUrl ?? baseUrl;
-  const resolvedLocal = connection?.local ?? local;
-  return {
-    baseUrl: resolvedBaseUrl,
-    localOptions: normalizeLocalOptions(resolvedLocal),
-  };
-}
-
-function resolveCreateWorkspaceConnection(
-  baseUrlOrConnection?: string | RelayCastConnection,
-): ResolvedConnection {
-  if (typeof baseUrlOrConnection === 'string') {
-    return normalizeConnection(baseUrlOrConnection, undefined, undefined);
-  }
-  return normalizeConnection(undefined, undefined, baseUrlOrConnection);
-}
-
-async function loadLocalRuntimeModule(): Promise<LocalRuntimeModule> {
-  if (!localRuntimeModulePromise) {
-    const specifier = LOCAL_RUNTIME_MODULE;
-    localRuntimeModulePromise = import(
-      /* @vite-ignore */
-      /* webpackIgnore: true */
-      specifier
-    )
-      .then((mod) => mod as LocalRuntimeModule);
-  }
-  return localRuntimeModulePromise;
-}
-
-function resolveLocalBaseUrl(baseUrl?: string): string {
-  const raw = baseUrl ?? process.env.RELAYCAST_LOCAL_BASE_URL ?? 'http://127.0.0.1:7528';
-  return raw.replace(/\/+$/, '');
-}
-
-function buildClientOptions(
-  input: RelayCastOptions,
-  apiKey: string,
-  baseUrl?: string,
-): {
-  apiKey: string;
-  baseUrl?: string;
-} {
-  return Object.assign(Object.create(input), {
-    apiKey,
-    baseUrl,
-  });
 }

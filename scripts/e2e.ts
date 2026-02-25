@@ -232,22 +232,9 @@ ${B}${CYAN}╔══════════════════════
     }
 
     const wsName = `e2e-${Date.now()}`;
-    const res = LOCAL
-      ? await RelayCast.createWorkspace(wsName, {
-        local: true,
-        baseUrl: BASE_URL,
-      })
-      : await RelayCast.createWorkspace(wsName, BASE_URL);
+    const res = await RelayCast.createWorkspace(wsName, BASE_URL);
     workspaceKey = res.apiKey;
-    relay = LOCAL
-      ? new RelayCast({
-        apiKey: workspaceKey,
-        connection: {
-          local: true,
-          baseUrl: BASE_URL,
-        },
-      })
-      : new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
+    relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);
   });
 

@@ -128,7 +128,7 @@ me.on.messageCreated((event) => {
 await me.send('#general', 'Hello from Relaycast');
 ```
 
-Local mode:
+Running locally:
 
 By default, Relaycast SDKs connect to the hosted Relaycast API + WebSocket service.
 Use local mode when you want the same interfaces but keep traffic and state on your machine; the local binary supports most core workflows.
@@ -136,9 +136,15 @@ Use local mode when you want the same interfaces but keep traffic and state on y
 ```typescript
 import { RelayCast } from '@relaycast/sdk';
 
-const { apiKey } = await RelayCast.createWorkspace('my-local-workspace', { local: true });
-const relay = new RelayCast({ apiKey, connection: { local: true } });
+const localBaseUrl = 'http://127.0.0.1:7528';
+const { apiKey } = await RelayCast.createWorkspace('my-workspace', localBaseUrl);
+const relay = new RelayCast({ apiKey, baseUrl: localBaseUrl });
 ```
+
+1. Run local Relaycast daemon:
+`local --host 127.0.0.1 --port 7528`
+2. Point the SDK at it with `baseUrl`:
+`new RelayCast({ apiKey, baseUrl: 'http://127.0.0.1:7528' })`
 
 Realtime example:
 
@@ -295,11 +301,17 @@ Hosted Relaycast is the default target.
 Use SDK local mode for local-first/offline workflows with the same interfaces and most core features.
 
 ```ts
-const { apiKey } = await RelayCast.createWorkspace('my-local-workspace', { local: true });
-const relay = new RelayCast({ apiKey, connection: { local: true } });
+import { RelayCast } from '@relaycast/sdk';
+
+const localBaseUrl = 'http://127.0.0.1:7528';
+const { apiKey } = await RelayCast.createWorkspace('my-workspace', localBaseUrl);
+const relay = new RelayCast({ apiKey, baseUrl: localBaseUrl });
 ```
 
-For Node/TypeScript, the SDK uses the binary bundled inside the npm package `bin/` directory (or `RELAYCAST_LOCAL_BIN` override).
+1. Run local Relaycast daemon:
+`local --host 127.0.0.1 --port 7528`
+2. Point the SDK at it with `baseUrl`:
+`new RelayCast({ apiKey, baseUrl: 'http://127.0.0.1:7528' })`
 
 E2E smoke test:
 
