@@ -83,6 +83,7 @@ This binary implements the core Relaycast REST + WS surface used by broker and S
 
 ## Notes
 
+- Verify local/hosted API parity: `npm run local:parity`
 - State is persisted to a local SQLite snapshot (`--db-path`, default `.agent-relay/state.db`).
 - Response envelope and JSON field casing match Relaycast conventions (`snake_case`, `{ ok: true, data }` / `{ ok: false, error }`).
 - Intended as a local-compatible daemon; it is not a full Cloudflare Durable Objects replacement.

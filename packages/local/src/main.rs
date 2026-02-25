@@ -3857,54 +3857,6 @@ async fn activity(
     ok(items)
 }
 
-async fn workspace_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let store = state.store.read().await;
-    let workspace_id = match auth_workspace(&store, &headers) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-
-    let mut agent_total = 0;
-    let mut agent_online = 0;
-    for agent in store.agents.values() {
-        if agent.workspace_id != workspace_id {
-            continue;
-        }
-        agent_total += 1;
-        if agent.status == "online" {
-            agent_online += 1;
-        }
-    }
-
-    let mut channel_total = 0;
-    for channel in store.channels.values() {
-        if channel.workspace_id == workspace_id {
-            channel_total += 1;
-        }
-    }
-
-    let mut message_total = 0;
-    let mut message_today = 0;
-    let today = Utc::now().date_naive();
-    for message in store.messages.values() {
-        if message.workspace_id != workspace_id {
-            continue;
-        }
-        message_total += 1;
-        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&message.created_at) {
-            if ts.date_naive() == today {
-                message_today += 1;
-            }
-        }
-    }
-
-    ok(json!({
-        "agents": { "total": agent_total, "online": agent_online },
-        "messages": { "total": message_total, "today": message_today },
-        "channels": { "total": channel_total },
-    }))
-}
-
 #[derive(Debug, Deserialize)]
 struct CreateCommandRequest {
     command: String,
@@ -4921,7 +4873,6 @@ fn app_router(state: AppState) -> Router {
             "/v1/workspace/system-prompt",
             get(get_system_prompt).put(put_system_prompt),
         )
-        .route("/v1/workspace/stats", get(workspace_stats))
         .route("/v1/activity", get(activity))
         .route("/v1/agents", post(create_agent).get(list_agents))
         .route("/v1/agents/presence", get(get_presence))
