@@ -221,6 +221,22 @@ ${B}${CYAN}╔══════════════════════
     });
   }
 
+  function isChannelAlreadyExists(err: unknown): boolean {
+    if (!(err instanceof RelayError)) return false;
+    if (err.rawCode === 'channel_already_exists') return true;
+    return err.code === 'name_conflict' && /channel .*already exists/i.test(err.message);
+  }
+
+  async function ensureChannel(owner: AgentClient, name: string, topic?: string): Promise<void> {
+    try {
+      await owner.channels.create({ name, ...(topic ? { topic } : {}) });
+      log('📢', `Channel ${B}#${name}${R} created by ${LEAD}`);
+    } catch (err) {
+      if (!isChannelAlreadyExists(err)) throw err;
+      log('ℹ️ ', `Channel ${B}#${name}${R} already exists; continuing.`);
+    }
+  }
+
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
@@ -344,8 +360,7 @@ ${B}${CYAN}╔══════════════════════
   // ── 3. Create channel + join ─────────────────────────────────────────
   step('Create channel');
   await run('Create #engineering', async () => {
-    await lead.channels.create({ name: channelName, topic: 'Engineering coordination' });
-    log('📢', `Channel ${B}#${channelName}${R} created by ${LEAD}`);
+    await ensureChannel(lead, channelName, 'Engineering coordination');
   });
 
   await run(`${INFRA} joins #engineering`, async () => {
@@ -394,14 +409,7 @@ ${B}${CYAN}╔══════════════════════
   // ── 5. Hello world in #general ─────────────────────────────────────
   step('Post to #general');
   await run(`${LEAD} says hello in #general`, async () => {
-    try {
-      await lead.channels.create({ name: 'general', topic: 'General discussion' });
-      log('📢', `Channel ${B}#general${R} created by ${LEAD}`);
-    } catch (err) {
-      if (!(err instanceof RelayError) || err.code !== 'channel_already_exists') {
-        throw err;
-      }
-    }
+    await ensureChannel(lead, 'general', 'General discussion');
 
     await lead.channels.join('general');
     await infra.channels.join('general');
@@ -677,11 +685,11 @@ ${B}${CYAN}╔══════════════════════
 
   await run(`${LEAD} creates group DM`, async () => {
     log('📤', `${YELLOW}${B}${LEAD}${R} → group(${INFRA}, ${BACKEND}): Let's sync on the deploy pipeline offline.`);
-    await lead.dms.createGroup({
+    const group = await lead.dms.createGroup({
       participants: [INFRA, BACKEND],
-      text: 'Let\'s sync on the deploy pipeline offline.',
       name: 'Deploy Sync',
     });
+    await lead.dms.sendMessage(group.id, 'Let\'s sync on the deploy pipeline offline.');
   });
   await pause();
 
