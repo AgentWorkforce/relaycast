@@ -3,6 +3,7 @@ import { ClientContext, StoreContext } from '../context.js';
 import type { UseThreadReturn, ThreadData } from '../types.js';
 
 const EMPTY: ThreadData = { parent: null, replies: [], loading: true, error: null };
+const IDLE: ThreadData = { parent: null, replies: [], loading: false, error: null };
 
 export function useThread(messageId: string): UseThreadReturn {
   const ctx = useContext(ClientContext);
@@ -10,6 +11,8 @@ export function useThread(messageId: string): UseThreadReturn {
   if (!ctx || !store) throw new Error('useThread must be used within <RelayProvider>');
 
   useEffect(() => {
+    if (!messageId) return;
+
     store.updateThread(messageId, (prev) => ({ ...prev, loading: true }));
 
     ctx.agent.thread(messageId)
@@ -25,9 +28,10 @@ export function useThread(messageId: string): UseThreadReturn {
       });
   }, [messageId, ctx.agent, store]);
 
+  const fallback = messageId ? EMPTY : IDLE;
   const data = useSyncExternalStore(
     store.subscribe,
-    () => store.getState().threads[messageId] ?? EMPTY,
+    () => store.getState().threads[messageId] ?? fallback,
   );
 
   return {

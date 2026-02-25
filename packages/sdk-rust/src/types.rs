@@ -439,7 +439,9 @@ enum DmParticipantValue {
     },
 }
 
-fn deserialize_dm_participants<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+fn deserialize_dm_participants<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -479,12 +481,12 @@ where
     let raw = Option::<DmLastMessageValue>::deserialize(deserializer)?;
     Ok(match raw {
         Some(DmLastMessageValue::Text(text)) if !text.is_empty() => Some(text),
-        Some(DmLastMessageValue::Object { text: Some(text), .. }) if !text.is_empty() => {
-            Some(text)
-        }
-        Some(DmLastMessageValue::Object { body: Some(body), .. }) if !body.is_empty() => {
-            Some(body)
-        }
+        Some(DmLastMessageValue::Object {
+            text: Some(text), ..
+        }) if !text.is_empty() => Some(text),
+        Some(DmLastMessageValue::Object {
+            body: Some(body), ..
+        }) if !body.is_empty() => Some(body),
         _ => None,
     })
 }
@@ -867,6 +869,8 @@ pub struct MessageUpdatedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadReplyEvent {
+    #[serde(default)]
+    pub channel: Option<String>,
     pub parent_id: String,
     pub message: ThreadReplyPayload,
 }

@@ -177,9 +177,7 @@ fn now_iso8601() -> String {
     }
     let day = remaining_days + 1;
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 /// Bootstrap an agent session using cached credentials or fresh registration.
@@ -239,10 +237,7 @@ pub async fn bootstrap_session(
         (key.clone(), cached.as_ref().map(|c| c.workspace_id.clone()))
     } else if let Some(ref creds) = cached {
         if creds.api_key.starts_with("rk_") {
-            (
-                creds.api_key.clone(),
-                Some(creds.workspace_id.clone()),
-            )
+            (creds.api_key.clone(), Some(creds.workspace_id.clone()))
         } else {
             create_fresh_workspace(base_url).await?
         }
@@ -253,7 +248,10 @@ pub async fn bootstrap_session(
     // Strategy 2: register agent with the API key
     let relay = build_relay(&api_key, base_url)?;
     let cached_name = cached.as_ref().and_then(|c| c.agent_name.clone());
-    let cached_agent_id = cached.as_ref().map(|c| c.agent_id.clone()).unwrap_or_default();
+    let cached_agent_id = cached
+        .as_ref()
+        .map(|c| c.agent_id.clone())
+        .unwrap_or_default();
 
     let name = config
         .preferred_name
@@ -273,7 +271,14 @@ pub async fn bootstrap_session(
     {
         Ok(result) => {
             let ws_id = workspace_id.unwrap_or_default();
-            finish_session(store, ws_id, result.id, api_key, Some(result.name), result.token)
+            finish_session(
+                store,
+                ws_id,
+                result.id,
+                api_key,
+                Some(result.name),
+                result.token,
+            )
         }
         Err(e) if e.is_conflict() => {
             // Agent name taken — try rotating the existing one
@@ -301,7 +306,14 @@ pub async fn bootstrap_session(
                 })
                 .await?;
             let ws_id = fresh_ws_id.unwrap_or_default();
-            finish_session(store, ws_id, result.id, fresh_key, Some(result.name), result.token)
+            finish_session(
+                store,
+                ws_id,
+                result.id,
+                fresh_key,
+                Some(result.name),
+                result.token,
+            )
         }
         Err(e) => Err(e),
     }

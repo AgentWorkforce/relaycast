@@ -117,18 +117,18 @@ pub use types::{
     // Workspace
     CreateWorkspaceResponse,
     DmConversationSummary,
-    DmSendResponse,
     DmReceivedEvent,
+    DmSendResponse,
     EventSubscription,
     // Files
     FileInfo,
     FileListOptions,
     FileUploadedEvent,
-    GroupDmReceivedEvent,
     GroupDmConversationResponse,
     GroupDmMessageResponse,
     GroupDmParticipantRef,
     GroupDmParticipantResponse,
+    GroupDmReceivedEvent,
     // Inbox
     InboxResponse,
     InvokeCommandRequest,

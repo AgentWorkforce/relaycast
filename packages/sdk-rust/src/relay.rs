@@ -142,11 +142,7 @@ fn ensure_local_runtime(
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            RelayError::InvalidResponse(
-                "RelayCast api_key is required".to_string(),
-            )
-        })?;
+        .ok_or_else(|| RelayError::InvalidResponse("RelayCast api_key is required".to_string()))?;
 
     Ok(ResolvedLocalRuntime { api_key, base_url })
 }

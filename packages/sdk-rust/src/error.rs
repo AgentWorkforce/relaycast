@@ -72,7 +72,13 @@ impl RelayError {
 
     /// Check if this is an authentication/authorization rejection (HTTP 401 or 403).
     pub fn is_auth_rejection(&self) -> bool {
-        matches!(self, Self::Api { status: 401 | 403, .. })
+        matches!(
+            self,
+            Self::Api {
+                status: 401 | 403,
+                ..
+            }
+        )
     }
 
     /// Check if this is a conflict error (HTTP 409).
