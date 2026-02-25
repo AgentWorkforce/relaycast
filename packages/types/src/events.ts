@@ -53,6 +53,7 @@ export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
 export const ThreadReplyEventSchema = z.object({
   type: z.literal('thread.reply'),
+  channel: z.string(),
   parent_id: z.string(),
   message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
@@ -207,6 +208,12 @@ export const WsReconnectingEventSchema = z.object({
 });
 export type WsReconnectingEvent = z.infer<typeof WsReconnectingEventSchema>;
 
+export const WsPermanentlyDisconnectedEventSchema = z.object({
+  type: z.literal('permanently_disconnected'),
+  attempt: z.number(),
+});
+export type WsPermanentlyDisconnectedEvent = z.infer<typeof WsPermanentlyDisconnectedEventSchema>;
+
 export const WsCloseEventSchema = z.object({
   type: z.literal('close'),
 });
@@ -268,6 +275,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   WsOpenEventSchema,
   WsErrorEventSchema,
   WsReconnectingEventSchema,
+  WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;

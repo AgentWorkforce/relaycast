@@ -42,7 +42,7 @@ export function registerChannelTools(
       outputSchema: {
         channels: z.array(z.object({}).passthrough()).describe('Array of channel objects with name, topic, and member details'),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ include_archived }) => {
       const client = getAgentClient();

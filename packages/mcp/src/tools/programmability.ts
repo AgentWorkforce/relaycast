@@ -39,7 +39,7 @@ export function registerProgrammabilityTools(
     outputSchema: {
       webhooks: z.array(z.object({}).passthrough()).describe('Array of webhook objects with id, name, channel, and URL'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const webhooks = await relay.webhooks.list();
@@ -128,7 +128,7 @@ export function registerProgrammabilityTools(
     outputSchema: {
       subscriptions: z.array(z.object({}).passthrough()).describe('Array of subscription objects with id, URL, events, and filters'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const subs = await relay.subscriptions.list();
@@ -145,7 +145,7 @@ export function registerProgrammabilityTools(
       subscription_id: z.string().describe('Unique identifier of the subscription to retrieve, obtained from list_subscriptions or create_subscription'),
     },
     outputSchema: jsonResult,
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ subscription_id }) => {
     const relay = getRelay();
     const sub = await relay.subscriptions.get(subscription_id);
@@ -216,7 +216,7 @@ export function registerProgrammabilityTools(
     outputSchema: {
       commands: z.array(z.object({}).passthrough()).describe('Array of command objects with name, description, handler, and parameters'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const relay = getRelay();
     const commands = await relay.commands.list();
@@ -278,22 +278,14 @@ export function registerProgrammabilityTools(
       task: z.string().describe('The task description or instructions for the agent to work on'),
       channel: z.string().optional().describe('Channel name to automatically join the agent to (e.g. "general", "dev-team")'),
       persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role'),
+      model: z.string().optional().describe('AI model powering this agent (e.g. "claude-sonnet-4-6", "gpt-4o"). Shown in the dashboard agent profile.'),
     },
-    outputSchema: {
-      id: z.string().describe('Unique identifier of the added agent'),
-      name: z.string().describe('Name of the added agent'),
-      token: z.string().describe('Authentication token for the agent to use when connecting'),
-      cli: z.string().describe('The CLI tool specified for this agent'),
-      task: z.string().describe('The task assigned to this agent'),
-      channel: z.string().nullable().describe('Channel the agent was joined to, or null if none specified'),
-      status: z.string().describe('Current status of the agent (online)'),
-      created_at: z.string().describe('ISO timestamp when the agent was created'),
-      already_existed: z.boolean().describe('True if the agent already existed and was reactivated'),
-    },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ name, cli, task, channel, persona }) => {
+  }, async ({ name, cli, task, channel, persona, model }) => {
     const relay = getRelay();
-    const result = await relay.agents.spawn({ name, cli, task, channel, persona });
+    const metadata = model ? { model } : undefined;
+    const result = await relay.agents.spawn({ name, cli, task, channel, persona, metadata });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,

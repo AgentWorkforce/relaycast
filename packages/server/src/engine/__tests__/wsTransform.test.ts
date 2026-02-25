@@ -68,6 +68,7 @@ describe('transformForClient', () => {
 
     expect(transformForClient(event)).toEqual({
       type: 'thread.reply',
+      channel: 'general',
       parent_id: 'msg_root',
       message: {
         id: 'msg_3',

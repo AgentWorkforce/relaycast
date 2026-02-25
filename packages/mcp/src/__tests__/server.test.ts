@@ -235,6 +235,56 @@ describe('createRelayMcpServer', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('auto-bootstraps when agentToken and agentName are provided', async () => {
+    const bootstrappedServer = createRelayMcpServer({
+      apiKey: 'test-key',
+      agentToken: 'tok_preregistered',
+      agentName: 'pre-registered-bot',
+    });
+    const bootstrappedClient = new Client({ name: 'bootstrap-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bootstrappedClient.connect(ct), bootstrappedServer.connect(st)]);
+
+    // Should be able to call tools immediately without calling register first
+    const result = await bootstrappedClient.callTool({
+      name: 'post_message',
+      arguments: { channel: 'general', text: 'hello from pre-registered agent' },
+    });
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('enforces strict configured agent identity during register', async () => {
+    const strictServer = createRelayMcpServer({
+      apiKey: 'test-key',
+      agentName: 'Lead',
+      agentType: 'agent',
+      strictAgentName: true,
+    });
+    const strictClient = new Client({ name: 'strict-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([strictClient.connect(ct), strictServer.connect(st)]);
+
+    const result = await strictClient.callTool({
+      name: 'register',
+      arguments: { name: 'Claude', type: 'human' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const firstContent = result.content?.[0] as { text?: string } | undefined;
+    const text = typeof firstContent?.text === 'string' ? firstContent.text : '{}';
+    const payload = JSON.parse(text) as {
+      registered_name?: string;
+      warnings?: string[];
+    };
+    expect(payload.registered_name).toBe('Lead');
+    expect(payload.warnings?.some((warning) => warning.includes('ignoring requested name'))).toBe(
+      true,
+    );
+    expect(payload.warnings?.some((warning) => warning.includes('ignoring requested type'))).toBe(
+      true,
+    );
+  });
+
   it('supports keyless startup and bootstrap via set_workspace_key', async () => {
     const keylessServer = createRelayMcpServer({});
     const keylessClient = new Client({ name: 'keyless-client', version: '0.1.0' });

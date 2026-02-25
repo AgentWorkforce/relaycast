@@ -51,7 +51,9 @@ export function eventToResourceUris(event: WsClientEvent): string[] {
       return [];
     case 'reaction.added':
     case 'reaction.removed':
-      return [];
+      // Reactions are informational activity: surface them as a soft inbox
+      // signal so agents can observe updates without implying a required reply.
+      return ['relay://inbox'];
     default:
       return [];
   }

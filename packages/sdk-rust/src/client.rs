@@ -178,7 +178,7 @@ impl HttpClient {
             let status = response.status().as_u16();
 
             // Retry on 5xx errors
-            if status >= 500 && status <= 599 && attempt < RETRY_BACKOFFS_MS.len() {
+            if (500..=599).contains(&status) && attempt < RETRY_BACKOFFS_MS.len() {
                 tokio::time::sleep(Duration::from_millis(*backoff)).await;
                 continue;
             }

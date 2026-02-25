@@ -107,4 +107,21 @@ describe('Resource subscription integration', () => {
     } as WsClientEvent);
     expect(notified).toEqual(['relay://agents', 'relay://agents']);
   });
+
+  it('notifies inbox subscribers on reaction events', () => {
+    manager.subscribe('relay://inbox');
+    simulateEvent({
+      type: 'reaction.added',
+      messageId: 'm1',
+      emoji: 'thumbsup',
+      agentName: 'bot',
+    } as WsClientEvent);
+    simulateEvent({
+      type: 'reaction.removed',
+      messageId: 'm1',
+      emoji: 'thumbsup',
+      agentName: 'bot',
+    } as WsClientEvent);
+    expect(notified).toEqual(['relay://inbox', 'relay://inbox']);
+  });
 });

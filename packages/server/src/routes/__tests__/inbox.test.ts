@@ -72,6 +72,15 @@ describe('GET /v1/inbox', () => {
           },
         },
       ],
+      recent_reactions: [
+        {
+          message_id: 'msg_005',
+          channel_name: 'general',
+          emoji: 'thumbsup',
+          agent_name: 'Alice',
+          created_at: '2025-01-01T00:00:00',
+        },
+      ],
     });
 
     const res = await app.request('/v1/inbox', {
@@ -89,6 +98,9 @@ describe('GET /v1/inbox', () => {
     expect(body.data.mentions[0].text).toContain('@TestBot');
     expect(body.data.unread_dms).toHaveLength(1);
     expect(body.data.unread_dms[0].from).toBe('Alice');
+    expect(body.data.recent_reactions).toHaveLength(1);
+    expect(body.data.recent_reactions[0].emoji).toBe('thumbsup');
+    expect(body.data.recent_reactions[0].agent_name).toBe('Alice');
   });
 
   it('returns empty inbox when nothing unread', async () => {
@@ -96,6 +108,7 @@ describe('GET /v1/inbox', () => {
       unread_channels: [],
       mentions: [],
       unread_dms: [],
+      recent_reactions: [],
     });
 
     const res = await app.request('/v1/inbox', {
@@ -109,6 +122,7 @@ describe('GET /v1/inbox', () => {
     expect(body.data.unread_channels).toEqual([]);
     expect(body.data.mentions).toEqual([]);
     expect(body.data.unread_dms).toEqual([]);
+    expect(body.data.recent_reactions).toEqual([]);
   });
 
   it('returns 401 without auth', async () => {
@@ -132,6 +146,7 @@ describe('GET /v1/inbox', () => {
       unread_channels: [],
       mentions: [],
       unread_dms: [],
+      recent_reactions: [],
     });
 
     await app.request('/v1/inbox', {

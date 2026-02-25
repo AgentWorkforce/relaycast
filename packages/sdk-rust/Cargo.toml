@@ -1,6 +1,6 @@
 [package]
 name = "relaycast"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 authors = ["Agent Workforce <team@agentrelay.dev>"]
 description = "Rust SDK for RelayCast - multi-agent coordination platform"
@@ -27,6 +27,7 @@ urlencoding = "2.1"
 tokio-test = "0.4"
 mockito = "1.5"
 wiremock = "0.6"
+tempfile = "3.19"
 
 [features]
 default = []

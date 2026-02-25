@@ -3,16 +3,30 @@ import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
+import { RelayError, relayErrorFromApi } from './errors.js';
 
 export interface ClientOptions {
   apiKey: string;
   baseUrl?: string;
+  retryPolicy?: RetryPolicyInput;
 }
 
 export interface RequestOptions {
   headers?: Record<string, string>;
   schema?: z.ZodType;
 }
+
+export interface RetryPolicy {
+  maxRetries: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  jitter: boolean;
+  retryOn: number[];
+}
+
+export type RetryPolicyInput = Partial<Omit<RetryPolicy, 'retryOn'>> & {
+  retryOn?: number[];
+};
 
 const INTERNAL_ORIGIN = Symbol('relaycast.internal.origin');
 
@@ -43,20 +57,53 @@ export function withInternalOrigin<T extends OriginCapableOptions>(
   return copy as T;
 }
 
-export class RelayError extends Error {
-  code: string;
-  status: number;
-
-  constructor(code: string, message: string, status: number) {
-    super(message);
-    this.name = 'RelayError';
-    this.code = code;
-    this.status = status;
-  }
-}
+export { RelayError } from './errors.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const DEFAULT_RETRY_POLICY: RetryPolicy = {
+  maxRetries: 3,
+  backoffMs: 1000,
+  backoffMultiplier: 2,
+  jitter: true,
+  retryOn: [429, 500, 502, 503, 504],
+};
+
+function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
+  return {
+    maxRetries: Number.isFinite(input?.maxRetries) ? Math.max(0, Math.floor(input!.maxRetries!)) : DEFAULT_RETRY_POLICY.maxRetries,
+    backoffMs: Number.isFinite(input?.backoffMs) ? Math.max(0, Math.floor(input!.backoffMs!)) : DEFAULT_RETRY_POLICY.backoffMs,
+    backoffMultiplier: Number.isFinite(input?.backoffMultiplier)
+      ? Math.max(1, input!.backoffMultiplier!)
+      : DEFAULT_RETRY_POLICY.backoffMultiplier,
+    jitter: typeof input?.jitter === 'boolean' ? input.jitter : DEFAULT_RETRY_POLICY.jitter,
+    retryOn: Array.isArray(input?.retryOn)
+      ? input.retryOn.filter((status): status is number => Number.isInteger(status) && status >= 100)
+      : [...DEFAULT_RETRY_POLICY.retryOn],
+  };
+}
+
+function computeBackoffMs(policy: RetryPolicy, retryAttempt: number): number {
+  const exponential = policy.backoffMs * (policy.backoffMultiplier ** retryAttempt);
+  if (!policy.jitter) return Math.max(0, Math.round(exponential));
+  const jitterFactor = 0.5 + Math.random();
+  return Math.max(0, Math.round(exponential * jitterFactor));
+}
+
+function parseRetryAfterMs(res: Response): number | null {
+  const header = res.headers.get('Retry-After');
+  if (!header) return null;
+
+  const asSeconds = Number(header);
+  if (Number.isFinite(asSeconds)) {
+    return Math.max(0, Math.round(asSeconds * 1000));
+  }
+
+  const asDate = Date.parse(header);
+  if (Number.isNaN(asDate)) return null;
+  return Math.max(0, asDate - Date.now());
 }
 
 const apiEnvelopeSchema = z.object({
@@ -78,6 +125,7 @@ export class HttpClient {
   private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
+  private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
@@ -86,6 +134,7 @@ export class HttpClient {
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
+    this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
   get apiKey(): string {
@@ -108,9 +157,13 @@ export class HttpClient {
     return this._originVersion;
   }
 
+  get retryPolicy(): RetryPolicy {
+    return this._retryPolicy;
+  }
+
   withApiKey(apiKey: string): HttpClient {
     return new HttpClient(withInternalOrigin(
-      { apiKey, baseUrl: this._baseUrl },
+      { apiKey, baseUrl: this._baseUrl, retryPolicy: this._retryPolicy },
       {
         surface: this._originSurface,
         client: this._originClient,
@@ -146,21 +199,36 @@ export class HttpClient {
     if (hasBody) headers['Content-Type'] = 'application/json';
     const wireBody = hasBody ? decamelizeKeys(body) : undefined;
 
-    const retryBackoffsMs = [200, 400, 800];
     let attempt = 0;
 
     while (true) {
-      const res = await fetch(url.toString(), {
-        method,
-        headers,
-        body: hasBody ? JSON.stringify(wireBody) : undefined,
-      });
+      let res: Response;
+      try {
+        res = await fetch(url.toString(), {
+          method,
+          headers,
+          body: hasBody ? JSON.stringify(wireBody) : undefined,
+        });
+      } catch (err) {
+        if (attempt < this._retryPolicy.maxRetries) {
+          const waitMs = computeBackoffMs(this._retryPolicy, attempt);
+          attempt += 1;
+          await sleep(waitMs);
+          continue;
+        }
+        throw new RelayError(
+          'transport_error',
+          `Network request failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+          { retryable: true, cause: err },
+        );
+      }
 
-      // Retry on 5xx with exponential backoff.
-      if (res.status >= 500 && res.status <= 599 && attempt < retryBackoffsMs.length) {
-        const backoff = retryBackoffsMs[attempt]!;
+      if (this._retryPolicy.retryOn.includes(res.status) && attempt < this._retryPolicy.maxRetries) {
+        const waitMs = res.status === 429
+          ? parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt)
+          : computeBackoffMs(this._retryPolicy, attempt);
         attempt += 1;
-        await sleep(backoff);
+        await sleep(waitMs);
         continue;
       }
 
@@ -169,18 +237,30 @@ export class HttpClient {
         return undefined as Camelize<T>;
       }
 
-      const json: unknown = await res.json();
+      let json: unknown;
+      try {
+        json = await res.json();
+      } catch (err) {
+        throw new RelayError(
+          'transport_error',
+          `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
+          { statusCode: res.status, retryable: false, cause: err },
+        );
+      }
       const envelope = apiEnvelopeSchema.safeParse(json);
 
       if (!envelope.success) {
-        throw new RelayError('invalid_response', 'Invalid API response', res.status);
+        throw new RelayError('transport_error', 'Invalid API response', {
+          statusCode: res.status,
+          retryable: false,
+        });
       }
 
       if (!envelope.data.ok) {
         const errParsed = ApiErrorSchema.safeParse(json);
         const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
         const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
-        throw new RelayError(code, message, res.status);
+        throw relayErrorFromApi(code, message, res.status);
       }
 
       const data = envelope.data.data;

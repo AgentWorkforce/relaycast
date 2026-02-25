@@ -306,7 +306,7 @@ impl WsClient {
                         "type": "subscribe",
                         "channels": subscribed_channels.iter().cloned().collect::<Vec<_>>()
                     });
-                    if let Err(err) = write.send(Message::Text(msg.to_string().into())).await {
+                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
                         let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                         *is_connected.lock().await = false;
                         continue;
@@ -353,7 +353,7 @@ impl WsClient {
                                         "type": "subscribe",
                                         "channels": channels
                                     });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string().into())).await {
+                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
                                         let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                                         break;
                                     }
@@ -366,7 +366,7 @@ impl WsClient {
                                         "type": "unsubscribe",
                                         "channels": channels
                                     });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string().into())).await {
+                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
                                         let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                                         break;
                                     }
@@ -380,7 +380,7 @@ impl WsClient {
                         }
                         _ = ping_interval.tick() => {
                             let ping = serde_json::json!({"type": "ping"});
-                            if let Err(err) = write.send(Message::Text(ping.to_string().into())).await {
+                            if let Err(err) = write.send(Message::Text(ping.to_string())).await {
                                 let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                                 break;
                             }
