@@ -147,7 +147,7 @@ describe('GET /v1/messages/:id/readers', () => {
   it('returns list of readers with agent token', async () => {
     vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
     vi.mocked(receiptEngine.getReaders).mockResolvedValue([
-      { agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
+      { agent_id: 'agent_123', agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
     ]);
 
     const res = await app.request('/v1/messages/msg_001/readers', {
@@ -159,14 +159,14 @@ describe('GET /v1/messages/:id/readers', () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.data).toEqual([
-      { agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
+      { agent_id: 'agent_123', agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
     ]);
   });
 
   it('returns list of readers with workspace key', async () => {
     vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
     vi.mocked(receiptEngine.getReaders).mockResolvedValue([
-      { agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
+      { agent_id: 'agent_123', agent_name: 'TestBot', read_at: '2025-01-01T00:00:00.000Z' },
     ]);
 
     const res = await app.request('/v1/messages/msg_001/readers', {
@@ -214,7 +214,7 @@ describe('GET /v1/channels/:name/read-status', () => {
   it('returns per-member read positions', async () => {
     vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
     vi.mocked(receiptEngine.getReadStatus).mockResolvedValue([
-      { agent_name: 'TestBot', last_read_id: '100' },
+      { agent_name: 'TestBot', last_read_id: '100', last_read_at: '2025-01-01T00:00:00.000Z' },
     ]);
 
     const res = await app.request('/v1/channels/general/read-status', {
@@ -226,7 +226,7 @@ describe('GET /v1/channels/:name/read-status', () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.data).toEqual([
-      { agent_name: 'TestBot', last_read_id: '100' },
+      { agent_name: 'TestBot', last_read_id: '100', last_read_at: '2025-01-01T00:00:00.000Z' },
     ]);
   });
 

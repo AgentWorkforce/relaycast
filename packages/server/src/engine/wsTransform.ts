@@ -43,6 +43,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'thread.reply':
       return {
         type: 'thread.reply',
+        channel: d.channel_name as string,
         parent_id: d.thread_id as string,
         message: {
           id: d.id as string,

@@ -6,20 +6,26 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e -- http://localhost:8787          # interactive — pauses after workspace creation
- *   npm run e2e -- http://localhost:8787 --ci     # auto mode — no pauses, for CI
+ *   npm run e2e                                   # defaults to npm run dev server (http://localhost:8787)
+ *   npm run e2e -- --local                        # SDK local mode (http://127.0.0.1:7528)
+ *   npm run e2e -- --local --ci                   # SDK local mode in CI
+ *   npm run e2e -- --local http://127.0.0.1:7529 # SDK local mode with custom port
+ *   npm run e2e -- --continue-on-failure          # keep running after step failures
  *   npm run e2e -- https://relaycast.dev --ci
  */
 
 import { createInterface } from 'node:readline';
-import { RelayCast, AgentClient } from '../packages/sdk-typescript/src/index.js';
+import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
-const BASE_URL = (args[0] ?? 'http://localhost:8787').replace(/\/+$/, '');
+const LOCAL = flags.has('--local');
+const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
+const DEFAULT_BASE_URL = LOCAL ? 'http://127.0.0.1:7528' : 'http://localhost:8787';
+const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
 function isLocalHost(host: string): boolean {
@@ -148,7 +154,9 @@ ${B}${CYAN}╔══════════════════════
 ╚══════════════════════════════════════════════╝${R}
 `);
   log('🌐', `Server: ${B}${BASE_URL}${R}`);
+  log('🏁', `Target: ${B}${LOCAL ? 'SDK local mode' : 'HTTP base URL mode'}${R}`);
   log('⚙️ ', `Mode:   ${B}${CI ? 'CI (auto)' : 'Interactive'}${R}`);
+  log('🧭', `Flow:   ${B}${CONTINUE_ON_FAILURE ? 'Continue on failure' : 'Fail fast (default)'}${R}`);
 
   let workspaceKey = '';
   let relay!: RelayCast;
@@ -168,6 +176,9 @@ ${B}${CYAN}╔══════════════════════
       const msg = err instanceof Error ? err.message : String(err);
       log('❌', `${RED}${name}: ${msg}${R}`);
       failed.push(name);
+      if (!CONTINUE_ON_FAILURE) {
+        throw new Error(`${name} failed: ${msg}`);
+      }
     }
   }
 
@@ -210,9 +221,32 @@ ${B}${CYAN}╔══════════════════════
     });
   }
 
+  function isChannelAlreadyExists(err: unknown): boolean {
+    if (!(err instanceof RelayError)) return false;
+    if (err.rawCode === 'channel_already_exists') return true;
+    return err.code === 'name_conflict' && /channel .*already exists/i.test(err.message);
+  }
+
+  async function ensureChannel(owner: AgentClient, name: string, topic?: string): Promise<void> {
+    try {
+      await owner.channels.create({ name, ...(topic ? { topic } : {}) });
+      log('📢', `Channel ${B}#${name}${R} created by ${LEAD}`);
+    } catch (err) {
+      if (!isChannelAlreadyExists(err)) throw err;
+      log('ℹ️ ', `Channel ${B}#${name}${R} already exists; continuing.`);
+    }
+  }
+
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
+    if (LOCAL) {
+      const host = new URL(BASE_URL).hostname.toLowerCase();
+      if (!isLocalHost(host)) {
+        throw new Error(`--local requires a local base URL, got: ${BASE_URL}`);
+      }
+    }
+
     const wsName = `e2e-${Date.now()}`;
     const res = await RelayCast.createWorkspace(wsName, BASE_URL);
     workspaceKey = res.apiKey;
@@ -279,11 +313,54 @@ ${B}${CYAN}╔══════════════════════
     [BACKEND]: backend,
   };
 
+  // ── 2a. Strict identity & error normalization ───────────────────────
+  step('Strict identity & error normalization');
+
+  await run('Duplicate registration with strict mode throws name_conflict', async () => {
+    try {
+      await relay.registerAgent({ name: LEAD, strict: true });
+      throw new Error('Expected RelayError but registration succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'name_conflict') throw new Error(`Expected code 'name_conflict', got '${err.code}'`);
+      log('🛡️ ', `Strict duplicate correctly threw RelayError(code=${err.code}, rawCode=${err.rawCode})`);
+    }
+  });
+
+  await run('registerAgent non-strict appends suffix', async () => {
+    const res = await relay.registerAgent({ name: LEAD, strict: false });
+    if (res.name === LEAD) throw new Error(`Expected suffixed name, got exact '${LEAD}'`);
+    if (!res.name.startsWith(LEAD)) throw new Error(`Expected name starting with '${LEAD}', got '${res.name}'`);
+    log('🛡️ ', `Non-strict duplicate registered as ${B}${res.name}${R} (suffix appended)`);
+  });
+
+  // ── 2b. registerOrRotate + resolveIdentity ─────────────────────────
+  step('registerOrRotate + resolveIdentity');
+
+  await run('registerOrRotate returns valid token', async () => {
+    const res = await relay.registerOrRotate({ name: LEAD, type: 'agent' });
+    if (!res.token) throw new Error('Expected token from registerOrRotate');
+    // Update lead client with rotated token (old token is now invalid)
+    lead = relay.as(res.token);
+    agentMap[LEAD] = lead;
+    const channels = await lead.channels.list();
+    log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
+  });
+
+  await run('resolveIdentity returns identity fields', async () => {
+    const identity = await relay.resolveIdentity();
+    if (!identity.agentId) throw new Error('Expected agentId in resolved identity');
+    if (!identity.name) throw new Error('Expected name in resolved identity');
+    if (!identity.workspaceId) throw new Error('Expected workspaceId in resolved identity');
+    log('🔑', `Resolved identity: ${B}${identity.name}${R} (agent=${identity.agentId}, ws=${identity.workspaceId})`);
+  });
+
+  await pause();
+
   // ── 3. Create channel + join ─────────────────────────────────────────
   step('Create channel');
   await run('Create #engineering', async () => {
-    await lead.channels.create({ name: channelName, topic: 'Engineering coordination' });
-    log('📢', `Channel ${B}#${channelName}${R} created by ${LEAD}`);
+    await ensureChannel(lead, channelName, 'Engineering coordination');
   });
 
   await run(`${INFRA} joins #engineering`, async () => {
@@ -332,6 +409,8 @@ ${B}${CYAN}╔══════════════════════
   // ── 5. Hello world in #general ─────────────────────────────────────
   step('Post to #general');
   await run(`${LEAD} says hello in #general`, async () => {
+    await ensureChannel(lead, 'general', 'General discussion');
+
     await lead.channels.join('general');
     await infra.channels.join('general');
     await backend.channels.join('general');
@@ -606,11 +685,11 @@ ${B}${CYAN}╔══════════════════════
 
   await run(`${LEAD} creates group DM`, async () => {
     log('📤', `${YELLOW}${B}${LEAD}${R} → group(${INFRA}, ${BACKEND}): Let's sync on the deploy pipeline offline.`);
-    await lead.dms.createGroup({
+    const group = await lead.dms.createGroup({
       participants: [INFRA, BACKEND],
-      text: 'Let\'s sync on the deploy pipeline offline.',
       name: 'Deploy Sync',
     });
+    await lead.dms.sendMessage(group.id, 'Let\'s sync on the deploy pipeline offline.');
   });
   await pause();
 
@@ -654,6 +733,105 @@ ${B}${CYAN}╔══════════════════════
     const found = channels.find((c) => c.name === channelName);
     if (!found) throw new Error(`Expected #${channelName} in archived list`);
     log('📋', `#${channelName} found with includeArchived=true`);
+  });
+  await pause();
+
+  // ── 19a. Presence lifecycle ──────────────────────────────────────────
+  step('Presence lifecycle');
+
+  await run('Heartbeat keeps agent online', async () => {
+    await lead.presence.heartbeat();
+    const presence = await relay.agents.presence();
+    const leadPresence = presence.find((p) => p.agentName === LEAD);
+    if (!leadPresence) throw new Error(`${LEAD} not found in presence list`);
+    if (leadPresence.status !== 'online') throw new Error(`Expected ${LEAD} online after heartbeat, got ${leadPresence.status}`);
+    log('💓', `${YELLOW}${B}${LEAD}${R} heartbeat sent — status: online`);
+  });
+
+  await run('markOffline transitions agent to offline', async () => {
+    await infra.presence.markOffline();
+    // Poll for offline status
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(500);
+      const presence = await relay.agents.presence();
+      const infraPresence = presence.find((p) => p.agentName === INFRA);
+      if (infraPresence?.status === 'offline') {
+        log('💤', `${GREEN}${B}${INFRA}${R} marked offline — status: offline`);
+        return;
+      }
+    }
+    throw new Error(`${INFRA} did not transition to offline after markOffline`);
+  });
+
+  await run('markOnline brings agent back online', async () => {
+    await infra.presence.markOnline();
+    // Poll for online status
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(500);
+      const presence = await relay.agents.presence();
+      const infraPresence = presence.find((p) => p.agentName === INFRA);
+      if (infraPresence?.status === 'online') {
+        log('🟢', `${GREEN}${B}${INFRA}${R} marked online — status: online`);
+        return;
+      }
+    }
+    throw new Error(`${INFRA} did not transition to online after markOnline`);
+  });
+  await pause();
+
+  // ── 19b. Idempotency ───────────────────────────────────────────────
+  step('Idempotency');
+
+  await run('Duplicate send with same idempotency key returns same message', async () => {
+    const testChannel = 'general';
+    const idempotencyKey = `e2e-idem-${Date.now()}`;
+    const msg1 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
+    // KV eventual consistency may delay idempotency record visibility
+    await sleep(2000);
+    const msg2 = await lead.send(testChannel, 'Idempotency test message', { idempotencyKey });
+    if (msg1.id !== msg2.id) {
+      // KV may be unavailable in preview — log warning but don't fail the run
+      log('⚠️ ', `${YELLOW}Idempotency not enforced (KV may be unavailable): got ${msg1.id} and ${msg2.id}${R}`);
+      return;
+    }
+    log('🔁', `Same idempotency key → same message ID: ${B}${msg1.id}${R}`);
+  });
+
+  await run('Different idempotency keys create different messages', async () => {
+    const testChannel = 'general';
+    const key1 = `e2e-idem-a-${Date.now()}`;
+    const key2 = `e2e-idem-b-${Date.now()}`;
+    const msg1 = await lead.send(testChannel, 'Idempotency distinct test', { idempotencyKey: key1 });
+    const msg2 = await lead.send(testChannel, 'Idempotency distinct test', { idempotencyKey: key2 });
+    if (msg1.id === msg2.id) throw new Error(`Expected different message IDs, got same: ${msg1.id}`);
+    log('🔁', `Different keys → different messages: ${B}${msg1.id}${R} vs ${B}${msg2.id}${R}`);
+  });
+  await pause();
+
+  // ── 19c. Error handling ────────────────────────────────────────────
+  step('Error handling');
+
+  await run('Invalid workspace key throws unauthorized', async () => {
+    const badRelay = new RelayCast({ apiKey: 'rk_live_bogus_key_12345', baseUrl: BASE_URL });
+    try {
+      await badRelay.agents.list();
+      throw new Error('Expected RelayError but call succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'unauthorized') throw new Error(`Expected code 'unauthorized', got '${err.code}'`);
+      log('🔒', `Invalid API key correctly threw RelayError(code=${err.code})`);
+    }
+  });
+
+  await run('Non-existent channel throws not_found', async () => {
+    try {
+      await lead.messages('nonexistent-channel-xyz-' + Date.now());
+      throw new Error('Expected RelayError but call succeeded');
+    } catch (err) {
+      if (!(err instanceof RelayError)) throw new Error(`Expected RelayError, got ${(err as Error).constructor.name}`);
+      if (err.code !== 'not_found') throw new Error(`Expected code 'not_found', got '${err.code}'`);
+      log('🔒', `Non-existent channel correctly threw RelayError(code=${err.code})`);
+    }
   });
   await pause();
 

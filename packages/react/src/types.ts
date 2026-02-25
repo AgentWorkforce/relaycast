@@ -1,5 +1,6 @@
 import type {
   MessageWithMeta,
+  SearchMessageResult,
   Channel,
   ChannelMemberInfo,
   Agent,
@@ -109,7 +110,7 @@ export interface UseDMsReturn {
 }
 
 export interface UseSearchReturn {
-  results: MessageWithMeta[];
+  results: SearchMessageResult[];
   loading: boolean;
   error: Error | null;
 }

@@ -209,9 +209,10 @@ describe('Programmability SDK', () => {
           command: 'deploy',
           channel: 'ops',
           invoked_by: 'agent_1',
+          handler_agent_id: 'agent_handler_1',
           args: '--force',
           parameters: null,
-          response_message_id: null,
+          message_id: 'msg_1',
           created_at: '2025-01-01',
         }),
       );

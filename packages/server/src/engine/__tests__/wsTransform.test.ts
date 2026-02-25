@@ -19,7 +19,7 @@ describe('transformForClient', () => {
       agent_id: 'agent_1',
       from_name: 'Bot',
       text: 'hi',
-      attachments: [{ file_id: 'f1', filename: 'a.txt', url: 'u', size: 1 }],
+      attachments: [{ file_id: 'f1', filename: 'a.txt', content_type: 'text/plain', size_bytes: 1 }],
     }, 'ch_1');
 
     expect(transformForClient(event)).toEqual({
@@ -30,7 +30,7 @@ describe('transformForClient', () => {
         agent_id: 'agent_1',
         agent_name: 'Bot',
         text: 'hi',
-        attachments: [{ file_id: 'f1', filename: 'a.txt', url: 'u', size: 1 }],
+        attachments: [{ file_id: 'f1', filename: 'a.txt', content_type: 'text/plain', size_bytes: 1 }],
       },
     });
   });
@@ -68,6 +68,7 @@ describe('transformForClient', () => {
 
     expect(transformForClient(event)).toEqual({
       type: 'thread.reply',
+      channel: 'general',
       parent_id: 'msg_root',
       message: {
         id: 'msg_3',

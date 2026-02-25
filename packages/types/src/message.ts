@@ -67,15 +67,19 @@ export type Message = z.infer<typeof MessageSchema>;
 
 export const MessageWithMetaSchema = z.object({
   id: z.string(),
-  agent_name: z.string(),
+  channel_id: z.string(),
   agent_id: z.string(),
+  agent_name: z.string(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
+  has_attachments: z.boolean(),
+  thread_id: z.string().nullable(),
   attachments: z.array(FileAttachmentSchema),
   created_at: z.string(),
   reply_count: z.number(),
   reactions: z.array(ReactionGroupSchema),
   read_by_count: z.number(),
+  mentions: z.array(z.string()).optional(),
 });
 export type MessageWithMeta = z.infer<typeof MessageWithMetaSchema>;
 
@@ -83,6 +87,8 @@ export const PostMessageRequestSchema = z.object({
   text: z.string(),
   blocks: z.array(MessageBlockSchema).optional(),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
+  content_type: z.string().optional(),
 });
 export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
 
@@ -98,3 +104,13 @@ export const ThreadReplyRequestSchema = z.object({
   blocks: z.array(MessageBlockSchema).optional(),
 });
 export type ThreadReplyRequest = z.infer<typeof ThreadReplyRequestSchema>;
+
+export const SearchMessageResultSchema = z.object({
+  id: z.string(),
+  channel_name: z.string(),
+  agent_name: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+  relevance_score: z.number(),
+});
+export type SearchMessageResult = z.infer<typeof SearchMessageResultSchema>;

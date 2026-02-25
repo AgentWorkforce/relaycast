@@ -2,26 +2,34 @@ import type {
   PostMessageRequest,
   MessageListQuery,
   MessageWithMeta,
+  SearchMessageResult,
   MessageBlock,
   ThreadReplyRequest,
   SendDmRequest,
+  SendDmResponse,
   CreateGroupDmRequest,
-  DmConversation,
+  CreateGroupDmResponse,
+  GroupDmMessageResponse,
+  GroupDmParticipantResponse,
   DmConversationSummary,
   CreateChannelRequest,
   UpdateChannelRequest,
   Channel,
   ChannelMemberInfo,
+  JoinChannelResponse,
+  InviteChannelResponse,
+  AddedReaction,
+  ReadReceipt,
   ReactionGroup,
   InboxResponse,
   ReaderInfo,
   ChannelReadStatus,
   UploadRequest,
   UploadResponse,
+  CompleteUploadResponse,
   FileInfo,
   InvokeCommandRequest,
   CommandInvokeResult,
-  SearchResult,
   WsClientEvent,
   MessageCreatedEvent,
   MessageUpdatedEvent,
@@ -317,7 +325,7 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<MessageWithMeta> {
+  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<SendDmResponse> {
     const body: SendDmRequest = { to: agent, text };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -343,14 +351,14 @@ export class AgentClient {
     createGroup: (
       opts: CreateGroupDmRequest,
       idempotency?: IdempotencyOption,
-    ): Promise<DmConversation> =>
+    ): Promise<CreateGroupDmResponse> =>
       this.client.post('/v1/dm/group', opts, idempotencyHeaders(idempotency)),
 
     sendMessage: (
       conversationId: string,
       text: string,
       opts?: IdempotencyOption,
-    ): Promise<MessageWithMeta> =>
+    ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         { text },
@@ -360,10 +368,10 @@ export class AgentClient {
     addParticipant: (
       conversationId: string,
       agent: string,
-    ): Promise<unknown> =>
+    ): Promise<GroupDmParticipantResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/participants`,
-        { agent },
+        { agentName: agent },
       ),
 
     removeParticipant: (
@@ -390,7 +398,7 @@ export class AgentClient {
     get: (name: string): Promise<Channel & { members: ChannelMemberInfo[] }> =>
       this.client.get(`/v1/channels/${encodeURIComponent(name)}`),
 
-    join: (name: string): Promise<unknown> =>
+    join: (name: string): Promise<JoinChannelResponse> =>
       this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`),
 
     leave: async (name: string): Promise<void> => {
@@ -403,10 +411,10 @@ export class AgentClient {
     archive: (name: string): Promise<void> =>
       this.client.delete(`/v1/channels/${encodeURIComponent(name)}`),
 
-    invite: (channel: string, agent: string): Promise<unknown> =>
+    invite: (channel: string, agent: string): Promise<InviteChannelResponse> =>
       this.client.post(
         `/v1/channels/${encodeURIComponent(channel)}/invite`,
-        { agent },
+        { agentName: agent },
       ),
 
     members: (name: string): Promise<ChannelMemberInfo[]> =>
@@ -418,7 +426,7 @@ export class AgentClient {
 
   // === Reactions ===
 
-  async react(messageId: string, emoji: string): Promise<unknown> {
+  async react(messageId: string, emoji: string): Promise<AddedReaction> {
     return this.client.post(
       `/v1/messages/${encodeURIComponent(messageId)}/reactions`,
       { emoji },
@@ -448,7 +456,7 @@ export class AgentClient {
       before?: string;
       after?: string;
     },
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchMessageResult[]> {
     const params: Record<string, string> = { q: query };
     if (opts?.channel) params.channel = opts.channel;
     if (opts?.from) params.from = opts.from;
@@ -466,7 +474,7 @@ export class AgentClient {
 
   // === Read Receipts ===
 
-  async markRead(messageId: string): Promise<unknown> {
+  async markRead(messageId: string): Promise<ReadReceipt> {
     return this.client.post(
       `/v1/messages/${encodeURIComponent(messageId)}/read`,
     );
@@ -504,7 +512,7 @@ export class AgentClient {
     upload: (data: UploadRequest): Promise<UploadResponse> =>
       this.client.post('/v1/files/upload', data),
 
-    complete: (fileId: string): Promise<FileInfo> =>
+    complete: (fileId: string): Promise<CompleteUploadResponse> =>
       this.client.post(`/v1/files/${encodeURIComponent(fileId)}/complete`),
 
     get: (fileId: string): Promise<FileInfo> =>

@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
+import { resolveEmoji } from '@relaycast/types';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -22,8 +23,9 @@ export function registerFeatureTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
-    await client.react(message_id, emoji);
-    const message = `Reacted with ${emoji}`;
+    const resolved = resolveEmoji(emoji);
+    await client.react(message_id, resolved);
+    const message = `Reacted with ${resolved}`;
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
@@ -43,8 +45,9 @@ export function registerFeatureTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, emoji }) => {
     const client = getAgentClient();
-    await client.unreact(message_id, emoji);
-    const message = `Removed reaction ${emoji}`;
+    const resolved = resolveEmoji(emoji);
+    await client.unreact(message_id, resolved);
+    const message = `Removed reaction ${resolved}`;
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
@@ -63,7 +66,7 @@ export function registerFeatureTools(
     outputSchema: {
       results: z.array(z.object({}).passthrough()).describe('Array of matching message objects'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ query, channel, from, limit }) => {
     const client = getAgentClient();
     const results = await client.search(query, { channel, from, limit });
@@ -80,7 +83,7 @@ export function registerFeatureTools(
       limit: z.number().optional().describe('Maximum number of inbox items to return'),
     },
     outputSchema: jsonResult,
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
     const inbox = await client.inbox();
@@ -119,7 +122,7 @@ export function registerFeatureTools(
     outputSchema: {
       readers: z.array(z.object({}).passthrough()).describe('Array of reader objects with agent name and read timestamp'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id }) => {
     const client = getAgentClient();
     const readers = await client.readers(message_id);

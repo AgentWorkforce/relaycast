@@ -90,7 +90,15 @@ export function enablePiggyback(
         const hasUnread =
           (inbox.unreadChannels?.length ?? 0) > 0 ||
           (inbox.mentions?.length ?? 0) > 0 ||
-          (inbox.unreadDms?.length ?? 0) > 0;
+          (inbox.unreadDms?.length ?? 0) > 0 ||
+          (inbox.recentReactions?.length ?? 0) > 0;
+
+        console.debug('[piggyback] inbox fetch ok — channels=%d mentions=%d dms=%d reactions=%d',
+          inbox.unreadChannels?.length ?? 0,
+          inbox.mentions?.length ?? 0,
+          inbox.unreadDms?.length ?? 0,
+          inbox.recentReactions?.length ?? 0,
+        );
 
         if (hasUnread && Array.isArray(result?.content)) {
           const selfName = getSession().agentName;
@@ -102,8 +110,8 @@ export function enablePiggyback(
             });
           }
         }
-      } catch {
-        // Silently ignore — never break the original tool response
+      } catch (err) {
+        console.debug('[piggyback] inbox fetch failed — %s', err instanceof Error ? err.message : String(err));
       }
 
       return result;
@@ -117,6 +125,7 @@ function formatInbox(inbox: {
   unreadChannels?: Array<{ channelName: string; unreadCount: number }>;
   mentions?: Array<{ agentName: string; channelName: string; text: string }>;
   unreadDms?: Array<{ from: string; unreadCount: number }>;
+  recentReactions?: Array<{ emoji: string; channelName: string; agentName: string }>;
 }, selfName?: string | null): string {
   const norm = (s: string) => s.trim().replace(/^@/, '').toLowerCase();
   const selfNorm = selfName ? norm(selfName) : null;
@@ -148,6 +157,16 @@ function formatInbox(inbox: {
     lines.push('Unread DMs:');
     for (const dm of dms) {
       lines.push(`  From ${dm.from}: ${dm.unreadCount} unread`);
+    }
+  }
+
+  const rxns = selfNorm
+    ? inbox.recentReactions?.filter((r) => !isSelf(r.agentName))
+    : inbox.recentReactions;
+  if (rxns?.length) {
+    lines.push('Reactions (informational — no response required):');
+    for (const r of rxns) {
+      lines.push(`  :${r.emoji}: on your message in #${r.channelName} by @${r.agentName}`);
     }
   }
 

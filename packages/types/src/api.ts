@@ -24,7 +24,19 @@ export const ApiResponseSchema = <T extends z.ZodType>(dataSchema: T) =>
 export const InboxResponseSchema = z.object({
   unread_channels: z.array(z.object({ channel_name: z.string(), unread_count: z.number() })),
   mentions: z.array(z.object({ id: z.string(), channel_name: z.string(), agent_name: z.string(), text: z.string(), created_at: z.string() })),
-  unread_dms: z.array(z.object({ conversation_id: z.string(), from: z.string(), unread_count: z.number(), last_message: z.string().nullable() })),
+  unread_dms: z.array(z.object({
+    conversation_id: z.string(),
+    from: z.string(),
+    unread_count: z.number(),
+    last_message: z.object({ id: z.string(), text: z.string(), created_at: z.string() }).nullable(),
+  })),
+  recent_reactions: z.array(z.object({
+    message_id: z.string(),
+    channel_name: z.string(),
+    emoji: z.string(),
+    agent_name: z.string(),
+    created_at: z.string(),
+  })),
 });
 
 export interface ApiSuccess<T> {

@@ -31,3 +31,10 @@ __pycache__/
 # Rust
 target/
 Cargo.lock
+
+# Relaycast local runtime generated state
+.agent-relay/
+
+# Staged local binary artifacts for npm packaging
+packages/sdk-typescript/bin/*
+!packages/sdk-typescript/bin/.gitkeep

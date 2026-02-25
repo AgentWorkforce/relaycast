@@ -30,19 +30,24 @@ export type RetryPolicyInput = Partial<Omit<RetryPolicy, 'retryOn'>> & {
 
 const INTERNAL_ORIGIN = Symbol('relaycast.internal.origin');
 
-type ClientOptionsWithInternalOrigin = ClientOptions & {
+type OriginCapableOptions = {
+  apiKey?: string;
+  baseUrl?: string;
+};
+
+type OriginCapableWithInternalOrigin = OriginCapableOptions & {
   [INTERNAL_ORIGIN]?: InternalOrigin;
 };
 
-function readInternalOrigin(options: ClientOptions): InternalOrigin | undefined {
-  return (options as ClientOptionsWithInternalOrigin)[INTERNAL_ORIGIN];
+function readInternalOrigin(options: OriginCapableOptions): InternalOrigin | undefined {
+  return (options as OriginCapableWithInternalOrigin)[INTERNAL_ORIGIN];
 }
 
-export function withInternalOrigin<T extends ClientOptions>(
+export function withInternalOrigin<T extends OriginCapableOptions>(
   options: T,
   origin: InternalOrigin,
 ): T {
-  const copy = { ...options } as ClientOptionsWithInternalOrigin;
+  const copy = { ...options } as OriginCapableWithInternalOrigin;
   Object.defineProperty(copy, INTERNAL_ORIGIN, {
     value: origin,
     enumerable: false,
@@ -74,7 +79,7 @@ function normalizeRetryPolicy(input?: RetryPolicyInput): RetryPolicy {
       ? Math.max(1, input!.backoffMultiplier!)
       : DEFAULT_RETRY_POLICY.backoffMultiplier,
     jitter: typeof input?.jitter === 'boolean' ? input.jitter : DEFAULT_RETRY_POLICY.jitter,
-    retryOn: Array.isArray(input?.retryOn) && input.retryOn.length > 0
+    retryOn: Array.isArray(input?.retryOn)
       ? input.retryOn.filter((status): status is number => Number.isInteger(status) && status >= 100)
       : [...DEFAULT_RETRY_POLICY.retryOn],
   };

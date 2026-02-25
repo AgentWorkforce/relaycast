@@ -1,0 +1,84 @@
+name: Build Local Binary
+
+on:
+  push:
+    tags:
+      - "local-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            asset: local-darwin-arm64
+            binary_path: packages/local/target/release/local
+          - os: macos-13
+            asset: local-darwin-x64
+            binary_path: packages/local/target/release/local
+          - os: ubuntu-latest
+            asset: local-linux-x64
+            binary_path: packages/local/target/release/local
+          - os: windows-latest
+            asset: local-windows-x64.exe
+            binary_path: packages/local/target/release/local.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path packages/local/Cargo.toml
+
+      - name: Stage asset (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.binary_path }}" "dist/${{ matrix.asset }}"
+          chmod 755 "dist/${{ matrix.asset }}"
+
+      - name: Stage asset (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item -Path "${{ matrix.binary_path }}" -Destination "dist/${{ matrix.asset }}" -Force
+
+      - name: Upload asset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/local-v')
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten release files
+        run: |
+          mkdir -p release
+          find dist -type f -maxdepth 2 -exec cp {} release/ \;
+          ls -la release
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

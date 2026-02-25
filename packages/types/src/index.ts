@@ -12,3 +12,4 @@ export * from './webhook.js';
 export * from './subscription.js';
 export * from './command.js';
 export * from './telemetry.js';
+export * from './emoji.js';

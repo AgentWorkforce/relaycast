@@ -2,12 +2,9 @@ import { z } from 'zod';
 
 export const WebhookSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
   name: z.string(),
-  channel_id: z.string(),
-  channel_name: z.string(),
+  channel: z.string(),
   url: z.string(),
-  created_by: z.string().nullable(),
   created_at: z.string(),
   is_active: z.boolean(),
 });
@@ -24,6 +21,7 @@ export const CreateWebhookResponseSchema = z.object({
   name: z.string(),
   channel: z.string(),
   url: z.string(),
+  is_active: z.boolean(),
   created_at: z.string(),
 });
 export type CreateWebhookResponse = z.infer<typeof CreateWebhookResponseSchema>;

@@ -58,11 +58,11 @@ function createAgent(options: AgentClientOptions = {}): AgentClient {
     baseUrl: 'http://localhost:8080',
   });
   return new AgentClient(client, {
+    ...options,
     ws: {
       reconnectJitter: false,
       ...(options.ws ?? {}),
     },
-    ...options,
   });
 }
 

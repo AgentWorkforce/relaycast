@@ -257,6 +257,68 @@ describe('piggyback unread messages', () => {
     expect((result.content as any[])[0].text).toBe('original result');
   });
 
+  it('appends recent reactions to tool response', async () => {
+    mockInbox.mockResolvedValue({
+      unreadChannels: [],
+      mentions: [],
+      unreadDms: [],
+      recentReactions: [
+        { emoji: 'thumbsup', channelName: 'general', agentName: 'alice' },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(2);
+    const piggyback = (result.content as any[])[1];
+    expect(piggyback.text).toContain('Reactions (informational — no response required):');
+    expect(piggyback.text).toContain(':thumbsup: on your message in #general by @alice');
+  });
+
+  it('filters out self-reactions from piggyback', async () => {
+    mockInbox.mockResolvedValue({
+      unreadChannels: [],
+      mentions: [],
+      unreadDms: [],
+      recentReactions: [
+        { emoji: 'thumbsup', channelName: 'general', agentName: 'bot1' },
+        { emoji: 'rocket', channelName: 'dev', agentName: 'alice' },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(2);
+    const piggyback = (result.content as any[])[1];
+    expect(piggyback.text).toContain(':rocket: on your message in #dev by @alice');
+    expect(piggyback.text).not.toContain('bot1');
+  });
+
+  it('suppresses piggyback when only self-reactions exist', async () => {
+    mockInbox.mockResolvedValue({
+      unreadChannels: [],
+      mentions: [],
+      unreadDms: [],
+      recentReactions: [
+        { emoji: 'thumbsup', channelName: 'general', agentName: 'bot1' },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: 'dummy_tool',
+      arguments: { arg: 'test' },
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect((result.content as any[])[0].text).toBe('original result');
+  });
+
   it('handles inbox error gracefully', async () => {
     mockInbox.mockRejectedValue(new Error('Network error'));
 

@@ -9,6 +9,31 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 - No unreleased changes yet.
 
+## [0.2.6] - 2026-02-25
+
+### Added
+- Added a new `credentials` module with file-backed credential persistence and session bootstrapping APIs:
+  - `CredentialStore`
+  - `BootstrapConfig`
+  - `bootstrap_session(...)`
+- Added local runtime support in `RelayCastOptions`:
+  - `RelayCastOptions::local(...)`
+  - `RelayCastOptions::with_local(...)`
+  - Auto-bootstrap and health checks for local daemon startup.
+- Added `RelayError` helper methods for API-aware handling:
+  - `is_rate_limited()`
+  - `is_not_found()`
+  - `is_auth_rejection()`
+  - `is_conflict()`
+  - `status()`
+  - `code()`
+- Added parity coverage for local option defaults and credential store behavior.
+
+### Changed
+- `RelayError::WebSocket` now stores boxed tungstenite errors.
+- Updated WebSocket send calls for current tungstenite message text API compatibility.
+- Enabled `reqwest` blocking client support to allow local daemon health checks during client initialization.
+
 ## [0.2.5] - 2026-02-22
 
 ### Added

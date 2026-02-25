@@ -10,11 +10,24 @@ export interface SessionState {
   wsInitAttempted: boolean;
 }
 
-export function createInitialSession(workspaceKey: string | null = null): SessionState {
+export interface InitialSessionOptions {
+  workspaceKey?: string | null;
+  agentToken?: string | null;
+  agentName?: string | null;
+}
+
+export function createInitialSession(
+  workspaceKeyOrOptions: string | null | InitialSessionOptions = null,
+): SessionState {
+  const opts: InitialSessionOptions =
+    typeof workspaceKeyOrOptions === 'object' && workspaceKeyOrOptions !== null && !Array.isArray(workspaceKeyOrOptions) && 'workspaceKey' in workspaceKeyOrOptions
+      ? workspaceKeyOrOptions
+      : { workspaceKey: workspaceKeyOrOptions as string | null };
+
   return {
-    workspaceKey,
-    agentToken: null,
-    agentName: null,
+    workspaceKey: opts.workspaceKey ?? null,
+    agentToken: opts.agentToken ?? null,
+    agentName: opts.agentName ?? null,
     wsBridge: null,
     subscriptions: null,
     wsInitAttempted: false,
