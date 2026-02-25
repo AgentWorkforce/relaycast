@@ -217,19 +217,14 @@ export class RelayCast {
       if (isNameConflictError(err)) {
         const agent = await this.agents.get(data.name);
         const { token } = await this.agents.rotateToken(agent.name);
-        if (!agent.createdAt) {
-          throw new RelayError('transport_error', 'Agent record is missing createdAt', {
-            statusCode: 500,
-            retryable: false,
-          });
-        }
         this.rememberIdentity(agent.id, agent.name);
+        const createdAt = agent.createdAt ?? agent.lastSeen;
         return {
           id: agent.id,
           name: agent.name,
           token,
           status: agent.status,
-          createdAt: agent.createdAt,
+          createdAt,
         };
       }
       throw err;
