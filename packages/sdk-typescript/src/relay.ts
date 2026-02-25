@@ -79,7 +79,9 @@ export class RelayCast {
       throw new Error('RelayCast apiKey is required');
     }
 
-    this.client = new HttpClient({ apiKey: options.apiKey, baseUrl: options.baseUrl });
+    // Preserve hidden internal-origin metadata on options when created via
+    // createInternalRelayCast() so downstream requests use the correct origin headers.
+    this.client = new HttpClient(options);
   }
 
   static async createWorkspace(

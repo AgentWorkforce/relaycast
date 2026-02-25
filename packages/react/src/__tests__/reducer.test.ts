@@ -6,10 +6,13 @@ import type { MessageWithMeta } from '@relaycast/sdk';
 function makeMessage(overrides: Partial<MessageWithMeta> = {}): MessageWithMeta {
   return {
     id: 'msg1',
+    channelId: 'general',
     agentName: 'Alice',
     agentId: 'a1',
     text: 'hello',
     blocks: null,
+    hasAttachments: false,
+    threadId: null,
     attachments: [],
     createdAt: '2026-01-01T00:00:00Z',
     replyCount: 0,
