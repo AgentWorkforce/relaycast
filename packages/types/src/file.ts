@@ -24,7 +24,7 @@ export const UploadRequestSchema = z.object({
 export type UploadRequest = z.infer<typeof UploadRequestSchema>;
 
 export const UploadResponseSchema = z.object({
-  file_id: z.string(),
+  id: z.string(),
   upload_url: z.string(),
   expires_at: z.string(),
 });
@@ -33,18 +33,28 @@ export type UploadResponse = z.infer<typeof UploadResponseSchema>;
 export const FileAttachmentSchema = z.object({
   file_id: z.string(),
   filename: z.string(),
-  url: z.string(),
-  size: z.number(),
+  content_type: z.string(),
+  size_bytes: z.number(),
 });
 export type FileAttachment = z.infer<typeof FileAttachmentSchema>;
 
 export const FileInfoSchema = z.object({
-  file_id: z.string(),
+  id: z.string(),
   filename: z.string(),
   content_type: z.string(),
-  size: z.number(),
-  url: z.string(),
-  uploaded_by: z.string(),
-  created_at: z.string(),
+  size_bytes: z.number(),
+  status: FileStatusSchema.optional(),
+  download_url: z.string().nullable().optional(),
+  uploaded_by: z.string().optional(),
+  created_at: z.string().optional(),
 });
 export type FileInfo = z.infer<typeof FileInfoSchema>;
+
+export const CompleteUploadResponseSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number(),
+  download_url: z.string(),
+});
+export type CompleteUploadResponse = z.infer<typeof CompleteUploadResponseSchema>;

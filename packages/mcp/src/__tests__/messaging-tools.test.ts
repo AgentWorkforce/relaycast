@@ -16,6 +16,7 @@ describe('messaging tools', () => {
     dms: {
       conversations: vi.fn(),
       createGroup: vi.fn(),
+      sendMessage: vi.fn(),
     },
   };
 
@@ -76,7 +77,8 @@ describe('messaging tools', () => {
   });
 
   it('send_group_dm calls dms.createGroup()', async () => {
-    mockAgentClient.dms.createGroup.mockResolvedValue({});
+    mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
+    mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });
     await client.callTool({
       name: 'send_group_dm',
       arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group' },
@@ -84,8 +86,7 @@ describe('messaging tools', () => {
     expect(mockAgentClient.dms.createGroup).toHaveBeenCalledWith({
       participants: ['a', 'b'],
       name: 'grp',
-      text: 'hello group',
     });
+    expect(mockAgentClient.dms.sendMessage).toHaveBeenCalledWith('conv1', 'hello group');
   });
 });
-

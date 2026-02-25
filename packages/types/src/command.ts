@@ -10,11 +10,9 @@ export type CommandParameter = z.infer<typeof CommandParameterSchema>;
 
 export const AgentCommandSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
   command: z.string(),
   description: z.string(),
-  handler_agent_id: z.string(),
-  handler_agent_name: z.string(),
+  handler_agent: z.string(),
   parameters: z.array(CommandParameterSchema),
   created_at: z.string(),
   is_active: z.boolean(),
@@ -51,9 +49,10 @@ export const CommandInvocationSchema = z.object({
   command: z.string(),
   channel: z.string(),
   invoked_by: z.string(),
+  handler_agent_id: z.string(),
   args: z.string().nullable(),
   parameters: z.record(z.string(), z.unknown()).nullable(),
-  response_message_id: z.string().nullable(),
+  message_id: z.string(),
   created_at: z.string(),
 });
 export type CommandInvocation = z.infer<typeof CommandInvocationSchema>;

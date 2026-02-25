@@ -10,7 +10,7 @@ export async function postReply(
   workspaceId: string,
   parentId: string,
   agentId: string,
-  data: { text: string },
+  data: { text: string; blocks?: unknown[] | null },
 ) {
   // Get the parent message
   const [parent] = await db
@@ -39,6 +39,7 @@ export async function postReply(
       agentId,
       threadId,
       body: data.text,
+      blocks: data.blocks || null,
       hasAttachments: false,
     })
     .returning();
@@ -54,6 +55,7 @@ export async function postReply(
     agent_name: agent?.name || 'unknown',
     thread_id: reply.threadId,
     text: reply.body,
+    blocks: (reply.blocks as unknown[] | null) || null,
     has_attachments: reply.hasAttachments,
     created_at: reply.createdAt.toISOString(),
   };
@@ -76,6 +78,7 @@ export async function getThread(
       agentName: agents.name,
       threadId: messages.threadId,
       body: messages.body,
+      blocks: messages.blocks,
       hasAttachments: messages.hasAttachments,
       createdAt: messages.createdAt,
     })
@@ -116,6 +119,7 @@ export async function getThread(
       agentName: agents.name,
       threadId: messages.threadId,
       body: messages.body,
+      blocks: messages.blocks,
       hasAttachments: messages.hasAttachments,
       createdAt: messages.createdAt,
     })
@@ -132,6 +136,7 @@ export async function getThread(
       agent_id: parent.agentId,
       agent_name: parent.agentName || 'unknown',
       text: parent.body,
+      blocks: (parent.blocks as unknown[] | null) || null,
       has_attachments: parent.hasAttachments,
       thread_id: parent.threadId,
       created_at: parent.createdAt.toISOString(),
@@ -144,6 +149,7 @@ export async function getThread(
       agent_name: r.agentName || 'unknown',
       thread_id: r.threadId,
       text: r.body,
+      blocks: (r.blocks as unknown[] | null) || null,
       has_attachments: r.hasAttachments,
       created_at: r.createdAt.toISOString(),
     })),

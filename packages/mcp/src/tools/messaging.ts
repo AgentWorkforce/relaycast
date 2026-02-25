@@ -135,7 +135,9 @@ export function registerMessagingTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text }) => {
     const client = getAgentClient();
-    const result = await client.dms.createGroup({ participants, name, text });
+    const conversation = await client.dms.createGroup({ participants, name });
+    const message = await client.dms.sendMessage(conversation.id, text);
+    const result = { conversation, message };
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,

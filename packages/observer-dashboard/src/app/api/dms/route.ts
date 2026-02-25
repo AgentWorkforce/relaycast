@@ -31,10 +31,21 @@ export async function GET(request: NextRequest) {
       .map((dm) => ({
         id: dm.id,
         type: dm.type as '1:1' | 'group',
-        name: dm.participants.join(', '),
-        participants: dm.participants,
-        lastMessage: dm.lastMessage?.text ?? null,
+        name: dm.type === 'group' ? null : dm.participants[0] ?? null,
+        participants: dm.participants.map((agentName) => ({
+          agentId: '',
+          agentName,
+        })),
+        lastMessage: dm.lastMessage
+          ? {
+              id: `${dm.id}:${dm.lastMessage.createdAt}`,
+              text: dm.lastMessage.text,
+              agentId: '',
+              createdAt: dm.lastMessage.createdAt,
+            }
+          : null,
         unreadCount: 0,
+        createdAt: dm.lastMessage?.createdAt ?? new Date().toISOString(),
       }));
 
     return NextResponse.json({ conversations });

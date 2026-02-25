@@ -322,7 +322,7 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/participants');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ agent: 'Worker-2' }));
+      expect(init.body).toBe(JSON.stringify({ agent_name: 'Worker-2' }));
     });
 
     it('removeParticipant() removes agent', async () => {

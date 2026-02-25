@@ -13,6 +13,7 @@ export const threadRoutes = new Hono<AppEnv>();
 
 const postReplySchema = z.object({
   text: z.string().min(1),
+  blocks: z.array(z.unknown()).nullable().optional(),
 });
 
 // POST /v1/messages/:id/replies - post a reply
@@ -32,7 +33,7 @@ threadRoutes.post(
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
-      const { text } = parsed.data;
+      const { text, blocks } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -57,7 +58,7 @@ threadRoutes.post(
         scope: `thread-reply:${parentId}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ parentId, text }),
+        fingerprint: JSON.stringify({ parentId, text, blocks }),
         kv: c.env.KV,
         operation: () =>
           threadEngine.postReply(
@@ -65,7 +66,7 @@ threadRoutes.post(
             workspace.id,
             parentId,
             agentId,
-            { text },
+            { text, blocks },
           ),
       });
 

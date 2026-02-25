@@ -69,7 +69,16 @@ describe('MCP → SDK → HTTP integration', () => {
       } else if (path.includes('/dm/conversations')) {
         data = [{ id: 'conv1' }];
       } else if (path.includes('/dm/group')) {
-        data = { conversation_id: 'conv1' };
+        data = {
+          id: 'conv1',
+          channel_id: 'ch1',
+          dm_type: 'group',
+          name: null,
+          participants: [{ agent_id: 'a1' }, { agent_id: 'a2' }],
+          created_at: new Date().toISOString(),
+        };
+      } else if (path.includes('/dm/conv1/messages')) {
+        data = { id: 'dm_msg_1', conversation_id: 'conv1', text: (req.body as Record<string, unknown>)?.text };
       } else if (path.includes('/reactions') && req.method === 'POST') {
         data = {};
       } else if (path.includes('/search')) {
@@ -175,11 +184,11 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req).toBeDefined();
   });
 
-  it('invite_to_channel → POST /channels/:name/invite {agent}', async () => {
+  it('invite_to_channel → POST /channels/:name/invite {agent_name}', async () => {
     await client.callTool({ name: 'invite_to_channel', arguments: { channel: 'general', agent: 'bot1' } });
     const req = findReq((r) => r.url.includes('/channels/general/invite'));
     expect(req).toBeDefined();
-    expect(req!.body).toEqual({ agent: 'bot1' });
+    expect(req!.body).toEqual({ agent_name: 'bot1' });
   });
 
   it('set_channel_topic → PATCH /v1/channels/:name/topic', async () => {
@@ -236,11 +245,14 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req).toBeDefined();
   });
 
-  it('send_group_dm → POST /v1/dm/group', async () => {
+  it('send_group_dm → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
     await client.callTool({ name: 'send_group_dm', arguments: { participants: ['A', 'B'], text: 'Hello' } });
-    const req = findReq((r) => r.url.includes('/dm/group'));
-    expect(req).toBeDefined();
-    expect(req!.body).toMatchObject({ participants: ['A', 'B'], text: 'Hello' });
+    const createReq = findReq((r) => r.url.includes('/dm/group'));
+    const sendReq = findReq((r) => r.url.includes('/dm/conv1/messages'));
+    expect(createReq).toBeDefined();
+    expect(createReq!.body).toMatchObject({ participants: ['A', 'B'] });
+    expect(sendReq).toBeDefined();
+    expect(sendReq!.body).toMatchObject({ text: 'Hello' });
   });
 
   // ─── Features ──────────────────────────────────────────

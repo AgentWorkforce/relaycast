@@ -19,6 +19,11 @@ describe('RelayCast', () => {
     vi.useRealTimers();
   });
 
+  it('requires apiKey when local mode is not enabled', async () => {
+    const { RelayCast } = await import('../relay.js');
+    expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
+  });
+
   describe('workspace', () => {
     it('info() calls GET /v1/workspace', async () => {
       const { RelayCast } = await import('../relay.js');

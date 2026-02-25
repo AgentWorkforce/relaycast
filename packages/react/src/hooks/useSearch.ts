@@ -1,6 +1,6 @@
 import { useState, useEffect, useContext, useRef } from 'react';
 import { ClientContext } from '../context.js';
-import type { SearchResult } from '@relaycast/sdk';
+import type { SearchMessageResult } from '@relaycast/sdk';
 import type { UseSearchReturn } from '../types.js';
 
 export interface UseSearchOptions {
@@ -13,7 +13,7 @@ export function useSearch(query: string, opts?: UseSearchOptions): UseSearchRetu
   const ctx = useContext(ClientContext);
   if (!ctx) throw new Error('useSearch must be used within <RelayProvider>');
 
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<SearchMessageResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const optsRef = useRef(opts);

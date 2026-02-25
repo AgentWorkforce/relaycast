@@ -181,6 +181,17 @@ let options = RelayCastOptions::new("rk_live_xxx")
 let relay = RelayCast::new(options)?;
 ```
 
+Local mode:
+
+By default, the Rust SDK talks to hosted Relaycast.
+Use local mode when you want traffic and state to stay on your machine while keeping the same interface for most workflows.
+
+```rust
+use relaycast::{RelayCast, RelayCastOptions};
+
+let relay = RelayCast::new(RelayCastOptions::local("rk_live_xxx"))?;
+```
+
 ## Changelog
 
 See `CHANGELOG.md` for Rust SDK release history.

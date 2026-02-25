@@ -87,6 +87,12 @@ export class RelayCast {
   private workspaceIdHint: string | null = null;
 
   constructor(options: RelayCastOptions) {
+    if (!options.apiKey || options.apiKey.trim().length === 0) {
+      throw new Error('RelayCast apiKey is required');
+    }
+
+    // Preserve hidden internal-origin metadata on options when created via
+    // createInternalRelayCast() so downstream requests use the correct origin headers.
     this.client = new HttpClient(options);
   }
 
@@ -94,7 +100,9 @@ export class RelayCast {
     name: string,
     baseUrl?: string,
   ): Promise<CreateWorkspaceResponse> {
-    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.relaycast.dev');
+    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+
+    const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
       headers: {
