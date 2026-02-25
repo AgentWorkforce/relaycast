@@ -30,16 +30,66 @@ export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 export const CreateGroupDmRequestSchema = z.object({
   participants: z.array(z.string()),
   name: z.string().optional(),
-  text: z.string(),
 });
 export type CreateGroupDmRequest = z.infer<typeof CreateGroupDmRequestSchema>;
+
+export const DmConversationParticipantSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string(),
+});
+export type DmConversationParticipant = z.infer<typeof DmConversationParticipantSchema>;
+
+export const DmLastMessageSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  agent_id: z.string(),
+  created_at: z.string(),
+});
+export type DmLastMessage = z.infer<typeof DmLastMessageSchema>;
 
 export const DmConversationSummarySchema = z.object({
   id: z.string(),
   type: DmTypeSchema,
   name: z.string().nullable(),
-  participants: z.array(z.string()),
-  last_message: z.string().nullable(),
+  participants: z.array(DmConversationParticipantSchema),
+  last_message: DmLastMessageSchema.nullable(),
   unread_count: z.number(),
+  created_at: z.string(),
 });
 export type DmConversationSummary = z.infer<typeof DmConversationSummarySchema>;
+
+export const SendDmResponseSchema = z.object({
+  id: z.string(),
+  conversation_id: z.string(),
+  from_agent_id: z.string(),
+  to: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
+
+export const CreateGroupDmResponseSchema = z.object({
+  id: z.string(),
+  channel_id: z.string(),
+  dm_type: z.literal('group'),
+  name: z.string().nullable(),
+  participants: z.array(z.object({ agent_id: z.string() })),
+  created_at: z.string(),
+});
+export type CreateGroupDmResponse = z.infer<typeof CreateGroupDmResponseSchema>;
+
+export const GroupDmMessageResponseSchema = z.object({
+  id: z.string(),
+  conversation_id: z.string(),
+  agent_id: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type GroupDmMessageResponse = z.infer<typeof GroupDmMessageResponseSchema>;
+
+export const GroupDmParticipantResponseSchema = z.object({
+  conversation_id: z.string(),
+  agent: z.string(),
+  already_member: z.boolean(),
+});
+export type GroupDmParticipantResponse = z.infer<typeof GroupDmParticipantResponseSchema>;

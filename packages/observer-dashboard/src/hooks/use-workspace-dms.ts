@@ -43,26 +43,38 @@ export function useWorkspaceDMs() {
   ) {
     setConversations((prev) => {
       const idx = prev.findIndex((c) => c.id === id);
+      const now = new Date().toISOString();
       if (idx === -1) {
         const created: DmConversationSummary = {
           id,
           type,
           name: type === 'group' ? null : senderName,
-          participants: [senderName],
-          lastMessage: text,
+          participants: [{ agentId: '', agentName: senderName }],
+          lastMessage: {
+            id: `${id}:${now}`,
+            text,
+            agentId: '',
+            createdAt: now,
+          },
           unreadCount: 1,
+          createdAt: now,
         };
         return [created, ...prev];
       }
 
       const existing = prev[idx];
-      const participants = existing.participants.includes(senderName)
+      const participants = existing.participants.some((p) => p.agentName === senderName)
         ? existing.participants
-        : [...existing.participants, senderName];
+        : [...existing.participants, { agentId: '', agentName: senderName }];
       const updated: DmConversationSummary = {
         ...existing,
         participants,
-        lastMessage: text,
+        lastMessage: {
+          id: `${id}:${now}`,
+          text,
+          agentId: '',
+          createdAt: now,
+        },
         unreadCount: existing.unreadCount + 1,
       };
       const next = [...prev];

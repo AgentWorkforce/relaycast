@@ -14,6 +14,15 @@ export const AddReactionRequestSchema = z.object({
 });
 export type AddReactionRequest = z.infer<typeof AddReactionRequestSchema>;
 
+export const AddedReactionSchema = z.object({
+  id: z.string(),
+  message_id: z.string(),
+  agent_name: z.string(),
+  emoji: z.string(),
+  created_at: z.string(),
+});
+export type AddedReaction = z.infer<typeof AddedReactionSchema>;
+
 export const ReactionGroupSchema = z.object({
   emoji: z.string(),
   count: z.number(),

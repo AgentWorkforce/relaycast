@@ -31,13 +31,14 @@ export const MessageCreatedEventSchema = z.object({
   channel: z.string(),
   message: z.object({
     id: z.string(),
+    agent_id: z.string().optional(),
     agent_name: z.string(),
     text: z.string(),
     attachments: z.array(z.object({
       file_id: z.string(),
       filename: z.string(),
-      url: z.string(),
-      size: z.number(),
+      content_type: z.string(),
+      size_bytes: z.number(),
     })),
   }),
 });
@@ -46,14 +47,14 @@ export type MessageCreatedEvent = z.infer<typeof MessageCreatedEventSchema>;
 export const MessageUpdatedEventSchema = z.object({
   type: z.literal('message.updated'),
   channel: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
 export const ThreadReplyEventSchema = z.object({
   type: z.literal('thread.reply'),
   parent_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
@@ -76,14 +77,14 @@ export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 export const DmReceivedEventSchema = z.object({
   type: z.literal('dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 
 export const GroupDmReceivedEventSchema = z.object({
   type: z.literal('group_dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 

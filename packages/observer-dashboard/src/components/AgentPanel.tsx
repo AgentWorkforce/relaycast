@@ -114,7 +114,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
           <InfoRow
             icon={agent.type === 'human' ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
             label="Created"
-            value={formatDate(agent.createdAt)}
+            value={formatDate(agent.createdAt ?? agent.lastSeen)}
           />
         </div>
 
