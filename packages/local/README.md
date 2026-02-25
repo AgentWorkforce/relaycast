@@ -24,19 +24,7 @@ Supported release asset names:
 
 ## Build (maintainers)
 
-Build an artifact for the current host:
-
-```bash
-bash packages/local/scripts/build-local-artifact.sh
-```
-
-Windows PowerShell:
-
-```powershell
-pwsh ./packages/local/scripts/build-local-artifact.ps1
-```
-
-Raw Cargo build:
+Build the binary:
 
 ```bash
 cargo build --release --manifest-path packages/local/Cargo.toml

@@ -17,8 +17,7 @@
     "db:execute": "wrangler d1 execute relaycast",
     "e2e": "npx tsx scripts/e2e.ts",
     "local:parity": "node scripts/check-local-api-parity.mjs",
-    "local:build": "cargo build --release --manifest-path packages/local/Cargo.toml",
-    "local:artifact": "bash packages/local/scripts/build-local-artifact.sh"
+    "local:build": "cargo build --release --manifest-path packages/local/Cargo.toml"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.9",
