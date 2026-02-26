@@ -34,7 +34,7 @@ threadRoutes.post(
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
-      const { text, blocks } = parsed.data;
+      const { text, blocks, data } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -59,7 +59,7 @@ threadRoutes.post(
         scope: `thread-reply:${parentId}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ parentId, text, blocks }),
+        fingerprint: JSON.stringify({ parentId, text, blocks, data }),
         kv: c.env.KV,
         operation: () =>
           threadEngine.postReply(
@@ -67,7 +67,7 @@ threadRoutes.post(
             workspace.id,
             parentId,
             agentId,
-            { text, blocks },
+            { text, blocks, data },
           ),
       });
 
