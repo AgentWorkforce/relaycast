@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 # ── Enums / Literals ──────────────────────────────────────────────
 
-AgentType = Literal["agent", "human"]
+AgentType = Literal["agent", "human", "system"]
 AgentStatus = Literal["online", "offline", "away"]
 FileStatus = Literal["pending", "complete", "deleted"]
 DmType = Literal["1:1", "group"]

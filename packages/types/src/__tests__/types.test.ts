@@ -99,6 +99,7 @@ describe('Type definitions', () => {
   it('AgentType union', () => {
     expectTypeOf<'agent'>().toMatchTypeOf<AgentType>();
     expectTypeOf<'human'>().toMatchTypeOf<AgentType>();
+    expectTypeOf<'system'>().toMatchTypeOf<AgentType>();
   });
 
   it('AgentStatus union', () => {

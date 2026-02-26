@@ -36,7 +36,7 @@ function makeChannel(overrides: Partial<{ id: string; workspaceId: string; name:
   };
 }
 
-function makeAgent(overrides: Partial<{ id: string; workspaceId: string; name: string; type: 'agent' | 'human'; tokenHash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; createdAt: string; lastSeen: string }> = {}) {
+function makeAgent(overrides: Partial<{ id: string; workspaceId: string; name: string; type: 'agent' | 'human' | 'system'; tokenHash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; createdAt: string; lastSeen: string }> = {}) {
   return {
     id: 'ag1',
     workspaceId: 'ws1',

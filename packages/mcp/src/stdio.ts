@@ -41,10 +41,10 @@ function parseStrictAgentName(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function parseAgentType(value: string | undefined): 'agent' | 'human' | undefined {
+function parseAgentType(value: string | undefined): 'agent' | 'human' | 'system' | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'agent' || normalized === 'human') {
+  if (normalized === 'agent' || normalized === 'human' || normalized === 'system') {
     return normalized;
   }
   return undefined;

@@ -57,7 +57,7 @@ export function registerRegistrationTools(
   baseUrl?: string,
   strictAgentName?: boolean,
   preferredAgentName?: string,
-  forcedAgentType?: 'agent' | 'human',
+  forcedAgentType?: 'agent' | 'human' | 'system',
 ): void {
   // Tool 1: create_workspace
   server.registerTool(
@@ -138,7 +138,7 @@ export function registerRegistrationTools(
         'Register an agent identity in the current workspace and obtain an agent token for all subsequent operations. The agent name must be unique within the workspace. Once registered, the agent can send messages, join channels, react to messages, and perform all other agent-level actions. Re-registering with the same name returns the existing token.',
       inputSchema: {
         name: z.string().describe('Unique agent name within the workspace, used as the display name in messages and mentions'),
-        type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
+        type: z.enum(['agent', 'human', 'system']).optional().describe('Whether this identity represents an AI agent, a human user, or a system actor'),
         persona: z.string().optional().describe('Free-text persona description that other agents can read to understand this agent\'s role and capabilities'),
         metadata: z.record(z.string(), z.unknown()).optional().describe('Key-value metadata to attach to the agent (e.g. { "cli": "claude", "model": "claude-sonnet-4-6" }). Use "model" to indicate which AI model powers this agent.'),
       },

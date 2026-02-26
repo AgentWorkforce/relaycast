@@ -25,7 +25,7 @@ export interface McpServerOptions {
   /** Agent name associated with the pre-registered token. */
   agentName?: string;
   /** Agent type associated with the pre-registered identity. */
-  agentType?: 'agent' | 'human';
+  agentType?: 'agent' | 'human' | 'system';
   /** When true, the `register` tool enforces the pre-registered agentName. */
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';

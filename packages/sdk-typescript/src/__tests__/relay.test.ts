@@ -136,6 +136,19 @@ describe('RelayCast', () => {
       expect(init.body).toBe(JSON.stringify({ name: 'Worker' }));
     });
 
+    it('system() registers a system identity', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ ok: true }));
+      await relay.system({ name: 'System' } as any);
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ name: 'System', type: 'system' }));
+    });
+
     it('list() calls GET /v1/agents', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
