@@ -13,10 +13,12 @@ export const channelRoutes = new Hono<AppEnv>();
 const createChannelSchema = z.object({
   name: z.string().min(1),
   topic: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateChannelSchema = z.object({
   topic: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateChannelTopicSchema = z.object({
@@ -44,12 +46,12 @@ channelRoutes.post(
           error: { code: 'invalid_request', message: 'name is required' },
         }, 400);
       }
-      const { name, topic } = parsed.data;
+      const { name, topic, metadata } = parsed.data;
 
       const result = await channelEngine.createChannel(
         db,
         workspace.id,
-        { name, topic: topic ?? undefined },
+        { name, topic: topic ?? undefined, metadata },
         agent?.id,
       );
 

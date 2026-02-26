@@ -263,8 +263,10 @@ impl WsClient {
                             let _ = lifecycle_tx.send(WsLifecycleEvent::Reconnecting {
                                 attempt: reconnect_attempt,
                             });
-                            let delay_ms = reconnect_delay_ms(reconnect_attempt, max_reconnect_delay_ms);
-                            let reconnect_sleep = tokio::time::sleep(Duration::from_millis(delay_ms));
+                            let delay_ms =
+                                reconnect_delay_ms(reconnect_attempt, max_reconnect_delay_ms);
+                            let reconnect_sleep =
+                                tokio::time::sleep(Duration::from_millis(delay_ms));
                             tokio::pin!(reconnect_sleep);
 
                             loop {
@@ -313,7 +315,8 @@ impl WsClient {
                     }
                 }
 
-                let mut ping_interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
+                let mut ping_interval =
+                    tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
                 ping_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
                 loop {

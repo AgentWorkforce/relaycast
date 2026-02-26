@@ -253,6 +253,8 @@ pub struct Channel {
     pub name: String,
     pub channel_type: i64,
     pub topic: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
     pub created_by: Option<String>,
     pub created_at: String,
     pub is_archived: bool,
@@ -264,12 +266,16 @@ pub struct CreateChannelRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +326,8 @@ pub struct MessageWithMeta {
     pub text: String,
     pub blocks: Option<Vec<MessageBlock>>,
     #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
     pub attachments: Vec<FileAttachment>,
     pub created_at: String,
     #[serde(default)]
@@ -337,6 +345,8 @@ pub struct PostMessageRequest {
     pub blocks: Option<Vec<MessageBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -344,6 +354,8 @@ pub struct ThreadReplyRequest {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<MessageBlock>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -439,7 +451,9 @@ enum DmParticipantValue {
     },
 }
 
-fn deserialize_dm_participants<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+fn deserialize_dm_participants<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -479,12 +493,12 @@ where
     let raw = Option::<DmLastMessageValue>::deserialize(deserializer)?;
     Ok(match raw {
         Some(DmLastMessageValue::Text(text)) if !text.is_empty() => Some(text),
-        Some(DmLastMessageValue::Object { text: Some(text), .. }) if !text.is_empty() => {
-            Some(text)
-        }
-        Some(DmLastMessageValue::Object { body: Some(body), .. }) if !body.is_empty() => {
-            Some(body)
-        }
+        Some(DmLastMessageValue::Object {
+            text: Some(text), ..
+        }) if !text.is_empty() => Some(text),
+        Some(DmLastMessageValue::Object {
+            body: Some(body), ..
+        }) if !body.is_empty() => Some(body),
         _ => None,
     })
 }
@@ -867,6 +881,8 @@ pub struct MessageUpdatedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadReplyEvent {
+    #[serde(default)]
+    pub channel: Option<String>,
     pub parent_id: String,
     pub message: ThreadReplyPayload,
 }

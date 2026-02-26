@@ -10,7 +10,7 @@ export async function postReply(
   workspaceId: string,
   parentId: string,
   agentId: string,
-  data: { text: string; blocks?: unknown[] | null },
+  data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
 ) {
   // Get the parent message
   const [parent] = await db
@@ -40,6 +40,7 @@ export async function postReply(
       threadId,
       body: data.text,
       blocks: data.blocks || null,
+      metadata: data.data || {},
       hasAttachments: false,
     })
     .returning();
@@ -56,6 +57,7 @@ export async function postReply(
     thread_id: reply.threadId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
+    metadata: (reply.metadata as Record<string, unknown>) || {},
     has_attachments: reply.hasAttachments,
     created_at: reply.createdAt.toISOString(),
   };
@@ -79,6 +81,7 @@ export async function getThread(
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
+      metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       createdAt: messages.createdAt,
     })
@@ -120,6 +123,7 @@ export async function getThread(
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
+      metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       createdAt: messages.createdAt,
     })
@@ -137,6 +141,7 @@ export async function getThread(
       agent_name: parent.agentName || 'unknown',
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
+      metadata: (parent.metadata as Record<string, unknown>) || {},
       has_attachments: parent.hasAttachments,
       thread_id: parent.threadId,
       created_at: parent.createdAt.toISOString(),
@@ -150,6 +155,7 @@ export async function getThread(
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,
+      metadata: (r.metadata as Record<string, unknown>) || {},
       has_attachments: r.hasAttachments,
       created_at: r.createdAt.toISOString(),
     })),

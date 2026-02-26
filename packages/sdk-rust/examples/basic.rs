@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .create_channel(CreateChannelRequest {
                 name: channel_name.to_string(),
                 topic: Some("Test channel for Rust SDK".to_string()),
+                metadata: None,
             })
             .await?;
         println!("Created channel: #{}", channel_name);

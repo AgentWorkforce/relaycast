@@ -12,6 +12,7 @@ export const ChannelSchema = z.object({
   id: z.string(),
   name: z.string(),
   topic: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   created_by: z.string().nullable().optional(),
   created_at: z.string(),
   is_archived: z.boolean().optional(),
@@ -32,11 +33,13 @@ export type ChannelMember = z.infer<typeof ChannelMemberSchema>;
 export const CreateChannelRequestSchema = z.object({
   name: z.string(),
   topic: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateChannelRequest = z.infer<typeof CreateChannelRequestSchema>;
 
 export const UpdateChannelRequestSchema = z.object({
   topic: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type UpdateChannelRequest = z.infer<typeof UpdateChannelRequestSchema>;
 
