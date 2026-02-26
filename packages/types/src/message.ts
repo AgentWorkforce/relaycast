@@ -59,6 +59,7 @@ export const MessageSchema = z.object({
   thread_id: z.string().nullable(),
   body: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   has_attachments: z.boolean(),
   created_at: z.string(),
   updated_at: z.string().nullable(),
@@ -72,6 +73,7 @@ export const MessageWithMetaSchema = z.object({
   agent_name: z.string(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   has_attachments: z.boolean(),
   thread_id: z.string().nullable(),
   attachments: z.array(FileAttachmentSchema),
@@ -102,6 +104,7 @@ export type MessageListQuery = z.infer<typeof MessageListQuerySchema>;
 export const ThreadReplyRequestSchema = z.object({
   text: z.string(),
   blocks: z.array(MessageBlockSchema).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 export type ThreadReplyRequest = z.infer<typeof ThreadReplyRequestSchema>;
 
