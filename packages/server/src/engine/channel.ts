@@ -9,7 +9,7 @@ type Db = ReturnType<typeof getDb>;
 export async function createChannel(
   db: Db,
   workspaceId: string,
-  data: { name: string; topic?: string },
+  data: { name: string; topic?: string; metadata?: Record<string, unknown> },
   creatorAgentId?: string,
 ) {
   // Validate channel name: lowercase alphanumeric + hyphens
@@ -42,6 +42,7 @@ export async function createChannel(
       workspaceId,
       name: data.name,
       topic: data.topic ?? null,
+      metadata: data.metadata ?? {},
       createdBy: creatorAgentId ?? null,
     })
     .returning();
@@ -59,6 +60,7 @@ export async function createChannel(
     id: channel.id,
     name: channel.name,
     topic: channel.topic,
+    metadata: channel.metadata as Record<string, unknown>,
     created_by: channel.createdBy,
     created_at: channel.createdAt.toISOString(),
     member_count: creatorAgentId ? 1 : 0,
@@ -111,6 +113,7 @@ export async function listChannels(
     id: ch.id,
     name: ch.name,
     topic: ch.topic,
+    metadata: ch.metadata as Record<string, unknown>,
     member_count: memberCountMap.get(ch.id) ?? 0,
     created_at: ch.createdAt.toISOString(),
     is_archived: ch.isArchived,
@@ -147,6 +150,7 @@ export async function getChannel(db: Db, workspaceId: string, name: string) {
     id: channel.id,
     name: channel.name,
     topic: channel.topic,
+    metadata: channel.metadata as Record<string, unknown>,
     member_count: members.length,
     members: members.map((m) => ({
       agent_id: m.agent_id,
@@ -168,7 +172,7 @@ export async function updateChannel(
   db: Db,
   workspaceId: string,
   name: string,
-  updates: { topic?: string | null },
+  updates: { topic?: string | null; metadata?: Record<string, unknown> },
 ) {
   const [channel] = await db
     .select()
@@ -187,6 +191,7 @@ export async function updateChannel(
 
   const setClause: Record<string, unknown> = {};
   if (updates.topic !== undefined) setClause.topic = updates.topic;
+  if (updates.metadata !== undefined) setClause.metadata = updates.metadata;
 
   if (Object.keys(setClause).length === 0) {
     return getChannel(db, workspaceId, name);
@@ -205,6 +210,7 @@ export async function updateChannel(
     id: updated.id,
     name: updated.name,
     topic: updated.topic,
+    metadata: updated.metadata as Record<string, unknown>,
     created_at: updated.createdAt.toISOString(),
     is_archived: updated.isArchived,
   };
