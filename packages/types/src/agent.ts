@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const AgentTypeSchema = z.enum(['agent', 'human']);
+export const AgentTypeSchema = z.enum(['agent', 'human', 'system']);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
 export const AgentStatusSchema = z.enum(['online', 'offline', 'away']);

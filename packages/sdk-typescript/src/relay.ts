@@ -81,6 +81,9 @@ interface WorkspaceDmMessage {
   createdAt: string;
 }
 
+type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
+type RegisterIdentityType = NonNullable<CreateAgentRequest['type']>;
+
 export class RelayCast {
   private client: HttpClient;
   private identityHint: { agentId: string; name: string } | null = null;
@@ -198,6 +201,13 @@ export class RelayCast {
     throw new RelayError('transport_error', 'Failed to register agent identity after suffix retries');
   }
 
+  private registerTypedIdentity(
+    type: RegisterIdentityType,
+    data: RegisterTypedIdentityInput,
+  ): Promise<CreateAgentResponse> {
+    return this.agents.register({ ...data, type });
+  }
+
   async registerAgent(data: RegisterAgentInput): Promise<CreateAgentResponse> {
     const { strict, ...request } = data;
     if (strict) {
@@ -233,6 +243,18 @@ export class RelayCast {
 
   async resolveIdentity(): Promise<ResolvedIdentity> {
     return this.resolveIdentityInternal();
+  }
+
+  agent(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('agent', data);
+  }
+
+  human(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('human', data);
+  }
+
+  system(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('system', data);
   }
 
   workspace = {

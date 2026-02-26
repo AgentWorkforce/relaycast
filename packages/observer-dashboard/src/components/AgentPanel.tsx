@@ -50,6 +50,12 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
   const model = (agent.metadata?.model as string) || '';
   const currentTask = (agent.metadata?.current_task as string) || '';
+  const identityLabel = agent.type === 'human' ? 'Human' : agent.type === 'system' ? 'System' : 'Agent';
+  const identityIcon = agent.type === 'human'
+    ? <User className="h-3.5 w-3.5" />
+    : agent.type === 'system'
+      ? <Sparkles className="h-3.5 w-3.5" />
+      : <Bot className="h-3.5 w-3.5" />;
 
   // Collect metadata entries to display (excluding known fields)
   const extraMeta = Object.entries(agent.metadata || {}).filter(
@@ -80,7 +86,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
             <span className={`text-xs ${status.color}`}>{status.text}</span>
             <span className="text-xs text-[var(--color-text-dim)] mx-1">&middot;</span>
             <span className="text-xs text-[var(--color-text-muted)]">
-              {agent.type === 'human' ? 'Human' : 'Agent'}
+              {identityLabel}
             </span>
           </div>
         </div>
@@ -123,7 +129,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
             value={relativeTime(agent.lastSeen)}
           />
           <InfoRow
-            icon={agent.type === 'human' ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+            icon={identityIcon}
             label="Created"
             value={formatDate(agent.createdAt ?? agent.lastSeen)}
           />

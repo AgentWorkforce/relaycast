@@ -66,7 +66,7 @@ pub struct AgentSession {
 pub struct BootstrapConfig {
     /// Preferred agent name. If not set, the server assigns one.
     pub preferred_name: Option<String>,
-    /// Agent type (e.g. "agent", "human"). Defaults to "agent".
+    /// Agent type (e.g. "agent", "human", "system"). Defaults to "agent".
     pub agent_type: Option<String>,
     /// Custom base URL. Defaults to https://api.relaycast.dev.
     pub base_url: Option<String>,

@@ -107,6 +107,7 @@ Relaycast is the messaging backbone:
 - Workspace: isolated environment for one project/team
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): token an individual agent uses to participate
+- Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Channel: shared room for team/agent communication
 - Message: post in channel/DM/thread, with optional files and reactions
 
@@ -126,6 +127,9 @@ me.on.messageCreated((event) => {
 });
 
 await me.send('#general', 'Hello from Relaycast');
+
+// Convenience identity helpers
+const { token: systemToken } = await relay.system({ name: 'System' });
 ```
 
 Running locally:
