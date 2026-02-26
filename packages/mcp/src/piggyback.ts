@@ -18,18 +18,35 @@ const MESSAGE_TOOLS = new Set([
   'invoke_command',
 ]);
 
+type ToolHandler = (...args: unknown[]) => unknown;
+type RegisterToolFn = (
+  name: string,
+  config: unknown,
+  handler: ToolHandler | undefined,
+) => unknown;
+type ContentCarrier = { content: Array<Record<string, unknown>> };
+
+function hasContentArray(value: unknown): value is ContentCarrier {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { content?: unknown }).content)
+  );
+}
+
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
   getAgentClient: () => AgentClient,
   telemetry?: McpTelemetry,
 ): void {
-  const original = mcpServer.registerTool.bind(mcpServer);
+  const original = mcpServer.registerTool.bind(mcpServer) as RegisterToolFn;
+  const mutableServer = mcpServer as unknown as { registerTool: RegisterToolFn };
 
-  (mcpServer as any).registerTool = (
+  mutableServer.registerTool = (
     name: string,
-    config: any,
-    handler: any,
+    config: unknown,
+    handler: ToolHandler | undefined,
   ) => {
     if (!handler) {
       return original(name, config, handler);
@@ -37,14 +54,14 @@ export function enablePiggyback(
 
     const shouldPiggybackInbox = !SKIP_PIGGYBACK.has(name);
 
-    const wrapped = async (...args: any[]) => {
+    const wrapped = async (...args: unknown[]) => {
       const startedAt = Date.now();
       telemetry?.capture('relaycast_mcp_tool_invoked', {
         source_surface: 'mcp',
         tool_name: name,
       });
 
-      let result: any;
+      let result: unknown;
       try {
         result = await handler(...args);
       } catch (error) {
@@ -100,7 +117,7 @@ export function enablePiggyback(
           inbox.recentReactions?.length ?? 0,
         );
 
-        if (hasUnread && Array.isArray(result?.content)) {
+        if (hasUnread && hasContentArray(result)) {
           const selfName = getSession().agentName;
           const inboxText = formatInbox(inbox, selfName);
           if (inboxText) {
