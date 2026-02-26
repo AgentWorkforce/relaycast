@@ -1,11 +1,16 @@
--- Add metadata JSON columns to channels and messages tables
+-- Migration: 0002_add_metadata_columns
+-- Purpose: Add metadata JSON columns to channels and messages tables
 -- for storing integration-specific data (e.g., Slack channel IDs, message timestamps)
+--
+-- SQLite ALTER TABLE ADD COLUMN constraints:
+-- - Cannot add NOT NULL column without DEFAULT to table with existing rows
+-- - DEFAULT must be a constant expression
+-- - Column will have DEFAULT value for new rows; existing rows get the default retroactively
 
--- Add metadata to channels table
+-- Add metadata column to channels table
+-- Stores JSON object for integration-specific data (e.g., slack_channel_id)
 ALTER TABLE channels ADD COLUMN metadata TEXT DEFAULT '{}';
 
--- Add metadata to messages table
+-- Add metadata column to messages table
+-- Stores JSON object for integration-specific data (e.g., slack_ts, slack_thread_ts)
 ALTER TABLE messages ADD COLUMN metadata TEXT DEFAULT '{}';
-
--- Create index for querying messages by metadata (for looking up by slack_ts, etc.)
-CREATE INDEX IF NOT EXISTS idx_messages_metadata ON messages(metadata);
