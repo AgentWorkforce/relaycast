@@ -146,6 +146,7 @@ impl AgentClient {
             text: text.to_string(),
             attachments,
             blocks,
+            data: None,
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
@@ -219,6 +220,7 @@ impl AgentClient {
         let body = ThreadReplyRequest {
             text: text.to_string(),
             blocks,
+            data: None,
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
