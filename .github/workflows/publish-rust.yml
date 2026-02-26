@@ -1,65 +1,231 @@
 name: Publish Rust SDK
 
 on:
-  push:
-    tags:
-      - "sdk-rust-v*"
   workflow_dispatch:
     inputs:
+      version:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+      custom_version:
+        description: "Custom version (optional, overrides version type)"
+        required: false
+        type: string
       dry_run:
-        description: "Dry run only (no publish)"
+        description: "Dry run (do not actually publish)"
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: publish-rust-sdk
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
   publish:
-    name: Publish sdk-rust
+    name: Build, Test & Publish sdk-rust
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Verify tag matches Cargo.toml version
-        if: github.event_name == 'push'
+      - name: Determine and set version
+        id: bump
+        shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#sdk-rust-v}"
-          CRATE_VERSION=$(awk -F '"' '/^version = / { print $2; exit }' packages/sdk-rust/Cargo.toml)
+          CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
+          VERSION_TYPE="${{ github.event.inputs.version }}"
+          CARGO_TOML="packages/sdk-rust/Cargo.toml"
 
-          echo "Tag version:   ${TAG_VERSION}"
-          echo "Crate version: ${CRATE_VERSION}"
-
-          if [ "${TAG_VERSION}" != "${CRATE_VERSION}" ]; then
-            echo "Tag version and crate version do not match."
+          CURRENT_VERSION=$(awk -F '"' '/^\[package\]/{in_pkg=1;next} in_pkg && /^version = / { print $2; exit }' "$CARGO_TOML")
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "Unable to read current crate version from $CARGO_TOML"
             exit 1
           fi
+
+          echo "Current version: $CURRENT_VERSION"
+
+          bump_semver() {
+            local current="$1"
+            local kind="$2"
+
+            if [[ ! "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z.-]+))?$ ]]; then
+              echo "Invalid semver version: $current" >&2
+              return 1
+            fi
+
+            local major="${BASH_REMATCH[1]}"
+            local minor="${BASH_REMATCH[2]}"
+            local patch="${BASH_REMATCH[3]}"
+            local prerelease="${BASH_REMATCH[5]}"
+
+            case "$kind" in
+              patch)
+                patch=$((patch + 1))
+                prerelease=""
+                ;;
+              minor)
+                minor=$((minor + 1))
+                patch=0
+                prerelease=""
+                ;;
+              major)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                prerelease=""
+                ;;
+              prepatch)
+                patch=$((patch + 1))
+                prerelease="beta.0"
+                ;;
+              preminor)
+                minor=$((minor + 1))
+                patch=0
+                prerelease="beta.0"
+                ;;
+              premajor)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                prerelease="beta.0"
+                ;;
+              prerelease)
+                if [[ -n "$prerelease" && "$prerelease" =~ ^beta\.([0-9]+)$ ]]; then
+                  local pre_num="${BASH_REMATCH[1]}"
+                  prerelease="beta.$((pre_num + 1))"
+                else
+                  patch=$((patch + 1))
+                  prerelease="beta.0"
+                fi
+                ;;
+              *)
+                echo "Unsupported version bump type: $kind" >&2
+                return 1
+                ;;
+            esac
+
+            if [ -n "$prerelease" ]; then
+              echo "${major}.${minor}.${patch}-${prerelease}"
+            else
+              echo "${major}.${minor}.${patch}"
+            fi
+          }
+
+          if [ -n "$CUSTOM_VERSION" ]; then
+            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid custom_version: $CUSTOM_VERSION"
+              exit 1
+            fi
+            NEW_VERSION="$CUSTOM_VERSION"
+            echo "Using custom version: $NEW_VERSION"
+          else
+            NEW_VERSION=$(bump_semver "$CURRENT_VERSION" "$VERSION_TYPE")
+            echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
+          fi
+
+          awk -v new_version="$NEW_VERSION" '
+            BEGIN { in_package = 0; updated = 0 }
+            /^\[package\]/ { in_package = 1; print; next }
+            /^\[/ && $0 != "[package]" { in_package = 0 }
+            in_package && !updated && /^version = / {
+              print "version = \"" new_version "\""
+              updated = 1
+              next
+            }
+            { print }
+            END {
+              if (!updated) {
+                print "Failed to update version in [package] section." > "/dev/stderr"
+                exit 1
+              }
+            }
+          ' "$CARGO_TOML" > "$CARGO_TOML.tmp"
+          mv "$CARGO_TOML.tmp" "$CARGO_TOML"
+
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION"
 
       - name: Run tests
         run: cargo test --manifest-path packages/sdk-rust/Cargo.toml
 
       - name: Cargo publish dry-run
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
         run: cargo publish --manifest-path packages/sdk-rust/Cargo.toml --dry-run
 
       - name: Authenticate with crates.io
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true')
+        if: github.event.inputs.dry_run != 'true'
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish to crates.io
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true')
+        if: github.event.inputs.dry_run != 'true'
         run: cargo publish --manifest-path packages/sdk-rust/Cargo.toml
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Commit and tag
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add packages/sdk-rust/Cargo.toml
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(sdk-rust): v${NEW_VERSION}"
+            git push origin HEAD:main
+          fi
+
+          git tag -a "sdk-rust-v${NEW_VERSION}" -m "sdk-rust v${NEW_VERSION}"
+          git push origin "sdk-rust-v${NEW_VERSION}"
+
+      - name: Create GitHub Release
+        if: github.event.inputs.dry_run != 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: sdk-rust-v${{ steps.bump.outputs.new_version }}
+          name: sdk-rust-v${{ steps.bump.outputs.new_version }}
+          body: |
+            ## Rust SDK v${{ steps.bump.outputs.new_version }}
+
+            ### Install
+            ```bash
+            cargo add relaycast@${{ steps.bump.outputs.new_version }}
+            ```
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Rust SDK Publish Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version**: \`${{ steps.bump.outputs.new_version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Dry run completed. No publish or tag was created." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Published crate and created tag \`sdk-rust-v${{ steps.bump.outputs.new_version }}\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
