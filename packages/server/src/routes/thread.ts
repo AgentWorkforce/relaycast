@@ -14,6 +14,7 @@ export const threadRoutes = new Hono<AppEnv>();
 const postReplySchema = z.object({
   text: z.string().min(1),
   blocks: z.array(z.unknown()).nullable().optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 // POST /v1/messages/:id/replies - post a reply
