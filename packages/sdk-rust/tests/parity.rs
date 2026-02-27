@@ -342,3 +342,98 @@ async fn add_dm_participant_uses_agent_name_payload_and_typed_response() {
     assert_eq!(typed.agent, "worker-1");
     assert!(!typed.already_member);
 }
+
+#[tokio::test]
+async fn dm_messages_with_agent_uses_matching_conversation() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations"))
+        .respond_with(ok(json!([
+            {
+                "id": "c_1",
+                "type": "dm",
+                "name": null,
+                "participants": ["worker-1", "lead"],
+                "last_message": "hello",
+                "unread_count": 0
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/c_1/messages"))
+        .and(query_param("limit", "2"))
+        .respond_with(ok(json!([
+            {
+                "id": "m_1",
+                "agent_name": "worker-1",
+                "agent_id": "a_1",
+                "text": "ping",
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "reply_count": 0,
+                "reactions": [],
+                "read_by_count": 0,
+                "attachments": []
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let messages = agent
+        .dm_messages_with_agent(
+            "worker-1",
+            Some(MessageListQuery {
+                limit: Some(2),
+                before: None,
+                after: None,
+            }),
+        )
+        .await
+        .expect("dm_messages_with_agent failed");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "ping");
+}
+
+#[tokio::test]
+async fn dm_conversation_participants_returns_workspace_conversation_members() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .respond_with(ok(json!([
+            {
+                "id": "conv_1",
+                "type": "dm",
+                "participants": ["alice", "bob"],
+                "message_count": 5,
+                "last_message": {
+                    "text": "latest",
+                    "agent_name": "alice",
+                    "created_at": "2026-01-01T00:00:00.000Z"
+                }
+            }
+        ])))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let participants = relay
+        .dm_conversation_participants("conv_1")
+        .await
+        .expect("dm_conversation_participants failed");
+    assert_eq!(participants, vec!["alice".to_string(), "bob".to_string()]);
+
+    let missing = relay
+        .dm_conversation_participants("missing")
+        .await
+        .expect("missing conversation should return empty vec");
+    assert!(missing.is_empty());
+}

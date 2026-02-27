@@ -61,6 +61,18 @@ pub struct AgentSession {
     pub token: String,
 }
 
+/// Behavior when the preferred agent name already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NameConflictStrategy {
+    /// Rotate the existing agent token and keep the same name.
+    #[default]
+    RotateExisting,
+    /// Retry registration once with a random name suffix.
+    RetryWithSuffixOnce,
+    /// Return a conflict error without rotating or retrying.
+    Fail,
+}
+
 /// Configuration for session bootstrapping.
 #[derive(Debug, Clone, Default)]
 pub struct BootstrapConfig {
@@ -73,6 +85,8 @@ pub struct BootstrapConfig {
     /// Workspace API key from environment or config.
     /// If not set, a new workspace is created.
     pub api_key: Option<String>,
+    /// How to resolve name conflicts when preferred_name is already taken.
+    pub conflict_strategy: NameConflictStrategy,
 }
 
 /// File-based credential store with atomic writes and Unix permissions.
@@ -259,11 +273,12 @@ pub async fn bootstrap_session(
         .unwrap_or_else(|| format!("agent-{}", &uuid_v4_short()));
 
     let agent_type = config.agent_type.unwrap_or_else(|| "agent".into());
+    let conflict_strategy = config.conflict_strategy;
 
     match relay
         .register_agent(CreateAgentRequest {
             name: name.clone(),
-            agent_type: Some(agent_type),
+            agent_type: Some(agent_type.clone()),
             persona: None,
             metadata: None,
         })
@@ -280,19 +295,56 @@ pub async fn bootstrap_session(
                 result.token,
             )
         }
-        Err(e) if e.is_conflict() => {
-            // Agent name taken — try rotating the existing one
-            let rotate_result = relay.rotate_agent_token(&name).await?;
-            let ws_id = workspace_id.unwrap_or_default();
-            finish_session(
-                store,
-                ws_id,
-                cached_agent_id,
-                api_key,
-                Some(name),
-                rotate_result.token,
-            )
-        }
+        Err(e) if e.is_conflict() => match conflict_strategy {
+            NameConflictStrategy::RotateExisting => {
+                let rotate_result = relay.rotate_agent_token(&name).await?;
+                let ws_id = workspace_id.unwrap_or_default();
+                finish_session(
+                    store,
+                    ws_id,
+                    cached_agent_id,
+                    api_key,
+                    Some(name),
+                    rotate_result.token,
+                )
+            }
+            NameConflictStrategy::RetryWithSuffixOnce => {
+                let suffix_name = format!("{}-{}", name, uuid_v4_short());
+                let retried = relay
+                    .register_agent(CreateAgentRequest {
+                        name: suffix_name.clone(),
+                        agent_type: Some(agent_type),
+                        persona: None,
+                        metadata: None,
+                    })
+                    .await;
+
+                match retried {
+                    Ok(result) => {
+                        let ws_id = workspace_id.unwrap_or_default();
+                        finish_session(
+                            store,
+                            ws_id,
+                            result.id,
+                            api_key,
+                            Some(result.name),
+                            result.token,
+                        )
+                    }
+                    Err(err) if err.is_conflict() => Err(RelayError::api(
+                        "agent_already_exists",
+                        format!("agent name '{}' already exists after retry", suffix_name),
+                        409,
+                    )),
+                    Err(err) => Err(err),
+                }
+            }
+            NameConflictStrategy::Fail => Err(RelayError::api(
+                "agent_already_exists",
+                format!("agent name '{}' already exists", name),
+                409,
+            )),
+        },
         Err(e) if e.is_auth_rejection() => {
             // Cached key is stale — create fresh workspace
             let (fresh_key, fresh_ws_id) = create_fresh_workspace(base_url).await?;
@@ -373,6 +425,23 @@ fn uuid_v4_short() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ok(data: serde_json::Value) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
+    }
+
+    fn api_error(status: u16, code: &str, message: &str) -> ResponseTemplate {
+        ResponseTemplate::new(status).set_body_json(json!({
+            "ok": false,
+            "error": {
+                "code": code,
+                "message": message
+            }
+        }))
+    }
 
     #[test]
     fn credential_store_round_trip() {
@@ -442,5 +511,82 @@ mod tests {
 
         let perms = fs::metadata(store.path()).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn conflict_strategy_fail_returns_conflict_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_string_contains("\"name\":\"lead\""))
+            .respond_with(api_error(409, "agent_already_exists", "name taken"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CredentialStore::new(dir.path().join("creds.json"));
+        let result = bootstrap_session(
+            &store,
+            BootstrapConfig {
+                preferred_name: Some("lead".to_string()),
+                api_key: Some("rk_live_test".to_string()),
+                base_url: Some(server.uri()),
+                conflict_strategy: NameConflictStrategy::Fail,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.is_conflict());
+    }
+
+    #[tokio::test]
+    async fn conflict_strategy_retry_with_suffix_registers_new_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_string_contains("\"name\":\"lead\""))
+            .respond_with(api_error(409, "agent_already_exists", "name taken"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_string_contains("\"name\":\"lead-"))
+            .respond_with(ok(json!({
+                "id": "a_retry",
+                "name": "lead-suffixed",
+                "token": "at_live_retry",
+                "status": "online",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CredentialStore::new(dir.path().join("creds.json"));
+        let session = bootstrap_session(
+            &store,
+            BootstrapConfig {
+                preferred_name: Some("lead".to_string()),
+                api_key: Some("rk_live_test".to_string()),
+                base_url: Some(server.uri()),
+                conflict_strategy: NameConflictStrategy::RetryWithSuffixOnce,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("bootstrap with suffix retry should succeed");
+
+        assert_eq!(session.token, "at_live_retry");
+        assert_eq!(
+            session.credentials.agent_name.as_deref(),
+            Some("lead-suffixed")
+        );
     }
 }

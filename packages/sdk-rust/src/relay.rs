@@ -195,6 +195,7 @@ impl RelayCastOptions {
 }
 
 /// Main client for RelayCast workspace operations.
+#[derive(Clone)]
 pub struct RelayCast {
     client: HttpClient,
 }
@@ -699,6 +700,21 @@ impl RelayCast {
         self.client
             .get("/v1/dm/conversations/all", None, None)
             .await
+    }
+
+    /// Resolve participants for a workspace DM conversation.
+    pub async fn dm_conversation_participants(&self, conversation_id: &str) -> Result<Vec<String>> {
+        let target = conversation_id.trim();
+        if target.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conversations = self.all_dm_conversations().await?;
+        Ok(conversations
+            .into_iter()
+            .find(|conversation| conversation.id == target)
+            .map(|conversation| conversation.participants)
+            .unwrap_or_default())
     }
 
     /// Get DM messages for a workspace conversation.
