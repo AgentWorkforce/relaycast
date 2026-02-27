@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
+import { setAuth } from '../lib/auth';
 
 interface Session {
   apiKey: string;
@@ -13,24 +14,38 @@ interface Session {
 
 export function RelaySessionProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const requestSeq = useRef(0);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
+    const keyParam = searchParams.get('key');
 
-    fetch('/api/auth/session')
-      .then((res) => {
-        if (seq !== requestSeq.current) return null;
+    async function initSession() {
+      try {
+        // If a key is in the URL, authenticate with it before checking the session.
+        if (keyParam?.startsWith('rk_live_')) {
+          const success = await setAuth(keyParam);
+          if (seq !== requestSeq.current) return;
+          if (!success) {
+            router.replace('/login');
+            return;
+          }
+        }
+
+        const res = await fetch('/api/auth/session');
+        if (seq !== requestSeq.current) return;
+
         if (!res.ok) {
           router.replace('/login');
-          return null;
+          return;
         }
-        return res.json();
-      })
-      .then((data) => {
+
+        const data = await res.json();
         if (seq !== requestSeq.current) return;
+
         if (data?.authenticated) {
           setSession({
             apiKey: data.apiKey,
@@ -38,19 +53,23 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
             wsToken: data.wsToken ?? data.apiKey,
             baseUrl: data.baseUrl,
           });
+          // Strip the key from the URL only after the session is established,
+          // so the URL change doesn't race with the session fetch.
+          if (keyParam) router.replace('/');
         } else {
           router.replace('/login');
         }
-      })
-      .catch(() => {
+      } catch {
         if (seq !== requestSeq.current) return;
         router.replace('/login');
-      })
-      .finally(() => {
+      } finally {
         if (seq !== requestSeq.current) return;
         setChecking(false);
-      });
-  }, [router]);
+      }
+    }
+
+    initSession();
+  }, [router, searchParams]);
 
   if (checking || !session) {
     return (
