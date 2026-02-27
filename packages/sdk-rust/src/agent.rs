@@ -347,6 +347,32 @@ impl AgentClient {
             .await
     }
 
+    /// Get DM history for a conversation with a specific agent participant.
+    ///
+    /// Returns an empty vector when no matching conversation exists.
+    pub async fn dm_messages_with_agent(
+        &self,
+        agent: &str,
+        opts: Option<MessageListQuery>,
+    ) -> Result<Vec<MessageWithMeta>> {
+        let target = agent.trim();
+        if target.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conversations = self.dm_conversations().await?;
+        let Some(conversation) = conversations.into_iter().find(|conversation| {
+            conversation
+                .participants
+                .iter()
+                .any(|participant| participant.eq_ignore_ascii_case(target))
+        }) else {
+            return Ok(vec![]);
+        };
+
+        self.dm_messages(&conversation.id, opts).await
+    }
+
     /// Create a group DM.
     pub async fn create_group_dm(
         &self,
