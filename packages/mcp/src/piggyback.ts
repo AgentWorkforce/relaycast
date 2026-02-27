@@ -110,7 +110,7 @@ export function enablePiggyback(
           (inbox.unreadDms?.length ?? 0) > 0 ||
           (inbox.recentReactions?.length ?? 0) > 0;
 
-        console.debug('[piggyback] inbox fetch ok — channels=%d mentions=%d dms=%d reactions=%d',
+        console.error('[piggyback] inbox fetch ok — channels=%d mentions=%d dms=%d reactions=%d',
           inbox.unreadChannels?.length ?? 0,
           inbox.mentions?.length ?? 0,
           inbox.unreadDms?.length ?? 0,
@@ -128,7 +128,7 @@ export function enablePiggyback(
           }
         }
       } catch (err) {
-        console.debug('[piggyback] inbox fetch failed — %s', err instanceof Error ? err.message : String(err));
+        console.error('[piggyback] inbox fetch failed — %s', err instanceof Error ? err.message : String(err));
       }
 
       return result;
