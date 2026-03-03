@@ -2,6 +2,7 @@ import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { touchLastActivity } from './workspace.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -75,10 +76,11 @@ export async function postMessage(
     await db.insert(messageAttachments).values(attachmentValues);
   }
 
-  // Fetch attachment details and agent name
+  // Fetch attachment details and agent name; track activity
   const [attachmentMap, [agent]] = await Promise.all([
     hasAttachments ? fetchAttachmentsBatch(db, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
     db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+    touchLastActivity(db, workspaceId),
   ]);
   const attachments = attachmentMap.get(messageId) || [];
 

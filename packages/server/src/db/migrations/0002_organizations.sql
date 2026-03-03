@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS email_verifications (
 CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id);
 
 -- Add new columns to workspaces
-ALTER TABLE workspaces ADD COLUMN organization_id TEXT REFERENCES organizations(id);
+ALTER TABLE workspaces ADD COLUMN organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE workspaces ADD COLUMN last_activity_at INTEGER;
 ALTER TABLE workspaces ADD COLUMN deleted_at INTEGER;
 

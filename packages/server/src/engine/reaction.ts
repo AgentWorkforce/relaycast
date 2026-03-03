@@ -2,6 +2,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { reactions, messages, agents, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { touchLastActivity } from './workspace.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -38,6 +39,8 @@ export async function addReaction(
       .insert(reactions)
       .values({ id, messageId, agentId, emoji })
       .returning();
+
+    await touchLastActivity(db, workspaceId);
 
     return {
       id: reaction.id,

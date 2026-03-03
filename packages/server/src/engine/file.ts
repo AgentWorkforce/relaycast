@@ -8,6 +8,7 @@ import { eq, and, ne, sql } from 'drizzle-orm';
 import { files, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import type { getDb } from '../db/index.js';
+import { touchLastActivity } from './workspace.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -53,6 +54,8 @@ export async function createUpload(
     ContentLength: data.size_bytes,
   });
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
+
+  await touchLastActivity(db, workspaceId);
 
   return {
     id,

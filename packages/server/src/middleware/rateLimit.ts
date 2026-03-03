@@ -5,6 +5,7 @@ import type { AppEnv } from '../env.js';
 const RATE_LIMITS: Record<string, number> = {
   free: 60,
   pro: 300,
+  enterprise: 1000,
 };
 
 // Per-route rate limit multipliers (fraction of global limit)

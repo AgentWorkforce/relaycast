@@ -1,6 +1,6 @@
-import { eq, and, lt, isNull, isNotNull, sql } from 'drizzle-orm';
+import { eq, and, lt, or, isNull, isNotNull, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { organizations, workspaces, messages } from '../db/schema.js';
+import { organizations, workspaces, messages, sessions, emailVerifications } from '../db/schema.js';
 import type { Logger } from '../lib/logger.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -68,7 +68,10 @@ export async function runTtlCleanup(db: Db, logger: Logger) {
         and(
           eq(workspaces.organizationId, org.id),
           isNull(workspaces.deletedAt),
-          lt(workspaces.lastActivityAt, sixtyDaysAgo),
+          or(
+            lt(workspaces.lastActivityAt, sixtyDaysAgo),
+            and(isNull(workspaces.lastActivityAt), lt(workspaces.createdAt, sixtyDaysAgo)),
+          ),
         ),
       );
 
@@ -106,11 +109,6 @@ export async function runTtlCleanup(db: Db, logger: Logger) {
   }
 
   // 4. Clean up expired sessions and verification codes
-  await db.delete(
-    (await import('../db/schema.js')).sessions,
-  ).where(lt((await import('../db/schema.js')).sessions.expiresAt, new Date()));
-
-  await db.delete(
-    (await import('../db/schema.js')).emailVerifications,
-  ).where(lt((await import('../db/schema.js')).emailVerifications.expiresAt, new Date()));
+  await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+  await db.delete(emailVerifications).where(lt(emailVerifications.expiresAt, new Date()));
 }

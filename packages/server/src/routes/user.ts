@@ -1,12 +1,39 @@
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireUserAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as userEngine from '../engine/user.js';
-import { sendVerificationEmail } from '../lib/email.js';
 
 export const userRoutes = new Hono<AppEnv>();
+
+// IP-based rate limiter for unauthenticated auth endpoints
+const authBuckets = new Map<string, { count: number; windowStart: number }>();
+
+function authRateLimit(maxRequests: number, windowMs: number = 60_000) {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
+    const key = `${ip}:${c.req.path}`;
+    const now = Date.now();
+
+    let bucket = authBuckets.get(key);
+    if (!bucket || now - bucket.windowStart > windowMs) {
+      bucket = { count: 0, windowStart: now };
+      authBuckets.set(key, bucket);
+    }
+
+    bucket.count++;
+    if (bucket.count > maxRequests) {
+      return c.json({
+        ok: false,
+        error: { code: 'rate_limit_exceeded', message: 'Too many requests. Please try again later.' },
+      }, 429);
+    }
+
+    await next();
+  });
+}
 
 const signupSchema = z.object({
   name: z.string().min(1),
@@ -29,7 +56,7 @@ const switchOrgSchema = z.object({
 });
 
 // POST /user/signup
-userRoutes.post('/user/signup', async (c) => {
+userRoutes.post('/user/signup', authRateLimit(5), async (c) => {
   try {
     const parsed = signupSchema.safeParse(await c.req.json());
     if (!parsed.success) {
@@ -39,14 +66,11 @@ userRoutes.post('/user/signup', async (c) => {
     const db = c.get('db');
     const result = await userEngine.signup(db, parsed.data);
 
-    if (c.env.RESEND_API_KEY) {
-      await sendVerificationEmail(c.env.RESEND_API_KEY, result.email, result.verification_code);
-    }
-
     return c.json({
       ok: true,
       data: {
         user_id: result.user_id,
+        verification_code: result.verification_code,
         created_at: result.created_at,
       },
     }, 201);
@@ -57,7 +81,7 @@ userRoutes.post('/user/signup', async (c) => {
 });
 
 // POST /user/verify
-userRoutes.post('/user/verify', async (c) => {
+userRoutes.post('/user/verify', authRateLimit(10), async (c) => {
   try {
     const parsed = verifyEmailSchema.safeParse(await c.req.json());
     if (!parsed.success) {
@@ -74,7 +98,7 @@ userRoutes.post('/user/verify', async (c) => {
 });
 
 // POST /user/login
-userRoutes.post('/user/login', async (c) => {
+userRoutes.post('/user/login', authRateLimit(5), async (c) => {
   try {
     const parsed = loginSchema.safeParse(await c.req.json());
     if (!parsed.success) {

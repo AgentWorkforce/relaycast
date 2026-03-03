@@ -42,7 +42,9 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
     256,
   );
   const hash = Buffer.from(derived);
-  return hash.toString('hex') === hashHex;
+  const storedHash = Buffer.from(hashHex, 'hex');
+  if (storedHash.length !== hash.length) return false;
+  return crypto.timingSafeEqual(hash, storedHash);
 }
 
 function generateVerificationCode(): string {
@@ -181,7 +183,7 @@ export async function login(
   }
 
   // Create session
-  const sessionId = generateId();
+  const sessionId = generateSessionToken();
   await db.insert(sessions).values({
     id: sessionId,
     userId: user.id,

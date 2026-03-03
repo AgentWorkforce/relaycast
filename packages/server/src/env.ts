@@ -25,7 +25,6 @@ export interface CloudflareBindings {
   RELAYCAST_TELEMETRY_DISABLED?: string;
   POSTHOG_API_KEY?: string;
   POSTHOG_HOST?: string;
-  RESEND_API_KEY?: string;
   ADMIN_SECRET?: string;
 }
 
