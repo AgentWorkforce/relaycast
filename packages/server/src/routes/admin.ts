@@ -8,10 +8,9 @@ export const adminRoutes = new Hono<AppEnv>();
 
 const setPlanSchema = z.object({
   plan: z.enum(['free', 'pro']),
-  billing_source: z.enum(['external']).optional(),
 });
 
-// PUT /admin/orgs/:id/plan - set org plan (external billing)
+// PUT /admin/orgs/:id/plan - set org plan
 adminRoutes.put('/admin/orgs/:id/plan', requireAdminSecret, async (c) => {
   try {
     const parsed = setPlanSchema.safeParse(await c.req.json());
@@ -21,13 +20,8 @@ adminRoutes.put('/admin/orgs/:id/plan', requireAdminSecret, async (c) => {
 
     const db = c.get('db');
     const orgId = c.req.param('id');
-    const { plan, billing_source } = parsed.data;
 
-    const result = await orgEngine.setOrgPlan(db, orgId, {
-      plan,
-      billing_source: billing_source ?? (plan === 'free' ? null : undefined),
-      subscription_status: plan === 'pro' ? 'active' : null,
-    });
+    const result = await orgEngine.setOrgPlan(db, orgId, parsed.data.plan);
 
     if (!result) {
       return c.json({ ok: false, error: { code: 'org_not_found', message: 'Organization not found' } }, 404);

@@ -28,9 +28,6 @@ export const organizations = sqliteTable('organizations', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   plan: text('plan').notNull().default('free'),
-  billingSource: text('billing_source'), // 'stripe' | 'external' | null
-  stripeCustomerId: text('stripe_customer_id'),
-  subscriptionStatus: text('subscription_status'), // 'active' | 'past_due' | 'canceled' | null
   orgApiKeyHash: text('org_api_key_hash').unique(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 });

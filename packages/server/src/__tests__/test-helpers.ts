@@ -35,9 +35,6 @@ export const FAKE_ORGANIZATION = {
   id: 'org_123',
   name: 'test-org',
   plan: 'free',
-  billingSource: null,
-  stripeCustomerId: null,
-  subscriptionStatus: null,
   orgApiKeyHash: null,
   createdAt: new Date(),
 };

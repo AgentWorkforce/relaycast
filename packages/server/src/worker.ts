@@ -27,8 +27,6 @@ import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { userRoutes } from './routes/user.js';
 import { organizationRoutes } from './routes/organization.js';
-import { billingRoutes } from './routes/billing.js';
-import { stripeWebhookRoutes } from './routes/stripeWebhook.js';
 import { adminRoutes } from './routes/admin.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
@@ -245,9 +243,6 @@ app.get('/v1/ws', async (c) => {
   return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
 });
 
-// Stripe webhook — outside v1, raw body needed for signature verification
-app.route('/', stripeWebhookRoutes);
-
 // Admin routes — outside v1 prefix
 app.route('/v1', adminRoutes);
 
@@ -255,7 +250,6 @@ app.route('/v1', adminRoutes);
 const v1 = new Hono<AppEnv>();
 v1.route('/', userRoutes);
 v1.route('/', organizationRoutes);
-v1.route('/', billingRoutes);
 v1.route('/', presenceRoutes);
 v1.route('/', systemPromptRoutes);
 v1.route('/', workspaceRoutes);

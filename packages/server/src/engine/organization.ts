@@ -70,8 +70,6 @@ export async function getOrg(db: Db, orgId: string) {
     id: org.id,
     name: org.name,
     plan: org.plan,
-    billing_source: org.billingSource,
-    subscription_status: org.subscriptionStatus,
     created_at: org.createdAt.toISOString(),
   };
 }
@@ -172,21 +170,11 @@ export async function getOrgWorkspaces(db: Db, orgId: string) {
 export async function setOrgPlan(
   db: Db,
   orgId: string,
-  updates: {
-    plan: string;
-    billing_source?: string | null;
-    stripe_customer_id?: string | null;
-    subscription_status?: string | null;
-  },
+  plan: string,
 ) {
-  const setClause: Record<string, unknown> = { plan: updates.plan };
-  if (updates.billing_source !== undefined) setClause.billingSource = updates.billing_source;
-  if (updates.stripe_customer_id !== undefined) setClause.stripeCustomerId = updates.stripe_customer_id;
-  if (updates.subscription_status !== undefined) setClause.subscriptionStatus = updates.subscription_status;
-
   await db
     .update(organizations)
-    .set(setClause)
+    .set({ plan })
     .where(eq(organizations.id, orgId));
 
   return getOrg(db, orgId);

@@ -26,8 +26,6 @@ export interface CloudflareBindings {
   POSTHOG_API_KEY?: string;
   POSTHOG_HOST?: string;
   RESEND_API_KEY?: string;
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_WEBHOOK_SECRET?: string;
   ADMIN_SECRET?: string;
 }
 

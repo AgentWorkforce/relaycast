@@ -13,9 +13,6 @@ CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   plan TEXT NOT NULL DEFAULT 'free',
-  billing_source TEXT,
-  stripe_customer_id TEXT,
-  subscription_status TEXT,
   org_api_key_hash TEXT UNIQUE,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );

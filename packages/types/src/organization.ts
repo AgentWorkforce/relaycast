@@ -52,8 +52,6 @@ export const OrganizationSchema = z.object({
   id: z.string(),
   name: z.string(),
   plan: z.enum(['free', 'pro']),
-  billing_source: z.enum(['stripe', 'external']).nullable(),
-  subscription_status: z.enum(['active', 'past_due', 'canceled']).nullable(),
   created_at: z.string(),
 });
 export type Organization = z.infer<typeof OrganizationSchema>;
@@ -95,16 +93,7 @@ export const ClaimWorkspaceRequestSchema = z.object({
 });
 export type ClaimWorkspaceRequest = z.infer<typeof ClaimWorkspaceRequestSchema>;
 
-export const OrgBillingSchema = z.object({
-  plan: z.enum(['free', 'pro']),
-  billing_source: z.enum(['stripe', 'external']).nullable(),
-  subscription_status: z.enum(['active', 'past_due', 'canceled']).nullable(),
-  stripe_customer_id: z.string().nullable(),
-});
-export type OrgBilling = z.infer<typeof OrgBillingSchema>;
-
 export const AdminSetPlanRequestSchema = z.object({
   plan: z.enum(['free', 'pro']),
-  billing_source: z.enum(['external']).optional(),
 });
 export type AdminSetPlanRequest = z.infer<typeof AdminSetPlanRequestSchema>;
