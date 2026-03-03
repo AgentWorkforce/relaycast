@@ -31,13 +31,14 @@ export const MessageCreatedEventSchema = z.object({
   channel: z.string(),
   message: z.object({
     id: z.string(),
+    agent_id: z.string().optional(),
     agent_name: z.string(),
     text: z.string(),
     attachments: z.array(z.object({
       file_id: z.string(),
       filename: z.string(),
-      url: z.string(),
-      size: z.number(),
+      content_type: z.string(),
+      size_bytes: z.number(),
     })),
   }),
 });
@@ -46,14 +47,15 @@ export type MessageCreatedEvent = z.infer<typeof MessageCreatedEventSchema>;
 export const MessageUpdatedEventSchema = z.object({
   type: z.literal('message.updated'),
   channel: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
 export const ThreadReplyEventSchema = z.object({
   type: z.literal('thread.reply'),
+  channel: z.string(),
   parent_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
@@ -76,14 +78,14 @@ export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 export const DmReceivedEventSchema = z.object({
   type: z.literal('dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 
 export const GroupDmReceivedEventSchema = z.object({
   type: z.literal('group_dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_name: z.string(), text: z.string() }),
+  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
 });
 export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 
@@ -183,6 +185,7 @@ export const CommandInvokedEventSchema = z.object({
   command: z.string(),
   channel: z.string(),
   invoked_by: z.string(),
+  handler_agent_id: z.string(),
   args: z.string().nullable(),
   parameters: z.record(z.string(), z.unknown()).nullable(),
 });
@@ -204,6 +207,12 @@ export const WsReconnectingEventSchema = z.object({
   attempt: z.number(),
 });
 export type WsReconnectingEvent = z.infer<typeof WsReconnectingEventSchema>;
+
+export const WsPermanentlyDisconnectedEventSchema = z.object({
+  type: z.literal('permanently_disconnected'),
+  attempt: z.number(),
+});
+export type WsPermanentlyDisconnectedEvent = z.infer<typeof WsPermanentlyDisconnectedEventSchema>;
 
 export const WsCloseEventSchema = z.object({
   type: z.literal('close'),
@@ -266,6 +275,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   WsOpenEventSchema,
   WsErrorEventSchema,
   WsReconnectingEventSchema,
+  WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;

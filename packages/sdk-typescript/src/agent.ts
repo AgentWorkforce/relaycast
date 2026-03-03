@@ -2,24 +2,34 @@ import type {
   PostMessageRequest,
   MessageListQuery,
   MessageWithMeta,
+  SearchMessageResult,
   MessageBlock,
   ThreadReplyRequest,
   SendDmRequest,
+  SendDmResponse,
   CreateGroupDmRequest,
+  CreateGroupDmResponse,
+  GroupDmMessageResponse,
+  GroupDmParticipantResponse,
   DmConversationSummary,
   CreateChannelRequest,
   UpdateChannelRequest,
   Channel,
   ChannelMemberInfo,
+  JoinChannelResponse,
+  InviteChannelResponse,
+  AddedReaction,
+  ReadReceipt,
   ReactionGroup,
   InboxResponse,
   ReaderInfo,
   ChannelReadStatus,
   UploadRequest,
   UploadResponse,
+  CompleteUploadResponse,
   FileInfo,
   InvokeCommandRequest,
-  CommandInvocation,
+  CommandInvokeResult,
   WsClientEvent,
   MessageCreatedEvent,
   MessageUpdatedEvent,
@@ -40,9 +50,10 @@ import type {
   WebhookReceivedEvent,
   CommandInvokedEvent,
   WsReconnectingEvent,
+  WsPermanentlyDisconnectedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
-import { WsClient, withInternalWsOrigin } from './ws.js';
+import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -61,17 +72,81 @@ interface FileListOptions {
   limit?: number;
 }
 
-function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions | undefined {
-  if (!opts?.idempotencyKey) return undefined;
-  return { headers: { 'Idempotency-Key': opts.idempotencyKey } };
+function normalizeAutoHeartbeatMs(value?: number | false): number | false {
+  if (value === false) return false;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return 30_000;
+}
+
+function generateIdempotencyKey(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (typeof randomUuid === 'string' && randomUuid.length > 0) {
+    return randomUuid;
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
+
+function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions {
+  const key = opts?.idempotencyKey?.trim() || generateIdempotencyKey();
+  return {
+    headers: {
+      'Idempotency-Key': key,
+      'X-Idempotency-Key': key,
+    },
+  };
+}
+
+export interface AgentClientOptions {
+  autoHeartbeatMs?: number | false;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 }
 
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
+  private autoHeartbeatMs: number | false;
+  private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 
-  constructor(client: HttpClient) {
+  constructor(client: HttpClient, options: AgentClientOptions = {}) {
     this.client = client;
+    this.autoHeartbeatMs = normalizeAutoHeartbeatMs(options.autoHeartbeatMs);
+    this.wsOptions = options.ws ?? {};
+  }
+
+  /**
+   * Presence lifecycle ownership:
+   * - worker identities should call `markOnline`/`heartbeat`/`markOffline`.
+   * - broker identities should signal presence only when they directly own worker lifecycle.
+   * - reader identities should not publish presence.
+   */
+  presence = {
+    markOnline: async (): Promise<void> => {
+      await this.client.post('/v1/agents/heartbeat', {});
+    },
+    heartbeat: async (): Promise<void> => {
+      await this.client.post('/v1/agents/heartbeat', {});
+    },
+    markOffline: async (): Promise<void> => {
+      await this.client.post('/v1/agents/disconnect', {});
+    },
+  };
+
+  private startAutoHeartbeat(): void {
+    this.stopAutoHeartbeat();
+    if (this.autoHeartbeatMs === false) return;
+    this.autoHeartbeatTimer = setInterval(() => {
+      void this.presence.heartbeat().catch(() => {});
+    }, this.autoHeartbeatMs);
+  }
+
+  private stopAutoHeartbeat(): void {
+    if (this.autoHeartbeatTimer) {
+      clearInterval(this.autoHeartbeatTimer);
+      this.autoHeartbeatTimer = null;
+    }
   }
 
   // === WebSocket ===
@@ -82,6 +157,7 @@ export class AgentClient {
       {
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
+        ...this.wsOptions,
       },
       {
         surface: this.client.originSurface,
@@ -89,19 +165,30 @@ export class AgentClient {
         version: this.client.originVersion,
       },
     ));
+    this.ws.on('open', () => {
+      void this.presence.markOnline().catch(() => {});
+      this.startAutoHeartbeat();
+    });
+    this.ws.on('close', () => {
+      this.stopAutoHeartbeat();
+    });
+    this.ws.on('permanently_disconnected', () => {
+      this.stopAutoHeartbeat();
+    });
     this.ws.connect();
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
   async heartbeat(): Promise<void> {
-    await this.client.post('/v1/agents/heartbeat', {});
+    await this.presence.heartbeat();
   }
 
   async disconnect(): Promise<void> {
+    this.stopAutoHeartbeat();
     if (this.ws) {
       // Notify the server before closing the WebSocket so presence
       // updates immediately (works around local DO hibernation issues).
-      await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
+      await this.presence.markOffline().catch(() => {});
       this.ws.disconnect();
       this.ws = null;
     }
@@ -150,6 +237,13 @@ export class AgentClient {
         throw new Error('WebSocket not connected. Call connect() first.');
       }
       return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
+    },
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
+      if (!this.ws) {
+        throw new Error('WebSocket not connected. Call connect() first.');
+      }
+      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt));
     },
     // Wildcard
     any: (handler: (e: WsClientEvent) => void): (() => void) => {
@@ -231,7 +325,7 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<unknown> {
+  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<SendDmResponse> {
     const body: SendDmRequest = { to: agent, text };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -254,14 +348,17 @@ export class AgentClient {
       );
     },
 
-    createGroup: (opts: CreateGroupDmRequest): Promise<unknown> =>
-      this.client.post('/v1/dm/group', opts),
+    createGroup: (
+      opts: CreateGroupDmRequest,
+      idempotency?: IdempotencyOption,
+    ): Promise<CreateGroupDmResponse> =>
+      this.client.post('/v1/dm/group', opts, idempotencyHeaders(idempotency)),
 
     sendMessage: (
       conversationId: string,
       text: string,
       opts?: IdempotencyOption,
-    ): Promise<unknown> =>
+    ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
         { text },
@@ -271,10 +368,10 @@ export class AgentClient {
     addParticipant: (
       conversationId: string,
       agent: string,
-    ): Promise<unknown> =>
+    ): Promise<GroupDmParticipantResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/participants`,
-        { agent },
+        { agentName: agent },
       ),
 
     removeParticipant: (
@@ -301,7 +398,7 @@ export class AgentClient {
     get: (name: string): Promise<Channel & { members: ChannelMemberInfo[] }> =>
       this.client.get(`/v1/channels/${encodeURIComponent(name)}`),
 
-    join: (name: string): Promise<unknown> =>
+    join: (name: string): Promise<JoinChannelResponse> =>
       this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`),
 
     leave: async (name: string): Promise<void> => {
@@ -314,10 +411,10 @@ export class AgentClient {
     archive: (name: string): Promise<void> =>
       this.client.delete(`/v1/channels/${encodeURIComponent(name)}`),
 
-    invite: (channel: string, agent: string): Promise<unknown> =>
+    invite: (channel: string, agent: string): Promise<InviteChannelResponse> =>
       this.client.post(
         `/v1/channels/${encodeURIComponent(channel)}/invite`,
-        { agent },
+        { agentName: agent },
       ),
 
     members: (name: string): Promise<ChannelMemberInfo[]> =>
@@ -329,7 +426,7 @@ export class AgentClient {
 
   // === Reactions ===
 
-  async react(messageId: string, emoji: string): Promise<unknown> {
+  async react(messageId: string, emoji: string): Promise<AddedReaction> {
     return this.client.post(
       `/v1/messages/${encodeURIComponent(messageId)}/reactions`,
       { emoji },
@@ -359,7 +456,7 @@ export class AgentClient {
       before?: string;
       after?: string;
     },
-  ): Promise<unknown[]> {
+  ): Promise<SearchMessageResult[]> {
     const params: Record<string, string> = { q: query };
     if (opts?.channel) params.channel = opts.channel;
     if (opts?.from) params.from = opts.from;
@@ -377,7 +474,7 @@ export class AgentClient {
 
   // === Read Receipts ===
 
-  async markRead(messageId: string): Promise<unknown> {
+  async markRead(messageId: string): Promise<ReadReceipt> {
     return this.client.post(
       `/v1/messages/${encodeURIComponent(messageId)}/read`,
     );
@@ -402,7 +499,7 @@ export class AgentClient {
     invoke: (
       command: string,
       data: InvokeCommandRequest,
-    ): Promise<CommandInvocation> =>
+    ): Promise<CommandInvokeResult> =>
       this.client.post(
         `/v1/commands/${encodeURIComponent(command)}/invoke`,
         data,
@@ -415,7 +512,7 @@ export class AgentClient {
     upload: (data: UploadRequest): Promise<UploadResponse> =>
       this.client.post('/v1/files/upload', data),
 
-    complete: (fileId: string): Promise<FileInfo> =>
+    complete: (fileId: string): Promise<CompleteUploadResponse> =>
       this.client.post(`/v1/files/${encodeURIComponent(fileId)}/complete`),
 
     get: (fileId: string): Promise<FileInfo> =>

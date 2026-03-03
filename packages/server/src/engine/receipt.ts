@@ -66,12 +66,13 @@ export async function getReaders(db: Db, workspaceId: string, messageId: string)
   if (!msg) return null;
 
   const rows = await db
-    .select({ agentName: agents.name, readAt: readReceipts.readAt })
+    .select({ agentId: agents.id, agentName: agents.name, readAt: readReceipts.readAt })
     .from(readReceipts)
     .innerJoin(agents, eq(readReceipts.agentId, agents.id))
     .where(eq(readReceipts.messageId, messageId));
 
   return rows.map((r) => ({
+    agent_id: r.agentId,
     agent_name: r.agentName,
     read_at: r.readAt.toISOString(),
   }));
@@ -87,13 +88,25 @@ export async function getReadStatus(db: Db, workspaceId: string, channelName: st
   if (!channel) return null;
 
   const rows = await db
-    .select({ agentName: agents.name, lastReadId: channelMembers.lastReadId })
+    .select({
+      agentName: agents.name,
+      lastReadId: channelMembers.lastReadId,
+      lastReadAt: readReceipts.readAt,
+    })
     .from(channelMembers)
     .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+    .leftJoin(
+      readReceipts,
+      and(
+        eq(readReceipts.messageId, channelMembers.lastReadId),
+        eq(readReceipts.agentId, channelMembers.agentId),
+      ),
+    )
     .where(eq(channelMembers.channelId, channel.id));
 
   return rows.map((r) => ({
     agent_name: r.agentName,
     last_read_id: r.lastReadId,
+    last_read_at: r.lastReadAt ? r.lastReadAt.toISOString() : null,
   }));
 }

@@ -5,6 +5,7 @@ import {
   channels,
   agents,
   dmParticipants,
+  reactions,
 } from '../db/schema.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -152,9 +153,31 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     }
   }
 
+  // 4. Recent reactions on the agent's own messages (from other agents)
+  const reactionRows = await db.all<{
+    message_id: string;
+    channel_name: string;
+    emoji: string;
+    agent_name: string;
+    created_at: string;
+  }>(sql`
+    SELECT r.message_id, ch.name AS channel_name, r.emoji,
+           a.name AS agent_name, datetime(r.created_at, 'unixepoch') AS created_at
+    FROM reactions r
+    JOIN messages m ON m.id = r.message_id
+    JOIN channels ch ON ch.id = m.channel_id
+    JOIN agents a ON a.id = r.agent_id
+    WHERE m.agent_id = ${agentId}
+      AND m.workspace_id = ${workspaceId}
+      AND r.agent_id != ${agentId}
+    ORDER BY r.created_at DESC
+    LIMIT 20
+  `);
+
   return {
     unread_channels: unreadChannels,
     mentions: mentionsEnriched,
     unread_dms: unreadDms,
+    recent_reactions: reactionRows,
   };
 }

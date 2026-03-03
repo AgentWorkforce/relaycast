@@ -1,33 +1,39 @@
 import type { WsClient, WsClientEvent } from '@relaycast/sdk';
 import type { SubscriptionManager } from './subscriptions.js';
 
+function getStringEventField(event: WsClientEvent, field: string): string | null {
+  const candidate = (event as Record<string, unknown>)[field];
+  return typeof candidate === 'string' ? candidate : null;
+}
+
 /**
  * Maps a WebSocket ServerEvent to the relay:// resource URIs it affects.
  */
 export function eventToResourceUris(event: WsClientEvent): string[] {
   switch (event.type) {
-    case 'message.created':
-      return [
-        'relay://inbox',
-        `relay://channels/${(event as any).channel}/messages`,
-      ];
-    case 'message.updated':
-      return [`relay://channels/${(event as any).channel}/messages`];
-    case 'thread.reply':
-      return [
-        'relay://inbox',
-        `relay://messages/${(event as any).parentId}/thread`,
-      ];
+    case 'message.created': {
+      const channel = getStringEventField(event, 'channel');
+      return channel
+        ? ['relay://inbox', `relay://channels/${channel}/messages`]
+        : ['relay://inbox'];
+    }
+    case 'message.updated': {
+      const channel = getStringEventField(event, 'channel');
+      return channel ? [`relay://channels/${channel}/messages`] : [];
+    }
+    case 'thread.reply': {
+      const parentId = getStringEventField(event, 'parentId');
+      return parentId
+        ? ['relay://inbox', `relay://messages/${parentId}/thread`]
+        : ['relay://inbox'];
+    }
     case 'dm.received':
-      return [
-        'relay://inbox',
-        `relay://dm/${(event as any).conversationId}`,
-      ];
-    case 'group_dm.received':
-      return [
-        'relay://inbox',
-        `relay://dm/${(event as any).conversationId}`,
-      ];
+    case 'group_dm.received': {
+      const conversationId = getStringEventField(event, 'conversationId');
+      return conversationId
+        ? ['relay://inbox', `relay://dm/${conversationId}`]
+        : ['relay://inbox'];
+    }
     case 'agent.online':
     case 'agent.offline':
       return ['relay://agents'];
@@ -38,20 +44,19 @@ export function eventToResourceUris(event: WsClientEvent): string[] {
     case 'member.left':
       return ['relay://channels'];
     case 'webhook.received':
-      return [
-        `relay://channels/${(event as any).channel}/messages`,
-      ];
-    case 'command.invoked':
-      return [
-        `relay://channels/${(event as any).channel}/messages`,
-      ];
+    case 'command.invoked': {
+      const channel = getStringEventField(event, 'channel');
+      return channel ? [`relay://channels/${channel}/messages`] : [];
+    }
     case 'message.read':
       return [];
     case 'file.uploaded':
       return [];
     case 'reaction.added':
     case 'reaction.removed':
-      return [];
+      // Reactions are informational activity: surface them as a soft inbox
+      // signal so agents can observe updates without implying a required reply.
+      return ['relay://inbox'];
     default:
       return [];
   }

@@ -1,5 +1,6 @@
 'use client';
 
+import { formatReplyCountLabel } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
@@ -58,7 +59,7 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
                 onClick={() => onOpenThread?.(message.id)}
                 className="text-xs text-[var(--color-accent-cyan)] cursor-pointer hover:underline"
               >
-                {message.replyCount} {message.replyCount === 1 ? 'reply' : 'replies'}
+                {formatReplyCountLabel(message.replyCount)}
               </button>
             )}
           </div>

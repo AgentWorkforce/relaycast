@@ -3,7 +3,7 @@
 use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::Result;
 use crate::types::*;
-use crate::ws::{EventReceiver, WsClient, WsClientOptions};
+use crate::ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions};
 
 /// Strip leading '#' from channel names.
 fn strip_hash(channel: &str) -> &str {
@@ -35,6 +35,16 @@ impl AgentClient {
     /// Get a reference to the underlying HTTP client.
     pub fn http_client(&self) -> &HttpClient {
         &self.client
+    }
+
+    /// Replace the agent token for HTTP and WebSocket operations.
+    pub async fn set_token(&mut self, token: impl Into<String>) -> Result<()> {
+        let token = token.into();
+        self.client = self.client.with_api_key(token.clone())?;
+        if let Some(ws) = self.ws.as_ref() {
+            ws.set_token(token).await;
+        }
+        Ok(())
     }
 
     // === WebSocket ===
@@ -94,6 +104,14 @@ impl AgentClient {
             .ok_or(crate::error::RelayError::NotConnected)
     }
 
+    /// Subscribe to lifecycle events such as connect/reconnect/close.
+    pub fn subscribe_lifecycle(&self) -> Result<LifecycleReceiver> {
+        self.ws
+            .as_ref()
+            .map(|ws| ws.subscribe_lifecycle())
+            .ok_or(crate::error::RelayError::NotConnected)
+    }
+
     /// Subscribe to channels for real-time updates.
     pub async fn subscribe_channels(&self, channels: Vec<String>) -> Result<()> {
         if let Some(ref ws) = self.ws {
@@ -128,6 +146,7 @@ impl AgentClient {
             text: text.to_string(),
             attachments,
             blocks,
+            data: None,
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
@@ -201,6 +220,7 @@ impl AgentClient {
         let body = ThreadReplyRequest {
             text: text.to_string(),
             blocks,
+            data: None,
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
@@ -268,6 +288,21 @@ impl AgentClient {
         self.client.post("/v1/dm", Some(body), options).await
     }
 
+    /// Send a direct message to another agent (typed response).
+    pub async fn dm_typed(
+        &self,
+        agent: &str,
+        text: &str,
+        idempotency_key: Option<String>,
+    ) -> Result<DmSendResponse> {
+        let body = SendDmRequest {
+            to: agent.to_string(),
+            text: text.to_string(),
+        };
+        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        self.client.post("/v1/dm", Some(body), options).await
+    }
+
     /// Get DM conversations.
     pub async fn dm_conversations(&self) -> Result<Vec<DmConversationSummary>> {
         self.client.get("/v1/dm/conversations", None, None).await
@@ -312,11 +347,45 @@ impl AgentClient {
             .await
     }
 
+    /// Get DM history for a conversation with a specific agent participant.
+    ///
+    /// Returns an empty vector when no matching conversation exists.
+    pub async fn dm_messages_with_agent(
+        &self,
+        agent: &str,
+        opts: Option<MessageListQuery>,
+    ) -> Result<Vec<MessageWithMeta>> {
+        let target = agent.trim();
+        if target.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conversations = self.dm_conversations().await?;
+        let Some(conversation) = conversations.into_iter().find(|conversation| {
+            conversation
+                .participants
+                .iter()
+                .any(|participant| participant.eq_ignore_ascii_case(target))
+        }) else {
+            return Ok(vec![]);
+        };
+
+        self.dm_messages(&conversation.id, opts).await
+    }
+
     /// Create a group DM.
     pub async fn create_group_dm(
         &self,
         request: CreateGroupDmRequest,
     ) -> Result<serde_json::Value> {
+        self.client.post("/v1/dm/group", Some(request), None).await
+    }
+
+    /// Create a group DM (typed response).
+    pub async fn create_group_dm_typed(
+        &self,
+        request: CreateGroupDmRequest,
+    ) -> Result<GroupDmConversationResponse> {
         self.client.post("/v1/dm/group", Some(request), None).await
     }
 
@@ -338,13 +407,50 @@ impl AgentClient {
             .await
     }
 
+    /// Send a message to a DM conversation (typed response).
+    pub async fn send_dm_message_typed(
+        &self,
+        conversation_id: &str,
+        text: &str,
+        idempotency_key: Option<String>,
+    ) -> Result<GroupDmMessageResponse> {
+        let body = serde_json::json!({ "text": text });
+        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        self.client
+            .post(
+                &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
+                Some(body),
+                options,
+            )
+            .await
+    }
+
     /// Add a participant to a group DM.
     pub async fn add_dm_participant(
         &self,
         conversation_id: &str,
         agent: &str,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({ "agent": agent });
+        let body = serde_json::json!({ "agent_name": agent });
+        self.client
+            .post(
+                &format!(
+                    "/v1/dm/{}/participants",
+                    urlencoding::encode(conversation_id)
+                ),
+                Some(body),
+                None,
+            )
+            .await
+    }
+
+    /// Add a participant to a group DM (typed response).
+    pub async fn add_dm_participant_typed(
+        &self,
+        conversation_id: &str,
+        agent: &str,
+    ) -> Result<GroupDmParticipantResponse> {
+        let body = serde_json::json!({ "agent_name": agent });
         self.client
             .post(
                 &format!(

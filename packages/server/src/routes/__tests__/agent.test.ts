@@ -77,6 +77,18 @@ describe('POST /v1/agents', () => {
     expect(body.error.code).toBe('invalid_request');
   });
 
+  it('returns 400 when type is invalid', async () => {
+    const res = await app.request('/v1/agents', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'CodeReviewer', type: 'robot' }),
+    }, bindings);
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('invalid_request');
+  });
+
   it('returns 409 for duplicate agent name', async () => {
     vi.mocked(agentEngine.registerAgent).mockRejectedValue(
       Object.assign(new Error('Agent "CodeReviewer" already exists'), {

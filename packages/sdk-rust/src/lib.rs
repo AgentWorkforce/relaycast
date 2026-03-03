@@ -67,7 +67,9 @@
 
 pub mod agent;
 pub mod client;
+pub mod credentials;
 pub mod error;
+pub mod registration;
 pub mod relay;
 pub mod types;
 pub mod ws;
@@ -76,8 +78,13 @@ pub mod ws;
 pub use agent::AgentClient;
 pub use client::{ClientOptions, HttpClient, RequestOptions};
 pub use error::{RelayError, Result};
+pub use registration::{
+    format_registration_error, registration_is_retryable, registration_retry_after_secs,
+    retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
+    AgentRegistrationRetryOutcome,
+};
 pub use relay::{RelayCast, RelayCastOptions};
-pub use ws::{EventReceiver, WsClient, WsClientOptions};
+pub use ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions, WsLifecycleEvent};
 
 // Re-export commonly used types
 pub use types::{
@@ -117,11 +124,16 @@ pub use types::{
     CreateWorkspaceResponse,
     DmConversationSummary,
     DmReceivedEvent,
+    DmSendResponse,
     EventSubscription,
     // Files
     FileInfo,
     FileListOptions,
     FileUploadedEvent,
+    GroupDmConversationResponse,
+    GroupDmMessageResponse,
+    GroupDmParticipantRef,
+    GroupDmParticipantResponse,
     GroupDmReceivedEvent,
     // Inbox
     InboxResponse,

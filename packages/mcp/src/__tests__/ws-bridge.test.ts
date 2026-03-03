@@ -150,13 +150,23 @@ describe('eventToResourceUris', () => {
     expect(eventToResourceUris(event)).toEqual([]);
   });
 
-  it('returns empty array for reaction events', () => {
+  it('maps reaction.added to inbox as a soft notification signal', () => {
     const event = {
       type: 'reaction.added',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
     } as WsClientEvent;
-    expect(eventToResourceUris(event)).toEqual([]);
+    expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
+  });
+
+  it('maps reaction.removed to inbox as a soft notification signal', () => {
+    const event = {
+      type: 'reaction.removed',
+      messageId: 'm1',
+      emoji: 'thumbsup',
+      agentName: 'bot',
+    } as WsClientEvent;
+    expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
   });
 });

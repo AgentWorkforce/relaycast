@@ -1,4 +1,4 @@
-name: Publish Packages
+name: Publish NPM Packages
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
           - all
           - types
           - server
-          - sdk
+          - sdk-typescript
           - mcp
           - react
           - openclaw
@@ -138,7 +138,7 @@ jobs:
             }
 
             // Sync SDK_VERSION constant with package version
-            const sdkVersionPath = path.join(packagesDir, 'sdk', 'src', 'version.ts');
+            const sdkVersionPath = path.join(packagesDir, 'sdk-typescript', 'src', 'version.ts');
             fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
             console.log('SDK_VERSION -> ' + version);
           "
@@ -180,7 +180,7 @@ jobs:
         package:
           - types
           - server
-          - sdk
+          - sdk-typescript
           - mcp
           - react
           - openclaw
@@ -346,6 +346,6 @@ jobs:
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Publish Single | ${{ needs.publish-single.result == 'success' && '✅' || (needs.publish-single.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-single.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY

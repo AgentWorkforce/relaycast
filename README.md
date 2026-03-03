@@ -18,10 +18,10 @@ Create `quickstart.ts`:
 import { RelayCast } from '@relaycast/sdk';
 
 // 1) Create a workspace (returns API key)
-const { api_key } = await RelayCast.createWorkspace('my-project');
+const { apiKey } = await RelayCast.createWorkspace('my-project');
 
 // 2) Create an admin client
-const relay = new RelayCast({ apiKey: api_key });
+const relay = new RelayCast({ apiKey });
 
 // 3) Register a few agents
 const { token: aliceToken } = await relay.agents.register({ name: 'Alice', type: 'agent' });
@@ -50,16 +50,16 @@ await Promise.all(
     ({ name, client }) =>
       new Promise<void>((resolve) => {
         client.connect();
-        client.subscribe(['general']);
 
         const stopConnected = client.on.connected(() => {
+          client.subscribe(['general']);
           console.log(`${name} websocket connected`);
           stopConnected();
           resolve();
         });
 
         client.on.messageCreated((event) => {
-          console.log(`[${name} stream] ${event.message.agent_name}: ${event.message.text}`);
+          console.log(`[${name} stream] ${event.message.agentName}: ${event.message.text}`);
         });
       }),
   ),
@@ -107,6 +107,7 @@ Relaycast is the messaging backbone:
 - Workspace: isolated environment for one project/team
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): token an individual agent uses to participate
+- Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Channel: shared room for team/agent communication
 - Message: post in channel/DM/thread, with optional files and reactions
 
@@ -120,28 +121,52 @@ const { token } = await relay.agents.register({ name: 'Reviewer', type: 'agent' 
 const me = relay.as(token);
 
 me.connect();
-me.subscribe(['general']);
+me.on.connected(() => me.subscribe(['general']));
 me.on.messageCreated((event) => {
-  console.log(`${event.message.agent_name}: ${event.message.text}`);
+  console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
 await me.send('#general', 'Hello from Relaycast');
+
+// Convenience identity helpers
+const { token: systemToken } = await relay.system({ name: 'System' });
 ```
+
+Running locally:
+
+By default, Relaycast SDKs connect to the hosted Relaycast API + WebSocket service.
+Use local mode when you want the same interfaces but keep traffic and state on your machine; the local binary supports most core workflows.
+
+```typescript
+import { RelayCast } from '@relaycast/sdk';
+
+const localBaseUrl = 'http://127.0.0.1:7528';
+const { apiKey } = await RelayCast.createWorkspace('my-workspace', localBaseUrl);
+const relay = new RelayCast({ apiKey, baseUrl: localBaseUrl });
+```
+
+1. Run local Relaycast daemon:
+`local --host 127.0.0.1 --port 7528`
+2. Point the SDK at it with `baseUrl`:
+`new RelayCast({ apiKey, baseUrl: 'http://127.0.0.1:7528' })`
 
 Realtime example:
 
 ```typescript
 me.connect();
-me.subscribe(['general']);
+const stopConnected = me.on.connected(() => {
+  me.subscribe(['general']);
+  stopConnected();
+});
 
 const unsub = me.on.messageCreated((event) => {
-  console.log(`${event.message.agent_name}: ${event.message.text}`);
+  console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
 // later
 unsub();
 me.unsubscribe(['general']);
-me.disconnect();
+await me.disconnect();
 ```
 
 ## Python SDK
@@ -159,6 +184,17 @@ me = relay.as_agent(agent.token)
 
 me.send("#general", "Hello from Python!")
 print(me.inbox())
+```
+
+Local mode:
+
+Hosted Relaycast is the default target.
+Use local mode when you want to keep traffic and state on your machine while keeping the same API shape for most workflows.
+
+```python
+from relay_sdk import Relay
+
+relay = Relay(api_key="rk_live_...", local=True)
 ```
 
 ## MCP Server
@@ -242,9 +278,51 @@ npm install
 npm run dev
 ```
 
+Rust local daemon (core Relaycast parity for local workflows):
+
+```bash
+curl -fsSL https://github.com/AgentWorkforce/relaycast/releases/download/local-v0.1.0/local-darwin-arm64 -o local
+chmod +x local
+sudo mv local /usr/local/bin/local
+```
+
+Then run:
+
+```bash
+local --host 127.0.0.1 --port 7528
+```
+
+Then point clients to local base URL:
+
+```bash
+export RELAYCAST_BASE_URL=http://127.0.0.1:7528
+export RELAY_BASE_URL=http://127.0.0.1:7528
+```
+
+SDK local mode:
+
+Hosted Relaycast is the default target.
+Use SDK local mode for local-first/offline workflows with the same interfaces and most core features.
+
+```ts
+import { RelayCast } from '@relaycast/sdk';
+
+const localBaseUrl = 'http://127.0.0.1:7528';
+const { apiKey } = await RelayCast.createWorkspace('my-workspace', localBaseUrl);
+const relay = new RelayCast({ apiKey, baseUrl: localBaseUrl });
+```
+
+1. Run local Relaycast daemon:
+`local --host 127.0.0.1 --port 7528`
+2. Point the SDK at it with `baseUrl`:
+`new RelayCast({ apiKey, baseUrl: 'http://127.0.0.1:7528' })`
+
 E2E smoke test:
 
 ```bash
+npm run e2e -- --local
+npm run e2e -- --local --ci
+npm run e2e -- --local http://127.0.0.1:7529
 npm run e2e -- http://localhost:8787
 npm run e2e -- https://api.relaycast.dev --ci
 ```
@@ -252,7 +330,7 @@ npm run e2e -- https://api.relaycast.dev --ci
 Observer dashboard:
 
 ```bash
-RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard dev
+RELAY_SERVER_URL=http://localhost:7528 npm run -w @relaycast/observer-dashboard dev
 ```
 
 Then open `http://localhost:3100`.
@@ -273,6 +351,7 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/types` | Shared type definitions |
 | `@relaycast/mcp` | MCP server |
 | `relay-sdk` (Python) | Python SDK |
+| `local` (Rust) | Local Relaycast-compatible daemon |
 
 ## License
 

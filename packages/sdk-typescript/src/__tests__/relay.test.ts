@@ -6,8 +6,9 @@ vi.stubGlobal('fetch', mockFetch);
 
 function mockResponse(data: unknown, apiOk = true, status = 200) {
   return Promise.resolve({
-    ok: true,
+    ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(),
     json: () => Promise.resolve(apiOk ? { ok: true, data } : { ok: false, error: data }),
   });
 }
@@ -16,6 +17,11 @@ describe('RelayCast', () => {
   beforeEach(() => {
     mockFetch.mockReset();
     vi.useRealTimers();
+  });
+
+  it('requires apiKey when local mode is not enabled', async () => {
+    const { RelayCast } = await import('../relay.js');
+    expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
   });
 
   describe('workspace', () => {
@@ -130,6 +136,19 @@ describe('RelayCast', () => {
       expect(init.body).toBe(JSON.stringify({ name: 'Worker' }));
     });
 
+    it('system() registers a system identity', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ ok: true }));
+      await relay.system({ name: 'System' } as any);
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ name: 'System', type: 'system' }));
+    });
+
     it('list() calls GET /v1/agents', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
@@ -172,20 +191,31 @@ describe('RelayCast', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ code: 'bad_request', message: 'Nope' }, false, 400),
+        mockResponse({ code: 'unauthorized', message: 'Nope' }, false, 401),
       );
 
       await expect(relay.workspace.info()).rejects.toBeInstanceOf(RelayError);
       await expect(relay.workspace.info()).rejects.toMatchObject({
-        code: 'bad_request',
-        status: 400,
+        code: 'unauthorized',
+        retryable: false,
+        statusCode: 401,
+        status: 401,
       });
     });
 
-    it('retries on 5xx with exponential backoff (200ms, 400ms, 800ms)', async () => {
+    it('retries on configured 5xx policy with deterministic backoff', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 3,
+          backoffMs: 200,
+          backoffMultiplier: 2,
+          jitter: false,
+          retryOn: [500, 502, 503],
+        },
+      });
 
       mockFetch
         .mockImplementationOnce(() => mockResponse({ code: 'e', message: 'x' }, false, 500))
@@ -202,6 +232,70 @@ describe('RelayCast', () => {
 
       await expect(promise).resolves.toEqual({ id: 'ws_1' });
       expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it('uses Retry-After for 429 responses', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 1,
+          backoffMs: 25,
+          backoffMultiplier: 1,
+          jitter: false,
+          retryOn: [429],
+        },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          Promise.resolve({
+            ok: false,
+            status: 429,
+            headers: new Headers({ 'Retry-After': '2' }),
+            json: () =>
+              Promise.resolve({
+                ok: false,
+                error: { code: 'rate_limited', message: 'slow down' },
+              }),
+          }),
+        )
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts retry policy overrides via RelayCast constructor options', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        retryPolicy: {
+          maxRetries: 1,
+          backoffMs: 10,
+          backoffMultiplier: 1,
+          jitter: false,
+          retryOn: [418],
+        },
+      });
+
+      mockFetch
+        .mockImplementationOnce(() => mockResponse({ code: 'teapot', message: 'brew' }, false, 418))
+        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }, true, 200));
+
+      const promise = relay.workspace.info();
+
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(promise).resolves.toEqual({ id: 'ws_1' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -410,10 +504,68 @@ describe('RelayCast', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ code: 'internal_error', message: 'boom' }, false, 500),
+        mockResponse({ code: 'internal_error', message: 'boom' }, false, 400),
       );
 
       await expect(relay.agents.registerOrGet({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+    });
+  });
+
+  describe('agents strict identity', () => {
+    it('registerAgent({ strict: true }) registers without suffix fallback', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' }),
+      );
+
+      const result = await relay.agents.registerAgent({ name: 'Bot', strict: true });
+      expect(result).toMatchObject({ id: 'a_1', name: 'Bot', token: 'at_live_new' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(init.body).toBe(JSON.stringify({ name: 'Bot' }));
+    });
+
+    it('registerAgent({ strict: true }) throws name_conflict on collision', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
+      );
+
+      await expect(relay.agents.registerAgent({ name: 'Bot', strict: true })).rejects.toMatchObject({
+        code: 'name_conflict',
+        retryable: false,
+        statusCode: 409,
+      });
+    });
+
+    it('resolveIdentity() returns { agentId, name, workspaceId } after register/rotate', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          mockResponse({ id: 'a_1', name: 'Bot', token: 'at_live_new', status: 'online', created_at: '2024-01-01' }),
+        )
+        .mockImplementationOnce(() =>
+          mockResponse({ id: 'ws_1', name: 'Workspace', metadata: {}, created_at: '2024-01-01' }),
+        );
+
+      await relay.agents.registerOrRotate({ name: 'Bot' });
+      const identity = await relay.agents.resolveIdentity();
+
+      expect(identity).toEqual({
+        agentId: 'a_1',
+        name: 'Bot',
+        workspaceId: 'ws_1',
+      });
+
+      const [workspaceUrl] = mockFetch.mock.calls[1]!;
+      expect(workspaceUrl).toBe('https://api.relaycast.dev/v1/workspace');
     });
   });
 

@@ -1,4 +1,11 @@
-import type { WsClientEvent, WsOpenEvent, WsErrorEvent, WsReconnectingEvent, WsCloseEvent } from './types.js';
+import type {
+  WsClientEvent,
+  WsOpenEvent,
+  WsErrorEvent,
+  WsReconnectingEvent,
+  WsPermanentlyDisconnectedEvent,
+  WsCloseEvent,
+} from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
@@ -8,6 +15,11 @@ export type EventHandler<T = WsClientEvent> = (event: T) => void;
 export interface WsClientOptions {
   token: string;
   baseUrl?: string;
+  maxReconnectAttempts?: number;
+  reconnectJitter?: boolean;
+  reconnectBaseDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  circuitBreakerMaxAttempts?: number;
   /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
   debug?: boolean;
 }
@@ -43,7 +55,12 @@ export class WsClient {
   private handlers: Map<string, Set<EventHandler>> = new Map();
   private isOpen = false;
   private reconnectAttempt = 0;
-  private maxReconnectAttempts = 10;
+  private maxReconnectAttempts: number;
+  private reconnectJitter: boolean;
+  private reconnectBaseDelayMs: number;
+  private reconnectMaxDelayMs: number;
+  private circuitBreakerMaxAttempts: number;
+  private permanentlyDisconnected = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimeoutMs = 10_000;
@@ -58,6 +75,19 @@ export class WsClient {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
     this.token = options.token;
     this.debug = options.debug ?? false;
+    this.maxReconnectAttempts = Number.isFinite(options.maxReconnectAttempts)
+      ? Math.max(0, Math.floor(options.maxReconnectAttempts!))
+      : Number.POSITIVE_INFINITY;
+    this.reconnectJitter = options.reconnectJitter ?? true;
+    this.reconnectBaseDelayMs = Number.isFinite(options.reconnectBaseDelayMs)
+      ? Math.max(1, Math.floor(options.reconnectBaseDelayMs!))
+      : 1000;
+    this.reconnectMaxDelayMs = Number.isFinite(options.reconnectMaxDelayMs)
+      ? Math.max(this.reconnectBaseDelayMs, Math.floor(options.reconnectMaxDelayMs!))
+      : 30_000;
+    this.circuitBreakerMaxAttempts = Number.isFinite(options.circuitBreakerMaxAttempts)
+      ? Math.max(1, Math.floor(options.circuitBreakerMaxAttempts!))
+      : 30;
     const base = (options.baseUrl ?? 'https://api.relaycast.dev').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
     this.originSurface = origin.surface;
@@ -68,6 +98,7 @@ export class WsClient {
   connect(): void {
     if (this.ws) return;
     this.closed = false;
+    this.permanentlyDisconnected = false;
 
     const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
     wsUrl.searchParams.set('token', this.token);
@@ -95,6 +126,7 @@ export class WsClient {
       this.clearConnectTimer();
       this.isOpen = true;
       this.reconnectAttempt = 0;
+      this.permanentlyDisconnected = false;
       this.startPing();
       const openEvent: WsOpenEvent = { type: 'open' };
       this.emit('open', openEvent);
@@ -155,6 +187,7 @@ export class WsClient {
   disconnect(): void {
     this.closed = true;
     this.isOpen = false;
+    this.permanentlyDisconnected = false;
     this.clearConnectTimer();
     this.stopPing();
     if (this.reconnectTimer) {
@@ -171,6 +204,32 @@ export class WsClient {
       this.ws.close();
       this.ws = null;
     }
+  }
+
+  reconnect(): void {
+    this.closed = false;
+    this.isOpen = false;
+    this.permanentlyDisconnected = false;
+    this.reconnectAttempt = 0;
+    this.clearConnectTimer();
+    this.stopPing();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      try {
+        this.ws.close();
+      } catch {
+        // noop
+      }
+      this.ws = null;
+    }
+    this.connect();
   }
 
   subscribe(channels: string[]): void {
@@ -237,13 +296,43 @@ export class WsClient {
     }
   }
 
+  private computeReconnectDelayMs(attempt: number): number {
+    const exponential = Math.min(
+      this.reconnectBaseDelayMs * Math.pow(2, Math.max(0, attempt - 1)),
+      this.reconnectMaxDelayMs,
+    );
+    if (!this.reconnectJitter) return exponential;
+    const jitterFactor = 0.5 + Math.random();
+    return Math.max(1, Math.round(exponential * jitterFactor));
+  }
+
+  private tripCircuitBreaker(): void {
+    if (this.permanentlyDisconnected) return;
+    this.permanentlyDisconnected = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const event: WsPermanentlyDisconnectedEvent = {
+      type: 'permanently_disconnected',
+      attempt: this.reconnectAttempt,
+    };
+    this.emit('permanently_disconnected', event);
+  }
+
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
-    if (this.reconnectAttempt >= this.maxReconnectAttempts) return;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
-    this.reconnectAttempt++;
+    if (this.reconnectTimer || this.closed || this.permanentlyDisconnected) return;
+    if (
+      this.reconnectAttempt >= this.maxReconnectAttempts ||
+      this.reconnectAttempt >= this.circuitBreakerMaxAttempts
+    ) {
+      this.tripCircuitBreaker();
+      return;
+    }
+    this.reconnectAttempt += 1;
     const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
     this.emit('reconnecting', reconnectingEvent);
+    const delay = this.computeReconnectDelayMs(this.reconnectAttempt);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();

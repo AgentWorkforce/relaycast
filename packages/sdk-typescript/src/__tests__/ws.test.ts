@@ -156,7 +156,7 @@ describe('WsClient', () => {
   });
 
   it('auto-reconnects on close with exponential backoff', () => {
-    const client = new WsClient({ token: 'at_live_test' });
+    const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
     client.connect();
     const ws1 = MockWebSocket.instances[0]!;
     ws1.simulateOpen();
@@ -177,7 +177,7 @@ describe('WsClient', () => {
   });
 
   it('reconnects when connect fails with error before close', () => {
-    const client = new WsClient({ token: 'at_live_test' });
+    const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
     client.connect();
     const ws1 = MockWebSocket.instances[0]!;
 
@@ -363,7 +363,7 @@ describe('WsClient', () => {
   });
 
   it('emits reconnecting event with attempt count', () => {
-    const client = new WsClient({ token: 'at_live_test' });
+    const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
     const handler = vi.fn();
     client.on('reconnecting', handler);
 
@@ -407,5 +407,75 @@ describe('WsClient', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ type: 'open' }));
+  });
+
+  it('applies jitter to reconnect delay when enabled', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const client = new WsClient({
+      token: 'at_live_test',
+      reconnectJitter: true,
+      reconnectBaseDelayMs: 1000,
+      reconnectMaxDelayMs: 30_000,
+    });
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateClose();
+
+    vi.advanceTimersByTime(499);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    randomSpy.mockRestore();
+  });
+
+  it('emits permanently_disconnected after maxReconnectAttempts is reached', () => {
+    const client = new WsClient({
+      token: 'at_live_test',
+      reconnectJitter: false,
+      maxReconnectAttempts: 1,
+    });
+    const handler = vi.fn();
+    client.on('permanently_disconnected', handler);
+
+    client.connect();
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    ws1.simulateClose();
+
+    vi.advanceTimersByTime(1000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'permanently_disconnected', attempt: 1 }),
+    );
+
+    vi.advanceTimersByTime(60_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('manual reconnect() opens a new socket after circuit breaker trip', () => {
+    const client = new WsClient({
+      token: 'at_live_test',
+      reconnectJitter: false,
+      maxReconnectAttempts: 0,
+    });
+    const handler = vi.fn();
+    client.on('permanently_disconnected', handler);
+
+    client.connect();
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    ws1.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    client.reconnect();
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 });

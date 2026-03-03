@@ -35,8 +35,17 @@ import type {
   ReleaseAgentResponse,
 } from './types.js';
 import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
-import { AgentClient } from './agent.js';
-import { HttpClient, RelayError } from './client.js';
+import { AgentClient, type AgentClientOptions } from './agent.js';
+import { HttpClient, type RetryPolicyInput } from './client.js';
+import { RelayError, relayErrorFromApi } from './errors.js';
+import {
+  appendLegacySuffix,
+  emitCompatibilityTelemetry,
+  isNameConflictError,
+  type RegisterAgentInput,
+  type RegisterOrRotateInput,
+  type ResolvedIdentity,
+} from './identity.js';
 import { SDK_VERSION } from './version.js';
 import { SDK_ORIGIN } from './origin.js';
 import { camelizeKeys } from './casing.js';
@@ -44,6 +53,7 @@ import { camelizeKeys } from './casing.js';
 export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
+  retryPolicy?: RetryPolicyInput;
 }
 
 export interface WorkspaceStreamConfig {
@@ -71,10 +81,21 @@ interface WorkspaceDmMessage {
   createdAt: string;
 }
 
+type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
+type RegisterIdentityType = NonNullable<CreateAgentRequest['type']>;
+
 export class RelayCast {
   private client: HttpClient;
+  private identityHint: { agentId: string; name: string } | null = null;
+  private workspaceIdHint: string | null = null;
 
   constructor(options: RelayCastOptions) {
+    if (!options.apiKey || options.apiKey.trim().length === 0) {
+      throw new Error('RelayCast apiKey is required');
+    }
+
+    // Preserve hidden internal-origin metadata on options when created via
+    // createInternalRelayCast() so downstream requests use the correct origin headers.
     this.client = new HttpClient(options);
   }
 
@@ -82,7 +103,9 @@ export class RelayCast {
     name: string,
     baseUrl?: string,
   ): Promise<CreateWorkspaceResponse> {
-    const url = new URL('/v1/workspaces', baseUrl ?? 'https://api.relaycast.dev');
+    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+
+    const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
       method: 'POST',
       headers: {
@@ -100,39 +123,138 @@ export class RelayCast {
       parsed = await res.json();
     } catch (err) {
       throw new RelayError(
-        'invalid_response',
+        'transport_error',
         `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
-        res.status,
+        { statusCode: res.status, retryable: false, cause: err },
       );
     }
 
     if (typeof parsed !== 'object' || parsed === null || !('ok' in parsed) || typeof parsed.ok !== 'boolean') {
       throw new RelayError(
-        'invalid_response',
+        'transport_error',
         'Response is not a valid Relay API response object',
-        res.status,
+        { statusCode: res.status, retryable: false },
       );
     }
 
     if (!parsed.ok) {
       const errResult = ApiErrorSchema.safeParse(parsed);
-      throw new RelayError(
-        errResult.success ? errResult.data.error.code : 'unknown_error',
-        errResult.success ? errResult.data.error.message : 'Unknown error',
-        res.status,
-      );
+      const rawCode = errResult.success ? errResult.data.error.code : undefined;
+      const message = errResult.success ? errResult.data.error.message : 'Unknown error';
+      throw relayErrorFromApi(rawCode, message, res.status);
     }
 
     if (!('data' in parsed)) {
       throw new RelayError(
-        'invalid_response',
+        'transport_error',
         'Response is missing required "data" field',
-        res.status,
+        { statusCode: res.status, retryable: false },
       );
     }
 
     const data = (parsed as { data: unknown }).data;
     return camelizeKeys(CreateWorkspaceResponseSchema.parse(data));
+  }
+
+  private rememberIdentity(agentId: string, name: string): void {
+    this.identityHint = { agentId, name };
+  }
+
+  private async resolveWorkspaceId(): Promise<string> {
+    if (this.workspaceIdHint) {
+      return this.workspaceIdHint;
+    }
+    const workspace = await this.workspace.info();
+    this.workspaceIdHint = workspace.id;
+    return workspace.id;
+  }
+
+  private async resolveIdentityInternal(): Promise<ResolvedIdentity> {
+    if (!this.identityHint) {
+      throw new RelayError('not_found', 'No identity is available. Register or rotate an agent first.', {
+        statusCode: 404,
+      });
+    }
+
+    return {
+      agentId: this.identityHint.agentId,
+      name: this.identityHint.name,
+      workspaceId: await this.resolveWorkspaceId(),
+    };
+  }
+
+  private async registerWithLegacySuffix(data: CreateAgentRequest): Promise<CreateAgentResponse> {
+    const maxAttempts = 5;
+    let candidateName = data.name;
+
+    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await this.agents.register({ ...data, name: candidateName });
+      } catch (err) {
+        if (!isNameConflictError(err) || attempt === maxAttempts) {
+          throw err;
+        }
+        candidateName = appendLegacySuffix(data.name);
+      }
+    }
+
+    throw new RelayError('transport_error', 'Failed to register agent identity after suffix retries');
+  }
+
+  private registerTypedIdentity(
+    type: RegisterIdentityType,
+    data: RegisterTypedIdentityInput,
+  ): Promise<CreateAgentResponse> {
+    return this.agents.register({ ...data, type });
+  }
+
+  async registerAgent(data: RegisterAgentInput): Promise<CreateAgentResponse> {
+    const { strict, ...request } = data;
+    if (strict) {
+      return this.agents.register(request);
+    }
+
+    emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
+      requested_name: data.name,
+    });
+    return this.registerWithLegacySuffix(request);
+  }
+
+  async registerOrRotate(data: RegisterOrRotateInput): Promise<CreateAgentResponse> {
+    try {
+      return await this.registerAgent({ ...data, strict: true });
+    } catch (err) {
+      if (isNameConflictError(err)) {
+        const agent = await this.agents.get(data.name);
+        const { token } = await this.agents.rotateToken(agent.name);
+        this.rememberIdentity(agent.id, agent.name);
+        const createdAt = agent.createdAt ?? agent.lastSeen;
+        return {
+          id: agent.id,
+          name: agent.name,
+          token,
+          status: agent.status,
+          createdAt,
+        };
+      }
+      throw err;
+    }
+  }
+
+  async resolveIdentity(): Promise<ResolvedIdentity> {
+    return this.resolveIdentityInternal();
+  }
+
+  agent(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('agent', data);
+  }
+
+  human(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('human', data);
+  }
+
+  system(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
+    return this.registerTypedIdentity('system', data);
   }
 
   workspace = {
@@ -188,8 +310,11 @@ export class RelayCast {
   };
 
   agents = {
-    register: (data: CreateAgentRequest): Promise<CreateAgentResponse> =>
-      this.client.post('/v1/agents', data),
+    register: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
+      const created = await this.client.post<CreateAgentResponse>('/v1/agents', data);
+      this.rememberIdentity(created.id, created.name);
+      return created;
+    },
     list: (query?: AgentListQuery): Promise<Agent[]> => {
       const params: Record<string, string> = {};
       if (query?.status) params.status = query.status;
@@ -206,23 +331,17 @@ export class RelayCast {
     presence: (): Promise<AgentPresenceInfo[]> =>
       this.client.get('/v1/agents/presence'),
     registerOrGet: async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
-      try {
-        return await this.agents.register(data);
-      } catch (err) {
-        if (err instanceof RelayError && err.code === 'agent_already_exists') {
-          const agent = await this.agents.get(data.name);
-          const { token } = await this.agents.rotateToken(agent.name);
-          return {
-            id: agent.id,
-            name: agent.name,
-            token,
-            status: agent.status,
-            createdAt: agent.createdAt,
-          };
-        }
-        throw err;
-      }
+      emitCompatibilityTelemetry('agents.registerOrGet.deprecated', {
+        replacement: 'agents.registerOrRotate',
+      });
+      return this.registerOrRotate(data);
     },
+    registerAgent: (data: RegisterAgentInput): Promise<CreateAgentResponse> =>
+      this.registerAgent(data),
+    registerOrRotate: (data: RegisterOrRotateInput): Promise<CreateAgentResponse> =>
+      this.registerOrRotate(data),
+    resolveIdentity: (): Promise<ResolvedIdentity> =>
+      this.resolveIdentity(),
     spawn: (data: SpawnAgentRequest): Promise<SpawnAgentResponse> =>
       this.client.post('/v1/agents/spawn', data),
     release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
@@ -285,8 +404,8 @@ export class RelayCast {
     return this.client.get(`/v1/dm/conversations/${encodeURIComponent(conversationId)}/messages`, query);
   };
 
-  as(agentToken: string): AgentClient {
+  as(agentToken: string, options?: AgentClientOptions): AgentClient {
     const agentHttpClient = this.client.withApiKey(agentToken);
-    return new AgentClient(agentHttpClient);
+    return new AgentClient(agentHttpClient, options);
   }
 }

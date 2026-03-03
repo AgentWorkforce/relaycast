@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentClient } from '../agent.js';
+import { AgentClient, type AgentClientOptions } from '../agent.js';
 import { HttpClient } from '../client.js';
 
 class MockWebSocket {
@@ -43,18 +43,35 @@ vi.stubGlobal('WebSocket', MockWebSocket);
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-function createAgent(): AgentClient {
+function mockResponse(data: unknown = {}, status = 200) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(),
+    json: () => Promise.resolve({ ok: true, data }),
+  });
+}
+
+function createAgent(options: AgentClientOptions = {}): AgentClient {
   const client = new HttpClient({
     apiKey: 'at_live_test',
     baseUrl: 'http://localhost:8080',
   });
-  return new AgentClient(client);
+  return new AgentClient(client, {
+    ...options,
+    ws: {
+      reconnectJitter: false,
+      ...(options.ws ?? {}),
+    },
+  });
 }
 
 describe('AgentClient WebSocket integration', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(() => mockResponse({}));
   });
 
   afterEach(() => {
@@ -312,6 +329,65 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenLastCalledWith(2);
   });
 
+  it('on.permanentlyDisconnected fires with attempt count', () => {
+    const agent = createAgent({
+      ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+    });
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.permanentlyDisconnected(handler);
+
+    ws.simulateClose();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(0);
+  });
+
+  it('starts auto-heartbeat on open and continues on interval', () => {
+    const agent = createAgent({ autoHeartbeatMs: 30_000 });
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+
+    vi.advanceTimersByTime(30_000);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+  });
+
+  it('stops auto-heartbeat on disconnect', async () => {
+    const agent = createAgent({ autoHeartbeatMs: 30_000 });
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    vi.advanceTimersByTime(30_000);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    await agent.disconnect();
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/disconnect');
+
+    vi.advanceTimersByTime(60_000);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not start auto-heartbeat interval when disabled', () => {
+    const agent = createAgent({ autoHeartbeatMs: false });
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(120_000);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   // --- wildcard ---
 
   it('on.any receives all events', () => {
@@ -355,6 +431,13 @@ describe('AgentClient WebSocket integration', () => {
   it('on.reconnecting throws if called before connect()', () => {
     const agent = createAgent();
     expect(() => agent.on.reconnecting(vi.fn())).toThrow(
+      'WebSocket not connected. Call connect() first.',
+    );
+  });
+
+  it('on.permanentlyDisconnected throws if called before connect()', () => {
+    const agent = createAgent();
+    expect(() => agent.on.permanentlyDisconnected(vi.fn())).toThrow(
       'WebSocket not connected. Call connect() first.',
     );
   });
@@ -406,5 +489,18 @@ describe('AgentClient WebSocket integration', () => {
     unsub();
     ws.simulateMessage({ type: 'pong' });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('presence.markOnline/heartbeat/markOffline hit expected endpoints', async () => {
+    const agent = createAgent({ autoHeartbeatMs: false });
+
+    await agent.presence.markOnline();
+    await agent.presence.heartbeat();
+    await agent.presence.markOffline();
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+    expect(mockFetch.mock.calls[1]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+    expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/disconnect');
   });
 });

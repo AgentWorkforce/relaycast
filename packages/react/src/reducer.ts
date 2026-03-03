@@ -68,9 +68,12 @@ function handleMessageCreated(store: RelayStore, event: MessageCreatedEvent): vo
     const msg: MessageWithMeta = {
       id: event.message.id,
       agentName: event.message.agentName,
-      agentId: '',
+      channelId: event.channel,
+      agentId: event.message.agentId ?? '',
       text: event.message.text,
       blocks: null,
+      hasAttachments: (event.message.attachments?.length ?? 0) > 0,
+      threadId: null,
       attachments: event.message.attachments ?? [],
       createdAt: new Date().toISOString(),
       replyCount: 0,
@@ -97,9 +100,12 @@ function handleThreadReply(store: RelayStore, event: ThreadReplyEvent): void {
     const reply: MessageWithMeta = {
       id: event.message.id,
       agentName: event.message.agentName,
-      agentId: '',
+      channelId: prev.parent?.channelId ?? '',
+      agentId: event.message.agentId ?? '',
       text: event.message.text,
       blocks: null,
+      hasAttachments: false,
+      threadId: event.parentId,
       attachments: [],
       createdAt: new Date().toISOString(),
       replyCount: 0,
@@ -109,16 +115,34 @@ function handleThreadReply(store: RelayStore, event: ThreadReplyEvent): void {
     return { ...prev, replies: [...prev.replies, reply] };
   });
 
-  // Increment replyCount on parent in all channel caches
+  // Increment replyCount on parent and inject reply into channel message list
   const state = store.getState();
   for (const channel of Object.keys(state.channelMessages)) {
     const msgs = state.channelMessages[channel].messages;
     const parentIdx = msgs.findIndex((m) => m.id === event.parentId);
     if (parentIdx !== -1) {
       store.updateChannelMessages(channel, (prev) => {
+        // Deduplicate
+        if (prev.messages.some((m) => m.id === event.message.id)) return prev;
         const updated = [...prev.messages];
         updated[parentIdx] = { ...updated[parentIdx], replyCount: updated[parentIdx].replyCount + 1 };
-        return { ...prev, messages: updated };
+        // Also inject the reply into the channel timeline with threadId set
+        const replyMsg: MessageWithMeta = {
+          id: event.message.id,
+          agentName: event.message.agentName,
+          channelId: channel,
+          agentId: event.message.agentId ?? '',
+          text: event.message.text,
+          blocks: null,
+          hasAttachments: false,
+          threadId: event.parentId,
+          attachments: [],
+          createdAt: new Date().toISOString(),
+          replyCount: 0,
+          reactions: [],
+          readByCount: 0,
+        };
+        return { ...prev, messages: [...updated, replyMsg] };
       });
       break;
     }

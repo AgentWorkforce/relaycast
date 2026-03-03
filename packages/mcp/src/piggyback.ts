@@ -18,18 +18,35 @@ const MESSAGE_TOOLS = new Set([
   'invoke_command',
 ]);
 
+type ToolHandler = (...args: unknown[]) => unknown;
+type RegisterToolFn = (
+  name: string,
+  config: unknown,
+  handler: ToolHandler | undefined,
+) => unknown;
+type ContentCarrier = { content: Array<Record<string, unknown>> };
+
+function hasContentArray(value: unknown): value is ContentCarrier {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { content?: unknown }).content)
+  );
+}
+
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
   getAgentClient: () => AgentClient,
   telemetry?: McpTelemetry,
 ): void {
-  const original = mcpServer.registerTool.bind(mcpServer);
+  const original = mcpServer.registerTool.bind(mcpServer) as RegisterToolFn;
+  const mutableServer = mcpServer as unknown as { registerTool: RegisterToolFn };
 
-  (mcpServer as any).registerTool = (
+  mutableServer.registerTool = (
     name: string,
-    config: any,
-    handler: any,
+    config: unknown,
+    handler: ToolHandler | undefined,
   ) => {
     if (!handler) {
       return original(name, config, handler);
@@ -37,14 +54,14 @@ export function enablePiggyback(
 
     const shouldPiggybackInbox = !SKIP_PIGGYBACK.has(name);
 
-    const wrapped = async (...args: any[]) => {
+    const wrapped = async (...args: unknown[]) => {
       const startedAt = Date.now();
       telemetry?.capture('relaycast_mcp_tool_invoked', {
         source_surface: 'mcp',
         tool_name: name,
       });
 
-      let result: any;
+      let result: unknown;
       try {
         result = await handler(...args);
       } catch (error) {
@@ -90,9 +107,17 @@ export function enablePiggyback(
         const hasUnread =
           (inbox.unreadChannels?.length ?? 0) > 0 ||
           (inbox.mentions?.length ?? 0) > 0 ||
-          (inbox.unreadDms?.length ?? 0) > 0;
+          (inbox.unreadDms?.length ?? 0) > 0 ||
+          (inbox.recentReactions?.length ?? 0) > 0;
 
-        if (hasUnread && Array.isArray(result?.content)) {
+        console.error('[piggyback] inbox fetch ok — channels=%d mentions=%d dms=%d reactions=%d',
+          inbox.unreadChannels?.length ?? 0,
+          inbox.mentions?.length ?? 0,
+          inbox.unreadDms?.length ?? 0,
+          inbox.recentReactions?.length ?? 0,
+        );
+
+        if (hasUnread && hasContentArray(result)) {
           const selfName = getSession().agentName;
           const inboxText = formatInbox(inbox, selfName);
           if (inboxText) {
@@ -102,8 +127,8 @@ export function enablePiggyback(
             });
           }
         }
-      } catch {
-        // Silently ignore — never break the original tool response
+      } catch (err) {
+        console.error('[piggyback] inbox fetch failed — %s', err instanceof Error ? err.message : String(err));
       }
 
       return result;
@@ -117,6 +142,7 @@ function formatInbox(inbox: {
   unreadChannels?: Array<{ channelName: string; unreadCount: number }>;
   mentions?: Array<{ agentName: string; channelName: string; text: string }>;
   unreadDms?: Array<{ from: string; unreadCount: number }>;
+  recentReactions?: Array<{ emoji: string; channelName: string; agentName: string }>;
 }, selfName?: string | null): string {
   const norm = (s: string) => s.trim().replace(/^@/, '').toLowerCase();
   const selfNorm = selfName ? norm(selfName) : null;
@@ -148,6 +174,16 @@ function formatInbox(inbox: {
     lines.push('Unread DMs:');
     for (const dm of dms) {
       lines.push(`  From ${dm.from}: ${dm.unreadCount} unread`);
+    }
+  }
+
+  const rxns = selfNorm
+    ? inbox.recentReactions?.filter((r) => !isSelf(r.agentName))
+    : inbox.recentReactions;
+  if (rxns?.length) {
+    lines.push('Reactions (informational — no response required):');
+    for (const r of rxns) {
+      lines.push(`  :${r.emoji}: on your message in #${r.channelName} by @${r.agentName}`);
     }
   }
 

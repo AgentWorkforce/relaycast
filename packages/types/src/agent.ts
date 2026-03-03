@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const AgentTypeSchema = z.enum(['agent', 'human']);
+export const AgentTypeSchema = z.enum(['agent', 'human', 'system']);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
 export const AgentStatusSchema = z.enum(['online', 'offline', 'away']);
@@ -8,15 +8,19 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 export const AgentSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
   name: z.string(),
   type: AgentTypeSchema,
-  token_hash: z.string(),
   status: AgentStatusSchema,
   persona: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()),
-  created_at: z.string(),
   last_seen: z.string(),
+  created_at: z.string().optional(),
+  channels: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    role: z.enum(['owner', 'member']),
+    joined_at: z.string(),
+  })).optional(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
@@ -39,7 +43,7 @@ export type CreateAgentResponse = z.infer<typeof CreateAgentResponseSchema>;
 
 export const UpdateAgentRequestSchema = z.object({
   status: AgentStatusSchema.optional(),
-  persona: z.string().optional(),
+  persona: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
@@ -65,8 +69,8 @@ export const SpawnAgentRequestSchema = z.object({
   name: z.string(),
   cli: CliTypeSchema,
   task: z.string(),
-  channel: z.string().optional(),
-  persona: z.string().optional(),
+  channel: z.string().nullable().optional(),
+  persona: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type SpawnAgentRequest = z.infer<typeof SpawnAgentRequestSchema>;
@@ -86,7 +90,7 @@ export type SpawnAgentResponse = z.infer<typeof SpawnAgentResponseSchema>;
 
 export const ReleaseAgentRequestSchema = z.object({
   name: z.string(),
-  reason: z.string().optional(),
+  reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
 });
 export type ReleaseAgentRequest = z.infer<typeof ReleaseAgentRequestSchema>;

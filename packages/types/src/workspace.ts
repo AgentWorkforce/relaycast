@@ -4,7 +4,6 @@ export const WorkspaceSchema = z.object({
   id: z.string(),
   organization_id: z.string(),
   name: z.string(),
-  api_key_hash: z.string(),
   system_prompt: z.string().nullable(),
   plan: z.enum(['free', 'pro']),
   created_at: z.string(),
@@ -26,7 +25,7 @@ export type CreateWorkspaceResponse = z.infer<typeof CreateWorkspaceResponseSche
 
 export const UpdateWorkspaceRequestSchema = z.object({
   name: z.string().optional(),
-  system_prompt: z.string().optional(),
+  system_prompt: z.string().nullable().optional(),
 });
 export type UpdateWorkspaceRequest = z.infer<typeof UpdateWorkspaceRequestSchema>;
 
@@ -57,6 +56,7 @@ export type ActivityItem = z.infer<typeof ActivityItemSchema>;
 
 export const WorkspaceDmConversationSchema = z.object({
   id: z.string(),
+  channel_id: z.string(),
   type: z.string(),
   participants: z.array(z.string()),
   last_message: z.object({

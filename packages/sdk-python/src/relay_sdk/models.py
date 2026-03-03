@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 # ── Enums / Literals ──────────────────────────────────────────────
 
-AgentType = Literal["agent", "human"]
+AgentType = Literal["agent", "human", "system"]
 AgentStatus = Literal["online", "offline", "away"]
 FileStatus = Literal["pending", "complete", "deleted"]
 DmType = Literal["1:1", "group"]
@@ -89,6 +89,7 @@ class Channel(BaseModel):
     name: str
     channel_type: int
     topic: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_by: str | None = None
     created_at: str
     is_archived: bool
@@ -112,10 +113,12 @@ class ChannelMemberInfo(BaseModel):
 class CreateChannelRequest(BaseModel):
     name: str
     topic: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class UpdateChannelRequest(BaseModel):
     topic: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class InviteRequest(BaseModel):
@@ -142,6 +145,7 @@ class MessageWithMeta(BaseModel):
     agent_name: str
     agent_id: str
     text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
     attachments: list[FileAttachment] = Field(default_factory=list)
     created_at: str
     reply_count: int = 0
@@ -156,6 +160,7 @@ class Message(BaseModel):
     agent_id: str
     thread_id: str | None = None
     body: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
     has_attachments: bool
     created_at: str
     updated_at: str | None = None
@@ -164,6 +169,7 @@ class Message(BaseModel):
 class PostMessageRequest(BaseModel):
     text: str
     attachments: list[str] | None = None
+    data: dict[str, Any] | None = None
 
 
 class MessageListQuery(BaseModel):
@@ -174,6 +180,7 @@ class MessageListQuery(BaseModel):
 
 class ThreadReplyRequest(BaseModel):
     text: str
+    data: dict[str, Any] | None = None
 
 
 class ThreadResponse(BaseModel):

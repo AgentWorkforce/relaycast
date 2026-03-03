@@ -1,6 +1,7 @@
 import { useContext, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { ClientContext, StoreContext } from '../context.js';
 import type { UseMessagesReturn, ChannelMessages } from '../types.js';
+import { sortMessagesChronologically } from '../adapters/messages.js';
 
 const EMPTY: ChannelMessages = { messages: [], loading: true, error: null };
 
@@ -14,7 +15,8 @@ export function useMessages(channel: string): UseMessagesReturn {
 
     ctx.agent.messages(channel, { limit: 50 })
       .then((messages) => {
-        store.updateChannelMessages(channel, () => ({ messages, loading: false, error: null }));
+        const sortedMessages = sortMessagesChronologically(messages);
+        store.updateChannelMessages(channel, () => ({ messages: sortedMessages, loading: false, error: null }));
       })
       .catch((error: unknown) => {
         store.updateChannelMessages(channel, (prev) => ({
@@ -38,11 +40,16 @@ export function useMessages(channel: string): UseMessagesReturn {
   const fetchMore = useCallback(async () => {
     const current = store.getState().channelMessages[channel];
     if (!current || current.messages.length === 0) return;
-    const oldest = current.messages[0];
+
+    const oldest = sortMessagesChronologically(current.messages)[0];
+    if (!oldest) return;
+
     const older = await ctx.agent.messages(channel, { before: oldest.id, limit: 50 });
+    const sortedOlder = sortMessagesChronologically(older);
+
     store.updateChannelMessages(channel, (prev) => ({
       ...prev,
-      messages: [...older, ...prev.messages],
+      messages: sortMessagesChronologically([...sortedOlder, ...prev.messages]),
     }));
   }, [channel, ctx.agent, store]);
 

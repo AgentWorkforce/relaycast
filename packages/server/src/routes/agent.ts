@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { AgentTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -12,7 +13,7 @@ export const agentRoutes = new Hono<AppEnv>();
 
 const registerAgentSchema = z.object({
   name: z.string().min(1),
-  type: z.string().optional(),
+  type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });

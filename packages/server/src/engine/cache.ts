@@ -4,6 +4,7 @@ export interface CachedChannel {
   id: string;
   name: string;
   topic: string | null;
+  metadata: Record<string, unknown>;
   member_count: number;
   members: Array<{
     agent_id: string;

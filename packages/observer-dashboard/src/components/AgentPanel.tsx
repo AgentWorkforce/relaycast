@@ -1,6 +1,6 @@
 'use client';
 
-import { X, Bot, User, Clock, Cpu, CircleDot } from 'lucide-react';
+import { X, Bot, User, Clock, Cpu, CircleDot, Sparkles } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
 import type { Agent } from '@relaycast/sdk';
 
@@ -16,8 +16,11 @@ function relativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
-function formatDate(timestamp: string): string {
-  return new Date(timestamp).toLocaleDateString(undefined, {
+function formatDate(timestamp: string | undefined | null): string {
+  if (!timestamp) return 'Unknown';
+  const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -45,11 +48,18 @@ interface AgentPanelProps {
 export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const status = statusLabel(agent.status);
   const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
+  const model = (agent.metadata?.model as string) || '';
   const currentTask = (agent.metadata?.current_task as string) || '';
+  const identityLabel = agent.type === 'human' ? 'Human' : agent.type === 'system' ? 'System' : 'Agent';
+  const identityIcon = agent.type === 'human'
+    ? <User className="h-3.5 w-3.5" />
+    : agent.type === 'system'
+      ? <Sparkles className="h-3.5 w-3.5" />
+      : <Bot className="h-3.5 w-3.5" />;
 
   // Collect metadata entries to display (excluding known fields)
   const extraMeta = Object.entries(agent.metadata || {}).filter(
-    ([key]) => !['cli', 'current_task'].includes(key)
+    ([key]) => !['cli', 'current_task', 'model'].includes(key)
   );
 
   return (
@@ -76,7 +86,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
             <span className={`text-xs ${status.color}`}>{status.text}</span>
             <span className="text-xs text-[var(--color-text-dim)] mx-1">&middot;</span>
             <span className="text-xs text-[var(--color-text-muted)]">
-              {agent.type === 'human' ? 'Human' : 'Agent'}
+              {identityLabel}
             </span>
           </div>
         </div>
@@ -106,15 +116,22 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
             label="CLI"
             value={cli}
           />
+          {model && (
+            <InfoRow
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+              label="Model"
+              value={model}
+            />
+          )}
           <InfoRow
             icon={<Clock className="h-3.5 w-3.5" />}
             label="Last seen"
             value={relativeTime(agent.lastSeen)}
           />
           <InfoRow
-            icon={agent.type === 'human' ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+            icon={identityIcon}
             label="Created"
-            value={formatDate(agent.createdAt)}
+            value={formatDate(agent.createdAt ?? agent.lastSeen)}
           />
         </div>
 

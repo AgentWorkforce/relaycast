@@ -32,8 +32,16 @@ export function DashboardLayout() {
   }, [selectedChannel, channels]);
   const [threadMessageId, setThreadMessageId] = useState<string | null>(null);
 
-  // Filter out the dashboard observer agent
-  const agents = rawAgents.filter((a) => !a.name.startsWith('_dashboard_'));
+  // Filter out the dashboard observer agent and stale offline agents (offline > 5 min)
+  const STALE_OFFLINE_MS = 5 * 60 * 1000;
+  const agents = rawAgents.filter((a) => {
+    if (a.name.startsWith('_dashboard_')) return false;
+    if (a.status === 'offline' && a.lastSeen) {
+      const elapsed = Date.now() - new Date(a.lastSeen).getTime();
+      if (elapsed > STALE_OFFLINE_MS) return false;
+    }
+    return true;
+  });
 
   const refreshStreamStatus = useCallback(async () => {
     try {

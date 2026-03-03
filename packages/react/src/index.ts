@@ -21,8 +21,22 @@ export { useSendDM } from './hooks/useSendDM.js';
 // Utility hooks
 export { useRelay } from './hooks/useRelay.js';
 export { useAgent } from './hooks/useAgent.js';
+export { useRelayClient } from './hooks/useRelayClient.js';
 export { useWebSocket } from './hooks/useWebSocket.js';
 export { useEvent } from './hooks/useEvent.js';
+export type { ClientContextValue } from './context.js';
+
+// Shared message adapters
+export {
+  mapMessageWithMetaToChannelMessage,
+  sortMessagesChronologically,
+  formatReplyCountLabel,
+} from './adapters/messages.js';
+export type {
+  ThreadSummaryViewModel,
+  ChannelMessageViewModel,
+  ChannelMessageAdapterOptions,
+} from './adapters/messages.js';
 
 // Types
 export type {

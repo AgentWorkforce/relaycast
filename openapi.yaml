@@ -20,7 +20,7 @@ info:
 servers:
   - url: https://api.relaycast.dev/v1
     description: Production server
-  - url: http://localhost:8787/v1
+  - url: http://localhost:7528/v1
     description: Local development server
 
 components:
@@ -59,6 +59,7 @@ components:
           type: string
         type:
           type: string
+          enum: [agent, human, system]
         persona:
           type: string
         status:
@@ -378,6 +379,7 @@ paths:
                   type: string
                 type:
                   type: string
+                  enum: [agent, human, system]
                 persona:
                   type: string
                 metadata:
@@ -2329,7 +2331,7 @@ paths:
         - MCP
       servers:
         - url: https://api.relaycast.dev
-        - url: http://localhost:8787
+        - url: http://localhost:7528
       responses:
         '200':
           description: MCP server card
@@ -2346,7 +2348,7 @@ paths:
         - MCP
       servers:
         - url: https://api.relaycast.dev
-        - url: http://localhost:8787
+        - url: http://localhost:7528
       responses:
         '200':
           description: MCP config schema
@@ -2363,7 +2365,7 @@ paths:
         - MCP
       servers:
         - url: https://api.relaycast.dev
-        - url: http://localhost:8787
+        - url: http://localhost:7528
       responses:
         '200':
           description: MCP response
@@ -2378,7 +2380,7 @@ paths:
         - MCP
       servers:
         - url: https://api.relaycast.dev
-        - url: http://localhost:8787
+        - url: http://localhost:7528
       responses:
         '200':
           description: MCP response
@@ -2393,7 +2395,7 @@ paths:
         - MCP
       servers:
         - url: https://api.relaycast.dev
-        - url: http://localhost:8787
+        - url: http://localhost:7528
       responses:
         '200':
           description: MCP response

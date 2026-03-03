@@ -6,10 +6,13 @@ import type { MessageWithMeta } from '@relaycast/sdk';
 function makeMessage(overrides: Partial<MessageWithMeta> = {}): MessageWithMeta {
   return {
     id: 'msg1',
+    channelId: 'general',
     agentName: 'Alice',
     agentId: 'a1',
     text: 'hello',
     blocks: null,
+    hasAttachments: false,
+    threadId: null,
     attachments: [],
     createdAt: '2026-01-01T00:00:00Z',
     replyCount: 0,
@@ -33,7 +36,7 @@ function makeChannel(overrides: Partial<{ id: string; workspaceId: string; name:
   };
 }
 
-function makeAgent(overrides: Partial<{ id: string; workspaceId: string; name: string; type: 'agent' | 'human'; tokenHash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; createdAt: string; lastSeen: string }> = {}) {
+function makeAgent(overrides: Partial<{ id: string; workspaceId: string; name: string; type: 'agent' | 'human' | 'system'; tokenHash: string; status: 'online' | 'offline' | 'away'; persona: string | null; metadata: Record<string, unknown>; createdAt: string; lastSeen: string }> = {}) {
   return {
     id: 'ag1',
     workspaceId: 'ws1',

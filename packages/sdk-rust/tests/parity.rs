@@ -1,10 +1,18 @@
 use relaycast::{
-    AgentClient, MessageListQuery, RelayCast, RelayCastOptions, ReleaseAgentRequest,
-    SpawnAgentRequest,
+    AgentClient, DmConversationSummary, MessageListQuery, RelayCast, RelayCastOptions,
+    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[test]
+fn local_options_builder_sets_expected_defaults() {
+    let options = RelayCastOptions::local("rk_live_local");
+    assert!(options.local);
+    assert_eq!(options.api_key, "rk_live_local");
+    assert_eq!(options.base_url.as_deref(), Some("http://127.0.0.1:7528"));
+}
 
 fn ok(data: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
@@ -216,4 +224,216 @@ async fn agent_heartbeat_uses_presence_endpoint() {
     let agent = AgentClient::new("at_live_test", Some(server.uri()))
         .expect("failed to create agent client");
     agent.heartbeat().await.expect("heartbeat failed");
+}
+
+#[test]
+fn ws_message_created_deserializes_optional_agent_id() {
+    let event = serde_json::from_value::<WsEvent>(json!({
+        "type": "message.created",
+        "channel": "general",
+        "message": {
+            "id": "m_1",
+            "agent_id": "a_123",
+            "agent_name": "alice",
+            "text": "hello",
+            "attachments": []
+        }
+    }))
+    .expect("failed to parse ws message.created");
+
+    match event {
+        WsEvent::MessageCreated(msg) => {
+            assert_eq!(msg.message.agent_id.as_deref(), Some("a_123"));
+            assert_eq!(msg.message.agent_name, "alice");
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+#[test]
+fn ws_command_invoked_deserializes_handler_agent_id() {
+    let event = serde_json::from_value::<WsEvent>(json!({
+        "type": "command.invoked",
+        "command": "/spawn",
+        "channel": "general",
+        "invoked_by": "lead",
+        "handler_agent_id": "a_handler_1",
+        "parameters": {
+            "name": "worker-1",
+            "cli": "codex"
+        }
+    }))
+    .expect("failed to parse ws command.invoked");
+
+    match event {
+        WsEvent::CommandInvoked(cmd) => {
+            assert_eq!(cmd.handler_agent_id, "a_handler_1");
+            assert_eq!(cmd.command, "/spawn");
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+#[test]
+fn ws_command_invoked_requires_handler_agent_id() {
+    let err = serde_json::from_value::<WsEvent>(json!({
+        "type": "command.invoked",
+        "command": "/spawn",
+        "channel": "general",
+        "invoked_by": "lead",
+        "parameters": {
+            "name": "worker-1"
+        }
+    }))
+    .expect_err("expected missing handler_agent_id to fail");
+
+    assert!(err.to_string().contains("handler_agent_id"));
+}
+
+#[test]
+fn dm_conversation_summary_supports_object_shapes() {
+    let summary = serde_json::from_value::<DmConversationSummary>(json!({
+        "id": "dm_1",
+        "channel_id": "c_1",
+        "type": "group",
+        "name": "ops-room",
+        "participants": [
+            { "agent_name": "alice", "agent_id": "a_1" },
+            { "agent_id": "a_2" },
+            "carol"
+        ],
+        "last_message": { "text": "latest update" },
+        "unread_count": 3
+    }))
+    .expect("failed to parse dm conversation summary");
+
+    assert_eq!(summary.participants, vec!["alice", "a_2", "carol"]);
+    assert_eq!(summary.last_message.as_deref(), Some("latest update"));
+}
+
+#[tokio::test]
+async fn add_dm_participant_uses_agent_name_payload_and_typed_response() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/dm/dm_123/participants"))
+        .and(body_json(json!({ "agent_name": "worker-1" })))
+        .respond_with(ok(json!({
+            "conversation_id": "dm_123",
+            "agent": "worker-1",
+            "already_member": false
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let untyped = agent
+        .add_dm_participant("dm_123", "worker-1")
+        .await
+        .expect("add_dm_participant failed");
+    assert_eq!(untyped["agent"], "worker-1");
+
+    let typed = agent
+        .add_dm_participant_typed("dm_123", "worker-1")
+        .await
+        .expect("add_dm_participant_typed failed");
+    assert_eq!(typed.agent, "worker-1");
+    assert!(!typed.already_member);
+}
+
+#[tokio::test]
+async fn dm_messages_with_agent_uses_matching_conversation() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations"))
+        .respond_with(ok(json!([
+            {
+                "id": "c_1",
+                "type": "dm",
+                "name": null,
+                "participants": ["worker-1", "lead"],
+                "last_message": "hello",
+                "unread_count": 0
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/c_1/messages"))
+        .and(query_param("limit", "2"))
+        .respond_with(ok(json!([
+            {
+                "id": "m_1",
+                "agent_name": "worker-1",
+                "agent_id": "a_1",
+                "text": "ping",
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "reply_count": 0,
+                "reactions": [],
+                "read_by_count": 0,
+                "attachments": []
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let messages = agent
+        .dm_messages_with_agent(
+            "worker-1",
+            Some(MessageListQuery {
+                limit: Some(2),
+                before: None,
+                after: None,
+            }),
+        )
+        .await
+        .expect("dm_messages_with_agent failed");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "ping");
+}
+
+#[tokio::test]
+async fn dm_conversation_participants_returns_workspace_conversation_members() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/dm/conversations/all"))
+        .respond_with(ok(json!([
+            {
+                "id": "conv_1",
+                "type": "dm",
+                "participants": ["alice", "bob"],
+                "message_count": 5,
+                "last_message": {
+                    "text": "latest",
+                    "agent_name": "alice",
+                    "created_at": "2026-01-01T00:00:00.000Z"
+                }
+            }
+        ])))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let participants = relay
+        .dm_conversation_participants("conv_1")
+        .await
+        .expect("dm_conversation_participants failed");
+    assert_eq!(participants, vec!["alice".to_string(), "bob".to_string()]);
+
+    let missing = relay
+        .dm_conversation_participants("missing")
+        .await
+        .expect("missing conversation should return empty vec");
+    assert!(missing.is_empty());
 }

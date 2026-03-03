@@ -40,7 +40,7 @@ export function registerMessagingTools(
     outputSchema: {
       messages: z.array(z.object({}).passthrough()).describe('Array of message objects with id, author, text, and timestamp'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ channel, limit, before, after }) => {
     const client = getAgentClient();
     const msgs = await client.messages(channel, { limit, before, after });
@@ -76,7 +76,7 @@ export function registerMessagingTools(
       limit: z.number().optional().describe('Maximum number of replies to return (the parent message is always included)'),
     },
     outputSchema: jsonResult,
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ message_id, limit }) => {
     const client = getAgentClient();
     const thread = await client.thread(message_id, limit ? { limit } : undefined);
@@ -113,7 +113,7 @@ export function registerMessagingTools(
     outputSchema: {
       conversations: z.array(z.object({}).passthrough()).describe('Array of DM conversation summaries'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async () => {
     const client = getAgentClient();
     const convos = await client.dms.conversations();
@@ -135,7 +135,9 @@ export function registerMessagingTools(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ participants, name, text }) => {
     const client = getAgentClient();
-    const result = await client.dms.createGroup({ participants, name, text });
+    const conversation = await client.dms.createGroup({ participants, name });
+    const message = await client.dms.sendMessage(conversation.id, text);
+    const result = { conversation, message };
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,

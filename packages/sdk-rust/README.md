@@ -181,6 +181,17 @@ let options = RelayCastOptions::new("rk_live_xxx")
 let relay = RelayCast::new(options)?;
 ```
 
+Local mode:
+
+By default, the Rust SDK talks to hosted Relaycast.
+Use local mode when you want traffic and state to stay on your machine while keeping the same interface for most workflows.
+
+```rust
+use relaycast::{RelayCast, RelayCastOptions};
+
+let relay = RelayCast::new(RelayCastOptions::local("rk_live_xxx"))?;
+```
+
 ## Changelog
 
 See `CHANGELOG.md` for Rust SDK release history.
@@ -189,22 +200,24 @@ See `CHANGELOG.md` for Rust SDK release history.
 
 Rust SDK publishing is handled by `.github/workflows/publish-rust.yml`.
 
-1. Update `packages/sdk-rust/Cargo.toml` version.
-2. Add release notes to `packages/sdk-rust/CHANGELOG.md`.
-3. Run local checks:
+1. Add release notes to `packages/sdk-rust/CHANGELOG.md`.
+2. Run local checks:
    ```bash
    cargo test --manifest-path packages/sdk-rust/Cargo.toml
    cargo publish --manifest-path packages/sdk-rust/Cargo.toml --dry-run
    ```
-4. Merge to `main`.
-5. Create and push a matching tag:
-   ```bash
-   git tag sdk-rust-vX.Y.Z
-   git push origin sdk-rust-vX.Y.Z
-   ```
-6. GitHub Actions publishes automatically.
-
-Optional: run workflow `Publish Rust SDK` with `workflow_dispatch` and `dry_run=true` to validate the release path without publishing.
+3. Merge to `main`.
+4. Run GitHub Actions workflow `Publish Rust SDK` with:
+   - `version` set to the bump type (`patch`, `minor`, `major`, `pre*`) or
+   - `custom_version` set explicitly (overrides `version`)
+   - `dry_run=true` to validate without publishing
+5. For non-dry runs, the workflow:
+   - updates `packages/sdk-rust/Cargo.toml`
+   - runs tests and `cargo publish --dry-run`
+   - publishes to crates.io
+   - commits the version bump to `main`
+   - creates and pushes `sdk-rust-vX.Y.Z`
+   - creates the matching GitHub release
 
 ## License
 
