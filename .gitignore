@@ -11,6 +11,7 @@ coverage/
 
 # MCP configs (contain API keys)
 .claude/mcp.json
+.claude/settings.local.json
 .codex/mcp.json
 .gemini/
 
