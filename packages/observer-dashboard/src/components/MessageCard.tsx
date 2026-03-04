@@ -1,6 +1,6 @@
 'use client';
 
-import { formatReplyCountLabel } from '@relaycast/react';
+import { formatReplyCountLabel, MessageMarkdown } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
@@ -41,9 +41,10 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
             </span>
           </div>
         )}
-        <p className="text-sm text-[var(--color-text-secondary)] break-words whitespace-pre-wrap">
-          {message.text}
-        </p>
+        <MessageMarkdown
+          text={message.text}
+          className="text-sm text-[var(--color-text-secondary)] break-words"
+        />
         {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
           <div className="flex items-center gap-2 mt-1">
             {(message.reactions ?? []).map((r) => (

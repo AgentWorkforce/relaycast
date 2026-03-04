@@ -1,7 +1,7 @@
 'use client';
 
 import { X, MessageSquare } from 'lucide-react';
-import { useThread } from '@relaycast/react';
+import { MessageMarkdown, useThread } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
@@ -30,9 +30,10 @@ function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
             {relativeTime(msg.createdAt)}
           </span>
         </div>
-        <p className="text-sm text-[var(--color-text-secondary)] break-words whitespace-pre-wrap">
-          {msg.text}
-        </p>
+        <MessageMarkdown
+          text={msg.text}
+          className="text-sm text-[var(--color-text-secondary)] break-words"
+        />
       </div>
     </div>
   );
