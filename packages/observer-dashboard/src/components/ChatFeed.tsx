@@ -11,6 +11,8 @@ interface ChatFeedProps {
   selectedChannelMemberCount?: number | null;
   dmLabel?: string;
   onOpenThread?: (messageId: string) => void;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
 }
 
 export function ChatFeed({
@@ -18,6 +20,8 @@ export function ChatFeed({
   selectedChannelMemberCount,
   dmLabel,
   onOpenThread,
+  mentionNames,
+  onOpenAgent,
 }: ChatFeedProps) {
   const isDm = selectedChannel?.startsWith('dm:');
   const channelName = selectedChannel && !isDm ? selectedChannel : null;
@@ -52,9 +56,18 @@ export function ChatFeed({
       {/* Messages */}
       <div className="flex-1 overflow-y-auto">
         {channelName ? (
-          <ChannelMessages channel={channelName} onOpenThread={onOpenThread} />
+          <ChannelMessages
+            channel={channelName}
+            onOpenThread={onOpenThread}
+            mentionNames={mentionNames}
+            onOpenAgent={onOpenAgent}
+          />
         ) : dmId ? (
-          <DmMessages conversationId={dmId} />
+          <DmMessages
+            conversationId={dmId}
+            mentionNames={mentionNames}
+            onOpenAgent={onOpenAgent}
+          />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
             <MessageSquare className="h-8 w-8 mb-2 opacity-40" />
@@ -69,9 +82,13 @@ export function ChatFeed({
 function ChannelMessages({
   channel,
   onOpenThread,
+  mentionNames,
+  onOpenAgent,
 }: {
   channel: string;
   onOpenThread?: (messageId: string) => void;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const { messages, loading } = useMessages(channel);
@@ -114,6 +131,8 @@ function ChannelMessages({
             message={msg}
             compact={compact}
             onOpenThread={onOpenThread}
+            mentionNames={mentionNames}
+            onOpenAgent={onOpenAgent}
           />
         );
       })}
@@ -122,7 +141,15 @@ function ChannelMessages({
   );
 }
 
-function DmMessages({ conversationId }: { conversationId: string }) {
+function DmMessages({
+  conversationId,
+  mentionNames,
+  onOpenAgent,
+}: {
+  conversationId: string;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
+}) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,6 +214,8 @@ function DmMessages({ conversationId }: { conversationId: string }) {
             key={msg.id}
             message={msg}
             compact={compact}
+            mentionNames={mentionNames}
+            onOpenAgent={onOpenAgent}
           />
         );
       })}

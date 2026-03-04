@@ -70,10 +70,13 @@ export function DashboardLayout() {
     }));
   });
 
-  // Filter out the dashboard observer agent and stale offline agents (offline > 5 min)
+  // Filter out dashboard observer identities.
+  const mentionableAgents = rawAgents.filter((agent) => !agent.name.startsWith('_dashboard_'));
+  const mentionNames = mentionableAgents.map((agent) => agent.name);
+
+  // Filter out stale offline agents (offline > 5 min) from sidebar listings.
   const STALE_OFFLINE_MS = 5 * 60 * 1000;
-  const agents = rawAgents.filter((a) => {
-    if (a.name.startsWith('_dashboard_')) return false;
+  const agents = mentionableAgents.filter((a) => {
     if (a.status === 'offline' && a.lastSeen) {
       const elapsed = Date.now() - new Date(a.lastSeen).getTime();
       if (elapsed > STALE_OFFLINE_MS) return false;
@@ -156,7 +159,7 @@ export function DashboardLayout() {
 
   // Determine right panel priority: agent panel > thread > activity
   const selectedAgentData: ApiAgent | null = selectedAgent
-    ? agents.find((a) => a.name === selectedAgent) ?? null
+    ? mentionableAgents.find((a) => a.name === selectedAgent) ?? null
     : null;
   const selectedChannelMemberCount =
     selectedChannel && !selectedChannel.startsWith('dm:')
@@ -184,6 +187,8 @@ export function DashboardLayout() {
       <ThreadPanel
         messageId={threadMessageId}
         onClose={() => setThreadMessageId(null)}
+        mentionNames={mentionNames}
+        onOpenAgent={handleSelectAgent}
       />
     );
   } else if (activityOpen) {
@@ -253,6 +258,8 @@ export function DashboardLayout() {
             selectedChannelMemberCount={selectedChannelMemberCount}
             dmLabel={selectedDmLabel}
             onOpenThread={(id) => setThreadMessageId(id)}
+            mentionNames={mentionNames}
+            onOpenAgent={handleSelectAgent}
           />
           {rightPanel}
         </div>
