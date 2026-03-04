@@ -33,6 +33,7 @@ function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
         <MessageMarkdown
           text={msg.text}
           className="text-sm text-[var(--color-text-secondary)] break-words"
+          showCodeCopyButton
         />
       </div>
     </div>

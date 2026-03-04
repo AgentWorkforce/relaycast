@@ -44,6 +44,7 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
         <MessageMarkdown
           text={message.text}
           className="text-sm text-[var(--color-text-secondary)] break-words"
+          showCodeCopyButton
         />
         {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
           <div className="flex items-center gap-2 mt-1">
