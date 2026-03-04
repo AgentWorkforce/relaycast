@@ -153,6 +153,10 @@ const CHANNEL_MESSAGES: Array<{ from: string; text: string }> = [
     from: INFRA,
     text: 'Deployment command used: `kubectl rollout status deployment/api -n staging`',
   },
+  {
+    from: BACKEND,
+    text: 'TypeScript patch preview:\n```ts\nconst deployConfig: { timeoutSeconds: number; retries: number } = {\n  timeoutSeconds: 30,\n  retries: 2,\n};\n```',
+  },
   { from: LEAD, text: 'Great work team. Merging to main.' },
 ];
 
