@@ -173,7 +173,6 @@ export function AgentSidebar({
             <button
               key={agent.name}
               onClick={() => {
-                onSelectChannel(null);
                 onSelectAgent(selectedAgent === agent.name ? null : agent.name);
               }}
               className={cn(
