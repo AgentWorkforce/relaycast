@@ -125,6 +125,7 @@ export function DashboardLayout() {
           const participantLabel = conversation.participants
             .map((p) => p.agentName.trim())
             .filter((name) => name.length > 0)
+            .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
             .join(', ');
           return participantLabel || conversation.name || undefined;
         })()

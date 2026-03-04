@@ -129,6 +129,7 @@ export function AgentSidebar({
                 const participantLabel = dm.participants
                   .map((p) => p.agentName.trim())
                   .filter((name) => name.length > 0)
+                  .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
                   .join(', ');
                 const dmLabel = participantLabel || dm.name || 'Direct Message';
                 return (
