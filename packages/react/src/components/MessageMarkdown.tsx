@@ -55,6 +55,8 @@ const TABLE_CELL_STYLE: CSSProperties = {
   verticalAlign: 'top',
 };
 
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+
 function isExternalHref(href: string | undefined): boolean {
   if (!href) return false;
   return /^(https?:)?\/\//i.test(href);
@@ -81,15 +83,15 @@ const DEFAULT_COMPONENTS: Components = {
   li({ children }) {
     return <li style={{ marginTop: '0.125rem' }}>{children}</li>;
   },
-  a({ href, children, ...props }) {
+  a({ href, children, node: _node, ...props }) {
     const external = isExternalHref(href);
     return (
       <a
+        {...props}
         href={href}
         target={external ? '_blank' : undefined}
         rel={external ? 'noopener noreferrer nofollow' : undefined}
         style={{ textDecoration: 'underline', overflowWrap: 'anywhere' }}
-        {...props}
       >
         {children}
       </a>
@@ -137,7 +139,7 @@ export function MessageMarkdown({ text, className, components }: MessageMarkdown
     <div className={className}>
       <ReactMarkdown
         components={{ ...DEFAULT_COMPONENTS, ...components }}
-        remarkPlugins={[remarkGfm, remarkBreaks]}
+        remarkPlugins={REMARK_PLUGINS}
         skipHtml
       >
         {text}

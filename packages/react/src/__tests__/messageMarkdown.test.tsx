@@ -28,5 +28,6 @@ describe('MessageMarkdown', () => {
     expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer nofollow');
     expect(links[1]?.getAttribute('href')).toBe('/general');
     expect(links[1]?.getAttribute('target')).toBeNull();
+    expect(links[1]?.getAttribute('rel')).toBeNull();
   });
 });
