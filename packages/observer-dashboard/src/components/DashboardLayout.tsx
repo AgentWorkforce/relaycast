@@ -8,7 +8,7 @@ import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { cn } from '../lib/utils';
+import { cn, formatDmLabel } from '../lib/utils';
 import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
 import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
@@ -28,7 +28,13 @@ export function DashboardLayout() {
   // Default to first channel if none selected
   useEffect(() => {
     if (!selectedChannel && channels.length > 0) {
-      setSelectedChannel(channels[0].name);
+      const firstChannel = channels[0].name;
+      setSelectedChannel(firstChannel);
+      setUnreadChannelCounts((prev) =>
+        prev[firstChannel] && prev[firstChannel] > 0
+          ? { ...prev, [firstChannel]: 0 }
+          : prev,
+      );
     }
   }, [selectedChannel, channels]);
   const [threadMessageId, setThreadMessageId] = useState<string | null>(null);
@@ -161,12 +167,7 @@ export function DashboardLayout() {
       ? (() => {
           const conversation = conversations.find((dm) => `dm:${dm.id}` === selectedChannel);
           if (!conversation) return undefined;
-          const participantLabel = conversation.participants
-            .map((p) => p.agentName.trim())
-            .filter((name) => name.length > 0)
-            .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-            .join(', ');
-          return participantLabel || conversation.name || undefined;
+          return formatDmLabel(conversation.participants, conversation.name);
         })()
       : undefined;
 

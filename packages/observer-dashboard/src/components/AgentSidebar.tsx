@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, formatDmLabel } from '../lib/utils';
 import { AgentAvatar } from './AgentAvatar';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
@@ -133,12 +133,7 @@ export function AgentSidebar({
               </h2>
               {conversations.map((dm) => {
                 const dmKey = `dm:${dm.id}`;
-                const participantLabel = dm.participants
-                  .map((p) => p.agentName.trim())
-                  .filter((name) => name.length > 0)
-                  .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-                  .join(', ');
-                const dmLabel = participantLabel || dm.name || 'Direct Message';
+                const dmLabel = formatDmLabel(dm.participants, dm.name);
                 return (
                   <button
                     key={dm.id}

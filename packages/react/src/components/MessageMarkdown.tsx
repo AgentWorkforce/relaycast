@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent, ReactNode } from 'react';
+import { useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { Highlight, Prism, themes, type Language } from 'prism-react-renderer';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
@@ -242,69 +242,83 @@ function renderCodeBlock(
 
 function buildDefaultComponents(showCodeCopyButton: boolean): Components {
   return {
-  p({ children }) {
-    return <p style={PARAGRAPH_STYLE}>{children}</p>;
-  },
-  ul({ children }) {
-    return (
-      <ul style={{ ...LIST_STYLE, listStyleType: 'disc' }}>
-        {children}
-      </ul>
-    );
-  },
-  ol({ children }) {
-    return (
-      <ol style={{ ...LIST_STYLE, listStyleType: 'decimal' }}>
-        {children}
-      </ol>
-    );
-  },
-  li({ children }) {
-    return <li style={{ marginTop: '0.125rem' }}>{children}</li>;
-  },
-  a({ href, children, node: _node, ...props }) {
-    const external = isExternalHref(href);
-    return (
-      <a
-        {...props}
-        href={href}
-        target={external ? '_blank' : undefined}
-        rel={external ? 'noopener noreferrer nofollow' : undefined}
-        style={{ textDecoration: 'underline', overflowWrap: 'anywhere' }}
-      >
-        {children}
-      </a>
-    );
-  },
-  pre({ children }) {
-    return <pre style={PRE_STYLE}>{children}</pre>;
-  },
-  code({ className, children }) {
-    const codeText = toCodeText(children);
-    const language = extractLanguageFromClassName(className);
-    const isBlockCode = language !== null || codeText.includes('\n');
+    p({ children }) {
+      return <p style={PARAGRAPH_STYLE}>{children}</p>;
+    },
+    ul({ children }) {
+      return (
+        <ul style={{ ...LIST_STYLE, listStyleType: 'disc' }}>
+          {children}
+        </ul>
+      );
+    },
+    ol({ children }) {
+      return (
+        <ol style={{ ...LIST_STYLE, listStyleType: 'decimal' }}>
+          {children}
+        </ol>
+      );
+    },
+    li({ children }) {
+      return <li style={{ marginTop: '0.125rem' }}>{children}</li>;
+    },
+    a({ href, children, node: _node, ...props }) {
+      const external = isExternalHref(href);
+      return (
+        <a
+          {...props}
+          href={href}
+          target={external ? '_blank' : undefined}
+          rel={external ? 'noopener noreferrer nofollow' : undefined}
+          style={{ textDecoration: 'underline', overflowWrap: 'anywhere' }}
+        >
+          {children}
+        </a>
+      );
+    },
+    pre({ children }) {
+      return <pre style={PRE_STYLE}>{children}</pre>;
+    },
+    code({ className, children }) {
+      const codeText = toCodeText(children);
+      const language = extractLanguageFromClassName(className);
+      const isBlockCode = language !== null || codeText.includes('\n');
 
-    if (isBlockCode) {
-      return renderCodeBlock(codeText, language ?? 'text', className, showCodeCopyButton);
-    }
+      if (isBlockCode) {
+        return renderCodeBlock(codeText, language ?? 'text', className, showCodeCopyButton);
+      }
 
-    return <code className={className} style={INLINE_CODE_STYLE}>{children}</code>;
-  },
-  blockquote({ children }) {
-    return <blockquote style={BLOCKQUOTE_STYLE}>{children}</blockquote>;
-  },
-  hr() {
-    return <hr style={{ margin: `${BLOCK_SPACING} 0`, opacity: 0.25 }} />;
-  },
-  table({ children }) {
-    return <table style={TABLE_STYLE}>{children}</table>;
-  },
-  th({ children }) {
-    return <th style={{ ...TABLE_CELL_STYLE, fontWeight: 600 }}>{children}</th>;
-  },
-  td({ children }) {
-    return <td style={TABLE_CELL_STYLE}>{children}</td>;
-  },
+      return <code className={className} style={INLINE_CODE_STYLE}>{children}</code>;
+    },
+    blockquote({ children }) {
+      return <blockquote style={BLOCKQUOTE_STYLE}>{children}</blockquote>;
+    },
+    hr() {
+      return <hr style={{ margin: `${BLOCK_SPACING} 0`, opacity: 0.25 }} />;
+    },
+    table({ children }) {
+      return <table style={TABLE_STYLE}>{children}</table>;
+    },
+    th({ children, style, node: _node, ...props }) {
+      return (
+        <th
+          {...props}
+          style={{ ...TABLE_CELL_STYLE, fontWeight: 600, ...style }}
+        >
+          {children}
+        </th>
+      );
+    },
+    td({ children, style, node: _node, ...props }) {
+      return (
+        <td
+          {...props}
+          style={{ ...TABLE_CELL_STYLE, ...style }}
+        >
+          {children}
+        </td>
+      );
+    },
   };
 }
 
@@ -321,10 +335,19 @@ export function MessageMarkdown({
   components,
   showCodeCopyButton = false,
 }: MessageMarkdownProps) {
+  const defaultComponents = useMemo(
+    () => buildDefaultComponents(showCodeCopyButton),
+    [showCodeCopyButton],
+  );
+  const mergedComponents = useMemo(
+    () => ({ ...defaultComponents, ...components }),
+    [defaultComponents, components],
+  );
+
   return (
     <div className={className}>
       <ReactMarkdown
-        components={{ ...buildDefaultComponents(showCodeCopyButton), ...components }}
+        components={mergedComponents}
         remarkPlugins={REMARK_PLUGINS}
         skipHtml
       >

@@ -57,4 +57,18 @@ describe('MessageMarkdown', () => {
       expect(copyButton.textContent).toBe('Copied');
     });
   });
+
+  it('preserves GFM table column alignment styles', () => {
+    const { container } = render(
+      <MessageMarkdown text={'| left | right |\n| :--- | ---: |\n| a | b |'} />,
+    );
+
+    const headerCells = container.querySelectorAll('th');
+    expect(headerCells[0]?.getAttribute('style')).toContain('text-align: left');
+    expect(headerCells[1]?.getAttribute('style')).toContain('text-align: right');
+
+    const rowCells = container.querySelectorAll('td');
+    expect(rowCells[0]?.getAttribute('style')).toContain('text-align: left');
+    expect(rowCells[1]?.getAttribute('style')).toContain('text-align: right');
+  });
 });
