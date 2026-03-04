@@ -2,15 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, AlertTriangle } from 'lucide-react';
-import { usePresence, useChannels, useWebSocket } from '@relaycast/react';
+import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { cn } from '../lib/utils';
+import { cn, formatDmLabel } from '../lib/utils';
 import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
-import type { Agent as ApiAgent } from '@relaycast/sdk';
+import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
 export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
@@ -19,6 +19,7 @@ export function DashboardLayout() {
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [unreadChannelCounts, setUnreadChannelCounts] = useState<Record<string, number>>({});
   const [activityOpen, setActivityOpen] = useState(true);
   const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
   const [streamMessage, setStreamMessage] = useState<string>('');
@@ -27,10 +28,47 @@ export function DashboardLayout() {
   // Default to first channel if none selected
   useEffect(() => {
     if (!selectedChannel && channels.length > 0) {
-      setSelectedChannel(channels[0].name);
+      const firstChannel = channels[0].name;
+      setSelectedChannel(firstChannel);
+      setUnreadChannelCounts((prev) =>
+        prev[firstChannel] && prev[firstChannel] > 0
+          ? { ...prev, [firstChannel]: 0 }
+          : prev,
+      );
     }
   }, [selectedChannel, channels]);
   const [threadMessageId, setThreadMessageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const knownChannels = new Set(channels.map((ch) => ch.name));
+    setUnreadChannelCounts((prev) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [name, count] of Object.entries(prev)) {
+        if (knownChannels.has(name)) {
+          next[name] = count;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [channels]);
+
+  useEvent('message.created', (evt) => {
+    const event = evt as MessageCreatedEvent;
+    const channelName = event.channel;
+    if (!channelName) return;
+
+    if (selectedChannel === channelName) {
+      return;
+    }
+
+    setUnreadChannelCounts((prev) => ({
+      ...prev,
+      [channelName]: (prev[channelName] ?? 0) + 1,
+    }));
+  });
 
   // Filter out the dashboard observer agent and stale offline agents (offline > 5 min)
   const STALE_OFFLINE_MS = 5 * 60 * 1000;
@@ -107,12 +145,31 @@ export function DashboardLayout() {
     setSelectedChannel(name);
     setSelectedAgent(null);
     setThreadMessageId(null);
+    if (name && !name.startsWith('dm:')) {
+      setUnreadChannelCounts((prev) =>
+        prev[name] && prev[name] > 0
+          ? { ...prev, [name]: 0 }
+          : prev,
+      );
+    }
   }
 
   // Determine right panel priority: agent panel > thread > activity
   const selectedAgentData: ApiAgent | null = selectedAgent
     ? agents.find((a) => a.name === selectedAgent) ?? null
     : null;
+  const selectedChannelMemberCount =
+    selectedChannel && !selectedChannel.startsWith('dm:')
+      ? (channels.find((ch) => ch.name === selectedChannel)?.memberCount ?? 0)
+      : null;
+  const selectedDmLabel =
+    selectedChannel?.startsWith('dm:')
+      ? (() => {
+          const conversation = conversations.find((dm) => `dm:${dm.id}` === selectedChannel);
+          if (!conversation) return undefined;
+          return formatDmLabel(conversation.participants, conversation.name);
+        })()
+      : undefined;
 
   let rightPanel: React.ReactNode = null;
   if (selectedAgentData) {
@@ -143,6 +200,7 @@ export function DashboardLayout() {
         conversations={conversations}
         selectedChannel={selectedChannel}
         selectedAgent={selectedAgent}
+        unreadChannelCounts={unreadChannelCounts}
         wsStatus={wsStatus}
         onSelectChannel={handleSelectChannel}
         onSelectAgent={handleSelectAgent}
@@ -192,11 +250,8 @@ export function DashboardLayout() {
         <div className="flex flex-1 min-h-0">
           <ChatFeed
             selectedChannel={selectedChannel}
-            dmLabel={
-              selectedChannel?.startsWith('dm:')
-                ? conversations.find((dm) => `dm:${dm.id}` === selectedChannel)?.name ?? undefined
-                : undefined
-            }
+            selectedChannelMemberCount={selectedChannelMemberCount}
+            dmLabel={selectedDmLabel}
             onOpenThread={(id) => setThreadMessageId(id)}
           />
           {rightPanel}
