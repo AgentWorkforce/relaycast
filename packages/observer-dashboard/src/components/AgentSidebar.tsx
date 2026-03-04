@@ -126,7 +126,11 @@ export function AgentSidebar({
               </h2>
               {conversations.map((dm) => {
                 const dmKey = `dm:${dm.id}`;
-                const dmLabel = dm.name || dm.participants.map((p) => p.agentName).join(', ');
+                const participantLabel = dm.participants
+                  .map((p) => p.agentName.trim())
+                  .filter((name) => name.length > 0)
+                  .join(', ');
+                const dmLabel = participantLabel || dm.name || 'Direct Message';
                 return (
                   <button
                     key={dm.id}

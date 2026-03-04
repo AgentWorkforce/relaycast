@@ -117,6 +117,18 @@ export function DashboardLayout() {
     selectedChannel && !selectedChannel.startsWith('dm:')
       ? (channels.find((ch) => ch.name === selectedChannel)?.memberCount ?? 0)
       : null;
+  const selectedDmLabel =
+    selectedChannel?.startsWith('dm:')
+      ? (() => {
+          const conversation = conversations.find((dm) => `dm:${dm.id}` === selectedChannel);
+          if (!conversation) return undefined;
+          const participantLabel = conversation.participants
+            .map((p) => p.agentName.trim())
+            .filter((name) => name.length > 0)
+            .join(', ');
+          return participantLabel || conversation.name || undefined;
+        })()
+      : undefined;
 
   let rightPanel: React.ReactNode = null;
   if (selectedAgentData) {
@@ -197,11 +209,7 @@ export function DashboardLayout() {
           <ChatFeed
             selectedChannel={selectedChannel}
             selectedChannelMemberCount={selectedChannelMemberCount}
-            dmLabel={
-              selectedChannel?.startsWith('dm:')
-                ? conversations.find((dm) => `dm:${dm.id}` === selectedChannel)?.name ?? undefined
-                : undefined
-            }
+            dmLabel={selectedDmLabel}
             onOpenThread={(id) => setThreadMessageId(id)}
           />
           {rightPanel}
