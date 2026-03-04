@@ -31,6 +31,30 @@ describe('MessageMarkdown', () => {
     expect(links[1]?.getAttribute('rel')).toBeNull();
   });
 
+  it('renders known mentions as clickable links', () => {
+    const onMentionClick = vi.fn();
+    const { container } = render(
+      <MessageMarkdown
+        text={'ping @alice and @unknown and `@alice`'}
+        mentionNames={['alice']}
+        onMentionClick={onMentionClick}
+        mentionClassName="mention-link"
+      />,
+    );
+
+    const links = Array.from(container.querySelectorAll('a'));
+    expect(links).toHaveLength(1);
+    const mention = links[0] as HTMLAnchorElement;
+    expect(mention.textContent).toBe('@alice');
+    expect(mention.tagName).toBe('A');
+    expect(mention.getAttribute('href')).toContain('alice');
+    expect(mention.getAttribute('class')).toContain('mention-link');
+
+    fireEvent.click(mention);
+    expect(onMentionClick).toHaveBeenCalledWith('alice');
+    expect(container.textContent).toContain('@unknown');
+  });
+
   it('renders highlighted fenced code and supports copy button', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {

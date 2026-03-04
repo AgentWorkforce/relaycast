@@ -17,7 +17,15 @@ function relativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
-function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
+function ThreadMessageRow({
+  msg,
+  mentionNames,
+  onOpenAgent,
+}: {
+  msg: MessageWithMeta;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
+}) {
   return (
     <div className="flex gap-3 px-4 py-2">
       <AgentAvatar name={msg.agentName} />
@@ -34,6 +42,9 @@ function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
           text={msg.text}
           className="text-sm text-[var(--color-text-secondary)] break-words"
           showCodeCopyButton
+          mentionNames={mentionNames}
+          onMentionClick={onOpenAgent}
+          mentionClassName="font-semibold text-[var(--color-accent-cyan)] hover:underline cursor-pointer"
         />
       </div>
     </div>
@@ -43,9 +54,16 @@ function ThreadMessageRow({ msg }: { msg: MessageWithMeta }) {
 interface ThreadPanelProps {
   messageId: string;
   onClose: () => void;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
 }
 
-export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
+export function ThreadPanel({
+  messageId,
+  onClose,
+  mentionNames,
+  onOpenAgent,
+}: ThreadPanelProps) {
   const { parent, replies, loading } = useThread(messageId);
 
   return (
@@ -83,7 +101,11 @@ export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
           <div>
             {/* Parent message */}
             <div className="border-b border-[var(--color-border-subtle)] pb-2 mb-1">
-              <ThreadMessageRow msg={parent} />
+              <ThreadMessageRow
+                msg={parent}
+                mentionNames={mentionNames}
+                onOpenAgent={onOpenAgent}
+              />
             </div>
 
             {/* Replies */}
@@ -94,7 +116,12 @@ export function ThreadPanel({ messageId, onClose }: ThreadPanelProps) {
             ) : (
               <div className="py-1">
                 {replies.map((reply) => (
-                  <ThreadMessageRow key={reply.id} msg={reply} />
+                  <ThreadMessageRow
+                    key={reply.id}
+                    msg={reply}
+                    mentionNames={mentionNames}
+                    onOpenAgent={onOpenAgent}
+                  />
                 ))}
               </div>
             )}

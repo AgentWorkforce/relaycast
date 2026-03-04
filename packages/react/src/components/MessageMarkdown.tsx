@@ -1,6 +1,6 @@
 import { useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { Highlight, Prism, themes, type Language } from 'prism-react-renderer';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
@@ -68,8 +68,10 @@ const TABLE_CELL_STYLE: CSSProperties = {
   verticalAlign: 'top',
 };
 
-const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+const BASE_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const CODE_THEME = themes.vsDark;
+const MENTION_URL_PREFIX = 'relaycast-agent://';
+const WORD_CHARACTER_PATTERN = /[A-Za-z0-9_]/;
 
 const CODE_BLOCK_CONTAINER_STYLE: CSSProperties = {
   display: 'block',
@@ -91,6 +93,10 @@ const COPY_BUTTON_STYLE: CSSProperties = {
   cursor: 'pointer',
 };
 
+const MENTION_LINK_STYLE: CSSProperties = {
+  fontWeight: 600,
+};
+
 const LANGUAGE_ALIASES: Record<string, string> = {
   js: 'javascript',
   ts: 'typescript',
@@ -104,9 +110,134 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   plaintext: 'plain',
 };
 
+interface MarkdownNode {
+  type?: string;
+  value?: string;
+  url?: string;
+  children?: MarkdownNode[];
+}
+
 function isExternalHref(href: string | undefined): boolean {
   if (!href) return false;
   return /^(https?:)?\/\//i.test(href);
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  return value !== undefined && WORD_CHARACTER_PATTERN.test(value);
+}
+
+function normalizeMentionNames(mentionNames: string[] | undefined): string[] {
+  if (!mentionNames || mentionNames.length === 0) return [];
+
+  const uniqueNames = new Set<string>();
+  for (const rawName of mentionNames) {
+    const normalizedName = rawName.trim();
+    if (normalizedName.length === 0 || /\s/.test(normalizedName)) continue;
+    uniqueNames.add(normalizedName);
+  }
+
+  return Array.from(uniqueNames).sort((a, b) => {
+    if (b.length !== a.length) return b.length - a.length;
+    return a.localeCompare(b);
+  });
+}
+
+function buildMentionMatcher(mentionNames: string[]): RegExp | null {
+  if (mentionNames.length === 0) return null;
+  const escapedNames = mentionNames.map((name) => escapeRegexLiteral(name));
+  return new RegExp(`@(${escapedNames.join('|')})`, 'g');
+}
+
+function splitTextIntoMentionNodes(text: string, mentionMatcher: RegExp): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
+  let cursor = 0;
+  let hasMention = false;
+  mentionMatcher.lastIndex = 0;
+
+  for (let match = mentionMatcher.exec(text); match !== null; match = mentionMatcher.exec(text)) {
+    const mention = match[0];
+    const mentionName = match[1];
+    if (!mentionName) continue;
+
+    const start = match.index;
+    const end = start + mention.length;
+    const previousChar = start > 0 ? text[start - 1] : undefined;
+    const nextChar = end < text.length ? text[end] : undefined;
+    if (isWordCharacter(previousChar) || isWordCharacter(nextChar)) {
+      continue;
+    }
+
+    if (start > cursor) {
+      nodes.push({ type: 'text', value: text.slice(cursor, start) });
+    }
+
+    nodes.push({
+      type: 'link',
+      url: `${MENTION_URL_PREFIX}${encodeURIComponent(mentionName)}`,
+      children: [{ type: 'text', value: `@${mentionName}` }],
+    });
+
+    cursor = end;
+    hasMention = true;
+  }
+
+  if (!hasMention) {
+    return [{ type: 'text', value: text }];
+  }
+
+  if (cursor < text.length) {
+    nodes.push({ type: 'text', value: text.slice(cursor) });
+  }
+
+  return nodes;
+}
+
+function rewriteMentionNodes(node: MarkdownNode, mentionMatcher: RegExp): void {
+  if (!Array.isArray(node.children) || node.children.length === 0) return;
+
+  const rewrittenChildren: MarkdownNode[] = [];
+  for (const child of node.children) {
+    if (child.type === 'text' && typeof child.value === 'string') {
+      rewrittenChildren.push(...splitTextIntoMentionNodes(child.value, mentionMatcher));
+      continue;
+    }
+
+    if (child.type !== 'link' && child.type !== 'inlineCode' && child.type !== 'code') {
+      rewriteMentionNodes(child, mentionMatcher);
+    }
+    rewrittenChildren.push(child);
+  }
+
+  node.children = rewrittenChildren;
+}
+
+function createMentionRemarkPlugin(mentionNames: string[]): (() => (tree: unknown) => void) | null {
+  const mentionMatcher = buildMentionMatcher(mentionNames);
+  if (!mentionMatcher) return null;
+
+  return () => (tree: unknown) => {
+    if (!tree || typeof tree !== 'object') return;
+    rewriteMentionNodes(tree as MarkdownNode, mentionMatcher);
+  };
+}
+
+function decodeMentionHref(href: string | undefined): string | null {
+  if (!href || !href.startsWith(MENTION_URL_PREFIX)) return null;
+  const encodedName = href.slice(MENTION_URL_PREFIX.length);
+  try {
+    return decodeURIComponent(encodedName);
+  } catch {
+    return encodedName;
+  }
+}
+
+function transformUrl(url: string): string {
+  if (url.startsWith(MENTION_URL_PREFIX)) return url;
+  return defaultUrlTransform(url);
 }
 
 function toCodeText(children: ReactNode): string {
@@ -240,7 +371,12 @@ function renderCodeBlock(
   );
 }
 
-function buildDefaultComponents(showCodeCopyButton: boolean): Components {
+function buildDefaultComponents(
+  showCodeCopyButton: boolean,
+  onMentionClick?: (mentionName: string) => void,
+  mentionClassName?: string,
+  mentionStyle?: CSSProperties,
+): Components {
   return {
     p({ children }) {
       return <p style={PARAGRAPH_STYLE}>{children}</p>;
@@ -262,7 +398,30 @@ function buildDefaultComponents(showCodeCopyButton: boolean): Components {
     li({ children }) {
       return <li style={{ marginTop: '0.125rem' }}>{children}</li>;
     },
-    a({ href, children, node: _node, ...props }) {
+    a({ href, children, node: _node, style, className, ...props }) {
+      const mentionName = decodeMentionHref(href);
+      if (mentionName) {
+        return (
+          <a
+            {...props}
+            href={href}
+            onClick={(event) => {
+              event.preventDefault();
+              onMentionClick?.(mentionName);
+            }}
+            className={mentionClassName ?? className}
+            style={{
+              ...MENTION_LINK_STYLE,
+              ...(onMentionClick ? { cursor: 'pointer' } : undefined),
+              ...mentionStyle,
+              ...style,
+            }}
+          >
+            {children}
+          </a>
+        );
+      }
+
       const external = isExternalHref(href);
       return (
         <a
@@ -270,7 +429,8 @@ function buildDefaultComponents(showCodeCopyButton: boolean): Components {
           href={href}
           target={external ? '_blank' : undefined}
           rel={external ? 'noopener noreferrer nofollow' : undefined}
-          style={{ textDecoration: 'underline', overflowWrap: 'anywhere' }}
+          className={className}
+          style={{ textDecoration: 'underline', overflowWrap: 'anywhere', ...style }}
         >
           {children}
         </a>
@@ -327,6 +487,10 @@ export interface MessageMarkdownProps {
   className?: string;
   components?: Components;
   showCodeCopyButton?: boolean;
+  mentionNames?: string[];
+  onMentionClick?: (mentionName: string) => void;
+  mentionClassName?: string;
+  mentionStyle?: CSSProperties;
 }
 
 export function MessageMarkdown({
@@ -334,10 +498,28 @@ export function MessageMarkdown({
   className,
   components,
   showCodeCopyButton = false,
+  mentionNames,
+  onMentionClick,
+  mentionClassName,
+  mentionStyle,
 }: MessageMarkdownProps) {
+  const normalizedMentionNames = useMemo(
+    () => normalizeMentionNames(mentionNames),
+    [mentionNames],
+  );
+  const mentionRemarkPlugin = useMemo(
+    () => createMentionRemarkPlugin(normalizedMentionNames),
+    [normalizedMentionNames],
+  );
+  const remarkPlugins = useMemo(
+    () => mentionRemarkPlugin
+      ? [...BASE_REMARK_PLUGINS, mentionRemarkPlugin]
+      : BASE_REMARK_PLUGINS,
+    [mentionRemarkPlugin],
+  );
   const defaultComponents = useMemo(
-    () => buildDefaultComponents(showCodeCopyButton),
-    [showCodeCopyButton],
+    () => buildDefaultComponents(showCodeCopyButton, onMentionClick, mentionClassName, mentionStyle),
+    [showCodeCopyButton, onMentionClick, mentionClassName, mentionStyle],
   );
   const mergedComponents = useMemo(
     () => ({ ...defaultComponents, ...components }),
@@ -348,7 +530,8 @@ export function MessageMarkdown({
     <div className={className}>
       <ReactMarkdown
         components={mergedComponents}
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={remarkPlugins}
+        urlTransform={transformUrl}
         skipHtml
       >
         {text}
