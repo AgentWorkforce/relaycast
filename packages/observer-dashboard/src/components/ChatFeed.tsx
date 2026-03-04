@@ -1,18 +1,24 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Hash, MessageSquare } from 'lucide-react';
+import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
   selectedChannel: string | null;
+  selectedChannelMemberCount?: number | null;
   dmLabel?: string;
   onOpenThread?: (messageId: string) => void;
 }
 
-export function ChatFeed({ selectedChannel, dmLabel, onOpenThread }: ChatFeedProps) {
+export function ChatFeed({
+  selectedChannel,
+  selectedChannelMemberCount,
+  dmLabel,
+  onOpenThread,
+}: ChatFeedProps) {
   const isDm = selectedChannel?.startsWith('dm:');
   const channelName = selectedChannel && !isDm ? selectedChannel : null;
   const dmId = isDm ? selectedChannel!.slice(3) : null;
@@ -22,6 +28,8 @@ export function ChatFeed({ selectedChannel, dmLabel, onOpenThread }: ChatFeedPro
       ? dmLabel || 'Direct Message'
       : `#${selectedChannel}`
     : 'Select a channel';
+  const memberCount = selectedChannelMemberCount ?? 0;
+  const showMemberBadge = !!channelName;
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -32,7 +40,13 @@ export function ChatFeed({ selectedChannel, dmLabel, onOpenThread }: ChatFeedPro
         ) : (
           <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
         )}
-        <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">{title}</h2>
+        <h2 className="font-semibold text-sm text-[var(--color-text-primary)] flex-1">{title}</h2>
+        {showMemberBadge && (
+          <span className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-border-default)] px-2.5 py-1 text-sm text-[var(--color-text-primary)] bg-[var(--color-bg-secondary)] shrink-0">
+            <UserRound className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
+            <span>{memberCount}</span>
+          </span>
+        )}
       </div>
 
       {/* Messages */}

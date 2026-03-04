@@ -109,11 +109,6 @@ export function AgentSidebar({
             >
               <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
               <span className="truncate flex-1 text-left">{ch.name}</span>
-              {(ch.memberCount ?? 0) > 0 && (
-                <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
-                  {ch.memberCount}
-                </span>
-              )}
             </button>
           ))}
           {regularChannels.length === 0 && (

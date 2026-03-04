@@ -113,6 +113,10 @@ export function DashboardLayout() {
   const selectedAgentData: ApiAgent | null = selectedAgent
     ? agents.find((a) => a.name === selectedAgent) ?? null
     : null;
+  const selectedChannelMemberCount =
+    selectedChannel && !selectedChannel.startsWith('dm:')
+      ? (channels.find((ch) => ch.name === selectedChannel)?.memberCount ?? 0)
+      : null;
 
   let rightPanel: React.ReactNode = null;
   if (selectedAgentData) {
@@ -192,6 +196,7 @@ export function DashboardLayout() {
         <div className="flex flex-1 min-h-0">
           <ChatFeed
             selectedChannel={selectedChannel}
+            selectedChannelMemberCount={selectedChannelMemberCount}
             dmLabel={
               selectedChannel?.startsWith('dm:')
                 ? conversations.find((dm) => `dm:${dm.id}` === selectedChannel)?.name ?? undefined
