@@ -95,7 +95,6 @@ const COPY_BUTTON_STYLE: CSSProperties = {
 
 const MENTION_LINK_STYLE: CSSProperties = {
   fontWeight: 600,
-  textDecoration: 'none',
 };
 
 const LANGUAGE_ALIASES: Record<string, string> = {
