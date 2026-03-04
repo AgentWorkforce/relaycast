@@ -16,6 +16,7 @@ interface AgentSidebarProps {
   conversations: DmConversationSummary[];
   selectedChannel: string | null;
   selectedAgent: string | null;
+  unreadChannelCounts: Record<string, number>;
   wsStatus: ConnectionStatus;
   onSelectChannel: (name: string | null) => void;
   onSelectAgent: (name: string | null) => void;
@@ -43,6 +44,7 @@ export function AgentSidebar({
   conversations,
   selectedChannel,
   selectedAgent,
+  unreadChannelCounts,
   wsStatus,
   onSelectChannel,
   onSelectAgent,
@@ -109,6 +111,11 @@ export function AgentSidebar({
             >
               <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
               <span className="truncate flex-1 text-left">{ch.name}</span>
+              {(unreadChannelCounts[ch.name] ?? 0) > 0 && (
+                <span className="text-[10px] font-semibold text-white bg-red-500 px-1.5 py-0.5 rounded-full shrink-0">
+                  {unreadChannelCounts[ch.name]}
+                </span>
+              )}
             </button>
           ))}
           {regularChannels.length === 0 && (
