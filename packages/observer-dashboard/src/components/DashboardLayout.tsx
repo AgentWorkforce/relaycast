@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
@@ -240,14 +240,14 @@ export function DashboardLayout() {
             <button
               onClick={() => setActivityOpen(!activityOpen)}
               className={cn(
-                'p-1.5 rounded-md cursor-pointer transition-colors',
+                'rounded-md px-2 py-1 text-xs font-medium cursor-pointer transition-colors',
                 activityOpen
                   ? 'text-[var(--color-accent-cyan)] bg-[var(--color-bg-active)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
               )}
               title="Toggle activity panel"
             >
-              <Activity className="h-4 w-4" />
+              Activity
             </button>
           </div>
         )}

@@ -102,7 +102,7 @@ function ChannelMessages({
   if (loading && sorted.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mb-2" />
+        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
         <p className="text-sm">Loading messages...</p>
       </div>
     );
@@ -186,7 +186,7 @@ function DmMessages({
   if (loading && sorted.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mb-2" />
+        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
         <p className="text-sm">Loading messages...</p>
       </div>
     );

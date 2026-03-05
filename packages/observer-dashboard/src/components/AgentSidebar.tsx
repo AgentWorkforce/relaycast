@@ -82,7 +82,11 @@ export function AgentSidebar({
           alt="Agent Relay"
           className="h-5 w-auto shrink-0"
         />
-        <h1 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">Agent Relay Observer</h1>
+        <h1 className="text-sm font-black tracking-wide uppercase [font-family:Outfit,sans-serif] truncate">
+          <span className="bg-gradient-to-r from-[var(--color-success)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent">
+            Observer
+          </span>
+        </h1>
         <span
           className={cn('h-2 w-2 rounded-full shrink-0', {
             'bg-green-500': wsStatus === 'connected',
