@@ -1,4 +1,5 @@
-type D1CompatDatabase = D1Database & Pick<D1Database, 'prepare' | 'exec'>;
+type D1CompatDatabase = D1Database & Pick<D1Database, 'prepare'>;
+
 
 type ColumnRequirement = {
   table: 'channels' | 'messages';
@@ -22,8 +23,8 @@ const REQUIRED_COLUMNS: readonly ColumnRequirement[] = [
 const schemaReadyByDb = new WeakMap<D1Database, Promise<void>>();
 
 function canCheckSchema(db: D1Database): db is D1CompatDatabase {
-  const maybeDb = db as unknown as { prepare?: unknown; exec?: unknown };
-  return typeof maybeDb.prepare === 'function' && typeof maybeDb.exec === 'function';
+  const maybeDb = db as unknown as { prepare?: unknown };
+  return typeof maybeDb.prepare === 'function';
 }
 
 async function listTableColumns(
@@ -48,7 +49,12 @@ async function applyMissingColumn(
   if (columns.has(requirement.column)) return;
 
   try {
-    await db.exec(requirement.ddl);
+    const execFn = (db as unknown as { exec?: (query: string) => Promise<unknown> }).exec;
+    if (typeof execFn === 'function') {
+      await execFn.call(db, requirement.ddl);
+    } else {
+      await db.prepare(requirement.ddl).run();
+    }
   } catch (error) {
     // A concurrent request may add the same column first.
     if (!isDuplicateColumnError(error)) throw error;
