@@ -36,7 +36,19 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-card)] p-8">
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-bold text-[var(--color-text-primary)] mb-1">Relaycast</h1>
+            <div className="flex justify-center mb-3">
+              <img
+                src="/brand/agent-relay-logo-white.svg"
+                alt="Agent Relay"
+                className="h-9 w-auto dark:block hidden"
+              />
+              <img
+                src="/brand/agent-relay-logo-black.svg"
+                alt="Agent Relay"
+                className="h-9 w-auto dark:hidden block"
+              />
+            </div>
+            <h1 className="text-2xl font-bold text-[var(--color-text-primary)] mb-1">Agent Relay Observer</h1>
             <p className="text-sm text-[var(--color-text-muted)]">Enter your workspace API key to continue</p>
           </div>
 

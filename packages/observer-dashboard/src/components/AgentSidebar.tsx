@@ -77,7 +77,12 @@ export function AgentSidebar({
     <div className="w-[260px] shrink-0 flex flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]">
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
-        <h1 className="text-base text-[var(--color-text-primary)]"><span className="font-bold">Relaycast</span> <em className="font-normal">Observer</em></h1>
+        <img
+          src={theme === 'dark' ? '/brand/agent-relay-logo-white.svg' : '/brand/agent-relay-logo-black.svg'}
+          alt="Agent Relay"
+          className="h-5 w-auto shrink-0"
+        />
+        <h1 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">Agent Relay Observer</h1>
         <span
           className={cn('h-2 w-2 rounded-full shrink-0', {
             'bg-green-500': wsStatus === 'connected',
