@@ -7,6 +7,7 @@ import type {
   ThreadReplyRequest,
   SendDmRequest,
   SendDmResponse,
+  DmMessage,
   CreateGroupDmRequest,
   CreateGroupDmResponse,
   GroupDmMessageResponse,
@@ -337,7 +338,7 @@ export class AgentClient {
     messages: (
       conversationId: string,
       opts?: MessageListQuery,
-    ): Promise<MessageWithMeta[]> => {
+    ): Promise<DmMessage[]> => {
       const query: Record<string, string> = {};
       if (opts?.limit) query.limit = String(opts.limit);
       if (opts?.before) query.before = opts.before;

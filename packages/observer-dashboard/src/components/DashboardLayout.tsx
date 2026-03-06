@@ -8,7 +8,7 @@ import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { cn, formatDmLabel } from '../lib/utils';
+import { formatDmLabel } from '../lib/utils';
 import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
 import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
@@ -20,7 +20,6 @@ export function DashboardLayout() {
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [unreadChannelCounts, setUnreadChannelCounts] = useState<Record<string, number>>({});
-  const [activityOpen, setActivityOpen] = useState(true);
   const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
   const [streamMessage, setStreamMessage] = useState<string>('');
   const [streamPending, setStreamPending] = useState(false);
@@ -191,11 +190,9 @@ export function DashboardLayout() {
         onOpenAgent={handleSelectAgent}
       />
     );
-  } else if (activityOpen) {
+  } else {
     rightPanel = <ActivityLog />;
   }
-
-  const showActivityToggle = !selectedAgentData && !threadMessageId;
 
   return (
     <div className="h-screen flex bg-[var(--color-bg-deep)]">
@@ -232,23 +229,6 @@ export function DashboardLayout() {
                 {streamPending ? 'Enabling...' : 'Enable Stream'}
               </button>
             </div>
-          </div>
-        )}
-
-        {showActivityToggle && (
-          <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
-            <button
-              onClick={() => setActivityOpen(!activityOpen)}
-              className={cn(
-                'rounded-md px-2 py-1 text-xs font-medium cursor-pointer transition-colors',
-                activityOpen
-                  ? 'text-[var(--color-accent-cyan)] bg-[var(--color-bg-active)]'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-              )}
-              title="Toggle activity panel"
-            >
-              Activity
-            </button>
           </div>
         )}
 

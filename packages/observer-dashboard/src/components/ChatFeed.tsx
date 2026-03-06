@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
-import type { MessageWithMeta } from '@relaycast/sdk';
+import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
   selectedChannel: string | null;
@@ -158,15 +158,19 @@ function DmMessages({
     setLoading(true);
     fetch(`/api/dms/${encodeURIComponent(conversationId)}/messages`)
       .then((res) => res.json())
-      .then((data) => {
-        const msgs = (data.messages ?? []).map((m: Record<string, unknown>) => ({
-          id: m.id as string,
-          agentName: (m.agentName as string) || 'unknown',
-          agentId: (m.agentId as string) || '',
-          text: (m.text as string) || '',
+      .then((data: { messages?: DmMessage[] }) => {
+        const msgs = (data.messages ?? []).map((m) => ({
+          id: m.id,
+          channelId: '',
+          agentName: m.agentName,
+          agentId: m.agentId,
+          text: m.text,
           blocks: null,
+          metadata: {},
+          hasAttachments: false,
+          threadId: null,
           attachments: [],
-          createdAt: (m.createdAt as string) || new Date().toISOString(),
+          createdAt: m.createdAt,
           replyCount: 0,
           reactions: [],
           readByCount: 0,

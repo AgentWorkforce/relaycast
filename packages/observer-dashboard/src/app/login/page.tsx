@@ -49,11 +49,11 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#09090b]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(65rem_32rem_at_15%_-5%,rgba(5,150,97,0.2),transparent_60%),radial-gradient(48rem_28rem_at_100%_100%,rgba(4,209,246,0.15),transparent_62%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.04),transparent_28%)]" />
+    <div className="relative min-h-screen overflow-hidden bg-[var(--color-bg-deep)]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(65rem_32rem_at_15%_-5%,var(--color-success-light),transparent_60%),radial-gradient(48rem_28rem_at_100%_100%,var(--color-accent-light),transparent_62%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,var(--color-bg-hover),transparent_28%)]" />
       <div className="relative min-h-screen flex items-center justify-center px-4 py-8">
-        <div className="w-full max-w-lg rounded-2xl border border-zinc-700/60 bg-zinc-900/60 shadow-[0_24px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+        <div className="w-full max-w-lg rounded-2xl border border-[var(--color-accent-cyan)] bg-[var(--color-bg-secondary)] shadow-[0_24px_70px_rgba(0,0,0,0.25)] backdrop-blur-xl">
           <div className="h-px w-full bg-gradient-to-r from-transparent via-[#059661] to-transparent" />
           <div className="p-8 md:p-10">
             <div className="mb-8">
@@ -70,16 +70,16 @@ export default function LoginPage() {
                 </h1>
               </div>
               <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
                   Secure Workspace Access
                 </p>
-                <p className="text-sm text-zinc-400">Enter your workspace API key to continue</p>
+                <p className="text-sm text-[var(--color-text-secondary)]">Enter your workspace API key to continue</p>
               </div>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label htmlFor="apiKey" className="mb-2 block text-sm font-medium text-zinc-300">
+                <label htmlFor="apiKey" className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">
                   API Key
                 </label>
                 <input
@@ -87,7 +87,7 @@ export default function LoginPage() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full rounded-xl border border-zinc-700 bg-[#0b0f15] px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[#5BBAA7]"
+                  className="w-full rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-primary)] px-4 py-3 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] shadow-[inset_0_0_0_1px_var(--color-border-subtle)] focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[var(--focus-color)]"
                   placeholder="rk_live_..."
                   autoFocus
                 />
@@ -102,7 +102,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || !apiKey}
-                className="w-full cursor-pointer rounded-xl bg-[#059661] px-4 py-3 text-sm font-semibold text-emerald-50 transition-colors hover:bg-[#04784e] disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full cursor-pointer rounded-xl bg-[var(--focus-color)] px-4 py-3 text-sm font-semibold text-[var(--color-text-inverse)] transition-colors hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {loading ? 'Validating...' : 'Sign in'}
               </button>
