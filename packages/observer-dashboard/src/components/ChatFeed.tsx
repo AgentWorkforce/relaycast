@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
-import { useMessages, sortMessagesChronologically } from '@relaycast/react';
+import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
-import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
+import type { MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
   selectedChannel: string | null;
@@ -157,16 +157,16 @@ function DmMessages({
   mentionNames?: string[];
   onOpenAgent?: (agentName: string | null) => void;
 }) {
+  const relay = useRelay();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/observer/api/dms/${encodeURIComponent(conversationId)}/messages`)
-      .then((res) => res.json())
-      .then((data: { messages?: DmMessage[] }) => {
-        const msgs = (data.messages ?? []).map((m) => ({
+    relay.dmMessages(conversationId, { limit: 50 })
+      .then((dms) => {
+        setMessages(dms.map((m) => ({
           id: m.id,
           channelId: '',
           agentName: m.agentName,
@@ -181,12 +181,11 @@ function DmMessages({
           replyCount: 0,
           reactions: [],
           readByCount: 0,
-        }));
-        setMessages(msgs);
+        })));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [conversationId]);
+  }, [conversationId, relay]);
 
   const sorted = sortMessagesChronologically(messages);
 
