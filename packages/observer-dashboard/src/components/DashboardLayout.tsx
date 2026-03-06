@@ -14,7 +14,7 @@ import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
 export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
-  const { channels } = useChannels();
+  const { channels } = useChannels({ includeArchived: true });
   const { conversations } = useWorkspaceDMs();
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
@@ -27,7 +27,7 @@ export function DashboardLayout() {
   // Default to first channel if none selected
   useEffect(() => {
     if (!selectedChannel && channels.length > 0) {
-      const firstChannel = channels[0].name;
+      const firstChannel = (channels.find((ch) => !ch.isArchived) ?? channels[0]).name;
       setSelectedChannel(firstChannel);
       setUnreadChannelCounts((prev) =>
         prev[firstChannel] && prev[firstChannel] > 0
@@ -164,6 +164,10 @@ export function DashboardLayout() {
     selectedChannel && !selectedChannel.startsWith('dm:')
       ? (channels.find((ch) => ch.name === selectedChannel)?.memberCount ?? 0)
       : null;
+  const selectedChannelArchived =
+    selectedChannel && !selectedChannel.startsWith('dm:')
+      ? (channels.find((ch) => ch.name === selectedChannel)?.isArchived ?? false)
+      : false;
   const selectedDmLabel =
     selectedChannel?.startsWith('dm:')
       ? (() => {
@@ -236,6 +240,7 @@ export function DashboardLayout() {
           <ChatFeed
             selectedChannel={selectedChannel}
             selectedChannelMemberCount={selectedChannelMemberCount}
+            selectedChannelArchived={selectedChannelArchived}
             dmLabel={selectedDmLabel}
             onOpenThread={(id) => setThreadMessageId(id)}
             mentionNames={mentionNames}

@@ -83,6 +83,10 @@ export interface UseChannelsReturn {
   error: Error | null;
 }
 
+export interface UseChannelsOptions {
+  includeArchived?: boolean;
+}
+
 export interface UseChannelReturn {
   channel: Channel | null;
   members: ChannelMemberInfo[];

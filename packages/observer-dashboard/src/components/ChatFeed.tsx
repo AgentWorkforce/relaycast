@@ -9,6 +9,7 @@ import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 interface ChatFeedProps {
   selectedChannel: string | null;
   selectedChannelMemberCount?: number | null;
+  selectedChannelArchived?: boolean;
   dmLabel?: string;
   onOpenThread?: (messageId: string) => void;
   mentionNames?: string[];
@@ -18,6 +19,7 @@ interface ChatFeedProps {
 export function ChatFeed({
   selectedChannel,
   selectedChannelMemberCount,
+  selectedChannelArchived = false,
   dmLabel,
   onOpenThread,
   mentionNames,
@@ -45,6 +47,11 @@ export function ChatFeed({
           <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
         )}
         <h2 className="font-semibold text-sm text-[var(--color-text-primary)] flex-1">{title}</h2>
+        {showMemberBadge && selectedChannelArchived && (
+          <span className="inline-flex items-center rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-muted)] shrink-0">
+            Archived
+          </span>
+        )}
         {showMemberBadge && (
           <span className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-border-default)] px-2.5 py-1 text-sm text-[var(--color-text-primary)] bg-[var(--color-bg-secondary)] shrink-0">
             <UserRound className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
