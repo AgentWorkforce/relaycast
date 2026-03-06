@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, sortMessagesChronologically } from '@relaycast/react';
-import { withBasePath } from '../lib/basePath';
 import { MessageCard } from './MessageCard';
 import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 
@@ -164,7 +163,7 @@ function DmMessages({
 
   useEffect(() => {
     setLoading(true);
-    fetch(withBasePath(`/api/dms/${encodeURIComponent(conversationId)}/messages`))
+    fetch(`/observer/api/dms/${encodeURIComponent(conversationId)}/messages`)
       .then((res) => res.json())
       .then((data: { messages?: DmMessage[] }) => {
         const msgs = (data.messages ?? []).map((m) => ({

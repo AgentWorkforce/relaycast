@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
 import { setAuth } from '../lib/auth';
-import { withBasePath } from '../lib/basePath';
 
 interface Session {
   apiKey: string;
@@ -36,7 +35,7 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
           }
         }
 
-        const res = await fetch(withBasePath('/api/auth/session'));
+        const res = await fetch('/observer/api/auth/session');
         if (seq !== requestSeq.current) return;
 
         if (!res.ok) {

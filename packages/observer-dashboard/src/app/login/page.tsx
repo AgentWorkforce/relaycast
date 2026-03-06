@@ -3,22 +3,21 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { setAuth } from '../../lib/auth';
-import { withBasePath } from '../../lib/basePath';
 
 export default function LoginPage() {
   const router = useRouter();
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [logoSrc, setLogoSrc] = useState(withBasePath('/brand/agent-relay-logo-white.svg'));
+  const [logoSrc, setLogoSrc] = useState('/observer/brand/agent-relay-logo-white.svg');
 
   useEffect(() => {
     const root = document.documentElement;
     const updateLogo = () => {
       setLogoSrc(
         root.classList.contains('theme-light')
-          ? withBasePath('/brand/agent-relay-logo-black.svg')
-          : withBasePath('/brand/agent-relay-logo-white.svg'),
+          ? '/observer/brand/agent-relay-logo-black.svg'
+          : '/observer/brand/agent-relay-logo-white.svg',
       );
     };
 
