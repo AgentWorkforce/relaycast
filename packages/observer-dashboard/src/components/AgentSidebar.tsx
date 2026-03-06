@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn, formatDmLabel } from '../lib/utils';
+import { withBasePath } from '../lib/basePath';
 import { AgentAvatar } from './AgentAvatar';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
@@ -76,7 +77,7 @@ export function AgentSidebar({
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
         <img
-          src={theme === 'dark' ? '/brand/agent-relay-logo-white.svg' : '/brand/agent-relay-logo-black.svg'}
+          src={theme === 'dark' ? withBasePath('/brand/agent-relay-logo-white.svg') : withBasePath('/brand/agent-relay-logo-black.svg')}
           alt="Agent Relay"
           className="h-5 w-auto shrink-0"
         />
