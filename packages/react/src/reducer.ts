@@ -95,8 +95,11 @@ function handleMessageUpdated(store: RelayStore, event: MessageUpdatedEvent): vo
 }
 
 function handleThreadReply(store: RelayStore, event: ThreadReplyEvent): void {
+  let inserted = false;
+
   store.updateThread(event.parentId, (prev) => {
     if (prev.replies.some((r) => r.id === event.message.id)) return prev;
+    inserted = true;
     const reply: MessageWithMeta = {
       id: event.message.id,
       agentName: event.message.agentName,
@@ -115,34 +118,28 @@ function handleThreadReply(store: RelayStore, event: ThreadReplyEvent): void {
     return { ...prev, replies: [...prev.replies, reply] };
   });
 
-  // Increment replyCount on parent and inject reply into channel message list
+  if (!inserted) return;
+
+  // Increment replyCount on parent in the thread cache
+  store.updateThread(event.parentId, (prev) => (
+    prev.parent
+      ? { ...prev, parent: { ...prev.parent, replyCount: prev.parent.replyCount + 1 } }
+      : prev
+  ));
+
+  // Increment replyCount on parent in channel timeline cache
   const state = store.getState();
   for (const channel of Object.keys(state.channelMessages)) {
     const msgs = state.channelMessages[channel].messages;
     const parentIdx = msgs.findIndex((m) => m.id === event.parentId);
     if (parentIdx !== -1) {
       store.updateChannelMessages(channel, (prev) => {
-        // Deduplicate
-        if (prev.messages.some((m) => m.id === event.message.id)) return prev;
         const updated = [...prev.messages];
-        updated[parentIdx] = { ...updated[parentIdx], replyCount: updated[parentIdx].replyCount + 1 };
-        // Also inject the reply into the channel timeline with threadId set
-        const replyMsg: MessageWithMeta = {
-          id: event.message.id,
-          agentName: event.message.agentName,
-          channelId: channel,
-          agentId: event.message.agentId ?? '',
-          text: event.message.text,
-          blocks: null,
-          hasAttachments: false,
-          threadId: event.parentId,
-          attachments: [],
-          createdAt: new Date().toISOString(),
-          replyCount: 0,
-          reactions: [],
-          readByCount: 0,
-        };
-        return { ...prev, messages: [...updated, replyMsg] };
+        const nextCount = Number.isFinite(updated[parentIdx].replyCount)
+          ? updated[parentIdx].replyCount + 1
+          : 1;
+        updated[parentIdx] = { ...updated[parentIdx], replyCount: nextCount };
+        return { ...prev, messages: updated };
       });
       break;
     }
