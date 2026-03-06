@@ -14,9 +14,6 @@ inputs:
   cloudflare-account-id:
     description: Cloudflare account ID
     required: true
-  base-path:
-    description: Next.js basePath (e.g. /observer for prod)
-    default: ''
 
 runs:
   using: composite
@@ -66,4 +63,3 @@ runs:
       env:
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
-        NEXT_PUBLIC_BASE_PATH: ${{ inputs.base-path }}

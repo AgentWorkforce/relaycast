@@ -2,21 +2,34 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
-import { withBasePath } from '../lib/basePath';
+import { useEvent, usePresence, useChannels, useWebSocket, useRelay } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
 import { formatDmLabel } from '../lib/utils';
-import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
-import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
+import type { Agent as ApiAgent, MessageCreatedEvent, DmConversationSummary, WorkspaceDmConversation } from '@relaycast/sdk';
+
+function toSummary(wdc: WorkspaceDmConversation): DmConversationSummary {
+  return {
+    id: wdc.id,
+    type: wdc.type as '1:1' | 'group',
+    name: null,
+    participants: wdc.participants.map((name) => ({ agentId: '', agentName: name })),
+    lastMessage: wdc.lastMessage
+      ? { id: '', text: wdc.lastMessage.text, agentId: '', createdAt: wdc.lastMessage.createdAt }
+      : null,
+    unreadCount: 0,
+    createdAt: wdc.lastMessage?.createdAt ?? '',
+  };
+}
 
 export function DashboardLayout() {
+  const relay = useRelay();
   const { agents: rawAgents } = usePresence();
   const { channels } = useChannels({ includeArchived: true });
-  const { conversations } = useWorkspaceDMs();
+  const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -24,6 +37,17 @@ export function DashboardLayout() {
   const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
   const [streamMessage, setStreamMessage] = useState<string>('');
   const [streamPending, setStreamPending] = useState(false);
+
+  // Fetch all workspace DMs and refresh on new DM events
+  const fetchDMs = useCallback(() => {
+    relay.allDmConversations()
+      .then((wdcs) => setConversations(wdcs.map(toSummary)))
+      .catch(() => {});
+  }, [relay]);
+
+  useEffect(() => { fetchDMs(); }, [fetchDMs]);
+  useEvent('dm.received', fetchDMs);
+  useEvent('group_dm.received', fetchDMs);
 
   // Default to first channel if none selected
   useEffect(() => {
@@ -86,22 +110,16 @@ export function DashboardLayout() {
 
   const refreshStreamStatus = useCallback(async () => {
     try {
-      const res = await fetch(withBasePath('/api/workspace/stream'), { cache: 'no-store' });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || data?.success !== true || typeof data.enabled !== 'boolean') {
-        throw new Error('Unable to verify workspace stream status');
-      }
+      const data = await relay.workspace.stream.get();
       setStreamEnabled(data.enabled);
-      if (data.enabled) {
-        setStreamMessage('');
-      } else {
-        setStreamMessage('Workspace stream is disabled. Realtime updates will be incomplete.');
-      }
+      setStreamMessage(data.enabled
+        ? ''
+        : 'Workspace stream is disabled. Realtime updates will be incomplete.');
     } catch {
       setStreamEnabled(null);
       setStreamMessage('');
     }
-  }, []);
+  }, [relay]);
 
   useEffect(() => {
     void refreshStreamStatus();
@@ -111,29 +129,16 @@ export function DashboardLayout() {
     setStreamPending(true);
     setStreamMessage('');
     try {
-      const res = await fetch(withBasePath('/api/workspace/stream'), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || data?.success !== true || data.enabled !== true) {
-        const detail = typeof data?.detail === 'string' && data.detail.length > 0
-          ? data.detail
-          : 'Failed to enable workspace stream';
-        const baseUrl = typeof data?.baseUrl === 'string' && data.baseUrl.length > 0
-          ? ` (base: ${data.baseUrl})`
-          : '';
-        throw new Error(`${detail}${baseUrl}`);
-      }
-      setStreamEnabled(true);
+      const data = await relay.workspace.stream.set(true);
+      setStreamEnabled(data.enabled);
       setStreamMessage('');
     } catch (error) {
       setStreamEnabled(false);
-      const detail = error instanceof Error && error.message
-        ? error.message
-        : 'Failed to enable workspace stream. Please try again.';
-      setStreamMessage(detail);
+      setStreamMessage(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Failed to enable workspace stream. Please try again.',
+      );
     } finally {
       setStreamPending(false);
     }
