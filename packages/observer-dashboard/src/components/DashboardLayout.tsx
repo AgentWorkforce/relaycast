@@ -2,20 +2,19 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
+import { useEvent, usePresence, useChannels, useWebSocket, useDMs } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
 import { formatDmLabel } from '../lib/utils';
-import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
 import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
 export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
   const { channels } = useChannels({ includeArchived: true });
-  const { conversations } = useWorkspaceDMs();
+  const { conversations } = useDMs();
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
