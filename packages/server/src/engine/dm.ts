@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { eq, and, sql, lt, gt, isNull, inArray } from 'drizzle-orm';
+import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
   messages,
@@ -232,7 +233,7 @@ export async function getDmMessages(
   conversationId: string,
   agentId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
-) {
+): Promise<DmMessage[]> {
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   // Verify agent is a participant
@@ -280,8 +281,15 @@ export async function getDmMessages(
   }
 
   const rows = await db
-    .select()
+    .select({
+      id: messages.id,
+      agentId: messages.agentId,
+      agentName: agents.name,
+      body: messages.body,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
+    .innerJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
@@ -289,6 +297,7 @@ export async function getDmMessages(
   return rows.map((r) => ({
     id: r.id,
     agent_id: r.agentId,
+    agent_name: r.agentName,
     text: r.body,
     created_at: r.createdAt.toISOString(),
   }));

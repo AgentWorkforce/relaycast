@@ -24,6 +24,7 @@ import type {
   CreateCommandResponse,
   AgentCommand,
   ActivityItem,
+  DmMessage,
   WorkspaceDmConversation,
   TokenRotateResponse,
   MessageListQuery,
@@ -71,14 +72,6 @@ interface CommandRegisterInput {
   description: string;
   handlerAgent: string;
   parameters?: CreateCommandRequest['parameters'];
-}
-
-interface WorkspaceDmMessage {
-  id: string;
-  agentId: string;
-  agentName: string;
-  text: string;
-  createdAt: string;
 }
 
 type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
@@ -396,7 +389,7 @@ export class RelayCast {
   allDmConversations = (): Promise<WorkspaceDmConversation[]> =>
     this.client.get('/v1/dm/conversations/all');
 
-  dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<WorkspaceDmMessage[]> => {
+  dmMessages = async (conversationId: string, opts?: { limit?: number; before?: string; after?: string }): Promise<DmMessage[]> => {
     const query: Record<string, string> = {};
     if (opts?.limit !== undefined) query.limit = String(opts.limit);
     if (opts?.before) query.before = opts.before;

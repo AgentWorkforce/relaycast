@@ -1,26 +1,25 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { cn, formatDmLabel } from '../lib/utils';
+import { formatDmLabel } from '../lib/utils';
 import { useWorkspaceDMs } from '../hooks/use-workspace-dms';
 import type { Agent as ApiAgent, MessageCreatedEvent } from '@relaycast/sdk';
 
 export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
-  const { channels } = useChannels();
+  const { channels } = useChannels({ includeArchived: true });
   const { conversations } = useWorkspaceDMs();
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [unreadChannelCounts, setUnreadChannelCounts] = useState<Record<string, number>>({});
-  const [activityOpen, setActivityOpen] = useState(true);
   const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
   const [streamMessage, setStreamMessage] = useState<string>('');
   const [streamPending, setStreamPending] = useState(false);
@@ -28,7 +27,7 @@ export function DashboardLayout() {
   // Default to first channel if none selected
   useEffect(() => {
     if (!selectedChannel && channels.length > 0) {
-      const firstChannel = channels[0].name;
+      const firstChannel = (channels.find((ch) => !ch.isArchived) ?? channels[0]).name;
       setSelectedChannel(firstChannel);
       setUnreadChannelCounts((prev) =>
         prev[firstChannel] && prev[firstChannel] > 0
@@ -165,6 +164,10 @@ export function DashboardLayout() {
     selectedChannel && !selectedChannel.startsWith('dm:')
       ? (channels.find((ch) => ch.name === selectedChannel)?.memberCount ?? 0)
       : null;
+  const selectedChannelArchived =
+    selectedChannel && !selectedChannel.startsWith('dm:')
+      ? (channels.find((ch) => ch.name === selectedChannel)?.isArchived ?? false)
+      : false;
   const selectedDmLabel =
     selectedChannel?.startsWith('dm:')
       ? (() => {
@@ -191,11 +194,9 @@ export function DashboardLayout() {
         onOpenAgent={handleSelectAgent}
       />
     );
-  } else if (activityOpen) {
+  } else {
     rightPanel = <ActivityLog />;
   }
-
-  const showActivityToggle = !selectedAgentData && !threadMessageId;
 
   return (
     <div className="h-screen flex bg-[var(--color-bg-deep)]">
@@ -235,27 +236,11 @@ export function DashboardLayout() {
           </div>
         )}
 
-        {showActivityToggle && (
-          <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
-            <button
-              onClick={() => setActivityOpen(!activityOpen)}
-              className={cn(
-                'p-1.5 rounded-md cursor-pointer transition-colors',
-                activityOpen
-                  ? 'text-[var(--color-accent-cyan)] bg-[var(--color-bg-active)]'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-              )}
-              title="Toggle activity panel"
-            >
-              <Activity className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-
         <div className="flex flex-1 min-h-0">
           <ChatFeed
             selectedChannel={selectedChannel}
             selectedChannelMemberCount={selectedChannelMemberCount}
+            selectedChannelArchived={selectedChannelArchived}
             dmLabel={selectedDmLabel}
             onOpenThread={(id) => setThreadMessageId(id)}
             mentionNames={mentionNames}

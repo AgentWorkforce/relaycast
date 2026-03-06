@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
-import type { MessageWithMeta } from '@relaycast/sdk';
+import type { DmMessage, MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
   selectedChannel: string | null;
   selectedChannelMemberCount?: number | null;
+  selectedChannelArchived?: boolean;
   dmLabel?: string;
   onOpenThread?: (messageId: string) => void;
   mentionNames?: string[];
@@ -18,6 +19,7 @@ interface ChatFeedProps {
 export function ChatFeed({
   selectedChannel,
   selectedChannelMemberCount,
+  selectedChannelArchived = false,
   dmLabel,
   onOpenThread,
   mentionNames,
@@ -45,6 +47,11 @@ export function ChatFeed({
           <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
         )}
         <h2 className="font-semibold text-sm text-[var(--color-text-primary)] flex-1">{title}</h2>
+        {showMemberBadge && selectedChannelArchived && (
+          <span className="inline-flex items-center rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-muted)] shrink-0">
+            Archived
+          </span>
+        )}
         {showMemberBadge && (
           <span className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-border-default)] px-2.5 py-1 text-sm text-[var(--color-text-primary)] bg-[var(--color-bg-secondary)] shrink-0">
             <UserRound className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
@@ -102,7 +109,7 @@ function ChannelMessages({
   if (loading && sorted.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mb-2" />
+        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
         <p className="text-sm">Loading messages...</p>
       </div>
     );
@@ -158,15 +165,19 @@ function DmMessages({
     setLoading(true);
     fetch(`/api/dms/${encodeURIComponent(conversationId)}/messages`)
       .then((res) => res.json())
-      .then((data) => {
-        const msgs = (data.messages ?? []).map((m: Record<string, unknown>) => ({
-          id: m.id as string,
-          agentName: (m.agentName as string) || 'unknown',
-          agentId: (m.agentId as string) || '',
-          text: (m.text as string) || '',
+      .then((data: { messages?: DmMessage[] }) => {
+        const msgs = (data.messages ?? []).map((m) => ({
+          id: m.id,
+          channelId: '',
+          agentName: m.agentName,
+          agentId: m.agentId,
+          text: m.text,
           blocks: null,
+          metadata: {},
+          hasAttachments: false,
+          threadId: null,
           attachments: [],
-          createdAt: (m.createdAt as string) || new Date().toISOString(),
+          createdAt: m.createdAt,
           replyCount: 0,
           reactions: [],
           readByCount: 0,
@@ -186,7 +197,7 @@ function DmMessages({
   if (loading && sorted.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mb-2" />
+        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
         <p className="text-sm">Loading messages...</p>
       </div>
     );

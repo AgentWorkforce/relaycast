@@ -145,6 +145,7 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
       {
         id: 'msg_001',
         agent_id: 'agent_456',
+        agent_name: 'TestBot',
         text: 'Hello',
         created_at: '2025-01-01T00:00:00.000Z',
       },
@@ -158,6 +159,7 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data).toHaveLength(1);
+    expect(body.data[0].agent_name).toBe('TestBot');
   });
 
   it('returns 403 for non-participant', async () => {

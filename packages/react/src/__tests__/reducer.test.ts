@@ -186,6 +186,51 @@ describe('handleServerEvent', () => {
 
       const state = store.getState();
       expect(state.channelMessages['general'].messages[0].replyCount).toBe(1);
+      expect(state.channelMessages['general'].messages).toHaveLength(1);
+    });
+
+    it('increments parent replyCount in thread parent cache', () => {
+      const store = createStore();
+      store.updateThread('msg1', () => ({
+        parent: makeMessage({ id: 'msg1', replyCount: 0 }),
+        replies: [],
+        loading: false,
+        error: null,
+      }));
+
+      handleServerEvent(store, {
+        type: 'thread.reply',
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text' },
+      });
+
+      const state = store.getState();
+      expect(state.threads['msg1'].parent?.replyCount).toBe(1);
+    });
+
+    it('does not double-count duplicate reply events', () => {
+      const store = createStore();
+      store.updateChannelMessages('general', () => ({
+        messages: [makeMessage({ id: 'msg1', replyCount: 0 })],
+        loading: false,
+        error: null,
+      }));
+
+      handleServerEvent(store, {
+        type: 'thread.reply',
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'reply text' },
+      });
+      handleServerEvent(store, {
+        type: 'thread.reply',
+        parentId: 'msg1',
+        message: { id: 'reply1', agentName: 'Bob', text: 'duplicate payload' },
+      });
+
+      const state = store.getState();
+      expect(state.threads['msg1'].replies).toHaveLength(1);
+      expect(state.channelMessages['general'].messages[0].replyCount).toBe(1);
+      expect(state.channelMessages['general'].messages).toHaveLength(1);
     });
   });
 

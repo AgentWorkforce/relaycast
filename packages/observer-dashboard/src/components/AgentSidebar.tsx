@@ -52,8 +52,6 @@ export function AgentSidebar({
   const router = useRouter();
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  const regularChannels = channels.filter((ch) => !ch.isArchived);
-
   useEffect(() => {
     setTheme(getTheme());
   }, []);
@@ -77,7 +75,16 @@ export function AgentSidebar({
     <div className="w-[260px] shrink-0 flex flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]">
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
-        <h1 className="text-base text-[var(--color-text-primary)]"><span className="font-bold">Relaycast</span> <em className="font-normal">Observer</em></h1>
+        <img
+          src={theme === 'dark' ? '/brand/agent-relay-logo-white.svg' : '/brand/agent-relay-logo-black.svg'}
+          alt="Agent Relay"
+          className="h-5 w-auto shrink-0"
+        />
+        <h1 className="text-sm font-black tracking-wide uppercase [font-family:Outfit,sans-serif] truncate">
+          <span className="bg-gradient-to-r from-[var(--color-success)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent">
+            Observer
+          </span>
+        </h1>
         <span
           className={cn('h-2 w-2 rounded-full shrink-0', {
             'bg-green-500': wsStatus === 'connected',
@@ -95,7 +102,7 @@ export function AgentSidebar({
           <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
             Channels
           </h2>
-          {regularChannels.map((ch) => (
+          {channels.map((ch) => (
             <button
               key={ch.id}
               onClick={() => {
@@ -106,7 +113,8 @@ export function AgentSidebar({
                 'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
                 selectedChannel === ch.name
                   ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
+                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]',
+                ch.isArchived && 'opacity-70'
               )}
             >
               <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
@@ -118,7 +126,7 @@ export function AgentSidebar({
               )}
             </button>
           ))}
-          {regularChannels.length === 0 && (
+          {channels.length === 0 && (
             <p className="px-2 text-xs text-[var(--color-text-dim)]">No channels</p>
           )}
         </div>

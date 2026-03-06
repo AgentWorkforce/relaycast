@@ -242,13 +242,26 @@ describe('AgentClient', () => {
     });
 
     it('messages() gets conversation messages', async () => {
-      mockFetch.mockImplementation(() => mockResponse([{ id: 'm_1' }]));
+      mockFetch.mockImplementation(() => mockResponse([{
+        id: 'm_1',
+        agent_id: 'a_1',
+        agent_name: 'Alice',
+        text: 'hello',
+        created_at: '2025-01-01T00:00:00.000Z',
+      }]));
 
-      await me.dms.messages('c_1');
+      const res = await me.dms.messages('c_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('GET');
+      expect(res[0]).toEqual({
+        id: 'm_1',
+        agentId: 'a_1',
+        agentName: 'Alice',
+        text: 'hello',
+        createdAt: '2025-01-01T00:00:00.000Z',
+      });
     });
 
     it('messages() passes query params', async () => {

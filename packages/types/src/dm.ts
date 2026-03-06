@@ -87,6 +87,15 @@ export const GroupDmMessageResponseSchema = z.object({
 });
 export type GroupDmMessageResponse = z.infer<typeof GroupDmMessageResponseSchema>;
 
+export const DmMessageSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type DmMessage = z.infer<typeof DmMessageSchema>;
+
 export const GroupDmParticipantResponseSchema = z.object({
   conversation_id: z.string(),
   agent: z.string(),

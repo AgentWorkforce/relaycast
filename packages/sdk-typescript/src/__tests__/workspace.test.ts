@@ -50,6 +50,31 @@ describe('Relay workspace methods', () => {
     expect(init.method).toBe('GET');
   });
 
+  it('dmMessages() camelizes DM message fields', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+    mockFetch.mockImplementation(() => mockResponse([{
+      id: 'msg_1',
+      agent_id: 'a_1',
+      agent_name: 'Alice',
+      text: 'hello',
+      created_at: '2025-01-01T00:00:00.000Z',
+    }]));
+    const result = await relay.dmMessages('c_1', { limit: 10, before: 'msg_9' });
+
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations/c_1/messages?limit=10&before=msg_9');
+    expect(init.method).toBe('GET');
+    expect(result[0]).toEqual({
+      id: 'msg_1',
+      agentId: 'a_1',
+      agentName: 'Alice',
+      text: 'hello',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    });
+  });
+
   it('agents.rotateToken() calls POST /v1/agents/:name/rotate-token', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });
