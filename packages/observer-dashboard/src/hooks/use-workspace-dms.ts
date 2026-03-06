@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useEvent } from '@relaycast/react';
 import type { DmConversationSummary, DmReceivedEvent, GroupDmReceivedEvent } from '@relaycast/sdk';
+import { withBasePath } from '../lib/basePath';
 
 /**
  * Workspace DM list for observer dashboard.
@@ -17,7 +18,7 @@ export function useWorkspaceDMs() {
 
     async function fetchDMs() {
       try {
-        const res = await fetch('/api/dms');
+        const res = await fetch(withBasePath('/api/dms'));
         if (!res.ok) return;
         const data = await res.json();
         if (!mounted) return;

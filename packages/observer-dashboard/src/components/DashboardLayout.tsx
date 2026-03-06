@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket } from '@relaycast/react';
+import { withBasePath } from '../lib/basePath';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ActivityLog } from './ActivityLog';
@@ -85,7 +86,7 @@ export function DashboardLayout() {
 
   const refreshStreamStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/workspace/stream', { cache: 'no-store' });
+      const res = await fetch(withBasePath('/api/workspace/stream'), { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       if (!res.ok || data?.success !== true || typeof data.enabled !== 'boolean') {
         throw new Error('Unable to verify workspace stream status');
@@ -110,7 +111,7 @@ export function DashboardLayout() {
     setStreamPending(true);
     setStreamMessage('');
     try {
-      const res = await fetch('/api/workspace/stream', {
+      const res = await fetch(withBasePath('/api/workspace/stream'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: true }),
