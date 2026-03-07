@@ -18,6 +18,16 @@ vi.mock('../../lib/serverTelemetry.js', () => ({
   emitServerEvent: vi.fn(),
 }));
 
+vi.mock('../fanout.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../fanout.js')>();
+  return {
+    ...original,
+    fanoutToChannel: vi.fn().mockResolvedValue(undefined),
+    fanoutToAgents: vi.fn().mockResolvedValue(undefined),
+    getDmParticipantAgentIds: vi.fn().mockResolvedValue(null),
+  };
+});
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
@@ -25,6 +35,7 @@ import { reactionRoutes } from '../../routes/reaction.js';
 import { getDb } from '../../db/index.js';
 import * as reactionEngine from '../../engine/reaction.js';
 import { emitServerEvent } from '../../lib/serverTelemetry.js';
+import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from '../fanout.js';
 import {
   createMockBindings, mockDbForAgentAuth, mockDbForWorkspaceAuth,
   agentAuthHeaders, wsAuthHeaders,
@@ -135,6 +146,62 @@ describe('POST /v1/messages/:id/reactions', () => {
     expect(res.status).toBe(404);
     const body = await res.json() as any;
     expect(body.error.code).toBe('message_not_found');
+  });
+
+  it('uses fanoutToAgents when reaction is on a DM message', async () => {
+    vi.mocked(getDmParticipantAgentIds).mockResolvedValue(['agent_a', 'agent_b']);
+    vi.mocked(reactionEngine.addReaction).mockResolvedValue({
+      id: 'rxn_dm',
+      message_id: 'msg_dm',
+      agent_name: 'TestBot',
+      emoji: 'heart',
+      created_at: '2025-01-01T00:00:00.000Z',
+      channel_id: 'dmch_100',
+      channel_name: 'dm',
+    });
+
+    const res = await app.request('/v1/messages/msg_dm/reactions', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ emoji: 'heart' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(fanoutToAgents).toHaveBeenCalledWith(
+      expect.anything(),
+      ['agent_a', 'agent_b'],
+      'reaction.added',
+      expect.objectContaining({ emoji: 'heart' }),
+    );
+    expect(fanoutToChannel).not.toHaveBeenCalled();
+  });
+
+  it('uses fanoutToChannel when reaction is on a regular channel message', async () => {
+    vi.mocked(getDmParticipantAgentIds).mockResolvedValue(null);
+    vi.mocked(reactionEngine.addReaction).mockResolvedValue({
+      id: 'rxn_ch',
+      message_id: 'msg_ch',
+      agent_name: 'TestBot',
+      emoji: 'fire',
+      created_at: '2025-01-01T00:00:00.000Z',
+      channel_id: 'ch_456',
+      channel_name: 'general',
+    });
+
+    const res = await app.request('/v1/messages/msg_ch/reactions', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ emoji: 'fire' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(fanoutToChannel).toHaveBeenCalledWith(
+      expect.anything(),
+      'ch_456',
+      'reaction.added',
+      expect.objectContaining({ emoji: 'fire' }),
+    );
+    expect(fanoutToAgents).not.toHaveBeenCalled();
   });
 
   it('returns 401 without auth', async () => {

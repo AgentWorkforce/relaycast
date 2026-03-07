@@ -459,7 +459,7 @@ function buildDefaultComponents(
     table({ children }) {
       return <table style={TABLE_STYLE}>{children}</table>;
     },
-    th({ children, style, node: _node, ...props }) {
+    th({ children, style, node: _node, ...props }: any) {
       return (
         <th
           {...props}
@@ -469,7 +469,7 @@ function buildDefaultComponents(
         </th>
       );
     },
-    td({ children, style, node: _node, ...props }) {
+    td({ children, style, node: _node, ...props }: any) {
       return (
         <td
           {...props}
