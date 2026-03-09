@@ -148,6 +148,67 @@ describe('MultiWorkspaceSessionManager', () => {
     });
   });
 
+  it('re-attaches websocket handlers after disconnectAll', async () => {
+    const manager = new MultiWorkspaceSessionManager({
+      memberships: [
+        {
+          workspaceId: 'ws_alpha',
+          workspaceAlias: 'alpha',
+          agentId: 'agent_alpha',
+          agentToken: 'at_alpha',
+          baseUrl: 'http://localhost:8080',
+          channels: ['general'],
+        },
+      ],
+    });
+
+    const handler = vi.fn();
+    manager.onAnyEvent(handler);
+    manager.connectAll();
+
+    const firstSocket = MockWebSocket.instances[0]!;
+    firstSocket.simulateOpen();
+
+    await manager.disconnectAll();
+
+    manager.connectAll();
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    const secondSocket = MockWebSocket.instances[1]!;
+    secondSocket.simulateOpen();
+
+    expect(secondSocket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'subscribe',
+      channels: ['general'],
+    }));
+
+    handler.mockClear();
+
+    secondSocket.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'msg_reconnected', agent_name: 'Relay', text: 'back again', attachments: [] },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({
+      workspaceId: 'ws_alpha',
+      workspaceAlias: 'alpha',
+      agentId: 'agent_alpha',
+      event: {
+        type: 'message.created',
+        channel: 'general',
+        message: {
+          id: 'msg_reconnected',
+          agentName: 'Relay',
+          text: 'back again',
+          attachments: [],
+        },
+      },
+    });
+  });
+
   it('resolves outbound sends by workspaceAlias', async () => {
     const manager = new MultiWorkspaceSessionManager({
       memberships: [

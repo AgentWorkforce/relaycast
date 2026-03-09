@@ -107,6 +107,8 @@ export class MultiWorkspaceSessionManager {
     await Promise.all(this.workspaceOrder.map(async (workspaceId) => {
       const runtime = this.runtimes.get(workspaceId)!;
       runtime.connected = false;
+      runtime.detachHandlers?.();
+      runtime.detachHandlers = null;
       await runtime.agent.disconnect();
     }));
   }
