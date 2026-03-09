@@ -3,6 +3,8 @@ import type { AppEnv } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
+import { dmConversations, dmParticipants } from '../db/schema.js';
+import { and, eq, isNull } from 'drizzle-orm';
 
 type HonoContext = Context<AppEnv>;
 
@@ -185,6 +187,37 @@ export async function fanoutToWorkspace(
       ...toErrorDetails(err),
     });
     throw err;
+  }
+}
+
+/**
+ * Check if a channel belongs to a DM conversation and return active participant
+ * agent IDs. Returns `null` for regular (non-DM) channels or on any error so
+ * callers can fall back to the standard `fanoutToChannel` path.
+ */
+export async function getDmParticipantAgentIds(
+  c: HonoContext,
+  channelId: string,
+): Promise<string[] | null> {
+  try {
+    const db = c.get('db');
+    const [conv] = await db
+      .select({ id: dmConversations.id })
+      .from(dmConversations)
+      .where(eq(dmConversations.channelId, channelId));
+    if (!conv) return null;
+    const rows = await db
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, conv.id), isNull(dmParticipants.leftAt)));
+    return rows.map((r) => r.agentId);
+  } catch (err) {
+    const logger = getRequestLogger(c, 'fanout.dm_lookup');
+    logger.warn(`getDmParticipantAgentIds failed for channel ${channelId}`, {
+      channel_id: channelId,
+      ...toErrorDetails(err),
+    });
+    return null;
   }
 }
 

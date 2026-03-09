@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
-import { fanoutToChannel } from './fanout.js';
+import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
@@ -78,7 +78,19 @@ threadRoutes.post(
       if (!idempotent.replayed) {
         const eventData = { ...idempotent.data, from_name: agent?.name };
         if (idempotent.data.channel_id) {
-          runInBackground(c, fanoutToChannel(c, idempotent.data.channel_id, 'thread.reply', eventData), 'fanout thread.reply');
+          const channelId = idempotent.data.channel_id;
+          runInBackground(
+            c,
+            (async () => {
+              const dmAgentIds = await getDmParticipantAgentIds(c, channelId);
+              if (dmAgentIds) {
+                await fanoutToAgents(c, dmAgentIds, 'thread.reply', eventData);
+              } else {
+                await fanoutToChannel(c, channelId, 'thread.reply', eventData);
+              }
+            })(),
+            'fanout thread.reply',
+          );
         }
 
         runInBackground(

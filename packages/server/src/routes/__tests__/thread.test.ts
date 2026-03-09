@@ -13,12 +13,23 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../fanout.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../fanout.js')>();
+  return {
+    ...original,
+    fanoutToChannel: vi.fn().mockResolvedValue(undefined),
+    fanoutToAgents: vi.fn().mockResolvedValue(undefined),
+    getDmParticipantAgentIds: vi.fn().mockResolvedValue(null),
+  };
+});
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { threadRoutes } from '../../routes/thread.js';
 import { getDb } from '../../db/index.js';
 import * as threadEngine from '../../engine/thread.js';
+import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from '../fanout.js';
 import {
   createMockBindings, mockDbForAgentAuth, agentAuthHeaders, FAKE_WORKSPACE,
 } from '../../__tests__/test-helpers.js';
@@ -80,6 +91,91 @@ describe('POST /v1/messages/:id/replies', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as any;
     expect(body.error.code).toBe('invalid_request');
+  });
+
+  it('uses fanoutToAgents for DM channel thread replies', async () => {
+    vi.mocked(getDmParticipantAgentIds).mockResolvedValue(['agent_a', 'agent_b']);
+    vi.mocked(threadEngine.postReply).mockResolvedValue({
+      id: 'reply_002',
+      channel_id: 'dmch_100',
+      agent_id: 'agent_456',
+      thread_id: 'msg_002',
+      text: 'DM reply',
+      has_attachments: false,
+      created_at: '2025-01-01T00:00:00.000Z',
+    });
+
+    const res = await app.request('/v1/messages/msg_002/replies', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ text: 'DM reply' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    await vi.waitFor(() => {
+      expect(fanoutToAgents).toHaveBeenCalledWith(
+        expect.anything(),
+        ['agent_a', 'agent_b'],
+        'thread.reply',
+        expect.objectContaining({ thread_id: 'msg_002' }),
+      );
+    });
+    expect(fanoutToChannel).not.toHaveBeenCalled();
+  });
+
+  it('uses fanoutToChannel for regular channel thread replies', async () => {
+    vi.mocked(getDmParticipantAgentIds).mockResolvedValue(null);
+    vi.mocked(threadEngine.postReply).mockResolvedValue({
+      id: 'reply_003',
+      channel_id: 'ch_789',
+      agent_id: 'agent_456',
+      thread_id: 'msg_003',
+      text: 'Channel reply',
+      has_attachments: false,
+      created_at: '2025-01-01T00:00:00.000Z',
+    });
+
+    const res = await app.request('/v1/messages/msg_003/replies', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ text: 'Channel reply' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    await vi.waitFor(() => {
+      expect(fanoutToChannel).toHaveBeenCalledWith(
+        expect.anything(),
+        'ch_789',
+        'thread.reply',
+        expect.objectContaining({ thread_id: 'msg_003' }),
+      );
+    });
+    expect(fanoutToAgents).not.toHaveBeenCalled();
+  });
+
+  it('falls back to fanoutToChannel when getDmParticipantAgentIds errors', async () => {
+    vi.mocked(getDmParticipantAgentIds).mockResolvedValue(null); // error path returns null
+    vi.mocked(threadEngine.postReply).mockResolvedValue({
+      id: 'reply_004',
+      channel_id: 'dmch_broken',
+      agent_id: 'agent_456',
+      thread_id: 'msg_004',
+      text: 'Fallback reply',
+      has_attachments: false,
+      created_at: '2025-01-01T00:00:00.000Z',
+    });
+
+    const res = await app.request('/v1/messages/msg_004/replies', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ text: 'Fallback reply' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    await vi.waitFor(() => {
+      expect(fanoutToChannel).toHaveBeenCalled();
+    });
+    expect(fanoutToAgents).not.toHaveBeenCalled();
   });
 
   it('returns 404 for unknown parent message', async () => {

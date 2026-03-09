@@ -6,7 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
-import { fanoutToChannel } from './fanout.js';
+import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
@@ -54,7 +54,18 @@ reactionRoutes.post(
 
       const eventData = { ...reactionData, channel_name, agent_name: agent!.name };
       if (channel_id) {
-        runInBackground(c, fanoutToChannel(c, channel_id, 'reaction.added', eventData), 'fanout reaction.added');
+        runInBackground(
+          c,
+          (async () => {
+            const dmAgentIds = await getDmParticipantAgentIds(c, channel_id);
+            if (dmAgentIds) {
+              await fanoutToAgents(c, dmAgentIds, 'reaction.added', eventData);
+            } else {
+              await fanoutToChannel(c, channel_id, 'reaction.added', eventData);
+            }
+          })(),
+          'fanout reaction.added',
+        );
       }
       runInBackground(
         c,
@@ -119,9 +130,17 @@ reactionRoutes.delete(
           .innerJoin(channels, eq(messages.channelId, channels.id))
           .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
         if (row?.channelId) {
+          const enriched = { ...eventData, channel_name: row.channelName };
           runInBackground(
             c,
-            fanoutToChannel(c, row.channelId, 'reaction.removed', { ...eventData, channel_name: row.channelName }),
+            (async () => {
+              const dmAgentIds = await getDmParticipantAgentIds(c, row.channelId);
+              if (dmAgentIds) {
+                await fanoutToAgents(c, dmAgentIds, 'reaction.removed', enriched);
+              } else {
+                await fanoutToChannel(c, row.channelId, 'reaction.removed', enriched);
+              }
+            })(),
             'fanout reaction.removed',
           );
         }
