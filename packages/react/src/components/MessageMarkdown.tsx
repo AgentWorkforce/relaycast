@@ -1,6 +1,6 @@
-import { useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import React, { useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { Highlight, Prism, themes, type Language } from 'prism-react-renderer';
-import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components, type ExtraProps } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
@@ -459,7 +459,7 @@ function buildDefaultComponents(
     table({ children }) {
       return <table style={TABLE_STYLE}>{children}</table>;
     },
-    th({ children, style, node: _node, ...props }: any) {
+    th({ children, style, node: _node, ...props }: React.ComponentPropsWithoutRef<'th'> & ExtraProps) {
       return (
         <th
           {...props}
@@ -469,7 +469,7 @@ function buildDefaultComponents(
         </th>
       );
     },
-    td({ children, style, node: _node, ...props }: any) {
+    td({ children, style, node: _node, ...props }: React.ComponentPropsWithoutRef<'td'> & ExtraProps) {
       return (
         <td
           {...props}
