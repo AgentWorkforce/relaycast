@@ -54,12 +54,18 @@ reactionRoutes.post(
 
       const eventData = { ...reactionData, channel_name, agent_name: agent!.name };
       if (channel_id) {
-        const dmAgentIds = await getDmParticipantAgentIds(c, channel_id);
-        if (dmAgentIds) {
-          runInBackground(c, fanoutToAgents(c, dmAgentIds, 'reaction.added', eventData), 'fanout dm reaction.added');
-        } else {
-          runInBackground(c, fanoutToChannel(c, channel_id, 'reaction.added', eventData), 'fanout reaction.added');
-        }
+        runInBackground(
+          c,
+          (async () => {
+            const dmAgentIds = await getDmParticipantAgentIds(c, channel_id);
+            if (dmAgentIds) {
+              await fanoutToAgents(c, dmAgentIds, 'reaction.added', eventData);
+            } else {
+              await fanoutToChannel(c, channel_id, 'reaction.added', eventData);
+            }
+          })(),
+          'fanout reaction.added',
+        );
       }
       runInBackground(
         c,
@@ -125,12 +131,18 @@ reactionRoutes.delete(
           .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
         if (row?.channelId) {
           const enriched = { ...eventData, channel_name: row.channelName };
-          const dmAgentIds = await getDmParticipantAgentIds(c, row.channelId);
-          if (dmAgentIds) {
-            runInBackground(c, fanoutToAgents(c, dmAgentIds, 'reaction.removed', enriched), 'fanout dm reaction.removed');
-          } else {
-            runInBackground(c, fanoutToChannel(c, row.channelId, 'reaction.removed', enriched), 'fanout reaction.removed');
-          }
+          runInBackground(
+            c,
+            (async () => {
+              const dmAgentIds = await getDmParticipantAgentIds(c, row.channelId);
+              if (dmAgentIds) {
+                await fanoutToAgents(c, dmAgentIds, 'reaction.removed', enriched);
+              } else {
+                await fanoutToChannel(c, row.channelId, 'reaction.removed', enriched);
+              }
+            })(),
+            'fanout reaction.removed',
+          );
         }
       } catch {
         // Ignore fanout failures

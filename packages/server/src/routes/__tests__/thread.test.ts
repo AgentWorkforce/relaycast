@@ -112,12 +112,14 @@ describe('POST /v1/messages/:id/replies', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
-    expect(fanoutToAgents).toHaveBeenCalledWith(
-      expect.anything(),
-      ['agent_a', 'agent_b'],
-      'thread.reply',
-      expect.objectContaining({ thread_id: 'msg_002' }),
-    );
+    await vi.waitFor(() => {
+      expect(fanoutToAgents).toHaveBeenCalledWith(
+        expect.anything(),
+        ['agent_a', 'agent_b'],
+        'thread.reply',
+        expect.objectContaining({ thread_id: 'msg_002' }),
+      );
+    });
     expect(fanoutToChannel).not.toHaveBeenCalled();
   });
 
@@ -140,12 +142,14 @@ describe('POST /v1/messages/:id/replies', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
-    expect(fanoutToChannel).toHaveBeenCalledWith(
-      expect.anything(),
-      'ch_789',
-      'thread.reply',
-      expect.objectContaining({ thread_id: 'msg_003' }),
-    );
+    await vi.waitFor(() => {
+      expect(fanoutToChannel).toHaveBeenCalledWith(
+        expect.anything(),
+        'ch_789',
+        'thread.reply',
+        expect.objectContaining({ thread_id: 'msg_003' }),
+      );
+    });
     expect(fanoutToAgents).not.toHaveBeenCalled();
   });
 
@@ -168,7 +172,9 @@ describe('POST /v1/messages/:id/replies', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
-    expect(fanoutToChannel).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(fanoutToChannel).toHaveBeenCalled();
+    });
     expect(fanoutToAgents).not.toHaveBeenCalled();
   });
 

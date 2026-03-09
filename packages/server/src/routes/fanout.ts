@@ -211,7 +211,12 @@ export async function getDmParticipantAgentIds(
       .from(dmParticipants)
       .where(and(eq(dmParticipants.conversationId, conv.id), isNull(dmParticipants.leftAt)));
     return rows.map((r) => r.agentId);
-  } catch {
+  } catch (err) {
+    const logger = getRequestLogger(c, 'fanout.dm_lookup');
+    logger.warn(`getDmParticipantAgentIds failed for channel ${channelId}`, {
+      channel_id: channelId,
+      ...toErrorDetails(err),
+    });
     return null;
   }
 }

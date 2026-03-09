@@ -167,12 +167,14 @@ describe('POST /v1/messages/:id/reactions', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
-    expect(fanoutToAgents).toHaveBeenCalledWith(
-      expect.anything(),
-      ['agent_a', 'agent_b'],
-      'reaction.added',
-      expect.objectContaining({ emoji: 'heart' }),
-    );
+    await vi.waitFor(() => {
+      expect(fanoutToAgents).toHaveBeenCalledWith(
+        expect.anything(),
+        ['agent_a', 'agent_b'],
+        'reaction.added',
+        expect.objectContaining({ emoji: 'heart' }),
+      );
+    });
     expect(fanoutToChannel).not.toHaveBeenCalled();
   });
 
@@ -195,12 +197,14 @@ describe('POST /v1/messages/:id/reactions', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
-    expect(fanoutToChannel).toHaveBeenCalledWith(
-      expect.anything(),
-      'ch_456',
-      'reaction.added',
-      expect.objectContaining({ emoji: 'fire' }),
-    );
+    await vi.waitFor(() => {
+      expect(fanoutToChannel).toHaveBeenCalledWith(
+        expect.anything(),
+        'ch_456',
+        'reaction.added',
+        expect.objectContaining({ emoji: 'fire' }),
+      );
+    });
     expect(fanoutToAgents).not.toHaveBeenCalled();
   });
 

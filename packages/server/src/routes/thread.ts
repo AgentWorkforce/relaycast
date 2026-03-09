@@ -78,12 +78,19 @@ threadRoutes.post(
       if (!idempotent.replayed) {
         const eventData = { ...idempotent.data, from_name: agent?.name };
         if (idempotent.data.channel_id) {
-          const dmAgentIds = await getDmParticipantAgentIds(c, idempotent.data.channel_id);
-          if (dmAgentIds) {
-            runInBackground(c, fanoutToAgents(c, dmAgentIds, 'thread.reply', eventData), 'fanout dm thread.reply');
-          } else {
-            runInBackground(c, fanoutToChannel(c, idempotent.data.channel_id, 'thread.reply', eventData), 'fanout thread.reply');
-          }
+          const channelId = idempotent.data.channel_id;
+          runInBackground(
+            c,
+            (async () => {
+              const dmAgentIds = await getDmParticipantAgentIds(c, channelId);
+              if (dmAgentIds) {
+                await fanoutToAgents(c, dmAgentIds, 'thread.reply', eventData);
+              } else {
+                await fanoutToChannel(c, channelId, 'thread.reply', eventData);
+              }
+            })(),
+            'fanout thread.reply',
+          );
         }
 
         runInBackground(
