@@ -9,49 +9,17 @@ This repo provides the Relaycast server plus the TypeScript and Rust SDKs that t
 - Merge inbound events into one workspace-scoped stream, with workspace context attached based on **which websocket delivered the event**.
 - Make outbound send APIs workspace-aware via `workspaceId` or `workspaceAlias`.
 - Do **not** change the production Relaycast schema for the Phase 1 MVP.
-- Preserve current wire behavior where `relaycast/packages/server/src/engine/wsTransform.ts` omits `workspace_id` for known websocket events; document and test that the client multiplexer must restore workspace context client-side.
+- Preserve current wire behavior where `packages/server/src/engine/wsTransform.ts` omits `workspace_id` for known websocket events; document and test that the client multiplexer must restore workspace context client-side.
 
 ## Current single-workspace flow
 
-### Top-level system view
-```text
-Agent Process -> Broker -> 1 WebSocket -> 1 Relaycast Workspace
-```
+The current single-workspace behavior is already concentrated in a few source files:
 
-### Through this repo today
-```text
-Inbound
--------
-Relaycast Workspace
-  -> Relaycast Server
-  -> wsTransform strips/normalizes event payload
-  -> 1 SDK client instance (TS or Rust)
-  -> Broker runtime receives event with one implicit workspace
-  -> Agent process / local handlers
+- `packages/sdk-typescript/src/agent.ts` and `packages/sdk-rust/src/agent.rs` each manage one workspace membership at a time: one `AgentClient`, one websocket connection, and one implicit workspace for subscriptions and inbound events.
+- `packages/server/src/worker.ts` owns the current websocket/session routing on the server side.
+- `packages/server/src/engine/wsTransform.ts` normalizes known websocket payloads and omits `workspace_id`, so any multi-workspace client has to restore workspace context from the connection that delivered the event.
 
-Outbound
---------
-Agent process command
-  -> Broker runtime send call
-  -> 1 SDK client instance
-  -> Relaycast HTTP/WebSocket API
-  -> 1 Relaycast Workspace
-```
-
-### Current repo-internal shape
-```text
-TS SDK / Rust SDK
-  Single workspace config
-    -> 1 AgentClient
-    -> 1 WsClient
-    -> callbacks/events assume one implicit workspace
-
-Server
-  worker.ts
-    -> websocket session keyed by workspaceId:agentId
-  wsTransform.ts
-    -> known websocket payloads omit workspace_id
-```
+Phase 1 multi-workspace support layers a client-side multiplexer on top of that existing behavior instead of changing the server schema or websocket contract.
 
 ## Proposed multi-workspace flow
 
@@ -103,25 +71,25 @@ Server
 ```
 
 ## Exact files to modify
-- `relaycast/packages/sdk-typescript/src/types.ts`
+- `packages/sdk-typescript/src/types.ts`
   - Add `WorkspaceRef`, `WorkspaceMembershipConfig`, `WorkspaceScopedEvent`, `WorkspaceSendTarget`, and `MultiWorkspaceStatus`.
-- `relaycast/packages/sdk-typescript/src/multi-workspace.ts`
+- `packages/sdk-typescript/src/multi-workspace.ts`
   - New manager that owns one `AgentClient` / `WsClient` per membership and emits merged workspace-scoped events.
-- `relaycast/packages/sdk-typescript/src/index.ts`
+- `packages/sdk-typescript/src/index.ts`
   - Export the new manager and related types.
-- `relaycast/packages/sdk-typescript/src/agent.ts`
+- `packages/sdk-typescript/src/agent.ts`
   - Add helper hooks for lifecycle and wildcard event subscription so the manager reuses existing logic.
-- `relaycast/packages/sdk-rust/src/types.rs`
+- `packages/sdk-rust/src/types.rs`
   - Add Rust equivalents of workspace refs, membership config, workspace-scoped websocket events, and workspace-aware send target types.
-- `relaycast/packages/sdk-rust/src/multi_workspace.rs`
+- `packages/sdk-rust/src/multi_workspace.rs`
   - New Rust `MultiWorkspaceSessionManager` built over `AgentClient` / `WsClient`.
-- `relaycast/packages/sdk-rust/src/lib.rs`
+- `packages/sdk-rust/src/lib.rs`
   - Export the new module.
-- `relaycast/packages/sdk-rust/src/agent.rs`
+- `packages/sdk-rust/src/agent.rs`
   - Add minimal helpers required by the manager while preserving current single-workspace behavior.
-- `relaycast/packages/server/src/engine/wsTransform.ts`
+- `packages/server/src/engine/wsTransform.ts`
   - Keep current wire behavior, but document/test that clients must restore workspace context from the connection that delivered the event.
-- `relaycast/packages/server/src/routes/__tests__/fanout.test.ts` or a new websocket transform test file
+- `packages/server/src/routes/__tests__/fanout.test.ts` or a new websocket transform test file
   - Add a contract test that proves merged clients cannot rely on `workspace_id` in the event body.
 
 ## Acceptance criteria
