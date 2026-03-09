@@ -129,7 +129,8 @@ impl MultiWorkspaceSessionManager {
                 }
             }
 
-            let agent = AgentClient::new(membership.agent_token.clone(), membership.base_url.clone())?;
+            let agent =
+                AgentClient::new(membership.agent_token.clone(), membership.base_url.clone())?;
             workspace_order.push(membership.workspace_id.clone());
             membership_map.insert(
                 membership.workspace_id.clone(),
@@ -210,8 +211,7 @@ impl MultiWorkspaceSessionManager {
         for workspace_id in workspace_ids {
             let subscribed_channels = {
                 let membership = self.memberships.get_mut(&workspace_id).unwrap();
-                membership.agent.connect().await?;
-                membership.connected.store(true, Ordering::SeqCst);
+                membership.agent.ensure_ws();
                 membership
                     .subscribed_channels
                     .iter()
@@ -220,6 +220,12 @@ impl MultiWorkspaceSessionManager {
             };
 
             self.start_forwarders(&workspace_id)?;
+
+            {
+                let membership = self.memberships.get_mut(&workspace_id).unwrap();
+                membership.agent.connect().await?;
+                membership.connected.store(true, Ordering::SeqCst);
+            }
 
             if !subscribed_channels.is_empty() {
                 self.memberships
@@ -400,8 +406,7 @@ impl MultiWorkspaceSessionManager {
         }
 
         Err(RelayError::InvalidResponse(
-            "Ambiguous workspace selection. Provide workspace_id or workspace_alias."
-                .to_string(),
+            "Ambiguous workspace selection. Provide workspace_id or workspace_alias.".to_string(),
         ))
     }
 }
@@ -462,7 +467,10 @@ mod tests {
             workspace_alias: Some("beta".to_string()),
         };
 
-        assert_eq!(manager.resolve_workspace_id(Some(&workspace)).unwrap(), "ws_beta");
+        assert_eq!(
+            manager.resolve_workspace_id(Some(&workspace)).unwrap(),
+            "ws_beta"
+        );
     }
 
     #[test]
