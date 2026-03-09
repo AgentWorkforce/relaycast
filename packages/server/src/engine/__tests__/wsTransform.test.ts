@@ -35,6 +35,32 @@ describe('transformForClient', () => {
     });
   });
 
+  it('omits workspace_id from known websocket payloads, so clients must tag by connection', () => {
+    const event = makeEvent('message.created', {
+      id: 'msg_contract',
+      channel_name: 'general',
+      agent_id: 'agent_1',
+      from_name: 'Bot',
+      text: 'contract',
+      attachments: [],
+    }, 'ch_1');
+
+    const transformed = transformForClient(event);
+
+    expect(transformed).toEqual({
+      type: 'message.created',
+      channel: 'general',
+      message: {
+        id: 'msg_contract',
+        agent_id: 'agent_1',
+        agent_name: 'Bot',
+        text: 'contract',
+        attachments: [],
+      },
+    });
+    expect(transformed).not.toHaveProperty('workspace_id');
+  });
+
   it('transforms message.updated', () => {
     const event = makeEvent('message.updated', {
       id: 'msg_2',
