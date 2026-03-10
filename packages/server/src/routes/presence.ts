@@ -71,12 +71,13 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
 
     // Tell the AgentDO to stop refreshing presence on WS pings.
     // Without this, the WS ping/pong cycle re-registers the agent as online
-    // immediately after the disconnect.
+    // immediately after the disconnect. Awaited to close the race window
+    // between PresenceDO disconnect and AgentDO suppression.
     const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
     const agentStub = c.env.AGENT_DO.get(agentDoId);
-    agentStub.fetch(new Request('http://do/suppress-presence', {
+    await agentStub.fetch(new Request('http://do/suppress-presence', {
       method: 'POST',
-    })).catch(() => {});
+    }));
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
       agent_id: agent.id,
