@@ -41,6 +41,13 @@ export class AgentDO implements DurableObject {
   /** Monotonic sequence counter scoped to this agent. */
   private agentSeq: number | null = null;
 
+  /**
+   * When true, WS pings no longer refresh presence in PresenceDO.
+   * Set by REST `/v1/agents/disconnect`; cleared on the next REST heartbeat
+   * or new WS connection.
+   */
+  private presenceSuppressed = false;
+
   constructor(state: DurableObjectState, env: CloudflareBindings) {
     this.state = state;
     this.env = env;
@@ -302,6 +309,16 @@ export class AgentDO implements DurableObject {
       return this.handleDeliver(request);
     }
 
+    if (request.method === 'POST' && url.pathname === '/suppress-presence') {
+      this.presenceSuppressed = true;
+      return Response.json({ ok: true });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/unsuppress-presence') {
+      this.presenceSuppressed = false;
+      return Response.json({ ok: true });
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -324,6 +341,9 @@ export class AgentDO implements DurableObject {
     };
 
     void this.state.storage.put('meta', connectionMeta);
+
+    // New WS connection clears any presence suppression from a prior REST disconnect.
+    this.presenceSuppressed = false;
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
@@ -379,16 +399,19 @@ export class AgentDO implements DurableObject {
 
       if (parsed.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
-        // Refresh presence so the agent stays "online" in PresenceDO
-        const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
-        if (meta) {
-          const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
-          const stub = this.env.PRESENCE_DO.get(doId);
-          stub.fetch(new Request('http://do/heartbeat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
-          })).catch(() => {});
+        // Refresh presence so the agent stays "online" in PresenceDO,
+        // unless presence was suppressed by an explicit REST disconnect.
+        if (!this.presenceSuppressed) {
+          const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
+          if (meta) {
+            const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
+            const stub = this.env.PRESENCE_DO.get(doId);
+            stub.fetch(new Request('http://do/heartbeat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
+            })).catch(() => {});
+          }
         }
         return;
       }

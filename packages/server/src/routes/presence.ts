@@ -34,6 +34,14 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+
+    // Clear any presence suppression so WS pings resume refreshing presence.
+    const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
+    const agentStub = c.env.AGENT_DO.get(agentDoId);
+    agentStub.fetch(new Request('http://do/unsuppress-presence', {
+      method: 'POST',
+    })).catch(() => {});
+
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_heartbeat', {
       agent_id: agent.id,
       agent_name: agent.name,
@@ -60,6 +68,16 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+
+    // Tell the AgentDO to stop refreshing presence on WS pings.
+    // Without this, the WS ping/pong cycle re-registers the agent as online
+    // immediately after the disconnect.
+    const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
+    const agentStub = c.env.AGENT_DO.get(agentDoId);
+    agentStub.fetch(new Request('http://do/suppress-presence', {
+      method: 'POST',
+    })).catch(() => {});
+
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
       agent_id: agent.id,
       agent_name: agent.name,
