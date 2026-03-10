@@ -3076,7 +3076,7 @@ async fn send_dm(
 struct CreateGroupDmRequest {
     participants: Vec<String>,
     name: Option<String>,
-    text: String,
+    text: Option<String>,
 }
 
 async fn create_group_dm(
@@ -3094,13 +3094,12 @@ async fn create_group_dm(
             "participants are required",
         );
     }
-    if payload.text.trim().is_empty() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "text is required",
-        );
-    }
+    let initial_text = payload
+        .text
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let (workspace_id, caller_id, caller_name) = {
         let store = state.store.read().await;
@@ -3140,42 +3139,46 @@ async fn create_group_dm(
         .insert(conv_id.clone(), conversation.clone());
     store.dm_messages.insert(conv_id.clone(), Vec::new());
 
-    let Some(message) = post_dm_message_internal(
-        &mut store,
-        &workspace_id,
-        &conv_id,
-        &caller_id,
-        &caller_name,
-        payload.text.clone(),
-    ) else {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "Failed to create initial group message",
-        );
-    };
+    if let Some(text) = initial_text {
+        let Some(message) = post_dm_message_internal(
+            &mut store,
+            &workspace_id,
+            &conv_id,
+            &caller_id,
+            &caller_name,
+            text,
+        ) else {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Failed to create initial group message",
+            );
+        };
 
-    drop(store);
+        drop(store);
 
-    publish(
-        &state,
-        RealtimeEvent {
-            workspace_id: workspace_id.clone(),
-            audience: EventAudience::Agents {
-                agent_ids: participant_ids.iter().cloned().collect(),
+        publish(
+            &state,
+            RealtimeEvent {
+                workspace_id: workspace_id.clone(),
+                audience: EventAudience::Agents {
+                    agent_ids: participant_ids.iter().cloned().collect(),
+                },
+                payload: json!({
+                    "type": "group_dm.received",
+                    "conversation_id": conv_id,
+                    "message": {
+                        "id": message.id,
+                        "agent_id": message.agent_id,
+                        "agent_name": message.agent_name,
+                        "text": message.text,
+                    }
+                }),
             },
-            payload: json!({
-                "type": "group_dm.received",
-                "conversation_id": conv_id,
-                "message": {
-                    "id": message.id,
-                    "agent_id": message.agent_id,
-                    "agent_name": message.agent_name,
-                    "text": message.text,
-                }
-            }),
-        },
-    );
+        );
+    } else {
+        drop(store);
+    }
 
     created(json!({
         "id": conversation.id,

@@ -17,6 +17,22 @@ pub struct AgentClient {
 }
 
 impl AgentClient {
+    fn ws_options(&self) -> WsClientOptions {
+        WsClientOptions::new(self.client.api_key())
+            .with_base_url(self.client.base_url())
+            .with_origin(
+                self.client.origin_surface(),
+                self.client.origin_client(),
+                self.client.origin_version(),
+            )
+    }
+
+    pub(crate) fn ensure_ws(&mut self) {
+        if self.ws.is_none() {
+            self.ws = Some(WsClient::new(self.ws_options()));
+        }
+    }
+
     /// Create a new agent client with the given token.
     pub fn new(token: impl Into<String>, base_url: Option<String>) -> Result<Self> {
         let mut options = ClientOptions::new(token);
@@ -51,20 +67,10 @@ impl AgentClient {
 
     /// Connect to the WebSocket server for real-time events.
     pub async fn connect(&mut self) -> Result<()> {
-        if self.ws.is_some() {
-            return Ok(());
+        self.ensure_ws();
+        if let Some(ws) = self.ws.as_mut() {
+            ws.connect().await?;
         }
-
-        let options = WsClientOptions::new(self.client.api_key())
-            .with_base_url(self.client.base_url())
-            .with_origin(
-                self.client.origin_surface(),
-                self.client.origin_client(),
-                self.client.origin_version(),
-            );
-        let mut ws = WsClient::new(options);
-        ws.connect().await?;
-        self.ws = Some(ws);
         Ok(())
     }
 
@@ -783,5 +789,24 @@ impl AgentClient {
         };
 
         self.client.get("/v1/files", query_ref, None).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_ws_initializes_receivers_before_connect() {
+        let mut agent = AgentClient::new("rk_live_test", Some("http://127.0.0.1:7528".to_string()))
+            .expect("agent client should initialize");
+
+        assert!(agent.subscribe_events().is_err());
+        assert!(agent.subscribe_lifecycle().is_err());
+
+        agent.ensure_ws();
+
+        assert!(agent.subscribe_events().is_ok());
+        assert!(agent.subscribe_lifecycle().is_ok());
     }
 }

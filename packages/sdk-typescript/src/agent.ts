@@ -104,6 +104,15 @@ export interface AgentClientOptions {
   ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 }
 
+export interface AgentClientWsHandlers {
+  any?: (event: WsClientEvent) => void;
+  connected?: () => void;
+  disconnected?: () => void;
+  error?: () => void;
+  reconnecting?: (attempt: number) => void;
+  permanentlyDisconnected?: (attempt: number) => void;
+}
+
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
@@ -150,11 +159,8 @@ export class AgentClient {
     }
   }
 
-  // === WebSocket ===
-
-  connect(): void {
-    if (this.ws) return;
-    this.ws = new WsClient(withInternalWsOrigin(
+  private createWsClient(): WsClient {
+    const ws = new WsClient(withInternalWsOrigin(
       {
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
@@ -166,17 +172,70 @@ export class AgentClient {
         version: this.client.originVersion,
       },
     ));
-    this.ws.on('open', () => {
+    ws.on('open', () => {
       void this.presence.markOnline().catch(() => {});
       this.startAutoHeartbeat();
     });
-    this.ws.on('close', () => {
+    ws.on('close', () => {
       this.stopAutoHeartbeat();
     });
-    this.ws.on('permanently_disconnected', () => {
+    ws.on('permanently_disconnected', () => {
       this.stopAutoHeartbeat();
     });
-    this.ws.connect();
+    return ws;
+  }
+
+  private ensureWs(): WsClient {
+    if (!this.ws) {
+      this.ws = this.createWsClient();
+    }
+    return this.ws;
+  }
+
+  // === WebSocket ===
+
+  connect(): void {
+    this.ensureWs().connect();
+  }
+
+  attachWsHandlers(handlers: AgentClientWsHandlers): () => void {
+    const ws = this.ensureWs();
+    const unsubscribers: Array<() => void> = [];
+
+    if (handlers.any) {
+      unsubscribers.push(ws.on('*', handlers.any));
+    }
+    if (handlers.connected) {
+      unsubscribers.push(ws.on('open', () => {
+        handlers.connected?.();
+      }));
+    }
+    if (handlers.disconnected) {
+      unsubscribers.push(ws.on('close', () => {
+        handlers.disconnected?.();
+      }));
+    }
+    if (handlers.error) {
+      unsubscribers.push(ws.on('error', () => {
+        handlers.error?.();
+      }));
+    }
+    if (handlers.reconnecting) {
+      unsubscribers.push(ws.on('reconnecting', (event) => {
+        handlers.reconnecting?.((event as WsReconnectingEvent).attempt);
+      }));
+    }
+    if (handlers.permanentlyDisconnected) {
+      unsubscribers.push(ws.on('permanently_disconnected', (event) => {
+        handlers.permanentlyDisconnected?.((event as WsPermanentlyDisconnectedEvent).attempt);
+      }));
+    }
+
+    return () => {
+      for (const unsubscribe of unsubscribers) {
+        unsubscribe();
+      }
+    };
   }
 
   /** Send a REST heartbeat to keep this agent online in PresenceDO without a WebSocket. */
