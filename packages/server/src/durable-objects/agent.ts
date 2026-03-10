@@ -44,9 +44,9 @@ export class AgentDO implements DurableObject {
   /**
    * When true, WS pings no longer refresh presence in PresenceDO.
    * Set by REST `/v1/agents/disconnect`; cleared on the next REST heartbeat
-   * or new WS connection.
+   * or new WS connection. Persisted to DO storage to survive hibernation.
    */
-  private presenceSuppressed = false;
+  private presenceSuppressed: boolean | null = null;
 
   constructor(state: DurableObjectState, env: CloudflareBindings) {
     this.state = state;
@@ -69,6 +69,19 @@ export class AgentDO implements DurableObject {
     this.agentSeq = next;
     await this.state.storage.put('agent_seq', next);
     return next;
+  }
+
+  private async getPresenceSuppressed(): Promise<boolean> {
+    if (this.presenceSuppressed === null) {
+      this.presenceSuppressed =
+        (await this.state.storage.get<boolean>('presence_suppressed')) ?? false;
+    }
+    return this.presenceSuppressed;
+  }
+
+  private async setPresenceSuppressed(value: boolean): Promise<void> {
+    this.presenceSuppressed = value;
+    await this.state.storage.put('presence_suppressed', value);
   }
 
   /**
@@ -310,12 +323,12 @@ export class AgentDO implements DurableObject {
     }
 
     if (request.method === 'POST' && url.pathname === '/suppress-presence') {
-      this.presenceSuppressed = true;
+      await this.setPresenceSuppressed(true);
       return Response.json({ ok: true });
     }
 
     if (request.method === 'POST' && url.pathname === '/unsuppress-presence') {
-      this.presenceSuppressed = false;
+      await this.setPresenceSuppressed(false);
       return Response.json({ ok: true });
     }
 
@@ -344,6 +357,7 @@ export class AgentDO implements DurableObject {
 
     // New WS connection clears any presence suppression from a prior REST disconnect.
     this.presenceSuppressed = false;
+    void this.state.storage.put('presence_suppressed', false);
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
@@ -401,7 +415,7 @@ export class AgentDO implements DurableObject {
         ws.send(JSON.stringify({ type: 'pong' }));
         // Refresh presence so the agent stays "online" in PresenceDO,
         // unless presence was suppressed by an explicit REST disconnect.
-        if (!this.presenceSuppressed) {
+        if (!(await this.getPresenceSuppressed())) {
           const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
           if (meta) {
             const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
