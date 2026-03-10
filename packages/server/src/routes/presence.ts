@@ -36,11 +36,12 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
     }));
 
     // Clear any presence suppression so WS pings resume refreshing presence.
+    // Awaited to prevent Workers runtime from dropping the fetch after response.
     const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
     const agentStub = c.env.AGENT_DO.get(agentDoId);
-    agentStub.fetch(new Request('http://do/unsuppress-presence', {
+    await agentStub.fetch(new Request('http://do/unsuppress-presence', {
       method: 'POST',
-    })).catch(() => {});
+    }));
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_heartbeat', {
       agent_id: agent.id,
