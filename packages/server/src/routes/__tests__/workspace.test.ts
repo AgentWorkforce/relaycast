@@ -28,6 +28,7 @@ import { workspaceRoutes } from '../../routes/workspace.js';
 import * as activityEngine from '../../engine/activity.js';
 import * as dmAllEngine from '../../engine/dmAll.js';
 import * as tokenRotateEngine from '../../engine/tokenRotate.js';
+import * as workspaceEngine from '../../engine/workspace.js';
 import { getDb } from '../../db/index.js';
 import {
   mockDbForWorkspaceAuth,
@@ -51,6 +52,29 @@ app.route('/v1', v1);
 describe('Dashboard routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('POST /v1/workspaces', () => {
+    it('creates a workspace without route-level duplicate name checks', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.spyOn(workspaceEngine, 'createWorkspace').mockResolvedValue({
+        workspace_id: 'ws_new',
+        api_key: 'rk_live_test',
+        created_at: '2026-03-10T00:00:00.000Z',
+      });
+
+      const res = await app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'my-project' }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(workspaceEngine.createWorkspace).toHaveBeenCalledWith(
+        expect.anything(),
+        'my-project',
+      );
+    });
   });
 
   describe('GET /v1/activity', () => {

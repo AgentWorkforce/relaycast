@@ -34,6 +34,15 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+
+    // Clear any presence suppression so WS pings resume refreshing presence.
+    // Awaited to prevent Workers runtime from dropping the fetch after response.
+    const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
+    const agentStub = c.env.AGENT_DO.get(agentDoId);
+    await agentStub.fetch(new Request('http://do/unsuppress-presence', {
+      method: 'POST',
+    }));
+
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_heartbeat', {
       agent_id: agent.id,
       agent_name: agent.name,
@@ -53,6 +62,14 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
   try {
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
+    // Suppress WS-ping presence refresh BEFORE disconnecting from PresenceDO.
+    // This prevents a WS ping from re-registering the agent between the two calls.
+    const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
+    const agentStub = c.env.AGENT_DO.get(agentDoId);
+    await agentStub.fetch(new Request('http://do/suppress-presence', {
+      method: 'POST',
+    }));
+
     const doId = c.env.PRESENCE_DO.idFromName(workspace.id);
     const stub = c.env.PRESENCE_DO.get(doId);
     await stub.fetch(new Request('http://do/disconnect', {
@@ -60,6 +77,7 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
       agent_id: agent.id,
       agent_name: agent.name,
