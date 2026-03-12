@@ -265,7 +265,7 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a new workspace and get an API key. Workspace names are not globally unique.
+      description: Create a new workspace and get an API key
       tags:
         - Workspaces
       requestBody:

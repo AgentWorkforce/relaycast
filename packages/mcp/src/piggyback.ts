@@ -4,18 +4,18 @@ import type { SessionState } from './types.js';
 import type { McpTelemetry } from './telemetry.js';
 
 const SKIP_PIGGYBACK = new Set([
-  'check_inbox',
-  'create_workspace',
-  'set_workspace_key',
-  'register',
+  'inbox.check',
+  'workspace.create',
+  'workspace.set_key',
+  'agent.register',
 ]);
 const MESSAGE_TOOLS = new Set([
-  'post_message',
-  'reply_to_thread',
-  'send_dm',
-  'send_group_dm',
-  'trigger_webhook',
-  'invoke_command',
+  'message.post',
+  'message.reply',
+  'dm.send',
+  'dm.send_group',
+  'webhook.trigger',
+  'command.invoke',
 ]);
 
 type ToolHandler = (...args: unknown[]) => unknown;
@@ -86,12 +86,12 @@ export function enablePiggyback(
           tool_name: name,
           message_kind: name,
         });
-      } else if (name === 'check_inbox') {
+      } else if (name === 'inbox.check') {
         telemetry?.capture('relaycast_inbox_checked', {
           source_surface: 'mcp',
           tool_name: name,
         });
-      } else if (name === 'register') {
+      } else if (name === 'agent.register') {
         telemetry?.capture('relaycast_agent_registered', {
           source_surface: 'mcp',
           tool_name: name,

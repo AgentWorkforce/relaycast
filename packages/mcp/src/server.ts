@@ -70,7 +70,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     const workspaceKey = session.workspaceKey;
     if (!workspaceKey) {
       throw new Error(
-        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
+        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "workspace.create" or "workspace.set_key" first.',
       );
     }
     return createInternalRelayCast({
@@ -79,28 +79,27 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }, mcpOrigin);
   };
   const setSession = (partial: Partial<SessionState>) => {
-    const nextAgentToken =
-      partial.agentToken === undefined ? session.agentToken : partial.agentToken;
-    const nextAgentName = partial.agentName ?? session.agentName ?? null;
-    const shouldResetBridge =
-      partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+    const switchingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+    const restoringBridge = !!partial.wsBridge;
+    const shouldResetBridge = switchingToken && !restoringBridge;
 
     if (shouldResetBridge && session.wsBridge) {
       session.wsBridge.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;
       session.subscriptions = null;
-    }
-    if (shouldResetBridge) {
       session.wsInitAttempted = false;
     }
 
-    // When an agent token is set, initialize the WebSocket bridge.
-    if (nextAgentToken && !session.wsBridge && !session.wsInitAttempted) {
+    // Apply the partial state update
+    Object.assign(session, partial);
+
+    // If we have a token but no bridge yet, and we haven't failed initialization, try to start it.
+    if (session.agentToken && !session.wsBridge && !session.wsInitAttempted) {
       try {
         const subscriptions = new SubscriptionManager();
         const wsClient = createInternalWsClient({
-          token: nextAgentToken,
+          token: session.agentToken,
           baseUrl: options.baseUrl,
         }, mcpOrigin);
         const wsBridge = new WsBridge(
@@ -113,32 +112,26 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           },
         );
         wsBridge.start();
-        Object.assign(session, partial, {
-          wsBridge,
-          subscriptions,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = wsBridge;
+        session.subscriptions = subscriptions;
+        session.wsInitAttempted = true;
       } catch {
         // In non-WS runtimes (e.g. some test environments), keep session usable
         // without real-time resource updates.
-        Object.assign(session, partial, {
-          wsBridge: null,
-          subscriptions: null,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = null;
+        session.subscriptions = null;
+        session.wsInitAttempted = true;
       }
       telemetry.capture('relaycast_mcp_session_authenticated', {
         source_surface: 'mcp',
-        agent_name: nextAgentName,
+        agent_name: session.agentName,
       });
-    } else {
-      Object.assign(session, partial);
     }
   };
 
   const getAgentClient = (): AgentClient => {
     if (!session.agentToken) {
-      throw new Error('Not registered. Call the "register" tool first.');
+      throw new Error('Not registered. Call the "agent.register" tool first.');
     }
     return createInternalRelayCast({
       apiKey: session.agentToken,

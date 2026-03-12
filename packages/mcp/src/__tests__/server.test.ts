@@ -39,6 +39,10 @@ vi.mock('@relaycast/sdk', () => {
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
+      registerOrRotate: vi.fn().mockResolvedValue({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      }),
       list: vi.fn().mockResolvedValue([]),
     };
     webhooks = {
@@ -107,6 +111,10 @@ vi.mock('@relaycast/sdk/internal', () => {
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
+      registerOrRotate: vi.fn().mockResolvedValue({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      }),
       list: vi.fn().mockResolvedValue([]),
     };
     webhooks = {
@@ -155,63 +163,66 @@ describe('createRelayMcpServer', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 39 tools', async () => {
+  it('lists all 42 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(39);
+    expect(tools.tools.length).toBe(42);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
-      'add_agent',
-      'add_reaction',
-      'archive_channel',
-      'check_inbox',
-      'create_channel',
-      'create_subscription',
-      'create_webhook',
-      'create_workspace',
-      'delete_command',
-      'delete_subscription',
-      'delete_webhook',
-      'get_dms',
-      'get_messages',
-      'get_readers',
-      'get_subscription',
-      'get_thread',
-      'invite_to_channel',
-      'invoke_command',
-      'join_channel',
-      'leave_channel',
-      'list_agents',
-      'list_channels',
-      'list_commands',
-      'list_subscriptions',
-      'list_webhooks',
-      'mark_read',
-      'post_message',
-      'register',
-      'register_command',
-      'remove_agent',
-      'remove_reaction',
-      'reply_to_thread',
-      'search_messages',
-      'send_dm',
-      'send_group_dm',
-      'set_channel_topic',
-      'set_workspace_key',
-      'trigger_webhook',
-      'upload_file',
+      'agent.add',
+      'agent.list',
+      'agent.register',
+      'agent.remove',
+      'channel.archive',
+      'channel.create',
+      'channel.invite',
+      'channel.join',
+      'channel.leave',
+      'channel.list',
+      'channel.set_topic',
+      'command.delete',
+      'command.invoke',
+      'command.list',
+      'command.register',
+      'dm.list',
+      'dm.send',
+      'dm.send_group',
+      'file.upload',
+      'inbox.check',
+      'inbox.get_readers',
+      'inbox.mark_read',
+      'message.get_thread',
+      'message.list',
+      'message.post',
+      'message.reply',
+      'message.search',
+      'reaction.add',
+      'reaction.remove',
+      'subscription.create',
+      'subscription.delete',
+      'subscription.get',
+      'subscription.list',
+      'webhook.create',
+      'webhook.delete',
+      'webhook.list',
+      'webhook.trigger',
+      'workspace.create',
+      'workspace.join',
+      'workspace.list',
+      'workspace.set_key',
+      'workspace.switch',
     ]);
   });
 
   it('register tool works and enables other tools', async () => {
     const result = await client.callTool({
-      name: 'register',
+      name: 'agent.register',
       arguments: { name: 'bot1' },
     });
     expect(result.content).toBeDefined();
 
     // Now post_message should work (uses agent token from register)
     const msgResult = await client.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(msgResult.content).toBeDefined();
@@ -229,7 +240,7 @@ describe('createRelayMcpServer', () => {
 
   it('tool call without register returns error', async () => {
     const result = await client.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(result.isError).toBe(true);
@@ -247,7 +258,7 @@ describe('createRelayMcpServer', () => {
 
     // Should be able to call tools immediately without calling register first
     const result = await bootstrappedClient.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello from pre-registered agent' },
     });
     expect(result.isError).toBeFalsy();
@@ -265,7 +276,7 @@ describe('createRelayMcpServer', () => {
     await Promise.all([strictClient.connect(ct), strictServer.connect(st)]);
 
     const result = await strictClient.callTool({
-      name: 'register',
+      name: 'agent.register',
       arguments: { name: 'Claude', type: 'human' },
     });
 
@@ -292,7 +303,7 @@ describe('createRelayMcpServer', () => {
     await Promise.all([keylessClient.connect(ct), keylessServer.connect(st)]);
 
     const result = await keylessClient.callTool({
-      name: 'set_workspace_key',
+      name: 'workspace.set_key',
       arguments: { api_key: 'rk_live_bootstrap123' },
     });
 

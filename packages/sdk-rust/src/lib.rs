@@ -69,7 +69,6 @@ pub mod agent;
 pub mod client;
 pub mod credentials;
 pub mod error;
-pub mod multi_workspace;
 pub mod registration;
 pub mod relay;
 pub mod types;
@@ -79,7 +78,6 @@ pub mod ws;
 pub use agent::AgentClient;
 pub use client::{ClientOptions, HttpClient, RequestOptions};
 pub use error::{RelayError, Result};
-pub use multi_workspace::MultiWorkspaceSessionManager;
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
     retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
@@ -178,14 +176,8 @@ pub use types::{
     WebhookTriggerRequest,
     WebhookTriggerResponse,
     Workspace,
-    WorkspaceMembershipConfig,
-    WorkspaceRef,
-    WorkspaceScopedEvent,
-    WorkspaceSendTarget,
     WorkspaceDmConversation,
     WorkspaceDmMessage,
-    MultiWorkspaceMembershipStatus,
-    MultiWorkspaceStatus,
     WorkspaceStats,
     WorkspaceStreamConfig,
     // Events

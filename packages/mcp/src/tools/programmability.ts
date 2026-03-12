@@ -12,7 +12,7 @@ export function registerProgrammabilityTools(
 ): void {
   // === Inbound Webhooks ===
 
-  server.registerTool('create_webhook', {
+  server.registerTool('webhook.create', {
     title: 'Create Webhook',
     description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL that accepts POST requests with a JSON body.',
     inputSchema: {
@@ -30,7 +30,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('list_webhooks', {
+  server.registerTool('webhook.list', {
     title: 'List Webhooks',
     description: 'List all inbound webhooks configured in the workspace. Returns each webhook\'s ID, name, target channel, URL, and creation date. Use this to audit existing integrations or find a webhook\'s URL for external service configuration.',
     inputSchema: {
@@ -49,7 +49,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('delete_webhook', {
+  server.registerTool('webhook.delete', {
     title: 'Delete Webhook',
     description: 'Permanently delete an inbound webhook by its ID. Once deleted, the webhook URL stops accepting requests and any external services still posting to it will receive errors. This action cannot be undone, so verify the webhook is no longer needed before deleting.',
     inputSchema: {
@@ -69,7 +69,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('trigger_webhook', {
+  server.registerTool('webhook.trigger', {
     title: 'Trigger Webhook',
     description: 'Manually trigger an inbound webhook to post a message into its target channel. This is useful for testing webhook integrations or programmatically injecting external events into the workspace. Provide optional text and source identifier to customize the delivered message.',
     inputSchema: {
@@ -90,7 +90,7 @@ export function registerProgrammabilityTools(
 
   // === Event Subscriptions ===
 
-  server.registerTool('create_subscription', {
+  server.registerTool('subscription.create', {
     title: 'Create Event Subscription',
     description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
@@ -119,7 +119,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('list_subscriptions', {
+  server.registerTool('subscription.list', {
     title: 'List Subscriptions',
     description: 'List all outbound event subscriptions configured in the workspace. Returns each subscription\'s ID, target URL, subscribed event types, filters, and status. Use this to audit which external services are receiving event notifications from the workspace.',
     inputSchema: {
@@ -138,7 +138,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('get_subscription', {
+  server.registerTool('subscription.get', {
     title: 'Get Subscription',
     description: 'Retrieve detailed information about a specific event subscription by its ID. Returns the subscription\'s target URL, subscribed event types, filter configuration, delivery status, and creation date. Use this to inspect or debug a particular subscription\'s configuration.',
     inputSchema: {
@@ -155,7 +155,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('delete_subscription', {
+  server.registerTool('subscription.delete', {
     title: 'Delete Subscription',
     description: 'Permanently delete an outbound event subscription by its ID. Once deleted, the external URL will stop receiving event notifications. This action cannot be undone, so verify the subscription is no longer needed before deleting.',
     inputSchema: {
@@ -177,7 +177,7 @@ export function registerProgrammabilityTools(
 
   // === Agent Commands ===
 
-  server.registerTool('register_command', {
+  server.registerTool('command.register', {
     title: 'Register Command',
     description: 'Register a custom slash command that a specific agent can handle. Other agents in the workspace can invoke this command, and the handler agent receives the invocation with its parameters. Commands enable structured inter-agent workflows, such as /deploy, /review, or /summarize. Re-registering an existing command updates its definition.',
     inputSchema: {
@@ -207,7 +207,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('list_commands', {
+  server.registerTool('command.list', {
     title: 'List Commands',
     description: 'List all registered slash commands available in the workspace. Returns each command\'s name, description, handler agent, and parameter definitions. Use this to discover what commands other agents have registered and how to invoke them.',
     inputSchema: {
@@ -226,7 +226,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('delete_command', {
+  server.registerTool('command.delete', {
     title: 'Delete Command',
     description: 'Permanently remove a registered slash command from the workspace. Once deleted, other agents can no longer invoke the command. This action cannot be undone, so verify the command is no longer needed before deleting.',
     inputSchema: {
@@ -246,7 +246,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('invoke_command', {
+  server.registerTool('command.invoke', {
     title: 'Invoke Command',
     description: 'Invoke a registered slash command as the current agent within a channel context. The invocation is routed to the command\'s handler agent for processing. You can pass arguments as a raw string or as structured JSON parameters matching the command\'s parameter definitions.',
     inputSchema: {
@@ -269,7 +269,7 @@ export function registerProgrammabilityTools(
 
   // === Agent Lifecycle (Spawn/Release) ===
 
-  server.registerTool('add_agent', {
+  server.registerTool('agent.add', {
     title: 'Add Agent',
     description: 'Add a new AI agent to the workspace to work on a task. This is a BUILT-IN system operation for creating worker agents. If an agent with the same name already exists, it will be reactivated with a new token and updated task. The agent is automatically set to online status and joined to the specified channel.',
     inputSchema: {
@@ -292,7 +292,7 @@ export function registerProgrammabilityTools(
     };
   });
 
-  server.registerTool('remove_agent', {
+  server.registerTool('agent.remove', {
     title: 'Remove Agent',
     description: 'Remove an agent from active duty, marking it as offline. This is a BUILT-IN system operation for agent lifecycle management. Optionally delete the agent entirely from the workspace. Use this when an agent has completed its task or is no longer needed.',
     inputSchema: {

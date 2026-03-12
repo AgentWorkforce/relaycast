@@ -1,72 +1,15 @@
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createInternalRelayCast } from "@relaycast/sdk/internal";
-import { RelayError } from "@relaycast/sdk";
-import {
-  createRelayMcpServer,
-  MCP_VERSION,
-  type McpServerOptions,
-} from "./server.js";
-import { randomUUID } from "node:crypto";
-import { createMcpTelemetry } from "./telemetry.js";
-
-async function resolveStdioBootstrapOptions(
-  options: McpServerOptions,
-): Promise<McpServerOptions> {
-  if (!options.apiKey || !options.agentName) {
-    return options;
-  }
-
-  const relay = createInternalRelayCast(
-    {
-      apiKey: options.apiKey,
-      baseUrl: options.baseUrl,
-    },
-    {
-      surface: "mcp",
-      client: "@relaycast/mcp",
-      version: MCP_VERSION,
-    },
-  );
-
-  if (options.agentToken) {
-    try {
-      await relay.as(options.agentToken).inbox();
-      return options;
-    } catch (err) {
-      const relayErr = err as Partial<RelayError> | undefined;
-      const unauthorized =
-        relayErr?.code === "unauthorized" ||
-        relayErr?.statusCode === 401 ||
-        relayErr?.statusCode === 403;
-      if (!unauthorized) {
-        throw err;
-      }
-    }
-  }
-
-  const registered = await relay.agents.registerOrRotate({
-    name: options.agentName,
-    type: options.agentType,
-  });
-
-  return {
-    ...options,
-    agentToken: registered.token,
-    agentName: registered.name ?? options.agentName,
-  };
-}
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createRelayMcpServer, MCP_VERSION, type McpServerOptions } from './server.js';
+import { randomUUID } from 'node:crypto';
+import { createMcpTelemetry } from './telemetry.js';
 
 /**
  * Start MCP server with stdio transport (single agent).
  * Reads from stdin, writes to stdout.
  */
 export async function startStdio(options: McpServerOptions): Promise<void> {
-  const bootstrappedOptions = await resolveStdioBootstrapOptions(options);
-  const mcpServer = createRelayMcpServer({
-    ...bootstrappedOptions,
-    telemetryTransport: "stdio",
-  });
+  const mcpServer = createRelayMcpServer({ ...options, telemetryTransport: 'stdio' });
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
 }
@@ -84,29 +27,23 @@ export interface SessionLifecycle {
  * Session map for HTTP transport (multi-agent).
  * Each session gets its own MCP server + transport + telemetry instance.
  */
-const sessions = new Map<
-  string,
-  { transport: StreamableHTTPServerTransport }
->();
+const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
 /**
  * Create Express middleware for HTTP+SSE transport (multi-agent).
  * Each connecting client gets its own session with isolated state and telemetry.
  */
-export function createHttpHandler(
-  baseOptions: McpServerOptions,
-  lifecycle?: SessionLifecycle,
-) {
+export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: SessionLifecycle) {
   return {
     /** Check whether a session ID is owned by this process. */
     hasSession: (sessionId: string) => sessions.has(sessionId),
 
     handleRequest: async (
-      req: import("node:http").IncomingMessage,
-      res: import("node:http").ServerResponse,
+      req: import('node:http').IncomingMessage,
+      res: import('node:http').ServerResponse,
     ) => {
       // Check for existing session
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
       if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId)!;
@@ -116,8 +53,8 @@ export function createHttpHandler(
 
       // New session — create fresh MCP server + transport + telemetry
       const telemetry = createMcpTelemetry(MCP_VERSION, {
-        originSurface: "mcp",
-        originClient: "@relaycast/mcp",
+        originSurface: 'mcp',
+        originClient: '@relaycast/mcp',
         originVersion: MCP_VERSION,
       });
 
@@ -127,7 +64,7 @@ export function createHttpHandler(
 
       const mcpServer = createRelayMcpServer({
         ...baseOptions,
-        telemetryTransport: "http",
+        telemetryTransport: 'http',
         telemetry,
       });
 
@@ -147,9 +84,9 @@ export function createHttpHandler(
       if (transport.sessionId && !sessions.has(transport.sessionId)) {
         sessions.set(transport.sessionId, { transport });
         lifecycle?.onCreated?.(transport.sessionId);
-        telemetry.capture("relaycast_mcp_http_session_started", {
-          source_surface: "mcp",
-          transport: "http",
+        telemetry.capture('relaycast_mcp_http_session_started', {
+          source_surface: 'mcp',
+          transport: 'http',
           mcp_transport_session_id: transport.sessionId,
         });
       }

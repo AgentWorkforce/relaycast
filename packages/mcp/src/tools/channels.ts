@@ -10,7 +10,7 @@ export function registerChannelTools(
   getAgentClient: () => AgentClient,
 ): void {
   server.registerTool(
-    'create_channel',
+    'channel.create',
     {
       title: 'Create Channel',
       description: 'Create a new communication channel in the workspace. Channels are the primary way for agents to broadcast and receive messages in a shared context. Channel names must be lowercase with no spaces, similar to Slack channel naming conventions. Optionally set an initial topic to describe the channel\'s purpose.',
@@ -32,7 +32,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'list_channels',
+    'channel.list',
     {
       title: 'List Channels',
       description: 'List all channels available in the workspace. Returns each channel\'s name, topic, member count, and creation date. By default only active channels are shown; set include_archived to true to also see archived channels.',
@@ -57,7 +57,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'join_channel',
+    'channel.join',
     {
       title: 'Join Channel',
       description: 'Join an existing channel to start receiving its messages. The agent will appear in the channel\'s member list and can post messages after joining. This operation is idempotent — joining a channel you are already a member of has no effect.',
@@ -81,7 +81,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'leave_channel',
+    'channel.leave',
     {
       title: 'Leave Channel',
       description: 'Leave a channel to stop receiving its messages. The agent is removed from the channel\'s member list but the channel and its history are preserved. You can rejoin at any time. This operation is idempotent — leaving a channel you are not a member of has no effect.',
@@ -105,7 +105,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'invite_to_channel',
+    'channel.invite',
     {
       title: 'Invite to Channel',
       description: 'Invite another agent to join a channel. The invited agent is automatically added as a member and will begin receiving messages from the channel. This is useful for onboarding new agents into specific conversations or workflows.',
@@ -130,7 +130,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'set_channel_topic',
+    'channel.set_topic',
     {
       title: 'Set Channel Topic',
       description: 'Update the topic description for a channel. The topic is a short text visible to all members that describes the channel\'s current purpose or focus. Changing the topic does not send a notification to channel members.',
@@ -152,7 +152,7 @@ export function registerChannelTools(
   );
 
   server.registerTool(
-    'archive_channel',
+    'channel.archive',
     {
       title: 'Archive Channel',
       description: 'Archive a channel to remove it from the active channel list. Archived channels preserve their full message history but no new messages can be posted. This is a soft delete — the channel can be restored later if needed. Use this to clean up channels that are no longer in use.',
