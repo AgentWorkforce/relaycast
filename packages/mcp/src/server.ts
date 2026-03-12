@@ -80,10 +80,8 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   };
   const setSession = (partial: Partial<SessionState>) => {
     const switchingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
-    const restoringBridge = !!partial.wsBridge;
-    const shouldResetBridge = switchingToken && !restoringBridge;
 
-    if (shouldResetBridge && session.wsBridge) {
+    if (switchingToken && session.wsBridge) {
       session.wsBridge.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;

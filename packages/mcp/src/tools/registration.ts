@@ -49,6 +49,23 @@ function requireWorkspaceKey(session: SessionState): void {
   );
 }
 
+function saveWorkspaceContext(
+  session: SessionState,
+  workspaceKey: string,
+  agentToken: string,
+  agentName: string,
+): void {
+  session.workspaces.set(workspaceKey, {
+    workspaceKey,
+    agentToken,
+    agentName,
+    // Force bridge re-init when this workspace is restored.
+    wsBridge: null,
+    subscriptions: null,
+    wsInitAttempted: false,
+  });
+}
+
 export function registerRegistrationTools(
   server: McpServer,
   getRelay: () => RelayCast,
@@ -82,14 +99,12 @@ export function registerRegistrationTools(
       // Save current workspace context before switching (if registered).
       const session = getSession();
       if (session.workspaceKey && session.agentToken && session.agentName) {
-        session.workspaces.set(session.workspaceKey, {
-          workspaceKey: session.workspaceKey,
-          agentToken: session.agentToken,
-          agentName: session.agentName,
-          wsBridge: session.wsBridge,
-          subscriptions: session.subscriptions,
-          wsInitAttempted: session.wsInitAttempted,
-        });
+        saveWorkspaceContext(
+          session,
+          session.workspaceKey,
+          session.agentToken,
+          session.agentName,
+        );
       }
       setSession({ workspaceKey, agentToken: null, agentName: null });
 
@@ -125,14 +140,12 @@ export function registerRegistrationTools(
       if (switchingWorkspace) {
         // Save current workspace context before switching (if registered).
         if (session.workspaceKey && session.agentToken && session.agentName) {
-          session.workspaces.set(session.workspaceKey, {
-            workspaceKey: session.workspaceKey,
-            agentToken: session.agentToken,
-            agentName: session.agentName,
-            wsBridge: session.wsBridge,
-            subscriptions: session.subscriptions,
-            wsInitAttempted: session.wsInitAttempted,
-          });
+          saveWorkspaceContext(
+            session,
+            session.workspaceKey,
+            session.agentToken,
+            session.agentName,
+          );
         }
 
         // Restore previously joined workspace context, or start fresh.
@@ -142,9 +155,6 @@ export function registerRegistrationTools(
             workspaceKey: api_key,
             agentToken: saved.agentToken,
             agentName: saved.agentName,
-            wsBridge: saved.wsBridge,
-            subscriptions: saved.subscriptions,
-            wsInitAttempted: saved.wsInitAttempted,
           });
         } else {
           setSession({ workspaceKey: api_key, agentToken: null, agentName: null });
@@ -237,14 +247,12 @@ export function registerRegistrationTools(
       // Update multi-workspace context map.
       const updatedSession = getSession();
       if (updatedSession.workspaceKey) {
-        updatedSession.workspaces.set(updatedSession.workspaceKey, {
-          workspaceKey: updatedSession.workspaceKey,
-          agentToken: result.token,
-          agentName: effectiveName,
-          wsBridge: updatedSession.wsBridge,
-          subscriptions: updatedSession.subscriptions,
-          wsInitAttempted: updatedSession.wsInitAttempted,
-        });
+        saveWorkspaceContext(
+          updatedSession,
+          updatedSession.workspaceKey,
+          result.token,
+          effectiveName,
+        );
       }
       const payload = {
         ...result,
@@ -349,14 +357,12 @@ export function registerRegistrationTools(
 
       // Save current workspace context before switching.
       if (session.workspaceKey && session.agentToken && session.agentName) {
-        session.workspaces.set(session.workspaceKey, {
-          workspaceKey: session.workspaceKey,
-          agentToken: session.agentToken,
-          agentName: session.agentName,
-          wsBridge: session.wsBridge,
-          subscriptions: session.subscriptions,
-          wsInitAttempted: session.wsInitAttempted,
-        });
+        saveWorkspaceContext(
+          session,
+          session.workspaceKey,
+          session.agentToken,
+          session.agentName,
+        );
       }
 
       // Check if already joined this workspace.
@@ -366,9 +372,6 @@ export function registerRegistrationTools(
           workspaceKey: api_key,
           agentToken: existing.agentToken,
           agentName: existing.agentName,
-          wsBridge: existing.wsBridge,
-          subscriptions: existing.subscriptions,
-          wsInitAttempted: existing.wsInitAttempted,
         });
         const result = {
           message: `Already joined workspace as "${existing.agentName}". Switched to it.`,
@@ -389,14 +392,7 @@ export function registerRegistrationTools(
 
       // Save the new workspace context.
       const updatedSession = getSession();
-      updatedSession.workspaces.set(api_key, {
-        workspaceKey: api_key,
-        agentToken: regResult.token,
-        agentName: name,
-        wsBridge: updatedSession.wsBridge,
-        subscriptions: updatedSession.subscriptions,
-        wsInitAttempted: updatedSession.wsInitAttempted,
-      });
+      saveWorkspaceContext(updatedSession, api_key, regResult.token, name);
 
       const result = {
         message: `Joined workspace and registered as "${name}".`,
@@ -441,14 +437,12 @@ export function registerRegistrationTools(
 
       // Save current workspace context.
       if (session.workspaceKey && session.agentToken && session.agentName) {
-        session.workspaces.set(session.workspaceKey, {
-          workspaceKey: session.workspaceKey,
-          agentToken: session.agentToken,
-          agentName: session.agentName,
-          wsBridge: session.wsBridge,
-          subscriptions: session.subscriptions,
-          wsInitAttempted: session.wsInitAttempted,
-        });
+        saveWorkspaceContext(
+          session,
+          session.workspaceKey,
+          session.agentToken,
+          session.agentName,
+        );
       }
 
       // Restore the target workspace context.
@@ -456,9 +450,6 @@ export function registerRegistrationTools(
         workspaceKey: api_key,
         agentToken: saved.agentToken,
         agentName: saved.agentName,
-        wsBridge: saved.wsBridge,
-        subscriptions: saved.subscriptions,
-        wsInitAttempted: saved.wsInitAttempted,
       });
 
       const result = {

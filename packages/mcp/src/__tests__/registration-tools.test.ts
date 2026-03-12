@@ -241,15 +241,13 @@ describe('registration tools', () => {
     session.workspaceKey = 'rk_live_ws1';
     session.agentToken = 'at_live_ws1';
     session.agentName = 'bot1';
-    const wsBridge = { stop: vi.fn() } as any;
-    const subscriptions = { clear: vi.fn() } as any;
     session.workspaces.set('rk_live_ws2', {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
-      wsBridge,
-      subscriptions,
-      wsInitAttempted: true,
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
     });
 
     const result = await client.callTool({
@@ -262,9 +260,6 @@ describe('registration tools', () => {
     expect(session.workspaceKey).toBe('rk_live_ws2');
     expect(session.agentToken).toBe('at_live_ws2');
     expect(session.agentName).toBe('bot2');
-    expect(session.wsBridge).toBe(wsBridge);
-    expect(session.subscriptions).toBe(subscriptions);
-    expect(session.wsInitAttempted).toBe(true);
   });
 
   it('switch_workspace restores saved context', async () => {

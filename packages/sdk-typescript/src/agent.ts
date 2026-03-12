@@ -131,6 +131,7 @@ export class AgentClient {
       await this.client.post('/v1/agents/heartbeat', {});
     },
     markOffline: async (): Promise<void> => {
+      this.stopAutoHeartbeat();
       await this.client.post('/v1/agents/disconnect', {});
     },
   };

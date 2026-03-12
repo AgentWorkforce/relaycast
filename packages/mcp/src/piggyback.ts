@@ -7,6 +7,9 @@ const SKIP_PIGGYBACK = new Set([
   'inbox.check',
   'workspace.create',
   'workspace.set_key',
+  'workspace.join',
+  'workspace.switch',
+  'workspace.list',
   'agent.register',
 ]);
 const MESSAGE_TOOLS = new Set([
