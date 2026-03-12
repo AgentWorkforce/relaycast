@@ -638,13 +638,14 @@ async fn create_workspace(
         );
     }
 
+    let workspace_name = payload.name.trim().to_string();
     let workspace_id = new_id("ws");
     let api_key = random_token("rk_live_");
     let created_at = now_iso();
 
     let workspace = WorkspaceRecord {
         id: workspace_id.clone(),
-        name: payload.name.trim().to_string(),
+        name: workspace_name.clone(),
         api_key: api_key.clone(),
         created_at: created_at.clone(),
         system_prompt: None,
@@ -653,6 +654,14 @@ async fn create_workspace(
     };
 
     let mut store = state.store.write().await;
+    let duplicate = store.workspaces.values().any(|ws| ws.name == workspace_name);
+    if duplicate {
+        return err(
+            StatusCode::CONFLICT,
+            "workspace_already_exists",
+            format!("Workspace \"{}\" already exists", workspace_name),
+        );
+    }
     store
         .workspace_by_key
         .insert(api_key.clone(), workspace_id.clone());

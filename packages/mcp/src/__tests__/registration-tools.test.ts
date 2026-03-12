@@ -24,6 +24,40 @@ describe('registration tools', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(url.toString()).pathname;
+      const headers = new Headers(init?.headers);
+      const authHeader = headers.get('Authorization');
+      const workspaceName = authHeader === 'Bearer rk_live_ws2'
+        ? 'Workspace Two'
+        : authHeader === 'Bearer rk_live_test'
+          ? 'Test Workspace'
+          : authHeader === 'Bearer rk_live_old'
+            ? 'Old Workspace'
+            : 'Primary Workspace';
+
+      if (path === '/v1/workspace') {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            data: {
+              id: 'ws_info',
+              name: workspaceName,
+              system_prompt: null,
+              plan: 'free',
+              created_at: new Date().toISOString(),
+              metadata: {},
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, data: {} }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof global.fetch;
     session = createInitialSession();
     mcpServer = new McpServer({ name: 'test', version: '0.1.0' });
 
@@ -264,6 +298,24 @@ describe('registration tools', () => {
     expect(session.agentName).toBe('bot2');
   });
 
+  it('join_workspace stores canonical workspace name from the API', async () => {
+    session.workspaceKey = 'rk_live_ws1';
+    session.agentToken = 'at_live_ws1';
+    session.agentName = 'bot1';
+    mockRelay.agents.registerOrRotate.mockResolvedValue({
+      agent: { name: 'bot2' },
+      token: 'at_live_ws2',
+    });
+
+    const result = await client.callTool({
+      name: 'workspace.join',
+      arguments: { api_key: 'rk_live_ws2', name: 'bot2' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(session.workspaces.get('rk_live_ws2')?.workspaceName).toBe('Workspace Two');
+  });
+
   it('switch_workspace restores saved context', async () => {
     session.workspaceKey = 'rk_live_ws1';
     session.agentToken = 'at_live_ws1';
@@ -332,6 +384,40 @@ describe('registration tools', () => {
     expect(session.agentName).toBe('bot2');
   });
 
+  it('switch_workspace accepts canonical workspace_name from the API', async () => {
+    session.workspaceKey = 'rk_live_ws1';
+    session.agentToken = 'at_live_ws1';
+    session.agentName = 'bot1';
+    session.workspaces.set('rk_live_ws1', {
+      workspaceKey: 'rk_live_ws1',
+      agentToken: 'at_live_ws1',
+      agentName: 'bot1',
+      workspaceName: 'Primary Workspace',
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+    session.workspaces.set('rk_live_ws2', {
+      workspaceKey: 'rk_live_ws2',
+      agentToken: 'at_live_ws2',
+      agentName: 'bot2',
+      workspaceName: 'Workspace Two',
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+
+    const result = await client.callTool({
+      name: 'workspace.switch',
+      arguments: { workspace_name: 'Workspace Two' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe('rk_live_ws2');
+    expect(session.agentToken).toBe('at_live_ws2');
+    expect(session.agentName).toBe('bot2');
+  });
+
   it('switch_workspace errors for unknown workspace', async () => {
     session.workspaceKey = 'rk_live_ws1';
 
@@ -359,5 +445,6 @@ describe('registration tools', () => {
     expect(saved).toBeDefined();
     expect(saved!.agentToken).toBe('tok_abc');
     expect(saved!.agentName).toBe('bot1');
+    expect(saved!.workspaceName).toBe('Test Workspace');
   });
 });

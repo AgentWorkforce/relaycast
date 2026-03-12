@@ -3,13 +3,113 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createRelayMcpServer, MCP_VERSION, type McpServerOptions } from './server.js';
 import { randomUUID } from 'node:crypto';
 import { createMcpTelemetry } from './telemetry.js';
+import { createInternalRelayCast } from '@relaycast/sdk/internal';
+import type { McpWorkspaceConfig } from './workspaces.js';
+import { resolveDefaultWorkspaceId } from './workspaces.js';
+
+const mcpOrigin = {
+  surface: 'mcp' as const,
+  client: '@relaycast/mcp',
+  version: MCP_VERSION,
+};
+
+/**
+ * Bootstrap workspaces by verifying/refreshing tokens and joining each
+ * workspace into the MCP server's session via setSession + saveWorkspaceContext.
+ *
+ * This is called during startStdio when `workspaces` are provided.
+ */
+async function bootstrapWorkspaces(
+  workspaces: McpWorkspaceConfig[],
+  baseUrl?: string,
+): Promise<McpWorkspaceConfig[]> {
+  const bootstrapped: McpWorkspaceConfig[] = [];
+
+  for (const ws of workspaces) {
+    try {
+      const relay = createInternalRelayCast({
+        apiKey: ws.api_key,
+        baseUrl,
+      }, mcpOrigin);
+
+      let token = ws.agent_token;
+      const agentName = ws.agent_name ?? ws.workspace_alias ?? ws.workspace_id;
+      let workspaceName = ws.workspace_name;
+
+      try {
+        const workspace = await relay.workspace.info();
+        workspaceName = workspace.name;
+      } catch {
+        // Keep any pre-supplied name or leave undefined if workspace info is unavailable.
+      }
+
+      // If we have a token, verify it's still valid via an inbox call
+      if (token) {
+        try {
+          const client = relay.as(token);
+          await client.inbox();
+        } catch {
+          // Token is invalid, need to re-register
+          token = undefined;
+        }
+      }
+
+      // If no valid token, register or rotate
+      if (!token) {
+        const result = await relay.agents.registerOrRotate({
+          name: agentName,
+          type: 'agent',
+        });
+        token = result.token;
+      }
+
+      bootstrapped.push({
+        ...ws,
+        agent_token: token,
+        agent_name: agentName,
+        workspace_name: workspaceName,
+      });
+    } catch (err) {
+      console.error(
+        `[bootstrap] Failed to bootstrap workspace ${ws.workspace_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // Still include the workspace config even if bootstrap failed,
+      // so it can be retried later
+      bootstrapped.push(ws);
+    }
+  }
+
+  return bootstrapped;
+}
 
 /**
  * Start MCP server with stdio transport (single agent).
  * Reads from stdin, writes to stdout.
  */
 export async function startStdio(options: McpServerOptions): Promise<void> {
-  const mcpServer = createRelayMcpServer({ ...options, telemetryTransport: 'stdio' });
+  let effectiveOptions = { ...options, telemetryTransport: 'stdio' as const };
+
+  // If workspaces are provided, bootstrap them before creating the server
+  if (options.workspaces?.length) {
+    const bootstrapped = await bootstrapWorkspaces(options.workspaces, options.baseUrl);
+    effectiveOptions = { ...effectiveOptions, workspaces: bootstrapped };
+
+    // Set the default workspace's api key/token/name as the primary session
+    const defaultWsId = resolveDefaultWorkspaceId(bootstrapped, options.defaultWorkspace);
+    const defaultWs = bootstrapped.find(
+      w => w.workspace_id === defaultWsId && w.agent_token,
+    );
+    if (defaultWs) {
+      effectiveOptions.apiKey = effectiveOptions.apiKey ?? defaultWs.api_key;
+      effectiveOptions.agentToken = effectiveOptions.agentToken ?? defaultWs.agent_token;
+      effectiveOptions.agentName = effectiveOptions.agentName ?? defaultWs.agent_name;
+    }
+  }
+
+  // createRelayMcpServer now populates session.workspaces from
+  // effectiveOptions.workspaces internally — no need to reach into internals.
+  const mcpServer = createRelayMcpServer(effectiveOptions);
+
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
 }

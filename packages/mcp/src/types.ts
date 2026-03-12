@@ -6,6 +6,10 @@ export interface WorkspaceContext {
   workspaceKey: string;
   agentToken: string;
   agentName: string;
+  /** Canonical workspace name from the Relaycast API. */
+  workspaceName?: string;
+  /** Optional user-saved label for switching. */
+  workspaceLabel?: string;
   wsBridge: WsBridge | null;
   subscriptions: SubscriptionManager | null;
   wsInitAttempted: boolean;

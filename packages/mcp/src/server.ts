@@ -25,6 +25,8 @@ import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 import { resolveToolName } from './tool-aliases.js';
+import type { McpWorkspaceConfig } from './workspaces.js';
+import { findWorkspaceContext } from './workspaces.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -41,6 +43,10 @@ export interface McpServerOptions {
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
+  /** Multi-workspace configs parsed from RELAY_WORKSPACES_JSON. */
+  workspaces?: McpWorkspaceConfig[];
+  /** Default workspace ID or alias to use as the active workspace. */
+  defaultWorkspace?: string;
 }
 
 type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
@@ -146,7 +152,24 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }
   };
 
-  const getAgentClient = (): AgentClient => {
+  const getAgentClient = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+  ): AgentClient => {
+    // If workspace routing is specified, resolve the target workspace context
+    if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias)) {
+      const ctx = findWorkspaceContext(session, wsRouting, options.workspaces);
+      if (!ctx) {
+        throw new Error(
+          `Workspace not found: ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. ` +
+          'Join the workspace first via "workspace.join" or bootstrap via RELAY_WORKSPACES_JSON.',
+        );
+      }
+      return createInternalRelayCast({
+        apiKey: ctx.agentToken,
+        baseUrl: options.baseUrl,
+      }, mcpOrigin).as(ctx.agentToken);
+    }
+
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "agent.register" tool first.');
     }
@@ -230,6 +253,24 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           };
       return await origCallToolHandler(request, extra);
     });
+  }
+
+  // Populate workspace contexts from options so routing works without
+  // external code reaching into server internals.
+  if (options.workspaces?.length) {
+    for (const ws of options.workspaces) {
+      if (ws.agent_token && ws.agent_name) {
+        session.workspaces.set(ws.api_key, {
+          workspaceKey: ws.api_key,
+          agentToken: ws.agent_token,
+          agentName: ws.agent_name,
+          workspaceName: ws.workspace_name,
+          wsBridge: null,
+          subscriptions: null,
+          wsInitAttempted: false,
+        });
+      }
+    }
   }
 
   return mcpServer;
