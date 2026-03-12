@@ -4,3 +4,4 @@ export { startStdio, createHttpHandler } from './transports.js';
 export type { SessionLifecycle } from './transports.js';
 export { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 export type { SessionState } from './types.js';
+export type { McpWorkspaceConfig } from './workspaces.js';

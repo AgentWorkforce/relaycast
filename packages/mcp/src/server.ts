@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { AgentClient } from '@relaycast/sdk';
+import { AgentClient, type RelayCast, type WorkspaceRef } from '@relaycast/sdk';
 import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
 import { registerChannelTools } from './tools/channels.js';
@@ -14,8 +14,19 @@ import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
+import {
+  buildMultiWorkspaceManager,
+  resolveDefaultWorkspaceId,
+  validateWorkspaceConfigs,
+  type McpWorkspaceConfig,
+} from './workspaces.js';
 
 export const MCP_VERSION = '0.1.2';
+
+type SelectedWorkspace =
+  | { kind: 'configured'; workspaceId: string }
+  | { kind: 'legacy' }
+  | null;
 
 export interface McpServerOptions {
   apiKey?: string;
@@ -28,15 +39,37 @@ export interface McpServerOptions {
   agentType?: 'agent' | 'human';
   /** When true, the `register` tool enforces the pre-registered agentName. */
   strictAgentName?: boolean;
+  /** Multi-workspace bootstrap config for stdio/embedded use. */
+  workspaces?: McpWorkspaceConfig[];
+  /** Default workspace ID or alias used when a tool call omits workspace routing. */
+  defaultWorkspace?: string;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
 }
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
+  const configuredWorkspaces = validateWorkspaceConfigs(options.workspaces ?? []).map((workspace) => ({
+    ...workspace,
+  }));
+  const workspaceById = new Map(configuredWorkspaces.map((workspace) => [workspace.workspaceId, workspace]));
+  const defaultWorkspaceId = resolveDefaultWorkspaceId(configuredWorkspaces, options.defaultWorkspace);
+  let selectedWorkspace: SelectedWorkspace = defaultWorkspaceId
+    ? { kind: 'configured', workspaceId: defaultWorkspaceId }
+    : configuredWorkspaces.length === 0 && (options.apiKey || options.agentToken || options.agentName)
+      ? { kind: 'legacy' }
+      : null;
+  let multiWorkspaceManager = buildMultiWorkspaceManager(
+    configuredWorkspaces,
+    defaultWorkspaceId,
+    options.baseUrl,
+  );
+  const selectedConfiguredWorkspace = selectedWorkspace?.kind === 'configured'
+    ? workspaceById.get(selectedWorkspace.workspaceId) ?? null
+    : null;
   const session: SessionState = createInitialSession({
-    workspaceKey: options.apiKey ?? null,
-    agentToken: options.agentToken ?? null,
-    agentName: options.agentName ?? null,
+    workspaceKey: selectedConfiguredWorkspace?.workspaceKey ?? options.apiKey ?? null,
+    agentToken: selectedConfiguredWorkspace?.agentToken ?? options.agentToken ?? null,
+    agentName: selectedConfiguredWorkspace?.agentName ?? options.agentName ?? null,
   });
   const mcpOrigin = {
     surface: 'mcp' as const,
@@ -66,8 +99,66 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   });
 
   const getSession = () => session;
-  const getRelay = () => {
-    const workspaceKey = session.workspaceKey;
+  const matchConfiguredWorkspaceByKey = (workspaceKey: string | null | undefined): string | null => {
+    if (!workspaceKey) return null;
+    for (const workspace of configuredWorkspaces) {
+      if (workspace.workspaceKey === workspaceKey) {
+        return workspace.workspaceId;
+      }
+    }
+    return null;
+  };
+  const rebuildMultiWorkspaceState = (): void => {
+    multiWorkspaceManager = buildMultiWorkspaceManager(
+      configuredWorkspaces,
+      defaultWorkspaceId,
+      options.baseUrl,
+    );
+  };
+  const resolveConfiguredWorkspaceId = (workspace?: WorkspaceRef): string => {
+    const workspaceId = workspace?.workspaceId?.trim();
+    if (workspaceId) {
+      if (!workspaceById.has(workspaceId)) {
+        throw new Error(`Workspace "${workspaceId}" is not configured.`);
+      }
+      return workspaceId;
+    }
+
+    const workspaceAlias = workspace?.workspaceAlias?.trim();
+    if (workspaceAlias) {
+      const matchedWorkspace = configuredWorkspaces.find(
+        (membership) => membership.workspaceAlias === workspaceAlias,
+      );
+      if (!matchedWorkspace) {
+        throw new Error(`Workspace alias "${workspaceAlias}" is not configured.`);
+      }
+      return matchedWorkspace.workspaceId;
+    }
+
+    if (selectedWorkspace?.kind === 'configured') {
+      return selectedWorkspace.workspaceId;
+    }
+
+    if (defaultWorkspaceId) {
+      return defaultWorkspaceId;
+    }
+
+    if (configuredWorkspaces.length === 1) {
+      return configuredWorkspaces[0]!.workspaceId;
+    }
+
+    throw new Error('Ambiguous workspace selection. Provide workspace_id or workspace_alias.');
+  };
+  const getRelay = (workspace?: WorkspaceRef): RelayCast => {
+    const workspaceKey = selectedWorkspace?.kind === 'legacy' && !workspace
+      ? session.workspaceKey
+      : (() => {
+        if (configuredWorkspaces.length === 0 && !workspace) {
+          return session.workspaceKey;
+        }
+        const configuredWorkspace = workspaceById.get(resolveConfiguredWorkspaceId(workspace));
+        return configuredWorkspace?.workspaceKey ?? null;
+      })();
     if (!workspaceKey) {
       throw new Error(
         'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
@@ -79,11 +170,41 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }, mcpOrigin);
   };
   const setSession = (partial: Partial<SessionState>) => {
+    let nextPartial = { ...partial };
+
+    if (partial.workspaceKey !== undefined) {
+      const matchedWorkspaceId = matchConfiguredWorkspaceByKey(partial.workspaceKey);
+      if (matchedWorkspaceId) {
+        selectedWorkspace = { kind: 'configured', workspaceId: matchedWorkspaceId };
+        const configuredWorkspace = workspaceById.get(matchedWorkspaceId)!;
+        nextPartial = {
+          ...nextPartial,
+          workspaceKey: configuredWorkspace.workspaceKey ?? partial.workspaceKey ?? null,
+          agentToken: partial.agentToken === undefined
+            ? configuredWorkspace.agentToken ?? null
+            : partial.agentToken,
+          agentName: partial.agentName === undefined
+            ? configuredWorkspace.agentName ?? null
+            : partial.agentName,
+        };
+      } else if (partial.workspaceKey) {
+        selectedWorkspace = { kind: 'legacy' };
+      } else {
+        selectedWorkspace = defaultWorkspaceId
+          ? { kind: 'configured', workspaceId: defaultWorkspaceId }
+          : configuredWorkspaces.length === 0
+            ? null
+            : configuredWorkspaces.length === 1
+              ? { kind: 'configured', workspaceId: configuredWorkspaces[0]!.workspaceId }
+              : null;
+      }
+    }
+
     const nextAgentToken =
-      partial.agentToken === undefined ? session.agentToken : partial.agentToken;
-    const nextAgentName = partial.agentName ?? session.agentName ?? null;
+      nextPartial.agentToken === undefined ? session.agentToken : nextPartial.agentToken;
+    const nextAgentName = nextPartial.agentName ?? session.agentName ?? null;
     const shouldResetBridge =
-      partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+      nextPartial.agentToken !== undefined && nextPartial.agentToken !== session.agentToken;
 
     if (shouldResetBridge && session.wsBridge) {
       session.wsBridge.stop();
@@ -113,7 +234,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           },
         );
         wsBridge.start();
-        Object.assign(session, partial, {
+        Object.assign(session, nextPartial, {
           wsBridge,
           subscriptions,
           wsInitAttempted: true,
@@ -121,7 +242,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       } catch {
         // In non-WS runtimes (e.g. some test environments), keep session usable
         // without real-time resource updates.
-        Object.assign(session, partial, {
+        Object.assign(session, nextPartial, {
           wsBridge: null,
           subscriptions: null,
           wsInitAttempted: true,
@@ -132,11 +253,55 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         agent_name: nextAgentName,
       });
     } else {
-      Object.assign(session, partial);
+      Object.assign(session, nextPartial);
+    }
+
+    if (selectedWorkspace?.kind === 'configured') {
+      const configuredWorkspace = workspaceById.get(selectedWorkspace.workspaceId);
+      if (configuredWorkspace) {
+        configuredWorkspace.workspaceKey = session.workspaceKey ?? undefined;
+        configuredWorkspace.agentToken = session.agentToken ?? undefined;
+        configuredWorkspace.agentName = session.agentName ?? undefined;
+        rebuildMultiWorkspaceState();
+      }
     }
   };
 
-  const getAgentClient = (): AgentClient => {
+  const getAgentClient = (workspace?: WorkspaceRef): AgentClient => {
+    if (workspace) {
+      const workspaceId = resolveConfiguredWorkspaceId(workspace);
+      const configuredWorkspace = workspaceById.get(workspaceId)!;
+      if (!configuredWorkspace.agentToken || !multiWorkspaceManager) {
+        throw new Error(
+          `Agent token not configured for workspace "${workspaceId}". Call "register" for that workspace first.`,
+        );
+      }
+      return multiWorkspaceManager.agentFor({ workspaceId });
+    }
+
+    if (selectedWorkspace?.kind === 'legacy') {
+      if (!session.agentToken) {
+        throw new Error('Not registered. Call the "register" tool first.');
+      }
+      return createInternalRelayCast({
+        apiKey: session.agentToken,
+        baseUrl: options.baseUrl,
+      }, mcpOrigin).as(
+        session.agentToken,
+      );
+    }
+
+    if (configuredWorkspaces.length > 0) {
+      const workspaceId = resolveConfiguredWorkspaceId();
+      const configuredWorkspace = workspaceById.get(workspaceId)!;
+      if (!configuredWorkspace.agentToken || !multiWorkspaceManager) {
+        throw new Error(
+          `Agent token not configured for workspace "${workspaceId}". Call "register" for that workspace first.`,
+        );
+      }
+      return multiWorkspaceManager.agentFor({ workspaceId });
+    }
+
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "register" tool first.');
     }

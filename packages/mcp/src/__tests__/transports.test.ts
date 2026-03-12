@@ -136,4 +136,59 @@ describe("startStdio bootstrap", () => {
       }),
     );
   });
+
+  it("bootstraps each configured workspace from workspaces[]", async () => {
+    mocks.registerOrRotateMock
+      .mockResolvedValueOnce({
+        name: "worker-alpha",
+        token: "at_live_alpha",
+      })
+      .mockResolvedValueOnce({
+        name: "worker-beta",
+        token: "at_live_beta",
+      });
+
+    await startStdio({
+      workspaces: [
+        {
+          workspaceId: "ws_alpha",
+          workspaceAlias: "alpha",
+          workspaceKey: "rk_live_alpha",
+          agentName: "worker-alpha",
+        },
+        {
+          workspaceId: "ws_beta",
+          workspaceAlias: "beta",
+          workspaceKey: "rk_live_beta",
+          agentName: "worker-beta",
+          agentToken: "at_live_stale_beta",
+        },
+      ],
+      defaultWorkspace: "alpha",
+    });
+
+    expect(mocks.registerOrRotateMock).toHaveBeenNthCalledWith(1, {
+      name: "worker-alpha",
+      type: undefined,
+    });
+    expect(mocks.asMock).toHaveBeenCalledWith("at_live_stale_beta");
+    expect(mocks.createRelayMcpServerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultWorkspace: "alpha",
+        telemetryTransport: "stdio",
+        workspaces: [
+          expect.objectContaining({
+            workspaceId: "ws_alpha",
+            agentToken: "at_live_alpha",
+            agentName: "worker-alpha",
+          }),
+          expect.objectContaining({
+            workspaceId: "ws_beta",
+            agentToken: "at_live_stale_beta",
+            agentName: "worker-beta",
+          }),
+        ],
+      }),
+    );
+  });
 });

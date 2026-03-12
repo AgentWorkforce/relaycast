@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AgentClient } from '@relaycast/sdk';
+import type { AgentClient, WorkspaceRef } from '@relaycast/sdk';
 import type { SessionState } from './types.js';
 import type { McpTelemetry } from './telemetry.js';
+import { workspaceRefFromArgs } from './workspaces.js';
 
 const SKIP_PIGGYBACK = new Set([
   'check_inbox',
@@ -37,7 +38,7 @@ function hasContentArray(value: unknown): value is ContentCarrier {
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
-  getAgentClient: () => AgentClient,
+  getAgentClient: (workspace?: WorkspaceRef) => AgentClient,
   telemetry?: McpTelemetry,
 ): void {
   const original = mcpServer.registerTool.bind(mcpServer) as RegisterToolFn;
@@ -98,10 +99,14 @@ export function enablePiggyback(
         });
       }
 
-      if (!shouldPiggybackInbox || !getSession().agentToken) return result;
+      if (!shouldPiggybackInbox) return result;
 
       try {
-        const client = getAgentClient();
+        const workspaceRef = workspaceRefFromArgs(args[0]);
+        if (!workspaceRef && !getSession().agentToken) {
+          return result;
+        }
+        const client = getAgentClient(workspaceRef);
         const inbox = await client.inbox();
 
         const hasUnread =

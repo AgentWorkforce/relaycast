@@ -66,6 +66,11 @@ vi.mock('@relaycast/sdk', () => {
 
   return {
     AgentClient: class {},
+    MultiWorkspaceSessionManager: class {
+      agentFor() {
+        return mockAgentClient;
+      }
+    },
     HttpClient: class {},
     Relay: MockRelay,
   };

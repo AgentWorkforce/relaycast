@@ -9,10 +9,72 @@ import {
 } from "./server.js";
 import { randomUUID } from "node:crypto";
 import { createMcpTelemetry } from "./telemetry.js";
+import type { McpWorkspaceConfig } from "./workspaces.js";
+
+async function resolveBootstrappedWorkspace(
+  workspace: McpWorkspaceConfig,
+  options: Pick<McpServerOptions, "baseUrl">,
+): Promise<McpWorkspaceConfig> {
+  if (!workspace.workspaceKey || !workspace.agentName) {
+    return workspace;
+  }
+
+  const relay = createInternalRelayCast(
+    {
+      apiKey: workspace.workspaceKey,
+      baseUrl: options.baseUrl,
+    },
+    {
+      surface: "mcp",
+      client: "@relaycast/mcp",
+      version: MCP_VERSION,
+    },
+  );
+
+  if (workspace.agentToken) {
+    try {
+      await relay.as(workspace.agentToken).inbox();
+      return workspace;
+    } catch (err) {
+      const relayErr = err as Partial<RelayError> | undefined;
+      const unauthorized =
+        relayErr?.code === "unauthorized" ||
+        relayErr?.statusCode === 401 ||
+        relayErr?.statusCode === 403;
+      if (!unauthorized) {
+        throw err;
+      }
+    }
+  }
+
+  const registered = await relay.agents.registerOrRotate({
+    name: workspace.agentName,
+    type: workspace.agentType,
+  });
+
+  return {
+    ...workspace,
+    agentToken: registered.token,
+    agentName: registered.name ?? workspace.agentName,
+  };
+}
 
 async function resolveStdioBootstrapOptions(
   options: McpServerOptions,
 ): Promise<McpServerOptions> {
+  if (options.workspaces?.length) {
+    const workspaces = await Promise.all(
+      options.workspaces.map((workspace) =>
+        resolveBootstrappedWorkspace(workspace, options),
+      ),
+    );
+
+    return {
+      ...options,
+      workspaces,
+    };
+  }
+
   if (!options.apiKey || !options.agentName) {
     return options;
   }
