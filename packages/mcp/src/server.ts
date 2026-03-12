@@ -26,7 +26,7 @@ import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 import { resolveToolName } from './tool-aliases.js';
 import type { McpWorkspaceConfig } from './workspaces.js';
-import { findWorkspaceContext, workspaceRefFromArgs } from './workspaces.js';
+import { findWorkspaceContext } from './workspaces.js';
 
 export const MCP_VERSION = '0.1.2';
 

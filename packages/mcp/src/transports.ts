@@ -33,7 +33,7 @@ async function bootstrapWorkspaces(
       }, mcpOrigin);
 
       let token = ws.agent_token;
-      let agentName = ws.agent_name ?? ws.workspace_alias ?? ws.workspace_id;
+      const agentName = ws.agent_name ?? ws.workspace_alias ?? ws.workspace_id;
 
       // If we have a token, verify it's still valid via an inbox call
       if (token) {
