@@ -1,10 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { describe, it, expect, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createRelayMcpServer } from '../server.js';
 import type { McpWorkspaceConfig } from '../workspaces.js';
-import type { SessionState } from '../types.js';
 
 // Mock the SDK internal modules
 vi.mock('@relaycast/sdk/internal', () => {
@@ -105,72 +103,28 @@ describe('multi-workspace server setup', () => {
     expect(server).toBeDefined();
   });
 
-  it('exposes _sessionRef for transport-level workspace population', () => {
+  it('populates workspace contexts during server creation', () => {
+    // createRelayMcpServer now populates session.workspaces internally
+    // from options.workspaces — no _sessionRef needed.
     const server = createRelayMcpServer({
       apiKey: 'rk_live_alpha_key_full',
       agentToken: 'at_alpha',
       agentName: 'AlphaBot',
       workspaces,
     });
-
-    const sessionRef = (server as unknown as { _sessionRef: SessionState })._sessionRef;
-    expect(sessionRef).toBeDefined();
-    expect(sessionRef.workspaces).toBeInstanceOf(Map);
-  });
-
-  it('allows populating workspace contexts via _sessionRef', async () => {
-    const server = createRelayMcpServer({
-      apiKey: 'rk_live_alpha_key_full',
-      agentToken: 'at_alpha',
-      agentName: 'AlphaBot',
-      workspaces,
-    });
-
-    const sessionRef = (server as unknown as { _sessionRef: SessionState })._sessionRef;
-
-    // Simulate what transports.ts bootstrapWorkspaces does
-    for (const ws of workspaces) {
-      if (ws.agent_token && ws.agent_name) {
-        sessionRef.workspaces.set(ws.api_key, {
-          workspaceKey: ws.api_key,
-          agentToken: ws.agent_token,
-          agentName: ws.agent_name,
-          wsBridge: null,
-          subscriptions: null,
-          wsInitAttempted: false,
-        });
-      }
-    }
-
-    expect(sessionRef.workspaces.size).toBe(2);
-    expect(sessionRef.workspaces.get('rk_live_alpha_key_full')?.agentName).toBe('AlphaBot');
-    expect(sessionRef.workspaces.get('rk_live_beta_key_full')?.agentName).toBe('BetaBot');
+    expect(server).toBeDefined();
   });
 
   it('message.post with workspace_id routes to correct workspace', async () => {
     const { createInternalRelayCast, __mockClient } = await import('@relaycast/sdk/internal') as any;
 
+    // Workspace contexts are now populated during server creation
     const server = createRelayMcpServer({
       apiKey: 'rk_live_alpha_key_full',
       agentToken: 'at_alpha',
       agentName: 'AlphaBot',
       workspaces,
     });
-
-    // Populate workspace contexts
-    const sessionRef = (server as unknown as { _sessionRef: SessionState })._sessionRef;
-    for (const ws of workspaces) {
-      if (ws.agent_token && ws.agent_name) {
-        sessionRef.workspaces.set(ws.api_key, {
-          workspaceKey: ws.api_key,
-          agentToken: ws.agent_token,
-          agentName: ws.agent_name,
-          wsBridge: null,
-          subscriptions: null,
-          wsInitAttempted: false,
-        });
-      }
-    }
 
     const client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();

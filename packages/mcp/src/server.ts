@@ -255,8 +255,22 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     });
   }
 
-  // Expose session reference for transport-level workspace bootstrap.
-  (mcpServer as unknown as { _sessionRef: SessionState })._sessionRef = session;
+  // Populate workspace contexts from options so routing works without
+  // external code reaching into server internals.
+  if (options.workspaces?.length) {
+    for (const ws of options.workspaces) {
+      if (ws.agent_token && ws.agent_name) {
+        session.workspaces.set(ws.api_key, {
+          workspaceKey: ws.api_key,
+          agentToken: ws.agent_token,
+          agentName: ws.agent_name,
+          wsBridge: null,
+          subscriptions: null,
+          wsInitAttempted: false,
+        });
+      }
+    }
+  }
 
   return mcpServer;
 }

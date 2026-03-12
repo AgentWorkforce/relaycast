@@ -97,38 +97,9 @@ export async function startStdio(options: McpServerOptions): Promise<void> {
     }
   }
 
+  // createRelayMcpServer now populates session.workspaces from
+  // effectiveOptions.workspaces internally — no need to reach into internals.
   const mcpServer = createRelayMcpServer(effectiveOptions);
-
-  // If workspaces were bootstrapped, save each into the session's workspaces Map
-  if (effectiveOptions.workspaces?.length) {
-    // Access the session through the server to save workspace contexts.
-    // The createRelayMcpServer already initialized the session, so we use
-    // a workspace.join-like approach by directly manipulating session state
-    // through the server's internal session reference.
-    // Since createRelayMcpServer returns a McpServer without direct session access,
-    // we rely on the fact that the session was initialized with the default workspace's
-    // credentials, and the workspace configs are passed through options.workspaces
-    // so getAgentClient can resolve them.
-    //
-    // We need to populate session.workspaces for routing to work.
-    // The cleanest way is to expose a hook. For now, we use the
-    // `_sessionRef` that createRelayMcpServer attaches to the server.
-    const sessionRef = (mcpServer as unknown as { _sessionRef?: { workspaces: Map<string, unknown> } })._sessionRef;
-    if (sessionRef) {
-      for (const ws of effectiveOptions.workspaces) {
-        if (ws.agent_token && ws.agent_name) {
-          sessionRef.workspaces.set(ws.api_key, {
-            workspaceKey: ws.api_key,
-            agentToken: ws.agent_token,
-            agentName: ws.agent_name,
-            wsBridge: null,
-            subscriptions: null,
-            wsInitAttempted: false,
-          });
-        }
-      }
-    }
-  }
 
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
