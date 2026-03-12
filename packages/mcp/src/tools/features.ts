@@ -8,7 +8,7 @@ const jsonResult = z.object({}).passthrough();
 
 export function registerFeatureTools(
   server: McpServer,
-  getAgentClient: () => AgentClient,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
 ): void {
   server.registerTool('reaction.add', {
     title: 'Add Reaction',

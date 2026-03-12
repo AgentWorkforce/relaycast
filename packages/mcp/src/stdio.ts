@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { startStdio } from './transports.js';
+import { parseWorkspaceEnv } from './workspaces.js';
 
 /**
  * Resolve the Relaycast API key from RELAY_API_KEY env var.
@@ -24,6 +25,8 @@ function parseAgentType(value: string | undefined): 'agent' | 'human' | undefine
   return undefined;
 }
 
+const workspaces = parseWorkspaceEnv(process.env.RELAY_WORKSPACES_JSON);
+
 startStdio({
   apiKey: resolveApiKey(),
   baseUrl: process.env.RELAY_BASE_URL,
@@ -31,4 +34,6 @@ startStdio({
   agentName: process.env.RELAY_AGENT_NAME,
   agentType: parseAgentType(process.env.RELAY_AGENT_TYPE),
   strictAgentName: parseStrictAgentName(process.env.RELAY_STRICT_AGENT_NAME),
+  workspaces: workspaces.length > 0 ? workspaces : undefined,
+  defaultWorkspace: process.env.RELAY_DEFAULT_WORKSPACE,
 });

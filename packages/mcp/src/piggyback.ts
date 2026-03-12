@@ -40,7 +40,7 @@ function hasContentArray(value: unknown): value is ContentCarrier {
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
-  getAgentClient: () => AgentClient,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
   telemetry?: McpTelemetry,
 ): void {
   const original = mcpServer.registerTool.bind(mcpServer) as RegisterToolFn;

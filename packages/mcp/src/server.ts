@@ -25,6 +25,8 @@ import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 import { resolveToolName } from './tool-aliases.js';
+import type { McpWorkspaceConfig } from './workspaces.js';
+import { findWorkspaceContext, workspaceRefFromArgs } from './workspaces.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -41,6 +43,10 @@ export interface McpServerOptions {
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
+  /** Multi-workspace configs parsed from RELAY_WORKSPACES_JSON. */
+  workspaces?: McpWorkspaceConfig[];
+  /** Default workspace ID or alias to use as the active workspace. */
+  defaultWorkspace?: string;
 }
 
 type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
@@ -146,7 +152,24 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }
   };
 
-  const getAgentClient = (): AgentClient => {
+  const getAgentClient = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+  ): AgentClient => {
+    // If workspace routing is specified, resolve the target workspace context
+    if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias) && options.workspaces?.length) {
+      const ctx = findWorkspaceContext(session, wsRouting, options.workspaces);
+      if (!ctx) {
+        throw new Error(
+          `Workspace not found: ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. ` +
+          'Check that it was bootstrapped via RELAY_WORKSPACES_JSON.',
+        );
+      }
+      return createInternalRelayCast({
+        apiKey: ctx.agentToken,
+        baseUrl: options.baseUrl,
+      }, mcpOrigin).as(ctx.agentToken);
+    }
+
     if (!session.agentToken) {
       throw new Error('Not registered. Call the "agent.register" tool first.');
     }
@@ -231,6 +254,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       return await origCallToolHandler(request, extra);
     });
   }
+
+  // Expose session reference for transport-level workspace bootstrap.
+  (mcpServer as unknown as { _sessionRef: SessionState })._sessionRef = session;
 
   return mcpServer;
 }
