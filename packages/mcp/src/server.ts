@@ -156,12 +156,12 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     wsRouting?: { workspace_id?: string; workspace_alias?: string },
   ): AgentClient => {
     // If workspace routing is specified, resolve the target workspace context
-    if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias) && options.workspaces?.length) {
+    if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias)) {
       const ctx = findWorkspaceContext(session, wsRouting, options.workspaces);
       if (!ctx) {
         throw new Error(
           `Workspace not found: ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. ` +
-          'Check that it was bootstrapped via RELAY_WORKSPACES_JSON.',
+          'Join the workspace first via "workspace.join" or bootstrap via RELAY_WORKSPACES_JSON.',
         );
       }
       return createInternalRelayCast({

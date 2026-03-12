@@ -638,6 +638,19 @@ async fn create_workspace(
         );
     }
 
+    // Enforce workspace name uniqueness (matches server behavior)
+    {
+        let store = state.store.read().await;
+        let duplicate = store.workspaces.values().any(|ws| ws.name == payload.name.trim());
+        if duplicate {
+            return err(
+                StatusCode::CONFLICT,
+                "workspace_name_taken",
+                format!("A workspace named \"{}\" already exists", payload.name.trim()),
+            );
+        }
+    }
+
     let workspace_id = new_id("ws");
     let api_key = random_token("rk_live_");
     let created_at = now_iso();
