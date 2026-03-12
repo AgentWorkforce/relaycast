@@ -1,5 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolRequest,
+  type ListToolsRequest,
+  type ListToolsResult,
+  type ServerNotification,
+  type ServerRequest,
+  type ServerResult,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { AgentClient } from '@relaycast/sdk';
 import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
@@ -14,6 +24,7 @@ import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
+import { resolveToolName } from './tool-aliases.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -31,6 +42,11 @@ export interface McpServerOptions {
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
 }
+
+type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
+  request: TRequest,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) => TResult | Promise<TResult>;
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const session: SessionState = createInitialSession({
@@ -70,7 +86,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     const workspaceKey = session.workspaceKey;
     if (!workspaceKey) {
       throw new Error(
-        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
+        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "workspace.create" or "workspace.set_key" first.',
       );
     }
     return createInternalRelayCast({
@@ -79,28 +95,28 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     }, mcpOrigin);
   };
   const setSession = (partial: Partial<SessionState>) => {
-    const nextAgentToken =
-      partial.agentToken === undefined ? session.agentToken : partial.agentToken;
-    const nextAgentName = partial.agentName ?? session.agentName ?? null;
-    const shouldResetBridge =
-      partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+    const switchingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
 
-    if (shouldResetBridge && session.wsBridge) {
+    if (switchingToken && session.wsBridge) {
       session.wsBridge.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;
       session.subscriptions = null;
     }
-    if (shouldResetBridge) {
+
+    if (switchingToken) {
       session.wsInitAttempted = false;
     }
 
-    // When an agent token is set, initialize the WebSocket bridge.
-    if (nextAgentToken && !session.wsBridge && !session.wsInitAttempted) {
+    // Apply the partial state update
+    Object.assign(session, partial);
+
+    // If we have a token but no bridge yet, and we haven't failed initialization, try to start it.
+    if (session.agentToken && !session.wsBridge && !session.wsInitAttempted) {
       try {
         const subscriptions = new SubscriptionManager();
         const wsClient = createInternalWsClient({
-          token: nextAgentToken,
+          token: session.agentToken,
           baseUrl: options.baseUrl,
         }, mcpOrigin);
         const wsBridge = new WsBridge(
@@ -113,32 +129,26 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           },
         );
         wsBridge.start();
-        Object.assign(session, partial, {
-          wsBridge,
-          subscriptions,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = wsBridge;
+        session.subscriptions = subscriptions;
+        session.wsInitAttempted = true;
       } catch {
         // In non-WS runtimes (e.g. some test environments), keep session usable
         // without real-time resource updates.
-        Object.assign(session, partial, {
-          wsBridge: null,
-          subscriptions: null,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = null;
+        session.subscriptions = null;
+        session.wsInitAttempted = true;
       }
       telemetry.capture('relaycast_mcp_session_authenticated', {
         source_surface: 'mcp',
-        agent_name: nextAgentName,
+        agent_name: session.agentName,
       });
-    } else {
-      Object.assign(session, partial);
     }
   };
 
   const getAgentClient = (): AgentClient => {
     if (!session.agentToken) {
-      throw new Error('Not registered. Call the "register" tool first.');
+      throw new Error('Not registered. Call the "agent.register" tool first.');
     }
     return createInternalRelayCast({
       apiKey: session.agentToken,
@@ -186,19 +196,39 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   // - `_meta` (internal SDK field)
   // These fields are only stripped from the LIST response; tool call validation
   // still uses the full schemas for structuredContent.
-  type RequestHandlerMap = Map<string, (...args: unknown[]) => unknown>;
+  type RequestHandlerMap = Map<string, ServerRequestHandler<unknown>>;
   const handlers = (mcpServer.server as unknown as { _requestHandlers: RequestHandlerMap })._requestHandlers;
-  const origToolsListHandler = handlers.get('tools/list');
+  const origToolsListHandler = handlers.get('tools/list') as ServerRequestHandler<
+    ListToolsRequest,
+    ListToolsResult
+  > | undefined;
   if (origToolsListHandler) {
     mcpServer.server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
-      const result = (await origToolsListHandler(req, extra)) as { tools?: Record<string, unknown>[] };
+      const result = await origToolsListHandler(req, extra);
       if (result?.tools) {
         result.tools = result.tools.map(t => {
-          const { execution, outputSchema, _meta, ...clean } = t;
+          const { execution: _execution, outputSchema: _outputSchema, _meta, ...clean } = t;
           return clean;
         });
       }
       return result;
+    });
+  }
+
+  const origCallToolHandler = handlers.get('tools/call') as ServerRequestHandler<CallToolRequest> | undefined;
+  if (origCallToolHandler) {
+    mcpServer.server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+      const resolvedName = resolveToolName(req.params.name);
+      const request = resolvedName === req.params.name
+        ? req
+        : {
+            ...req,
+            params: {
+              ...req.params,
+              name: resolvedName,
+            },
+          };
+      return await origCallToolHandler(request, extra);
     });
   }
 

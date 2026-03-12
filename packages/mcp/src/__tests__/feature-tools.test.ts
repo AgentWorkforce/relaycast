@@ -29,7 +29,7 @@ describe('feature tools', () => {
   it('add_reaction calls react()', async () => {
     mockAgentClient.react.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'add_reaction',
+      name: 'reaction.add',
       arguments: { message_id: 'msg1', emoji: '👍' },
     });
     expect(mockAgentClient.react).toHaveBeenCalledWith('msg1', '👍');
@@ -39,7 +39,7 @@ describe('feature tools', () => {
   it('remove_reaction calls unreact()', async () => {
     mockAgentClient.unreact.mockResolvedValue(undefined);
     await client.callTool({
-      name: 'remove_reaction',
+      name: 'reaction.remove',
       arguments: { message_id: 'msg1', emoji: '👍' },
     });
     expect(mockAgentClient.unreact).toHaveBeenCalledWith('msg1', '👍');
@@ -48,7 +48,7 @@ describe('feature tools', () => {
   it('search_messages calls search()', async () => {
     mockAgentClient.search.mockResolvedValue([]);
     await client.callTool({
-      name: 'search_messages',
+      name: 'message.search',
       arguments: { query: 'hello' },
     });
     expect(mockAgentClient.search).toHaveBeenCalledWith('hello', {
@@ -60,14 +60,14 @@ describe('feature tools', () => {
 
   it('check_inbox calls inbox()', async () => {
     mockAgentClient.inbox.mockResolvedValue({ unread: 0 });
-    await client.callTool({ name: 'check_inbox', arguments: {} });
+    await client.callTool({ name: 'inbox.check', arguments: {} });
     expect(mockAgentClient.inbox).toHaveBeenCalled();
   });
 
   it('mark_read calls markRead()', async () => {
     mockAgentClient.markRead.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'mark_read',
+      name: 'inbox.mark_read',
       arguments: { message_id: 'msg1' },
     });
     expect(mockAgentClient.markRead).toHaveBeenCalledWith('msg1');
@@ -81,7 +81,7 @@ describe('feature tools', () => {
       { agent: 'bot1', read_at: '2025-01-01' },
     ]);
     await client.callTool({
-      name: 'get_readers',
+      name: 'inbox.get_readers',
       arguments: { message_id: 'msg1' },
     });
     expect(mockAgentClient.readers).toHaveBeenCalledWith('msg1');
@@ -93,7 +93,7 @@ describe('feature tools', () => {
       upload_url: 'https://...',
     });
     await client.callTool({
-      name: 'upload_file',
+      name: 'file.upload',
       arguments: {
         filename: 'test.txt',
         content_type: 'text/plain',

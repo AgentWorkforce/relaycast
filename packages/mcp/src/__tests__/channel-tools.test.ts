@@ -37,7 +37,7 @@ describe('channel tools', () => {
     });
 
     const result = await client.callTool({
-      name: 'create_channel',
+      name: 'channel.create',
       arguments: { name: 'general', topic: 'Main' },
     });
     expect(mockAgentClient.channels.create).toHaveBeenCalledWith({
@@ -49,14 +49,14 @@ describe('channel tools', () => {
 
   it('list_channels calls channels.list', async () => {
     mockAgentClient.channels.list.mockResolvedValue([]);
-    await client.callTool({ name: 'list_channels', arguments: {} });
+    await client.callTool({ name: 'channel.list', arguments: {} });
     expect(mockAgentClient.channels.list).toHaveBeenCalledWith(undefined);
   });
 
   it('join_channel calls channels.join', async () => {
     mockAgentClient.channels.join.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'join_channel',
+      name: 'channel.join',
       arguments: { channel: 'general' },
     });
     expect(mockAgentClient.channels.join).toHaveBeenCalledWith('general');
@@ -68,7 +68,7 @@ describe('channel tools', () => {
   it('leave_channel calls channels.leave', async () => {
     mockAgentClient.channels.leave.mockResolvedValue(undefined);
     await client.callTool({
-      name: 'leave_channel',
+      name: 'channel.leave',
       arguments: { channel: 'general' },
     });
     expect(mockAgentClient.channels.leave).toHaveBeenCalledWith('general');
@@ -77,7 +77,7 @@ describe('channel tools', () => {
   it('invite_to_channel calls channels.invite', async () => {
     mockAgentClient.channels.invite.mockResolvedValue(undefined);
     await client.callTool({
-      name: 'invite_to_channel',
+      name: 'channel.invite',
       arguments: { channel: 'general', agent: 'bot1' },
     });
     expect(mockAgentClient.channels.invite).toHaveBeenCalledWith('general', 'bot1');
@@ -89,7 +89,7 @@ describe('channel tools', () => {
       topic: 'New',
     });
     await client.callTool({
-      name: 'set_channel_topic',
+      name: 'channel.set_topic',
       arguments: { channel: 'general', topic: 'New' },
     });
     expect(mockAgentClient.channels.setTopic).toHaveBeenCalledWith('general', 'New');
@@ -98,7 +98,7 @@ describe('channel tools', () => {
   it('archive_channel calls channels.archive', async () => {
     mockAgentClient.channels.archive.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'archive_channel',
+      name: 'channel.archive',
       arguments: { channel: 'old' },
     });
     expect(mockAgentClient.channels.archive).toHaveBeenCalledWith('old');

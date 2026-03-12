@@ -10,10 +10,6 @@ export type WsEvent = {
  * Transform an internal WsEvent into the ServerEvent shape defined in @relaycast/types.
  * This strips internal fields (workspace_id, channel_id, timestamp) and reshapes
  * the `data` bag into the canonical typed event format that clients expect.
- *
- * Known websocket event payloads intentionally omit `workspace_id`, so any
- * multi-workspace client must restore workspace context from the connection
- * that delivered the event rather than the event body itself.
  */
 export function transformForClient(event: WsEvent): Record<string, unknown> {
   const d = event.data;

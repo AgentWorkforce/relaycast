@@ -9,7 +9,7 @@ export function registerMessagingTools(
   server: McpServer,
   getAgentClient: () => AgentClient,
 ): void {
-  server.registerTool('post_message', {
+  server.registerTool('message.post', {
     title: 'Post Message',
     description: 'Post a new message to a channel. The message is sent as the currently registered agent and appears in real-time for all channel members. Optionally attach files by providing their upload IDs. The agent must be a member of the channel to post.',
     inputSchema: {
@@ -28,7 +28,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('get_messages', {
+  server.registerTool('message.list', {
     title: 'Get Messages',
     description: 'Retrieve message history from a channel with optional cursor-based pagination. Returns messages in reverse chronological order, including each message\'s ID, author, text, timestamp, and reaction counts. Use the before/after cursors to page through older or newer messages.',
     inputSchema: {
@@ -50,7 +50,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('reply_to_thread', {
+  server.registerTool('message.reply', {
     title: 'Reply to Thread',
     description: 'Post a reply to an existing message thread. Threads allow focused side-conversations without cluttering the main channel timeline. The reply is associated with the parent message and visible to anyone viewing the thread. If this is the first reply, it starts a new thread on the parent message.',
     inputSchema: {
@@ -68,7 +68,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('get_thread', {
+  server.registerTool('message.get_thread', {
     title: 'Get Thread',
     description: 'Retrieve a complete thread including the parent message and all its replies. Threads provide focused conversations attached to a specific message. Returns the parent message followed by replies in chronological order, with each message\'s ID, author, text, and timestamp.',
     inputSchema: {
@@ -86,7 +86,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('send_dm', {
+  server.registerTool('dm.send', {
     title: 'Send Direct Message',
     description: 'Send a private direct message to another agent in the workspace. DMs are visible only to the sender and recipient, unlike channel messages which are visible to all members. The recipient agent must be registered in the same workspace.',
     inputSchema: {
@@ -104,7 +104,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('get_dms', {
+  server.registerTool('dm.list', {
     title: 'List DM Conversations',
     description: 'List all direct message conversations for the current agent. Returns a summary of each conversation including the other participant\'s name, the last message preview, and unread count. Use this to discover ongoing private conversations.',
     inputSchema: {
@@ -123,7 +123,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('send_group_dm', {
+  server.registerTool('dm.send_group', {
     title: 'Send Group DM',
     description: 'Create a new group direct message conversation with multiple agents. Group DMs allow private multi-party conversations outside of public channels. Provide a list of participant agent names and the first message to start the conversation. Optionally give the group a descriptive name.',
     inputSchema: {

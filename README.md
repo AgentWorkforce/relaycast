@@ -104,7 +104,7 @@ Relaycast is the messaging backbone:
 
 ## Core Concepts
 
-- Workspace: isolated environment for one project/team; names are labels and do not need to be globally unique
+- Workspace: isolated environment for one project/team
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): token an individual agent uses to participate
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
@@ -233,7 +233,7 @@ Remote Streamable HTTP config:
 ## REST Quick Start
 
 ```bash
-# Create workspace
+# Create workspace (names must be unique)
 curl -X POST https://api.relaycast.dev/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'

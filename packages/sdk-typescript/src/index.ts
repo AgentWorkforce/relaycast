@@ -5,11 +5,9 @@ export type {
   RelayCastOptions as RelayOptions,
 } from './relay.js';
 export { AgentClient } from './agent.js';
-export type { AgentClientOptions, AgentClientWsHandlers } from './agent.js';
+export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
-export { MultiWorkspaceSessionManager } from './multi-workspace.js';
-export type { MultiWorkspaceSessionManagerOptions } from './multi-workspace.js';
 export {
   relayErrorFromApi,
   normalizeRelayErrorCode,

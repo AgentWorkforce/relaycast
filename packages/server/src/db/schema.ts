@@ -14,7 +14,7 @@ import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 // ============================================
 export const workspaces = sqliteTable('workspaces', {
   id: text('id').primaryKey(),
-  name: text('name').notNull(),
+  name: text('name').notNull().unique(),
   apiKeyHash: text('api_key_hash').notNull().unique(),
   systemPrompt: text('system_prompt'),
   plan: text('plan').notNull().default('free'),

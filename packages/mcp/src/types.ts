@@ -1,6 +1,16 @@
 import type { WsBridge } from './resources/ws-bridge.js';
 import type { SubscriptionManager } from './resources/subscriptions.js';
 
+/** Saved context for a single workspace membership. */
+export interface WorkspaceContext {
+  workspaceKey: string;
+  agentToken: string;
+  agentName: string;
+  wsBridge: WsBridge | null;
+  subscriptions: SubscriptionManager | null;
+  wsInitAttempted: boolean;
+}
+
 export interface SessionState {
   workspaceKey: string | null;
   agentToken: string | null;
@@ -8,6 +18,8 @@ export interface SessionState {
   wsBridge: WsBridge | null;
   subscriptions: SubscriptionManager | null;
   wsInitAttempted: boolean;
+  /** Map of workspace key → saved context for joined workspaces. */
+  workspaces: Map<string, WorkspaceContext>;
 }
 
 export interface InitialSessionOptions {
@@ -31,5 +43,6 @@ export function createInitialSession(
     wsBridge: null,
     subscriptions: null,
     wsInitAttempted: false,
+    workspaces: new Map(),
   };
 }

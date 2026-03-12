@@ -46,8 +46,25 @@ describe('MCP → SDK → HTTP integration', () => {
       let data: unknown = {};
 
       // Registration → return token so getAgentClient works
-      if (path === '/v1/agents' && req.method === 'POST') {
-        data = { id: '1', name: req.body && (req.body as Record<string, unknown>).name, token: 'at_test_integration', status: 'online' };
+      if (path === '/v1/workspaces' && req.method === 'POST') {
+        data = {
+          workspace_id: 'ws_created',
+          api_key: 'rk_live_created123',
+          created_at: new Date().toISOString(),
+        };
+      } else if (path === '/v1/agents' && req.method === 'POST') {
+        const authHeader = req.headers.authorization;
+        const token = authHeader === 'Bearer rk_live_ws2'
+          ? 'at_live_ws2'
+          : authHeader === 'Bearer rk_live_ws3'
+            ? 'at_live_ws3'
+            : 'at_test_integration';
+        data = {
+          id: '1',
+          name: req.body && (req.body as Record<string, unknown>).name,
+          token,
+          status: 'online',
+        };
       } else if (path === '/v1/agents' && req.method === 'GET') {
         data = [{ id: '1', name: 'TestAgent', status: 'online' }];
       } else if (path.match(/\/v1\/channels\/[^/]+\/messages$/) && req.method === 'POST') {
@@ -121,7 +138,7 @@ describe('MCP → SDK → HTTP integration', () => {
     }) as unknown as typeof global.fetch;
 
     const mcpServer = createRelayMcpServer({
-      apiKey: 'rk_test_integration123456789abcdef',
+      apiKey: 'rk_live_int1',
       baseUrl: 'https://api.test.dev',
     });
 
@@ -131,7 +148,7 @@ describe('MCP → SDK → HTTP integration', () => {
 
     // Register first to enable agent-token-dependent tools
     await client.callTool({
-      name: 'register',
+      name: 'agent.register',
       arguments: { name: 'IntegrationBot', persona: 'test bot' },
     });
     captured = []; // Reset captures after registration
@@ -144,109 +161,176 @@ describe('MCP → SDK → HTTP integration', () => {
   // ─── Auth ──────────────────────────────────────────────
 
   it('uses agent token for authenticated requests after register', async () => {
-    await client.callTool({ name: 'list_channels', arguments: {} });
+    await client.callTool({ name: 'channel.list', arguments: {} });
     expect(captured[0].headers['authorization']).toBe('Bearer at_test_integration');
   });
 
   it('sends mcp origin headers on relay API requests', async () => {
-    await client.callTool({ name: 'list_channels', arguments: {} });
+    await client.callTool({ name: 'channel.list', arguments: {} });
     const req = lastReq();
     expect(req.headers['x-relaycast-origin-surface']).toBe('mcp');
     expect(req.headers['x-relaycast-origin-client']).toBe('@relaycast/mcp');
     expect(req.headers['x-relaycast-origin-version']).toBeDefined();
   });
 
+  // ─── Workspaces ────────────────────────────────────────
+
+  it('workspace.create → POST /v1/workspaces', async () => {
+    captured = [];
+    await client.callTool({ name: 'workspace.create', arguments: { name: 'project-alpha' } });
+    const req = findReq((r) => r.url.endsWith('/v1/workspaces') && r.method === 'POST');
+    expect(req).toBeDefined();
+    expect(req!.body).toEqual({ name: 'project-alpha' });
+  });
+
+  it('workspace.set_key switches workspace-level auth for agent.list', async () => {
+    captured = [];
+    await client.callTool({ name: 'workspace.set_key', arguments: { api_key: 'rk_live_ws2' } });
+    await client.callTool({ name: 'agent.list', arguments: {} });
+    const req = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'GET');
+    expect(req).toBeDefined();
+    expect(req!.headers.authorization).toBe('Bearer rk_live_ws2');
+  });
+
+  it('workspace.join registers in the new workspace and uses the restored agent token', async () => {
+    captured = [];
+    await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
+    await client.callTool({ name: 'channel.list', arguments: {} });
+
+    const registerReq = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'POST');
+    const listReq = findReq((r) => r.url.endsWith('/v1/channels') && r.method === 'GET');
+
+    expect(registerReq).toBeDefined();
+    expect(registerReq!.headers.authorization).toBe('Bearer rk_live_ws2');
+    expect(registerReq!.body).toMatchObject({ name: 'Ws2Bot' });
+    expect(listReq).toBeDefined();
+    expect(listReq!.headers.authorization).toBe('Bearer at_live_ws2');
+  });
+
+  it('workspace.list returns joined workspaces after joining another workspace', async () => {
+    await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
+    const result = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const payload = JSON.parse(((result.content ?? []) as Array<{ text: string }>)[0]!.text) as {
+      workspaces: Array<{ agent_name: string; is_active: boolean; workspace_ref: string }>;
+      active_workspace_ref: string | null;
+    };
+
+    expect(payload.workspaces).toHaveLength(2);
+    expect(payload.workspaces.some((workspace) => workspace.agent_name === 'IntegrationBot')).toBe(true);
+    expect(payload.workspaces.some((workspace) => workspace.agent_name === 'Ws2Bot' && workspace.is_active)).toBe(true);
+    expect(payload.active_workspace_ref).toMatch(/^ws_[a-f0-9]{12}$/);
+  });
+
+  it('workspace.switch restores the previous workspace agent token from workspace_ref', async () => {
+    await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
+    const listResult = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const payload = JSON.parse(((listResult.content ?? []) as Array<{ text: string }>)[0]!.text) as {
+      workspaces: Array<{ workspace_ref: string; agent_name: string }>;
+    };
+    const target = payload.workspaces.find((workspace) => workspace.agent_name === 'IntegrationBot');
+
+    captured = [];
+    await client.callTool({
+      name: 'workspace.switch',
+      arguments: { workspace_ref: target!.workspace_ref },
+    });
+    await client.callTool({ name: 'channel.list', arguments: {} });
+    const req = findReq((r) => r.url.endsWith('/v1/channels') && r.method === 'GET');
+    expect(req).toBeDefined();
+    expect(req!.headers.authorization).toBe('Bearer at_test_integration');
+  });
+
   // ─── Channels ──────────────────────────────────────────
 
-  it('create_channel → POST /v1/channels', async () => {
-    await client.callTool({ name: 'create_channel', arguments: { name: 'eng', topic: 'Engineering' } });
+  it('channel.create → POST /v1/channels', async () => {
+    await client.callTool({ name: 'channel.create', arguments: { name: 'eng', topic: 'Engineering' } });
     const req = findReq((r) => r.url.includes('/v1/channels') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toEqual({ name: 'eng', topic: 'Engineering' });
   });
 
-  it('list_channels → GET /v1/channels', async () => {
-    await client.callTool({ name: 'list_channels', arguments: {} });
+  it('channel.list → GET /v1/channels', async () => {
+    await client.callTool({ name: 'channel.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/v1/channels') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('join_channel → POST /v1/channels/:name/join', async () => {
-    await client.callTool({ name: 'join_channel', arguments: { channel: 'general' } });
+  it('channel.join → POST /v1/channels/:name/join', async () => {
+    await client.callTool({ name: 'channel.join', arguments: { channel: 'general' } });
     const req = findReq((r) => r.url.includes('/channels/general/join'));
     expect(req).toBeDefined();
     expect(req!.method).toBe('POST');
   });
 
-  it('leave_channel → POST /v1/channels/:name/leave', async () => {
-    await client.callTool({ name: 'leave_channel', arguments: { channel: 'dev' } });
+  it('channel.leave → POST /v1/channels/:name/leave', async () => {
+    await client.callTool({ name: 'channel.leave', arguments: { channel: 'dev' } });
     const req = findReq((r) => r.url.includes('/channels/dev/leave'));
     expect(req).toBeDefined();
   });
 
-  it('invite_to_channel → POST /channels/:name/invite {agent_name}', async () => {
-    await client.callTool({ name: 'invite_to_channel', arguments: { channel: 'general', agent: 'bot1' } });
+  it('channel.invite → POST /channels/:name/invite {agent_name}', async () => {
+    await client.callTool({ name: 'channel.invite', arguments: { channel: 'general', agent: 'bot1' } });
     const req = findReq((r) => r.url.includes('/channels/general/invite'));
     expect(req).toBeDefined();
     expect(req!.body).toEqual({ agent_name: 'bot1' });
   });
 
-  it('set_channel_topic → PATCH /v1/channels/:name/topic', async () => {
-    await client.callTool({ name: 'set_channel_topic', arguments: { channel: 'general', topic: 'New' } });
+  it('channel.set_topic → PATCH /v1/channels/:name/topic', async () => {
+    await client.callTool({ name: 'channel.set_topic', arguments: { channel: 'general', topic: 'New' } });
     const req = findReq((r) => r.url.includes('/channels/general/topic') && r.method === 'PATCH');
     expect(req).toBeDefined();
     expect(req!.body).toEqual({ topic: 'New' });
   });
 
-  it('archive_channel → DELETE /v1/channels/:name', async () => {
-    await client.callTool({ name: 'archive_channel', arguments: { channel: 'old' } });
+  it('channel.archive → DELETE /v1/channels/:name', async () => {
+    await client.callTool({ name: 'channel.archive', arguments: { channel: 'old' } });
     const req = findReq((r) => r.url.includes('/channels/old') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
   // ─── Messaging ─────────────────────────────────────────
 
-  it('post_message → POST /v1/channels/:name/messages', async () => {
-    await client.callTool({ name: 'post_message', arguments: { channel: 'general', text: 'Hello' } });
+  it('message.post → POST /v1/channels/:name/messages', async () => {
+    await client.callTool({ name: 'message.post', arguments: { channel: 'general', text: 'Hello' } });
     const req = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ text: 'Hello' });
   });
 
-  it('get_messages → GET /v1/channels/:name/messages', async () => {
-    await client.callTool({ name: 'get_messages', arguments: { channel: 'general' } });
+  it('message.list → GET /v1/channels/:name/messages', async () => {
+    await client.callTool({ name: 'message.list', arguments: { channel: 'general' } });
     const req = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('reply_to_thread → POST /v1/messages/:id/replies', async () => {
-    await client.callTool({ name: 'reply_to_thread', arguments: { message_id: 'msg1', text: 'Reply' } });
+  it('message.reply → POST /v1/messages/:id/replies', async () => {
+    await client.callTool({ name: 'message.reply', arguments: { message_id: 'msg1', text: 'Reply' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/replies') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ text: 'Reply' });
   });
 
-  it('get_thread → GET /v1/messages/:id/replies', async () => {
-    await client.callTool({ name: 'get_thread', arguments: { message_id: 'msg1' } });
+  it('message.get_thread → GET /v1/messages/:id/replies', async () => {
+    await client.callTool({ name: 'message.get_thread', arguments: { message_id: 'msg1' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/replies') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('send_dm → POST /v1/dm', async () => {
-    await client.callTool({ name: 'send_dm', arguments: { to: 'Alice', text: 'Hi' } });
+  it('dm.send → POST /v1/dm', async () => {
+    await client.callTool({ name: 'dm.send', arguments: { to: 'Alice', text: 'Hi' } });
     const req = findReq((r) => r.url.endsWith('/v1/dm') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ to: 'Alice', text: 'Hi' });
   });
 
-  it('get_dms → GET /v1/dm/conversations', async () => {
-    await client.callTool({ name: 'get_dms', arguments: {} });
+  it('dm.list → GET /v1/dm/conversations', async () => {
+    await client.callTool({ name: 'dm.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
   });
 
-  it('send_group_dm → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
-    await client.callTool({ name: 'send_group_dm', arguments: { participants: ['A', 'B'], text: 'Hello' } });
+  it('dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
+    await client.callTool({ name: 'dm.send_group', arguments: { participants: ['A', 'B'], text: 'Hello' } });
     const createReq = findReq((r) => r.url.includes('/dm/group'));
     const sendReq = findReq((r) => r.url.includes('/dm/conv1/messages'));
     expect(createReq).toBeDefined();
@@ -257,41 +341,41 @@ describe('MCP → SDK → HTTP integration', () => {
 
   // ─── Features ──────────────────────────────────────────
 
-  it('add_reaction → POST /v1/messages/:id/reactions', async () => {
-    await client.callTool({ name: 'add_reaction', arguments: { message_id: 'msg1', emoji: 'rocket' } });
+  it('reaction.add → POST /v1/messages/:id/reactions', async () => {
+    await client.callTool({ name: 'reaction.add', arguments: { message_id: 'msg1', emoji: 'rocket' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/reactions') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toEqual({ emoji: '🚀' });
   });
 
-  it('remove_reaction → DELETE /v1/messages/:id/reactions/:emoji', async () => {
-    await client.callTool({ name: 'remove_reaction', arguments: { message_id: 'msg1', emoji: 'rocket' } });
+  it('reaction.remove → DELETE /v1/messages/:id/reactions/:emoji', async () => {
+    await client.callTool({ name: 'reaction.remove', arguments: { message_id: 'msg1', emoji: 'rocket' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/reactions/') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('search_messages → GET /v1/search?q=...', async () => {
-    await client.callTool({ name: 'search_messages', arguments: { query: 'hello' } });
+  it('message.search → GET /v1/search?q=...', async () => {
+    await client.callTool({ name: 'message.search', arguments: { query: 'hello' } });
     const req = findReq((r) => r.url.includes('/search'));
     expect(req).toBeDefined();
     expect(req!.url).toContain('q=hello');
   });
 
-  it('check_inbox → GET /v1/inbox', async () => {
-    await client.callTool({ name: 'check_inbox', arguments: {} });
+  it('inbox.check → GET /v1/inbox', async () => {
+    await client.callTool({ name: 'inbox.check', arguments: {} });
     const req = findReq((r) => r.url.includes('/inbox'));
     expect(req).toBeDefined();
   });
 
-  it('mark_read → POST /v1/messages/:id/read', async () => {
-    await client.callTool({ name: 'mark_read', arguments: { message_id: 'msg1' } });
+  it('inbox.mark_read → POST /v1/messages/:id/read', async () => {
+    await client.callTool({ name: 'inbox.mark_read', arguments: { message_id: 'msg1' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/read'));
     expect(req).toBeDefined();
   });
 
-  it('upload_file → POST /v1/files/upload', async () => {
+  it('file.upload → POST /v1/files/upload', async () => {
     await client.callTool({
-      name: 'upload_file',
+      name: 'file.upload',
       arguments: { filename: 'test.txt', content_type: 'text/plain', size_bytes: 100 },
     });
     const req = findReq((r) => r.url.includes('/files/upload'));
@@ -300,88 +384,88 @@ describe('MCP → SDK → HTTP integration', () => {
 
   // ─── Registration ──────────────────────────────────────
 
-  it('register → POST /v1/agents', async () => {
+  it('agent.register → POST /v1/agents', async () => {
     // We already registered in beforeEach, test with a new registration
     captured = [];
-    await client.callTool({ name: 'register', arguments: { name: 'NewBot', persona: 'new' } });
+    await client.callTool({ name: 'agent.register', arguments: { name: 'NewBot', persona: 'new' } });
     const req = findReq((r) => r.url.includes('/agents') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ name: 'NewBot', persona: 'new' });
   });
 
-  it('list_agents → GET /v1/agents', async () => {
-    await client.callTool({ name: 'list_agents', arguments: {} });
+  it('agent.list → GET /v1/agents', async () => {
+    await client.callTool({ name: 'agent.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/agents') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
   // ─── Programmability ───────────────────────────────────
 
-  it('create_webhook → POST /v1/webhooks', async () => {
-    await client.callTool({ name: 'create_webhook', arguments: { name: 'gh', channel: 'eng' } });
+  it('webhook.create → POST /v1/webhooks', async () => {
+    await client.callTool({ name: 'webhook.create', arguments: { name: 'gh', channel: 'eng' } });
     const req = findReq((r) => r.url.includes('/webhooks') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ name: 'gh', channel: 'eng' });
   });
 
-  it('list_webhooks → GET /v1/webhooks', async () => {
-    await client.callTool({ name: 'list_webhooks', arguments: {} });
+  it('webhook.list → GET /v1/webhooks', async () => {
+    await client.callTool({ name: 'webhook.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/webhooks') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('delete_webhook → DELETE /v1/webhooks/:id', async () => {
-    await client.callTool({ name: 'delete_webhook', arguments: { webhook_id: 'wh_1' } });
+  it('webhook.delete → DELETE /v1/webhooks/:id', async () => {
+    await client.callTool({ name: 'webhook.delete', arguments: { webhook_id: 'wh_1' } });
     const req = findReq((r) => r.url.includes('/webhooks/wh_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('trigger_webhook → POST /v1/hooks/:id', async () => {
-    await client.callTool({ name: 'trigger_webhook', arguments: { webhook_id: 'wh_1', text: 'test' } });
+  it('webhook.trigger → POST /v1/hooks/:id', async () => {
+    await client.callTool({ name: 'webhook.trigger', arguments: { webhook_id: 'wh_1', text: 'test' } });
     const req = findReq((r) => r.url.includes('/hooks/wh_1') && r.method === 'POST');
     expect(req).toBeDefined();
   });
 
-  it('create_subscription → POST /v1/subscriptions', async () => {
-    await client.callTool({ name: 'create_subscription', arguments: { events: ['message.created'], url: 'https://example.com/hook' } });
+  it('subscription.create → POST /v1/subscriptions', async () => {
+    await client.callTool({ name: 'subscription.create', arguments: { events: ['message.created'], url: 'https://example.com/hook' } });
     const req = findReq((r) => r.url.includes('/subscriptions') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ events: ['message.created'], url: 'https://example.com/hook' });
   });
 
-  it('list_subscriptions → GET /v1/subscriptions', async () => {
-    await client.callTool({ name: 'list_subscriptions', arguments: {} });
+  it('subscription.list → GET /v1/subscriptions', async () => {
+    await client.callTool({ name: 'subscription.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/subscriptions') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('delete_subscription → DELETE /v1/subscriptions/:id', async () => {
-    await client.callTool({ name: 'delete_subscription', arguments: { subscription_id: 'sub_1' } });
+  it('subscription.delete → DELETE /v1/subscriptions/:id', async () => {
+    await client.callTool({ name: 'subscription.delete', arguments: { subscription_id: 'sub_1' } });
     const req = findReq((r) => r.url.includes('/subscriptions/sub_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('register_command → POST /v1/commands', async () => {
-    await client.callTool({ name: 'register_command', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
+  it('command.register → POST /v1/commands', async () => {
+    await client.callTool({ name: 'command.register', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
     const req = findReq((r) => r.url.includes('/commands') && r.method === 'POST' && !r.url.includes('/invoke'));
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' });
   });
 
-  it('list_commands → GET /v1/commands', async () => {
-    await client.callTool({ name: 'list_commands', arguments: {} });
+  it('command.list → GET /v1/commands', async () => {
+    await client.callTool({ name: 'command.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/commands') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('delete_command → DELETE /v1/commands/:command', async () => {
-    await client.callTool({ name: 'delete_command', arguments: { command: 'deploy' } });
+  it('command.delete → DELETE /v1/commands/:command', async () => {
+    await client.callTool({ name: 'command.delete', arguments: { command: 'deploy' } });
     const req = findReq((r) => r.url.includes('/commands/deploy') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('invoke_command → POST /v1/commands/:command/invoke', async () => {
-    await client.callTool({ name: 'invoke_command', arguments: { command: 'deploy', channel: 'general' } });
+  it('command.invoke → POST /v1/commands/:command/invoke', async () => {
+    await client.callTool({ name: 'command.invoke', arguments: { command: 'deploy', channel: 'general' } });
     const req = findReq((r) => r.url.includes('/commands/deploy/invoke'));
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ channel: 'general' });

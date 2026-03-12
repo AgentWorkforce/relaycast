@@ -32,7 +32,7 @@ describe('messaging tools', () => {
   it('post_message calls send()', async () => {
     mockAgentClient.send.mockResolvedValue({ id: 'msg1', text: 'hello' });
     const result = await client.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(mockAgentClient.send).toHaveBeenCalledWith('general', 'hello', undefined);
@@ -41,7 +41,7 @@ describe('messaging tools', () => {
 
   it('get_messages calls messages()', async () => {
     mockAgentClient.messages.mockResolvedValue([]);
-    await client.callTool({ name: 'get_messages', arguments: { channel: 'general' } });
+    await client.callTool({ name: 'message.list', arguments: { channel: 'general' } });
     expect(mockAgentClient.messages).toHaveBeenCalledWith('general', {
       limit: undefined,
       before: undefined,
@@ -52,7 +52,7 @@ describe('messaging tools', () => {
   it('reply_to_thread calls reply()', async () => {
     mockAgentClient.reply.mockResolvedValue({ id: 'reply1' });
     await client.callTool({
-      name: 'reply_to_thread',
+      name: 'message.reply',
       arguments: { message_id: 'msg1', text: 'reply' },
     });
     expect(mockAgentClient.reply).toHaveBeenCalledWith('msg1', 'reply');
@@ -60,19 +60,19 @@ describe('messaging tools', () => {
 
   it('get_thread calls thread()', async () => {
     mockAgentClient.thread.mockResolvedValue({ parent: {}, replies: [] });
-    await client.callTool({ name: 'get_thread', arguments: { message_id: 'msg1' } });
+    await client.callTool({ name: 'message.get_thread', arguments: { message_id: 'msg1' } });
     expect(mockAgentClient.thread).toHaveBeenCalledWith('msg1', undefined);
   });
 
   it('send_dm calls dm()', async () => {
     mockAgentClient.dm.mockResolvedValue({});
-    await client.callTool({ name: 'send_dm', arguments: { to: 'bot2', text: 'hi' } });
+    await client.callTool({ name: 'dm.send', arguments: { to: 'bot2', text: 'hi' } });
     expect(mockAgentClient.dm).toHaveBeenCalledWith('bot2', 'hi');
   });
 
   it('get_dms calls dms.conversations()', async () => {
     mockAgentClient.dms.conversations.mockResolvedValue([]);
-    await client.callTool({ name: 'get_dms', arguments: {} });
+    await client.callTool({ name: 'dm.list', arguments: {} });
     expect(mockAgentClient.dms.conversations).toHaveBeenCalled();
   });
 
@@ -80,7 +80,7 @@ describe('messaging tools', () => {
     mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
     mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });
     await client.callTool({
-      name: 'send_group_dm',
+      name: 'dm.send_group',
       arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group' },
     });
     expect(mockAgentClient.dms.createGroup).toHaveBeenCalledWith({
