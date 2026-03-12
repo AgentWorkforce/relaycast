@@ -1,5 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolRequest,
+  type ListToolsRequest,
+  type ListToolsResult,
+  type ServerNotification,
+  type ServerRequest,
+  type ServerResult,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { AgentClient } from '@relaycast/sdk';
 import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
@@ -32,6 +42,11 @@ export interface McpServerOptions {
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
 }
+
+type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
+  request: TRequest,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) => TResult | Promise<TResult>;
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const session: SessionState = createInitialSession({
@@ -181,12 +196,15 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   // - `_meta` (internal SDK field)
   // These fields are only stripped from the LIST response; tool call validation
   // still uses the full schemas for structuredContent.
-  type RequestHandlerMap = Map<string, (...args: unknown[]) => unknown>;
+  type RequestHandlerMap = Map<string, ServerRequestHandler<unknown>>;
   const handlers = (mcpServer.server as unknown as { _requestHandlers: RequestHandlerMap })._requestHandlers;
-  const origToolsListHandler = handlers.get('tools/list');
+  const origToolsListHandler = handlers.get('tools/list') as ServerRequestHandler<
+    ListToolsRequest,
+    ListToolsResult
+  > | undefined;
   if (origToolsListHandler) {
     mcpServer.server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
-      const result = (await origToolsListHandler(req, extra)) as { tools?: Record<string, unknown>[] };
+      const result = await origToolsListHandler(req, extra);
       if (result?.tools) {
         result.tools = result.tools.map(t => {
           const { execution: _execution, outputSchema: _outputSchema, _meta, ...clean } = t;
@@ -197,7 +215,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     });
   }
 
-  const origCallToolHandler = handlers.get('tools/call');
+  const origCallToolHandler = handlers.get('tools/call') as ServerRequestHandler<CallToolRequest> | undefined;
   if (origCallToolHandler) {
     mcpServer.server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const resolvedName = resolveToolName(req.params.name);
@@ -210,7 +228,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
               name: resolvedName,
             },
           };
-      return origCallToolHandler(request, extra);
+      return await origCallToolHandler(request, extra);
     });
   }
 
