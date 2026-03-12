@@ -13,6 +13,15 @@ export interface McpWorkspaceConfig {
   agent_name?: string;
 }
 
+const mcpWorkspaceConfigSchema = z.object({
+  workspace_id: z.string({ error: 'is required and must be a string' }),
+  workspace_alias: z.string().optional(),
+  workspace_name: z.string().optional(),
+  api_key: z.string({ error: 'is required and must be a string' }),
+  agent_token: z.string().optional(),
+  agent_name: z.string().optional(),
+});
+
 /**
  * Parse RELAY_WORKSPACES_JSON env var into an array of workspace configs.
  * Returns an empty array if the env var is not set or empty.
@@ -39,23 +48,15 @@ export function parseWorkspaceEnv(raw?: string): McpWorkspaceConfig[] {
  */
 export function validateWorkspaceConfigs(configs: unknown[]): McpWorkspaceConfig[] {
   return configs.map((cfg, i) => {
-    if (!cfg || typeof cfg !== 'object') {
-      throw new Error(`RELAY_WORKSPACES_JSON[${i}] must be an object`);
+    const result = mcpWorkspaceConfigSchema.safeParse(cfg);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      if (!issue.path.length) {
+        throw new Error(`RELAY_WORKSPACES_JSON[${i}] must be an object`);
+      }
+      throw new Error(`RELAY_WORKSPACES_JSON[${i}].${issue.path.join('.')} ${issue.message}`);
     }
-    const obj = cfg as Record<string, unknown>;
-    if (!obj.workspace_id || typeof obj.workspace_id !== 'string') {
-      throw new Error(`RELAY_WORKSPACES_JSON[${i}].workspace_id is required and must be a string`);
-    }
-    if (!obj.api_key || typeof obj.api_key !== 'string') {
-      throw new Error(`RELAY_WORKSPACES_JSON[${i}].api_key is required and must be a string`);
-    }
-    return {
-      workspace_id: obj.workspace_id as string,
-      workspace_alias: typeof obj.workspace_alias === 'string' ? obj.workspace_alias : undefined,
-      api_key: obj.api_key as string,
-      agent_token: typeof obj.agent_token === 'string' ? obj.agent_token : undefined,
-      agent_name: typeof obj.agent_name === 'string' ? obj.agent_name : undefined,
-    };
+    return result.data;
   });
 }
 
