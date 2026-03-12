@@ -210,6 +210,8 @@ describe('registration tools', () => {
     expect(parsed.workspaces).toHaveLength(2);
     const active = parsed.workspaces.find((w: any) => w.is_active);
     expect(active.agent_name).toBe('bot1');
+    expect(active.workspace_ref).toMatch(/^ws_[a-f0-9]{12}$/);
+    expect(parsed.active_workspace_ref).toBe(active.workspace_ref);
   });
 
   it('join_workspace registers in new workspace and saves context', async () => {
@@ -286,6 +288,42 @@ describe('registration tools', () => {
     const result = await client.callTool({
       name: 'workspace.switch',
       arguments: { api_key: 'rk_live_ws2' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe('rk_live_ws2');
+    expect(session.agentToken).toBe('at_live_ws2');
+    expect(session.agentName).toBe('bot2');
+  });
+
+  it('switch_workspace accepts workspace_ref from workspace.list', async () => {
+    session.workspaceKey = 'rk_live_ws1';
+    session.agentToken = 'at_live_ws1';
+    session.agentName = 'bot1';
+    session.workspaces.set('rk_live_ws1', {
+      workspaceKey: 'rk_live_ws1',
+      agentToken: 'at_live_ws1',
+      agentName: 'bot1',
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+    session.workspaces.set('rk_live_ws2', {
+      workspaceKey: 'rk_live_ws2',
+      agentToken: 'at_live_ws2',
+      agentName: 'bot2',
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+
+    const listResult = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const parsed = JSON.parse((listResult.content as any)[0].text);
+    const target = parsed.workspaces.find((w: any) => w.agent_name === 'bot2');
+
+    const result = await client.callTool({
+      name: 'workspace.switch',
+      arguments: { workspace_ref: target.workspace_ref },
     });
 
     expect(result.isError).toBeFalsy();

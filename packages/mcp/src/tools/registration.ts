@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RelayCast } from '@relaycast/sdk';
-import type { SessionState } from '../types.js';
+import type { SessionState, WorkspaceContext } from '../types.js';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
@@ -17,6 +18,12 @@ const DEFAULT_BASE_URL = 'https://api.relaycast.dev';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
+const workspaceEntrySchema = z.object({
+  workspace_ref: z.string().describe('Stable workspace reference accepted by "workspace.switch"'),
+  workspace_key: z.string().describe('Masked workspace API key for display'),
+  agent_name: z.string().describe('Saved agent name for this workspace'),
+  is_active: z.boolean().describe('True if this workspace is currently active in the session'),
+});
 
 function normalizeBaseUrl(baseUrl?: string): string {
   return (baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -301,19 +308,21 @@ export function registerRegistrationTools(
     {
       title: 'List Joined Workspaces',
       description:
-        'List all workspaces this agent has joined in the current MCP session. Returns each workspace key (masked), agent name, and whether it is the currently active workspace.',
+        'List all workspaces this agent has joined in the current MCP session. Returns a stable workspace_ref for switching, the masked workspace key for display, the saved agent name, and whether the workspace is currently active.',
       inputSchema: {
         status: z.enum(['active', 'all']).optional().describe('Filter workspaces by status: "active" for only the current workspace, "all" (default) for every joined workspace'),
       },
       outputSchema: {
-        workspaces: z.array(z.object({}).passthrough()).describe('Array of joined workspace entries'),
-        active_workspace: z.string().nullable().describe('The workspace key that is currently active'),
+        workspaces: z.array(workspaceEntrySchema).describe('Array of joined workspace entries'),
+        active_workspace: z.string().nullable().describe('The masked workspace key that is currently active'),
+        active_workspace_ref: z.string().nullable().describe('Stable reference for the currently active workspace'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ status }) => {
       const session = getSession();
       const all = Array.from(session.workspaces.values()).map((ctx) => ({
+        workspace_ref: createWorkspaceRef(ctx.workspaceKey),
         workspace_key: maskKey(ctx.workspaceKey),
         agent_name: ctx.agentName,
         is_active: ctx.workspaceKey === session.workspaceKey,
@@ -324,6 +333,7 @@ export function registerRegistrationTools(
       const result = {
         workspaces: entries,
         active_workspace: session.workspaceKey ? maskKey(session.workspaceKey) : null,
+        active_workspace_ref: session.workspaceKey ? createWorkspaceRef(session.workspaceKey) : null,
       };
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -412,9 +422,10 @@ export function registerRegistrationTools(
     {
       title: 'Switch Workspace',
       description:
-        'Switch the active workspace to a previously joined workspace. The agent identity and WebSocket connection for the target workspace are restored from the saved session context. Use "workspace.list" to see available workspaces.',
+        'Switch the active workspace to a previously joined workspace. Provide either a full api_key or the workspace_ref returned by "workspace.list". The agent identity and WebSocket connection for the target workspace are restored from the saved session context.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key to switch to (must have been previously joined)'),
+        api_key: z.string().optional().describe('Full workspace API key to switch to (must have been previously joined)'),
+        workspace_ref: z.string().optional().describe('Stable workspace reference from "workspace.list"'),
       },
       outputSchema: {
         message: z.string().describe('Confirmation message'),
@@ -422,18 +433,22 @@ export function registerRegistrationTools(
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ api_key }) => {
-      if (!api_key.startsWith('rk_live_')) {
+    async ({ api_key, workspace_ref }) => {
+      if (!api_key && !workspace_ref) {
+        throw new Error('Provide either "api_key" or "workspace_ref".');
+      }
+      if (api_key && !api_key.startsWith('rk_live_')) {
         throw new Error('Workspace key must start with "rk_live_"');
       }
 
       const session = getSession();
-      const saved = session.workspaces.get(api_key);
-      if (!saved) {
+      const resolved = resolveSavedWorkspace(session, api_key, workspace_ref);
+      if (!resolved) {
         throw new Error(
           'Workspace not found in session. Use "workspace.join" to join it first, or "workspace.set_key" to connect without a saved context.',
         );
       }
+      const { workspaceKey: targetWorkspaceKey, context: saved } = resolved;
 
       // Save current workspace context.
       if (session.workspaceKey && session.agentToken && session.agentName) {
@@ -447,7 +462,7 @@ export function registerRegistrationTools(
 
       // Restore the target workspace context.
       setSession({
-        workspaceKey: api_key,
+        workspaceKey: targetWorkspaceKey,
         agentToken: saved.agentToken,
         agentName: saved.agentName,
       });
@@ -462,6 +477,46 @@ export function registerRegistrationTools(
       };
     },
   );
+}
+
+function createWorkspaceRef(workspaceKey: string): string {
+  return `ws_${createHash('sha256').update(workspaceKey).digest('hex').slice(0, 12)}`;
+}
+
+function resolveSavedWorkspace(
+  session: SessionState,
+  apiKey?: string,
+  workspaceRef?: string,
+): { workspaceKey: string; context: WorkspaceContext } | null {
+  if (apiKey) {
+    const exact = session.workspaces.get(apiKey);
+    if (exact) {
+      return { workspaceKey: apiKey, context: exact };
+    }
+
+    const maskedMatches = Array.from(session.workspaces.entries()).filter(
+      ([workspaceKey]) => maskKey(workspaceKey) === apiKey,
+    );
+    if (maskedMatches.length > 1) {
+      throw new Error(
+        'Masked workspace key is ambiguous. Use "workspace_ref" from "workspace.list" or the full api_key.',
+      );
+    }
+    if (maskedMatches.length === 1) {
+      const [workspaceKey, context] = maskedMatches[0];
+      return { workspaceKey, context };
+    }
+  }
+
+  if (workspaceRef) {
+    for (const [workspaceKey, context] of session.workspaces.entries()) {
+      if (createWorkspaceRef(workspaceKey) === workspaceRef) {
+        return { workspaceKey, context };
+      }
+    }
+  }
+
+  return null;
 }
 
 /** Mask a workspace key for display, showing only first 12 and last 4 chars. */

@@ -213,6 +213,25 @@ describe('createRelayMcpServer', () => {
     ]);
   });
 
+  it('supports legacy flat tool calls without advertising legacy names', async () => {
+    const tools = await client.listTools();
+    const toolNames = tools.tools.map((tool) => tool.name);
+    expect(toolNames).not.toContain('register');
+    expect(toolNames).not.toContain('post_message');
+
+    const registerResult = await client.callTool({
+      name: 'register',
+      arguments: { name: 'bot1' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+
+    const messageResult = await client.callTool({
+      name: 'post_message',
+      arguments: { channel: 'general', text: 'hello from legacy alias' },
+    });
+    expect(messageResult.isError).toBeFalsy();
+  });
+
   it('register tool works and enables other tools', async () => {
     const result = await client.callTool({
       name: 'agent.register',

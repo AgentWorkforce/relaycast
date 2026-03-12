@@ -3082,7 +3082,7 @@ struct CreateGroupDmRequest {
 fn normalize_initial_group_dm_text(text: Option<String>) -> Result<Option<String>, &'static str> {
     match text {
         Some(text) if text.trim().is_empty() => Err("text must not be empty when provided"),
-        Some(text) => Ok(Some(text)),
+        Some(text) => Ok(Some(text.trim().to_string())),
         None => Ok(None),
     }
 }
@@ -5048,9 +5048,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_initial_group_dm_text_preserves_non_empty_text() {
+    fn normalize_initial_group_dm_text_trims_non_empty_text() {
         assert_eq!(
-            normalize_initial_group_dm_text(Some("hello".to_string())).unwrap(),
+            normalize_initial_group_dm_text(Some("  hello  ".to_string())).unwrap(),
             Some("hello".to_string())
         );
     }

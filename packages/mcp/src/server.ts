@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { AgentClient } from '@relaycast/sdk';
 import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
@@ -14,6 +14,7 @@ import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
+import { resolveToolName } from './tool-aliases.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -190,6 +191,23 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         });
       }
       return result;
+    });
+  }
+
+  const origCallToolHandler = handlers.get('tools/call');
+  if (origCallToolHandler) {
+    mcpServer.server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+      const resolvedName = resolveToolName(req.params.name);
+      const request = resolvedName === req.params.name
+        ? req
+        : {
+            ...req,
+            params: {
+              ...req.params,
+              name: resolvedName,
+            },
+          };
+      return origCallToolHandler(request, extra);
     });
   }
 

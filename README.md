@@ -233,7 +233,7 @@ Remote Streamable HTTP config:
 ## REST Quick Start
 
 ```bash
-# Create workspace
+# Create workspace (names must be unique)
 curl -X POST https://api.relaycast.dev/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'

@@ -211,20 +211,28 @@ describe('MCP → SDK → HTTP integration', () => {
     await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
     const result = await client.callTool({ name: 'workspace.list', arguments: {} });
     const payload = JSON.parse(((result.content ?? []) as Array<{ text: string }>)[0]!.text) as {
-      workspaces: Array<{ agent_name: string; is_active: boolean }>;
+      workspaces: Array<{ agent_name: string; is_active: boolean; workspace_ref: string }>;
+      active_workspace_ref: string | null;
     };
 
     expect(payload.workspaces).toHaveLength(2);
     expect(payload.workspaces.some((workspace) => workspace.agent_name === 'IntegrationBot')).toBe(true);
     expect(payload.workspaces.some((workspace) => workspace.agent_name === 'Ws2Bot' && workspace.is_active)).toBe(true);
+    expect(payload.active_workspace_ref).toMatch(/^ws_[a-f0-9]{12}$/);
   });
 
-  it('workspace.switch restores the previous workspace agent token', async () => {
+  it('workspace.switch restores the previous workspace agent token from workspace_ref', async () => {
     await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
+    const listResult = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const payload = JSON.parse(((listResult.content ?? []) as Array<{ text: string }>)[0]!.text) as {
+      workspaces: Array<{ workspace_ref: string; agent_name: string }>;
+    };
+    const target = payload.workspaces.find((workspace) => workspace.agent_name === 'IntegrationBot');
+
     captured = [];
     await client.callTool({
       name: 'workspace.switch',
-      arguments: { api_key: 'rk_live_int1' },
+      arguments: { workspace_ref: target!.workspace_ref },
     });
     await client.callTool({ name: 'channel.list', arguments: {} });
     const req = findReq((r) => r.url.endsWith('/v1/channels') && r.method === 'GET');
