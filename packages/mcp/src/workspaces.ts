@@ -25,6 +25,11 @@ const configuredWorkspaceSchema = z.object({
   agent_type: z.enum(['agent', 'human']).optional(),
 });
 
+const configuredWorkspacePayloadSchema = z.object({
+  memberships: z.array(configuredWorkspaceSchema),
+  default_workspace_id: z.string().trim().min(1).optional(),
+});
+
 export const workspaceRoutingInputShape = {
   workspace_id: z.string().optional().describe('Optional workspace ID to route this call to explicitly'),
   workspace_alias: z.string().optional().describe('Optional workspace alias to route this call to explicitly'),
@@ -42,11 +47,19 @@ export function parseWorkspaceEnv(value: string | undefined): McpWorkspaceConfig
     );
   }
 
-  if (!Array.isArray(parsed)) {
-    throw new Error('RELAY_WORKSPACES_JSON must decode to an array of workspace objects.');
+  const rawMemberships = Array.isArray(parsed)
+    ? parsed
+    : configuredWorkspacePayloadSchema.safeParse(parsed).success
+      ? configuredWorkspacePayloadSchema.parse(parsed).memberships
+      : null;
+
+  if (!rawMemberships) {
+    throw new Error(
+      'RELAY_WORKSPACES_JSON must decode to either an array of workspace objects or an object containing memberships.',
+    );
   }
 
-  return validateWorkspaceConfigs(parsed.map((item) => {
+  return validateWorkspaceConfigs(rawMemberships.map((item) => {
     const workspace = configuredWorkspaceSchema.parse(item);
     return {
       workspaceId: workspace.workspace_id,

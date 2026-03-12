@@ -23,7 +23,7 @@ describe('stdio entrypoint', () => {
     process.env = originalEnv;
   });
 
-  it('passes RELAY_WORKSPACES_JSON and RELAY_DEFAULT_WORKSPACE to startStdio()', async () => {
+  it('passes legacy array-shaped RELAY_WORKSPACES_JSON and RELAY_DEFAULT_WORKSPACE to startStdio()', async () => {
     process.env.RELAY_WORKSPACES_JSON = JSON.stringify([
       {
         workspace_id: 'ws_alpha',
@@ -46,6 +46,51 @@ describe('stdio entrypoint', () => {
 
     expect(mocks.startStdio).toHaveBeenCalledWith(expect.objectContaining({
       defaultWorkspace: 'beta',
+      workspaces: [
+        {
+          workspaceId: 'ws_alpha',
+          workspaceAlias: 'alpha',
+          workspaceKey: 'rk_live_alpha',
+          agentToken: 'at_live_alpha',
+          agentName: 'Alpha',
+        },
+        {
+          workspaceId: 'ws_beta',
+          workspaceAlias: 'beta',
+          workspaceKey: 'rk_live_beta',
+          agentToken: 'at_live_beta',
+          agentName: 'Beta',
+        },
+      ],
+    }));
+  });
+
+  it('passes object-shaped RELAY_WORKSPACES_JSON with memberships to startStdio()', async () => {
+    process.env.RELAY_WORKSPACES_JSON = JSON.stringify({
+      memberships: [
+        {
+          workspace_id: 'ws_alpha',
+          workspace_alias: 'alpha',
+          api_key: 'rk_live_alpha',
+          agent_token: 'at_live_alpha',
+          agent_name: 'Alpha',
+        },
+        {
+          workspace_id: 'ws_beta',
+          workspace_alias: 'beta',
+          api_key: 'rk_live_beta',
+          agent_token: 'at_live_beta',
+          agent_name: 'Beta',
+        },
+      ],
+      default_workspace_id: 'ws_beta',
+    });
+    process.env.RELAY_DEFAULT_WORKSPACE = 'ws_beta';
+
+    await import('../stdio.js');
+
+    expect(mocks.startStdio).toHaveBeenCalledWith(expect.objectContaining({
+      defaultWorkspace: 'ws_beta',
       workspaces: [
         {
           workspaceId: 'ws_alpha',
