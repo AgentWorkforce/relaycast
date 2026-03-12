@@ -34,6 +34,14 @@ async function bootstrapWorkspaces(
 
       let token = ws.agent_token;
       const agentName = ws.agent_name ?? ws.workspace_alias ?? ws.workspace_id;
+      let workspaceName = ws.workspace_name;
+
+      try {
+        const workspace = await relay.workspace.info();
+        workspaceName = workspace.name;
+      } catch {
+        // Keep any pre-supplied name or leave undefined if workspace info is unavailable.
+      }
 
       // If we have a token, verify it's still valid via an inbox call
       if (token) {
@@ -59,6 +67,7 @@ async function bootstrapWorkspaces(
         ...ws,
         agent_token: token,
         agent_name: agentName,
+        workspace_name: workspaceName,
       });
     } catch (err) {
       console.error(

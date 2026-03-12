@@ -7,6 +7,7 @@ import type { SessionState, WorkspaceContext } from './types.js';
 export interface McpWorkspaceConfig {
   workspace_id: string;
   workspace_alias?: string;
+  workspace_name?: string;
   api_key: string;
   agent_token?: string;
   agent_name?: string;
@@ -106,8 +107,8 @@ export function workspaceRefFromArgs(
 }
 
 /**
- * Find a WorkspaceContext in the session by workspace_id, workspace_alias,
- * or workspace_name. Scans the workspaces Map for matching entries.
+ * Find a WorkspaceContext in the session by workspace_id or workspace_alias.
+ * Falls back to matching a saved workspace label or canonical workspace name.
  */
 export function findWorkspaceContext(
   session: SessionState,
@@ -125,10 +126,14 @@ export function findWorkspaceContext(
     return session.workspaces.get(config.api_key);
   }
 
-  // Fall back to matching by workspace_alias against workspaceName in session
+  // Fall back to matching by workspace_alias against saved workspace metadata.
   if (ref.workspace_alias) {
+    const target = ref.workspace_alias.toLowerCase();
     for (const ctx of session.workspaces.values()) {
-      if (ctx.workspaceName?.toLowerCase() === ref.workspace_alias.toLowerCase()) {
+      if (
+        ctx.workspaceLabel?.toLowerCase() === target
+        || ctx.workspaceName?.toLowerCase() === target
+      ) {
         return ctx;
       }
     }

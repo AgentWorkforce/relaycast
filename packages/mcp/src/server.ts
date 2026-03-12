@@ -264,6 +264,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           workspaceKey: ws.api_key,
           agentToken: ws.agent_token,
           agentName: ws.agent_name,
+          workspaceName: ws.workspace_name,
           wsBridge: null,
           subscriptions: null,
           wsInitAttempted: false,

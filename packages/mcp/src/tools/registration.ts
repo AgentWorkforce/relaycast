@@ -6,6 +6,10 @@ import type { SessionState, WorkspaceContext } from '../types.js';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
+type WorkspaceMetadata = {
+  workspaceName?: string;
+  workspaceLabel?: string;
+};
 
 interface CreateWorkspaceResponse {
   workspace_id?: string;
@@ -21,7 +25,8 @@ const jsonResult = z.object({}).passthrough();
 const workspaceEntrySchema = z.object({
   workspace_ref: z.string().describe('Stable workspace reference accepted by "workspace.switch"'),
   workspace_key: z.string().describe('Masked workspace API key for display'),
-  workspace_name: z.string().nullable().describe('Human-readable workspace name if assigned during "workspace.join"'),
+  workspace_name: z.string().nullable().describe('Canonical workspace name from the Relaycast API'),
+  workspace_label: z.string().nullable().describe('Optional custom label saved during "workspace.join"'),
   agent_name: z.string().describe('Saved agent name for this workspace'),
   is_active: z.boolean().describe('True if this workspace is currently active in the session'),
 });
@@ -50,6 +55,30 @@ async function createWorkspace(
   return payload.data;
 }
 
+async function fetchWorkspaceName(
+  apiKey: string,
+  baseUrl?: string,
+): Promise<string | undefined> {
+  try {
+    const response = await fetch(`${normalizeBaseUrl(baseUrl)}/v1/workspace`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+    if (!response.ok) return undefined;
+
+    const payload = (await response.json()) as ApiOk<{ name?: unknown }> | ApiErr;
+    if (!payload || typeof payload !== 'object' || !('ok' in payload) || !payload.ok) {
+      return undefined;
+    }
+
+    const name = payload.data?.name;
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function requireWorkspaceKey(session: SessionState): void {
   if (session.workspaceKey) return;
   throw new Error(
@@ -62,15 +91,16 @@ function saveWorkspaceContext(
   workspaceKey: string,
   agentToken: string,
   agentName: string,
-  workspaceName?: string,
+  metadata: WorkspaceMetadata = {},
 ): void {
   const existing = session.workspaces.get(workspaceKey);
   session.workspaces.set(workspaceKey, {
     workspaceKey,
     agentToken,
     agentName,
-    // Preserve existing workspace name if not explicitly provided.
-    workspaceName: workspaceName ?? existing?.workspaceName,
+    // Preserve existing workspace metadata if not explicitly provided.
+    workspaceName: metadata.workspaceName ?? existing?.workspaceName,
+    workspaceLabel: metadata.workspaceLabel ?? existing?.workspaceLabel,
     // Force bridge re-init when this workspace is restored.
     wsBridge: null,
     subscriptions: null,
@@ -234,6 +264,18 @@ export function registerRegistrationTools(
       // If already pre-registered with a token, skip the API call and return
       // the existing registration to avoid overwriting the pre-registered identity.
       if (session.agentToken && effectiveName && strictAgentName) {
+        const workspaceName = session.workspaceKey
+          ? await fetchWorkspaceName(session.workspaceKey, baseUrl)
+          : undefined;
+        if (session.workspaceKey) {
+          saveWorkspaceContext(
+            session,
+            session.workspaceKey,
+            session.agentToken,
+            effectiveName,
+            { workspaceName },
+          );
+        }
         const existing = {
           name: effectiveName,
           token: session.agentToken,
@@ -259,11 +301,13 @@ export function registerRegistrationTools(
       // Update multi-workspace context map.
       const updatedSession = getSession();
       if (updatedSession.workspaceKey) {
+        const workspaceName = await fetchWorkspaceName(updatedSession.workspaceKey, baseUrl);
         saveWorkspaceContext(
           updatedSession,
           updatedSession.workspaceKey,
           result.token,
           effectiveName,
+          { workspaceName },
         );
       }
       const payload = {
@@ -313,7 +357,7 @@ export function registerRegistrationTools(
     {
       title: 'List Joined Workspaces',
       description:
-        'List all workspaces this agent has joined in the current MCP session. Returns a stable workspace_ref for switching, the masked workspace key for display, the saved agent name, and whether the workspace is currently active.',
+        'List all workspaces this agent has joined in the current MCP session. Returns a stable workspace_ref for switching, the masked workspace key for display, the canonical workspace name, any saved label, the saved agent name, and whether the workspace is currently active.',
       inputSchema: {
         status: z.enum(['active', 'all']).optional().describe('Filter workspaces by status: "active" for only the current workspace, "all" (default) for every joined workspace'),
       },
@@ -330,6 +374,7 @@ export function registerRegistrationTools(
         workspace_ref: createWorkspaceRef(ctx.workspaceKey),
         workspace_key: maskKey(ctx.workspaceKey),
         workspace_name: ctx.workspaceName ?? null,
+        workspace_label: ctx.workspaceLabel ?? null,
         agent_name: ctx.agentName,
         is_active: ctx.workspaceKey === session.workspaceKey,
       }));
@@ -358,7 +403,7 @@ export function registerRegistrationTools(
       inputSchema: {
         api_key: z.string().describe('Workspace API key starting with "rk_live_"'),
         name: z.string().describe('Agent name to register in the target workspace'),
-        workspace_name: z.string().optional().describe('Human-readable workspace name for easier switching (e.g. "Production", "Staging")'),
+        workspace_name: z.string().optional().describe('Optional custom label to save for easier switching. The canonical workspace name is fetched automatically from the API.'),
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
         persona: z.string().optional().describe('Free-text persona description'),
       },
@@ -371,6 +416,7 @@ export function registerRegistrationTools(
       }
 
       const session = getSession();
+      const canonicalWorkspaceName = await fetchWorkspaceName(api_key, baseUrl);
 
       // Save current workspace context before switching.
       if (session.workspaceKey && session.agentToken && session.agentName) {
@@ -385,9 +431,11 @@ export function registerRegistrationTools(
       // Check if already joined this workspace.
       const existing = session.workspaces.get(api_key);
       if (existing) {
-        // Update workspace name if provided.
-        if (workspace_name && existing.workspaceName !== workspace_name) {
-          existing.workspaceName = workspace_name;
+        if (canonicalWorkspaceName && existing.workspaceName !== canonicalWorkspaceName) {
+          existing.workspaceName = canonicalWorkspaceName;
+        }
+        if (workspace_name && existing.workspaceLabel !== workspace_name) {
+          existing.workspaceLabel = workspace_name;
         }
         setSession({
           workspaceKey: api_key,
@@ -413,7 +461,10 @@ export function registerRegistrationTools(
 
       // Save the new workspace context.
       const updatedSession = getSession();
-      saveWorkspaceContext(updatedSession, api_key, regResult.token, name, workspace_name);
+      saveWorkspaceContext(updatedSession, api_key, regResult.token, name, {
+        workspaceName: canonicalWorkspaceName,
+        workspaceLabel: workspace_name,
+      });
 
       const result = {
         message: `Joined workspace and registered as "${name}".`,
@@ -433,11 +484,11 @@ export function registerRegistrationTools(
     {
       title: 'Switch Workspace',
       description:
-        'Switch the active workspace to a previously joined workspace. Provide either a full api_key, workspace_ref from "workspace.list", or workspace_name assigned during "workspace.join". The agent identity and WebSocket connection for the target workspace are restored from the saved session context.',
+        'Switch the active workspace to a previously joined workspace. Provide either a full api_key, workspace_ref from "workspace.list", or workspace_name matching either the canonical workspace record name or a saved custom label. The agent identity and WebSocket connection for the target workspace are restored from the saved session context.',
       inputSchema: {
         api_key: z.string().optional().describe('Full workspace API key to switch to (must have been previously joined)'),
         workspace_ref: z.string().optional().describe('Stable workspace reference from "workspace.list"'),
-        workspace_name: z.string().optional().describe('Human-readable workspace name assigned during "workspace.join"'),
+        workspace_name: z.string().optional().describe('Canonical workspace name from the API, or a saved custom label from "workspace.join"'),
       },
       outputSchema: {
         message: z.string().describe('Confirmation message'),
@@ -531,7 +582,9 @@ function resolveSavedWorkspace(
 
   if (workspaceName) {
     const nameMatches = Array.from(session.workspaces.entries()).filter(
-      ([, ctx]) => ctx.workspaceName?.toLowerCase() === workspaceName.toLowerCase(),
+      ([, ctx]) =>
+        ctx.workspaceName?.toLowerCase() === workspaceName.toLowerCase()
+        || ctx.workspaceLabel?.toLowerCase() === workspaceName.toLowerCase(),
     );
     if (nameMatches.length > 1) {
       throw new Error(

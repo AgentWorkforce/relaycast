@@ -645,8 +645,8 @@ async fn create_workspace(
         if duplicate {
             return err(
                 StatusCode::CONFLICT,
-                "workspace_name_taken",
-                format!("A workspace named \"{}\" already exists", payload.name.trim()),
+                "workspace_already_exists",
+                format!("Workspace \"{}\" already exists", payload.name.trim()),
             );
         }
     }

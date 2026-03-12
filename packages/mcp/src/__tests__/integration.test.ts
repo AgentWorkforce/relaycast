@@ -52,6 +52,21 @@ describe('MCP → SDK → HTTP integration', () => {
           api_key: 'rk_live_created123',
           created_at: new Date().toISOString(),
         };
+      } else if (path === '/v1/workspace' && req.method === 'GET') {
+        const authHeader = req.headers.authorization;
+        const name = authHeader === 'Bearer rk_live_ws2'
+          ? 'Workspace Two'
+          : authHeader === 'Bearer rk_live_ws3'
+            ? 'Workspace Three'
+            : 'Integration Workspace';
+        data = {
+          id: 'ws_info',
+          name,
+          system_prompt: null,
+          plan: 'free',
+          created_at: new Date().toISOString(),
+          metadata: {},
+        };
       } else if (path === '/v1/agents' && req.method === 'POST') {
         const authHeader = req.headers.authorization;
         const token = authHeader === 'Bearer rk_live_ws2'
@@ -235,6 +250,21 @@ describe('MCP → SDK → HTTP integration', () => {
       arguments: { workspace_ref: target!.workspace_ref },
     });
     await client.callTool({ name: 'channel.list', arguments: {} });
+    const req = findReq((r) => r.url.endsWith('/v1/channels') && r.method === 'GET');
+    expect(req).toBeDefined();
+    expect(req!.headers.authorization).toBe('Bearer at_test_integration');
+  });
+
+  it('workspace.switch accepts the canonical workspace_name from the API', async () => {
+    await client.callTool({ name: 'workspace.join', arguments: { api_key: 'rk_live_ws2', name: 'Ws2Bot' } });
+
+    captured = [];
+    await client.callTool({
+      name: 'workspace.switch',
+      arguments: { workspace_name: 'Integration Workspace' },
+    });
+    await client.callTool({ name: 'channel.list', arguments: {} });
+
     const req = findReq((r) => r.url.endsWith('/v1/channels') && r.method === 'GET');
     expect(req).toBeDefined();
     expect(req!.headers.authorization).toBe('Bearer at_test_integration');
