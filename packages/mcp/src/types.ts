@@ -6,6 +6,8 @@ export interface WorkspaceContext {
   workspaceKey: string;
   agentToken: string;
   agentName: string;
+  /** Human-readable workspace name, used for routing via workspace.switch. */
+  workspaceName?: string;
   wsBridge: WsBridge | null;
   subscriptions: SubscriptionManager | null;
   wsInitAttempted: boolean;

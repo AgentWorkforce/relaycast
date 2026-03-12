@@ -106,23 +106,33 @@ export function workspaceRefFromArgs(
 }
 
 /**
- * Find a WorkspaceContext in the session by workspace_id or workspace_alias.
- * Scans the workspaces Map for matching entries.
+ * Find a WorkspaceContext in the session by workspace_id, workspace_alias,
+ * or workspace_name. Scans the workspaces Map for matching entries.
  */
 export function findWorkspaceContext(
   session: SessionState,
   ref: { workspace_id?: string; workspace_alias?: string },
-  configs: McpWorkspaceConfig[],
+  configs?: McpWorkspaceConfig[],
 ): WorkspaceContext | undefined {
   // Try to find the matching config first to get the api_key
-  const config = configs.find(c => {
+  const config = configs?.find(c => {
     if (ref.workspace_id && c.workspace_id === ref.workspace_id) return true;
     if (ref.workspace_alias && c.workspace_alias === ref.workspace_alias) return true;
     return false;
   });
 
-  if (!config) return undefined;
+  if (config) {
+    return session.workspaces.get(config.api_key);
+  }
 
-  // Look up by api_key in session.workspaces
-  return session.workspaces.get(config.api_key);
+  // Fall back to matching by workspace_alias against workspaceName in session
+  if (ref.workspace_alias) {
+    for (const ctx of session.workspaces.values()) {
+      if (ctx.workspaceName?.toLowerCase() === ref.workspace_alias.toLowerCase()) {
+        return ctx;
+      }
+    }
+  }
+
+  return undefined;
 }
