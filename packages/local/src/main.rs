@@ -3079,6 +3079,14 @@ struct CreateGroupDmRequest {
     text: Option<String>,
 }
 
+fn normalize_initial_group_dm_text(text: Option<String>) -> Result<Option<String>, &'static str> {
+    match text {
+        Some(text) if text.trim().is_empty() => Err("text must not be empty when provided"),
+        Some(text) => Ok(Some(text)),
+        None => Ok(None),
+    }
+}
+
 async fn create_group_dm(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3094,6 +3102,12 @@ async fn create_group_dm(
             "participants are required",
         );
     }
+    let initial_text = match normalize_initial_group_dm_text(payload.text.clone()) {
+        Ok(text) => text,
+        Err(message) => {
+            return err(StatusCode::BAD_REQUEST, "invalid_request", message);
+        }
+    };
 
     let (workspace_id, caller_id, caller_name) = {
         let store = state.store.read().await;
@@ -3133,15 +3147,7 @@ async fn create_group_dm(
         .insert(conv_id.clone(), conversation.clone());
     store.dm_messages.insert(conv_id.clone(), Vec::new());
 
-    let message = if let Some(text) = payload.text.clone() {
-        if text.trim().is_empty() {
-            drop(store);
-            return err(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "text must not be empty when provided",
-            );
-        }
+    let message = if let Some(text) = initial_text {
         let Some(msg) = post_dm_message_internal(
             &mut store,
             &workspace_id,
@@ -5022,4 +5028,30 @@ async fn main() -> anyhow::Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_initial_group_dm_text;
+
+    #[test]
+    fn normalize_initial_group_dm_text_accepts_absent_text() {
+        assert_eq!(normalize_initial_group_dm_text(None).unwrap(), None);
+    }
+
+    #[test]
+    fn normalize_initial_group_dm_text_rejects_whitespace_only_text() {
+        assert_eq!(
+            normalize_initial_group_dm_text(Some("   ".to_string())).unwrap_err(),
+            "text must not be empty when provided"
+        );
+    }
+
+    #[test]
+    fn normalize_initial_group_dm_text_preserves_non_empty_text() {
+        assert_eq!(
+            normalize_initial_group_dm_text(Some("hello".to_string())).unwrap(),
+            Some("hello".to_string())
+        );
+    }
 }
