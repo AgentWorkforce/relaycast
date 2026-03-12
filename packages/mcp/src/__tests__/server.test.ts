@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createInternalWsClient } from '@relaycast/sdk/internal';
 
 // Mock the SDK so we don't need a real server
 vi.mock('@relaycast/sdk', () => {
@@ -157,6 +158,7 @@ describe('createRelayMcpServer', () => {
   let client: Client;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     const mcpServer = createRelayMcpServer({ apiKey: 'test-key' });
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -327,5 +329,36 @@ describe('createRelayMcpServer', () => {
     });
 
     expect(result.isError).toBeFalsy();
+  });
+
+  it('retries WS bridge initialization after switching away from a token that failed WS init', async () => {
+    const wsFactory = vi.mocked(createInternalWsClient);
+    wsFactory.mockImplementationOnce(() => {
+      throw new Error('ws unsupported');
+    });
+
+    const bootstrappedServer = createRelayMcpServer({
+      apiKey: 'rk_live_bootstrap123',
+      agentToken: 'tok_old',
+      agentName: 'pre-registered-bot',
+    });
+    const bootstrappedClient = new Client({ name: 'ws-retry-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bootstrappedClient.connect(ct), bootstrappedServer.connect(st)]);
+
+    expect(wsFactory).toHaveBeenCalledTimes(1);
+
+    const setKeyResult = await bootstrappedClient.callTool({
+      name: 'workspace.set_key',
+      arguments: { api_key: 'rk_live_retry456' },
+    });
+    expect(setKeyResult.isError).toBeFalsy();
+
+    const registerResult = await bootstrappedClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'retry-bot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+    expect(wsFactory).toHaveBeenCalledTimes(2);
   });
 });

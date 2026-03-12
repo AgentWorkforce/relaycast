@@ -87,6 +87,9 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       session.subscriptions?.clear();
       session.wsBridge = null;
       session.subscriptions = null;
+    }
+
+    if (switchingToken) {
       session.wsInitAttempted = false;
     }
 
@@ -186,7 +189,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       const result = (await origToolsListHandler(req, extra)) as { tools?: Record<string, unknown>[] };
       if (result?.tools) {
         result.tools = result.tools.map(t => {
-          const { execution, outputSchema, _meta, ...clean } = t;
+          const { execution: _execution, outputSchema: _outputSchema, _meta, ...clean } = t;
           return clean;
         });
       }

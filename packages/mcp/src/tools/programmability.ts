@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { RelayCast, AgentClient } from '@relaycast/sdk';
+import { SubscribableEventTypeSchema } from '@relaycast/types';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -94,7 +95,7 @@ export function registerProgrammabilityTools(
     title: 'Create Event Subscription',
     description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
-      events: z.array(z.string()).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
+      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
       url: z.string().describe('HTTPS endpoint URL that will receive POST requests with event payloads'),
       filter_channel: z.string().optional().describe('Only fire events that occur in this specific channel'),
       filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
@@ -108,7 +109,7 @@ export function registerProgrammabilityTools(
       ? { channel: filter_channel, mentions: filter_mentions }
       : undefined;
     const result = await relay.subscriptions.create({
-      events: events as any,
+      events,
       url,
       filter,
       secret,
