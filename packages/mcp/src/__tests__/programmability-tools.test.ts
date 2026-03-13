@@ -60,7 +60,7 @@ describe('programmability tools', () => {
       url: 'https://relay.dev/hooks/wh_1',
     });
     const result = await client.callTool({
-      name: 'webhook.create',
+      name: 'integration.webhook.create',
       arguments: { name: 'GitHub', channel: 'dev' },
     });
     expect(mockRelay.webhooks.create).toHaveBeenCalledWith({
@@ -74,14 +74,14 @@ describe('programmability tools', () => {
 
   it('list_webhooks calls relay.webhooks.list()', async () => {
     mockRelay.webhooks.list.mockResolvedValue([]);
-    await client.callTool({ name: 'webhook.list', arguments: {} });
+    await client.callTool({ name: 'integration.webhook.list', arguments: {} });
     expect(mockRelay.webhooks.list).toHaveBeenCalled();
   });
 
   it('delete_webhook calls relay.webhooks.delete()', async () => {
     mockRelay.webhooks.delete.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'webhook.delete',
+      name: 'integration.webhook.delete',
       arguments: { webhook_id: 'wh_1' },
     });
     expect(mockRelay.webhooks.delete).toHaveBeenCalledWith('wh_1');
@@ -97,7 +97,7 @@ describe('programmability tools', () => {
       text: 'Alert',
     });
     await client.callTool({
-      name: 'webhook.trigger',
+      name: 'integration.webhook.trigger',
       arguments: { webhook_id: 'wh_1', text: 'Alert', source: 'github' },
     });
     expect(mockRelay.webhooks.trigger).toHaveBeenCalledWith('wh_1', {
@@ -115,7 +115,7 @@ describe('programmability tools', () => {
       url: 'https://example.com/hook',
     });
     await client.callTool({
-      name: 'subscription.create',
+      name: 'integration.subscription.create',
       arguments: {
         events: ['message.created'],
         url: 'https://example.com/hook',
@@ -133,7 +133,7 @@ describe('programmability tools', () => {
   it('create_subscription without filter passes undefined', async () => {
     mockRelay.subscriptions.create.mockResolvedValue({ id: 'sub_2' });
     await client.callTool({
-      name: 'subscription.create',
+      name: 'integration.subscription.create',
       arguments: {
         events: ['reaction.added'],
         url: 'https://example.com/hook2',
@@ -149,14 +149,14 @@ describe('programmability tools', () => {
 
   it('list_subscriptions calls relay.subscriptions.list()', async () => {
     mockRelay.subscriptions.list.mockResolvedValue([]);
-    await client.callTool({ name: 'subscription.list', arguments: {} });
+    await client.callTool({ name: 'integration.subscription.list', arguments: {} });
     expect(mockRelay.subscriptions.list).toHaveBeenCalled();
   });
 
   it('get_subscription calls relay.subscriptions.get()', async () => {
     mockRelay.subscriptions.get.mockResolvedValue({ id: 'sub_1' });
     await client.callTool({
-      name: 'subscription.get',
+      name: 'integration.subscription.get',
       arguments: { subscription_id: 'sub_1' },
     });
     expect(mockRelay.subscriptions.get).toHaveBeenCalledWith('sub_1');
@@ -165,7 +165,7 @@ describe('programmability tools', () => {
   it('delete_subscription calls relay.subscriptions.delete()', async () => {
     mockRelay.subscriptions.delete.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'subscription.delete',
+      name: 'integration.subscription.delete',
       arguments: { subscription_id: 'sub_1' },
     });
     expect(mockRelay.subscriptions.delete).toHaveBeenCalledWith('sub_1');
@@ -182,7 +182,7 @@ describe('programmability tools', () => {
       command: 'deploy',
     });
     await client.callTool({
-      name: 'command.register',
+      name: 'integration.command.register',
       arguments: {
         command: 'deploy',
         description: 'Deploy the app',
@@ -199,14 +199,14 @@ describe('programmability tools', () => {
 
   it('list_commands calls relay.commands.list()', async () => {
     mockRelay.commands.list.mockResolvedValue([]);
-    await client.callTool({ name: 'command.list', arguments: {} });
+    await client.callTool({ name: 'integration.command.list', arguments: {} });
     expect(mockRelay.commands.list).toHaveBeenCalled();
   });
 
   it('delete_command calls relay.commands.delete()', async () => {
     mockRelay.commands.delete.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'command.delete',
+      name: 'integration.command.delete',
       arguments: { command: 'deploy' },
     });
     expect(mockRelay.commands.delete).toHaveBeenCalledWith('deploy');
@@ -222,7 +222,7 @@ describe('programmability tools', () => {
       channel: 'ops',
     });
     await client.callTool({
-      name: 'command.invoke',
+      name: 'integration.command.invoke',
       arguments: {
         command: 'deploy',
         channel: 'ops',
@@ -243,7 +243,7 @@ describe('programmability tools', () => {
       channel: 'ops',
     });
     await client.callTool({
-      name: 'command.invoke',
+      name: 'integration.command.invoke',
       arguments: {
         command: 'scale',
         channel: 'ops',
