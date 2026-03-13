@@ -132,7 +132,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('file.upload', {
+  server.registerTool('message.file.upload', {
     title: 'Upload File',
     description: 'Upload a file to the workspace and receive an attachment ID that can be used when posting messages. Files are stored securely and can be shared across channels and DMs. Provide the filename, MIME type, and size in bytes to initiate the upload. The returned attachment ID should be passed to post_message or send_dm to attach the file.',
     inputSchema: {

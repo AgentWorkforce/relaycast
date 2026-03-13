@@ -26,7 +26,7 @@ export const LEGACY_TOOL_NAME_ALIASES = {
   check_inbox: 'message.inbox.check',
   mark_read: 'message.inbox.mark_read',
   get_readers: 'message.inbox.get_readers',
-  upload_file: 'file.upload',
+  upload_file: 'message.file.upload',
   create_webhook: 'webhook.create',
   list_webhooks: 'webhook.list',
   delete_webhook: 'webhook.delete',
@@ -50,6 +50,7 @@ export const LEGACY_TOOL_NAME_ALIASES = {
   'inbox.check': 'message.inbox.check',
   'inbox.mark_read': 'message.inbox.mark_read',
   'inbox.get_readers': 'message.inbox.get_readers',
+  'file.upload': 'message.file.upload',
 } as const satisfies Record<string, string>;
 
 export function resolveToolName(toolName: string): string {

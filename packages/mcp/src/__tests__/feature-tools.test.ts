@@ -93,7 +93,7 @@ describe('feature tools', () => {
       upload_url: 'https://...',
     });
     await client.callTool({
-      name: 'file.upload',
+      name: 'message.file.upload',
       arguments: {
         filename: 'test.txt',
         content_type: 'text/plain',
