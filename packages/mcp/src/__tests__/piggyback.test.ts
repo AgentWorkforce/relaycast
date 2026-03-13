@@ -123,7 +123,7 @@ describe('piggyback unread messages', () => {
     const server2 = new McpServer({ name: 'test2', version: '0.1.0' });
     enablePiggyback(server2, () => session, () => mockAgentClient);
     server2.registerTool(
-      'inbox.check',
+      'message.inbox.check',
       { description: 'Check inbox', inputSchema: { arg: z.string() } },
       async () => ({ content: [{ type: 'text' as const, text: 'inbox data' }] }),
     );
@@ -131,7 +131,7 @@ describe('piggyback unread messages', () => {
     const [ct2, st2] = InMemoryTransport.createLinkedPair();
     await Promise.all([client2.connect(ct2), server2.connect(st2)]);
 
-    await client2.callTool({ name: 'inbox.check', arguments: { arg: 'test' } });
+    await client2.callTool({ name: 'message.inbox.check', arguments: { arg: 'test' } });
 
     expect(mockInbox).not.toHaveBeenCalled();
   });

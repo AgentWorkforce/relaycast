@@ -29,7 +29,7 @@ describe('feature tools', () => {
   it('add_reaction calls react()', async () => {
     mockAgentClient.react.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'reaction.add',
+      name: 'message.reaction.add',
       arguments: { message_id: 'msg1', emoji: '👍' },
     });
     expect(mockAgentClient.react).toHaveBeenCalledWith('msg1', '👍');
@@ -39,7 +39,7 @@ describe('feature tools', () => {
   it('remove_reaction calls unreact()', async () => {
     mockAgentClient.unreact.mockResolvedValue(undefined);
     await client.callTool({
-      name: 'reaction.remove',
+      name: 'message.reaction.remove',
       arguments: { message_id: 'msg1', emoji: '👍' },
     });
     expect(mockAgentClient.unreact).toHaveBeenCalledWith('msg1', '👍');
@@ -60,14 +60,14 @@ describe('feature tools', () => {
 
   it('check_inbox calls inbox()', async () => {
     mockAgentClient.inbox.mockResolvedValue({ unread: 0 });
-    await client.callTool({ name: 'inbox.check', arguments: {} });
+    await client.callTool({ name: 'message.inbox.check', arguments: {} });
     expect(mockAgentClient.inbox).toHaveBeenCalled();
   });
 
   it('mark_read calls markRead()', async () => {
     mockAgentClient.markRead.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'inbox.mark_read',
+      name: 'message.inbox.mark_read',
       arguments: { message_id: 'msg1' },
     });
     expect(mockAgentClient.markRead).toHaveBeenCalledWith('msg1');
@@ -81,7 +81,7 @@ describe('feature tools', () => {
       { agent: 'bot1', read_at: '2025-01-01' },
     ]);
     await client.callTool({
-      name: 'inbox.get_readers',
+      name: 'message.inbox.get_readers',
       arguments: { message_id: 'msg1' },
     });
     expect(mockAgentClient.readers).toHaveBeenCalledWith('msg1');

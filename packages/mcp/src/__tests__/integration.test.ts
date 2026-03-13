@@ -346,21 +346,21 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req).toBeDefined();
   });
 
-  it('dm.send → POST /v1/dm', async () => {
-    await client.callTool({ name: 'dm.send', arguments: { to: 'Alice', text: 'Hi' } });
+  it('message.dm.send → POST /v1/dm', async () => {
+    await client.callTool({ name: 'message.dm.send', arguments: { to: 'Alice', text: 'Hi' } });
     const req = findReq((r) => r.url.endsWith('/v1/dm') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ to: 'Alice', text: 'Hi' });
   });
 
-  it('dm.list → GET /v1/dm/conversations', async () => {
-    await client.callTool({ name: 'dm.list', arguments: {} });
+  it('message.dm.list → GET /v1/dm/conversations', async () => {
+    await client.callTool({ name: 'message.dm.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
   });
 
-  it('dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
-    await client.callTool({ name: 'dm.send_group', arguments: { participants: ['A', 'B'], text: 'Hello' } });
+  it('message.dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {
+    await client.callTool({ name: 'message.dm.send_group', arguments: { participants: ['A', 'B'], text: 'Hello' } });
     const createReq = findReq((r) => r.url.includes('/dm/group'));
     const sendReq = findReq((r) => r.url.includes('/dm/conv1/messages'));
     expect(createReq).toBeDefined();
@@ -371,15 +371,15 @@ describe('MCP → SDK → HTTP integration', () => {
 
   // ─── Features ──────────────────────────────────────────
 
-  it('reaction.add → POST /v1/messages/:id/reactions', async () => {
-    await client.callTool({ name: 'reaction.add', arguments: { message_id: 'msg1', emoji: 'rocket' } });
+  it('message.reaction.add → POST /v1/messages/:id/reactions', async () => {
+    await client.callTool({ name: 'message.reaction.add', arguments: { message_id: 'msg1', emoji: 'rocket' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/reactions') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toEqual({ emoji: '🚀' });
   });
 
-  it('reaction.remove → DELETE /v1/messages/:id/reactions/:emoji', async () => {
-    await client.callTool({ name: 'reaction.remove', arguments: { message_id: 'msg1', emoji: 'rocket' } });
+  it('message.reaction.remove → DELETE /v1/messages/:id/reactions/:emoji', async () => {
+    await client.callTool({ name: 'message.reaction.remove', arguments: { message_id: 'msg1', emoji: 'rocket' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/reactions/') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
@@ -391,14 +391,14 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req!.url).toContain('q=hello');
   });
 
-  it('inbox.check → GET /v1/inbox', async () => {
-    await client.callTool({ name: 'inbox.check', arguments: {} });
+  it('message.inbox.check → GET /v1/inbox', async () => {
+    await client.callTool({ name: 'message.inbox.check', arguments: {} });
     const req = findReq((r) => r.url.includes('/inbox'));
     expect(req).toBeDefined();
   });
 
-  it('inbox.mark_read → POST /v1/messages/:id/read', async () => {
-    await client.callTool({ name: 'inbox.mark_read', arguments: { message_id: 'msg1' } });
+  it('message.inbox.mark_read → POST /v1/messages/:id/read', async () => {
+    await client.callTool({ name: 'message.inbox.mark_read', arguments: { message_id: 'msg1' } });
     const req = findReq((r) => r.url.includes('/messages/msg1/read'));
     expect(req).toBeDefined();
   });

@@ -66,13 +66,13 @@ describe('messaging tools', () => {
 
   it('send_dm calls dm()', async () => {
     mockAgentClient.dm.mockResolvedValue({});
-    await client.callTool({ name: 'dm.send', arguments: { to: 'bot2', text: 'hi' } });
+    await client.callTool({ name: 'message.dm.send', arguments: { to: 'bot2', text: 'hi' } });
     expect(mockAgentClient.dm).toHaveBeenCalledWith('bot2', 'hi');
   });
 
   it('get_dms calls dms.conversations()', async () => {
     mockAgentClient.dms.conversations.mockResolvedValue([]);
-    await client.callTool({ name: 'dm.list', arguments: {} });
+    await client.callTool({ name: 'message.dm.list', arguments: {} });
     expect(mockAgentClient.dms.conversations).toHaveBeenCalled();
   });
 
@@ -80,7 +80,7 @@ describe('messaging tools', () => {
     mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
     mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });
     await client.callTool({
-      name: 'dm.send_group',
+      name: 'message.dm.send_group',
       arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group' },
     });
     expect(mockAgentClient.dms.createGroup).toHaveBeenCalledWith({
@@ -165,10 +165,10 @@ describe('messaging tools with workspace routing', () => {
     expect(routedClient.send).toHaveBeenCalledWith('general', 'hello beta alias', undefined);
   });
 
-  it('dm.send with workspace_id routes correctly', async () => {
+  it('message.dm.send with workspace_id routes correctly', async () => {
     routedClient.dm.mockResolvedValue({});
     await client.callTool({
-      name: 'dm.send',
+      name: 'message.dm.send',
       arguments: { to: 'bot2', text: 'hi', workspace_id: 'ws_beta' },
     });
     expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined });
