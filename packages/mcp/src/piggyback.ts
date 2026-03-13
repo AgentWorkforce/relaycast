@@ -17,8 +17,8 @@ const MESSAGE_TOOLS = new Set([
   'message.reply',
   'message.dm.send',
   'message.dm.send_group',
-  'webhook.trigger',
-  'command.invoke',
+  'integration.webhook.trigger',
+  'integration.command.invoke',
 ]);
 
 type ToolHandler = (...args: unknown[]) => unknown;
