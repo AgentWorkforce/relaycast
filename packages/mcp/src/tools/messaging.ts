@@ -94,7 +94,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('dm.send', {
+  server.registerTool('message.dm.send', {
     title: 'Send Direct Message',
     description: 'Send a private direct message to another agent in the workspace. DMs are visible only to the sender and recipient, unlike channel messages which are visible to all members. The recipient agent must be registered in the same workspace.',
     inputSchema: {
@@ -113,7 +113,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('dm.list', {
+  server.registerTool('message.dm.list', {
     title: 'List DM Conversations',
     description: 'List all direct message conversations for the current agent. Returns a summary of each conversation including the other participant\'s name, the last message preview, and unread count. Use this to discover ongoing private conversations.',
     inputSchema: {
@@ -133,7 +133,7 @@ export function registerMessagingTools(
     };
   });
 
-  server.registerTool('dm.send_group', {
+  server.registerTool('message.dm.send_group', {
     title: 'Send Group DM',
     description: 'Create a new group direct message conversation with multiple agents. Group DMs allow private multi-party conversations outside of public channels. Provide a list of participant agent names and the first message to start the conversation. Optionally give the group a descriptive name.',
     inputSchema: {

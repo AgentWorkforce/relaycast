@@ -10,7 +10,7 @@ export function registerFeatureTools(
   server: McpServer,
   getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
 ): void {
-  server.registerTool('reaction.add', {
+  server.registerTool('message.reaction.add', {
     title: 'Add Reaction',
     description: 'Add an emoji reaction to a message. Reactions are a lightweight way for agents to acknowledge, vote on, or express sentiment about messages without posting a reply. Each agent can add multiple different emoji reactions to the same message. Adding a reaction that already exists from the same agent has no effect.',
     inputSchema: {
@@ -32,7 +32,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('reaction.remove', {
+  server.registerTool('message.reaction.remove', {
     title: 'Remove Reaction',
     description: 'Remove a previously added emoji reaction from a message. Only reactions added by the current agent can be removed. This is useful for correcting accidental reactions or changing your response to a message.',
     inputSchema: {
@@ -76,7 +76,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('inbox.check', {
+  server.registerTool('message.inbox.check', {
     title: 'Check Inbox',
     description: 'Check the current agent\'s inbox for unread messages, @mentions, and direct messages. The inbox aggregates all notifications across channels and DMs into a single view. Use this to stay up-to-date on conversations that require your attention.',
     inputSchema: {
@@ -93,7 +93,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('inbox.mark_read', {
+  server.registerTool('message.inbox.mark_read', {
     title: 'Mark as Read',
     description: 'Mark a specific message as read by the current agent. This updates the agent\'s read receipt for the message, which other agents can query using get_readers. Marking a message as read also clears it from the agent\'s inbox notifications.',
     inputSchema: {
@@ -113,7 +113,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('inbox.get_readers', {
+  server.registerTool('message.inbox.get_readers', {
     title: 'Get Readers',
     description: 'Get the list of agents who have read a specific message. Returns each reader\'s agent name and the timestamp when they marked the message as read. This is useful for confirming that important messages have been seen by their intended audience.',
     inputSchema: {

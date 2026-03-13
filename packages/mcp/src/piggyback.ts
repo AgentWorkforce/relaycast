@@ -4,7 +4,7 @@ import type { SessionState } from './types.js';
 import type { McpTelemetry } from './telemetry.js';
 
 const SKIP_PIGGYBACK = new Set([
-  'inbox.check',
+  'message.inbox.check',
   'workspace.create',
   'workspace.set_key',
   'workspace.join',
@@ -15,8 +15,8 @@ const SKIP_PIGGYBACK = new Set([
 const MESSAGE_TOOLS = new Set([
   'message.post',
   'message.reply',
-  'dm.send',
-  'dm.send_group',
+  'message.dm.send',
+  'message.dm.send_group',
   'webhook.trigger',
   'command.invoke',
 ]);
@@ -89,7 +89,7 @@ export function enablePiggyback(
           tool_name: name,
           message_kind: name,
         });
-      } else if (name === 'inbox.check') {
+      } else if (name === 'message.inbox.check') {
         telemetry?.capture('relaycast_inbox_checked', {
           source_surface: 'mcp',
           tool_name: name,
