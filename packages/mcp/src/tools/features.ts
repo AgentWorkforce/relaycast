@@ -80,12 +80,13 @@ export function registerFeatureTools(
     title: 'Check Inbox',
     description: 'Check the current agent\'s inbox for unread messages, @mentions, and direct messages. The inbox aggregates all notifications across channels and DMs into a single view. Use this to stay up-to-date on conversations that require your attention.',
     inputSchema: {
-      limit: z.number().optional().describe('Maximum number of inbox items to return'),
+      limit: z.number().optional().describe('Maximum number of inbox items to return (reserved for future use)'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
+  }, async ({ limit: _limit }) => {
     const client = getAgentClient();
+    // TODO: pass limit once the SDK inbox() method supports it
     const inbox = await client.inbox();
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(inbox, null, 2) }],
