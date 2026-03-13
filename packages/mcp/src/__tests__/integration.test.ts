@@ -431,71 +431,71 @@ describe('MCP → SDK → HTTP integration', () => {
 
   // ─── Programmability ───────────────────────────────────
 
-  it('webhook.create → POST /v1/webhooks', async () => {
-    await client.callTool({ name: 'webhook.create', arguments: { name: 'gh', channel: 'eng' } });
+  it('integration.webhook.create → POST /v1/webhooks', async () => {
+    await client.callTool({ name: 'integration.webhook.create', arguments: { name: 'gh', channel: 'eng' } });
     const req = findReq((r) => r.url.includes('/webhooks') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ name: 'gh', channel: 'eng' });
   });
 
-  it('webhook.list → GET /v1/webhooks', async () => {
-    await client.callTool({ name: 'webhook.list', arguments: {} });
+  it('integration.webhook.list → GET /v1/webhooks', async () => {
+    await client.callTool({ name: 'integration.webhook.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/webhooks') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('webhook.delete → DELETE /v1/webhooks/:id', async () => {
-    await client.callTool({ name: 'webhook.delete', arguments: { webhook_id: 'wh_1' } });
+  it('integration.webhook.delete → DELETE /v1/webhooks/:id', async () => {
+    await client.callTool({ name: 'integration.webhook.delete', arguments: { webhook_id: 'wh_1' } });
     const req = findReq((r) => r.url.includes('/webhooks/wh_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('webhook.trigger → POST /v1/hooks/:id', async () => {
-    await client.callTool({ name: 'webhook.trigger', arguments: { webhook_id: 'wh_1', text: 'test' } });
+  it('integration.webhook.trigger → POST /v1/hooks/:id', async () => {
+    await client.callTool({ name: 'integration.webhook.trigger', arguments: { webhook_id: 'wh_1', text: 'test' } });
     const req = findReq((r) => r.url.includes('/hooks/wh_1') && r.method === 'POST');
     expect(req).toBeDefined();
   });
 
-  it('subscription.create → POST /v1/subscriptions', async () => {
-    await client.callTool({ name: 'subscription.create', arguments: { events: ['message.created'], url: 'https://example.com/hook' } });
+  it('integration.subscription.create → POST /v1/subscriptions', async () => {
+    await client.callTool({ name: 'integration.subscription.create', arguments: { events: ['message.created'], url: 'https://example.com/hook' } });
     const req = findReq((r) => r.url.includes('/subscriptions') && r.method === 'POST');
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ events: ['message.created'], url: 'https://example.com/hook' });
   });
 
-  it('subscription.list → GET /v1/subscriptions', async () => {
-    await client.callTool({ name: 'subscription.list', arguments: {} });
+  it('integration.subscription.list → GET /v1/subscriptions', async () => {
+    await client.callTool({ name: 'integration.subscription.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/subscriptions') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('subscription.delete → DELETE /v1/subscriptions/:id', async () => {
-    await client.callTool({ name: 'subscription.delete', arguments: { subscription_id: 'sub_1' } });
+  it('integration.subscription.delete → DELETE /v1/subscriptions/:id', async () => {
+    await client.callTool({ name: 'integration.subscription.delete', arguments: { subscription_id: 'sub_1' } });
     const req = findReq((r) => r.url.includes('/subscriptions/sub_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('command.register → POST /v1/commands', async () => {
-    await client.callTool({ name: 'command.register', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
+  it('integration.command.register → POST /v1/commands', async () => {
+    await client.callTool({ name: 'integration.command.register', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
     const req = findReq((r) => r.url.includes('/commands') && r.method === 'POST' && !r.url.includes('/invoke'));
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' });
   });
 
-  it('command.list → GET /v1/commands', async () => {
-    await client.callTool({ name: 'command.list', arguments: {} });
+  it('integration.command.list → GET /v1/commands', async () => {
+    await client.callTool({ name: 'integration.command.list', arguments: {} });
     const req = findReq((r) => r.url.includes('/commands') && r.method === 'GET');
     expect(req).toBeDefined();
   });
 
-  it('command.delete → DELETE /v1/commands/:command', async () => {
-    await client.callTool({ name: 'command.delete', arguments: { command: 'deploy' } });
+  it('integration.command.delete → DELETE /v1/commands/:command', async () => {
+    await client.callTool({ name: 'integration.command.delete', arguments: { command: 'deploy' } });
     const req = findReq((r) => r.url.includes('/commands/deploy') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
 
-  it('command.invoke → POST /v1/commands/:command/invoke', async () => {
-    await client.callTool({ name: 'command.invoke', arguments: { command: 'deploy', channel: 'general' } });
+  it('integration.command.invoke → POST /v1/commands/:command/invoke', async () => {
+    await client.callTool({ name: 'integration.command.invoke', arguments: { command: 'deploy', channel: 'general' } });
     const req = findReq((r) => r.url.includes('/commands/deploy/invoke'));
     expect(req).toBeDefined();
     expect(req!.body).toMatchObject({ channel: 'general' });
