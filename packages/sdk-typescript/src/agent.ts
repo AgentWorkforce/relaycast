@@ -470,8 +470,10 @@ export class AgentClient {
 
   // === Inbox ===
 
-  async inbox(): Promise<InboxResponse> {
-    return this.client.get('/v1/inbox');
+  async inbox(options?: { limit?: number }): Promise<InboxResponse> {
+    const params: Record<string, string> = {};
+    if (options?.limit != null) params.limit = String(options.limit);
+    return this.client.get('/v1/inbox', params);
   }
 
   // === Read Receipts ===

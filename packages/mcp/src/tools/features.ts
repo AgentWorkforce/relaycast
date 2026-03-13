@@ -84,9 +84,9 @@ export function registerFeatureTools(
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
+  }, async ({ limit }) => {
     const client = getAgentClient();
-    const inbox = await client.inbox();
+    const inbox = await client.inbox(limit != null ? { limit } : undefined);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(inbox, null, 2) }],
       structuredContent: inbox as unknown as Record<string, unknown>,
@@ -132,7 +132,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('file.upload', {
+  server.registerTool('message.file.upload', {
     title: 'Upload File',
     description: 'Upload a file to the workspace and receive an attachment ID that can be used when posting messages. Files are stored securely and can be shared across channels and DMs. Provide the filename, MIME type, and size in bytes to initiate the upload. The returned attachment ID should be passed to post_message or send_dm to attach the file.',
     inputSchema: {
