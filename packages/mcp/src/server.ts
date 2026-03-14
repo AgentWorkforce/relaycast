@@ -121,7 +121,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     return createInternalRelayCast({
       apiKey: identity.workspaceKey,
       baseUrl: options.baseUrl,
-    }, mcpOrigin).as(identity.agentToken);
+    }, mcpOrigin);
   };
   const syncActiveWorkspaceContext = () => {
     if (!session.workspaceKey || !session.agentToken || !session.agentName) {
