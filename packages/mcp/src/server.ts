@@ -101,17 +101,27 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   });
 
   const getSession = () => session;
-  const getRelay = () => {
-    const workspaceKey = session.workspaceKey;
-    if (!workspaceKey) {
+  const getRelay = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ) => {
+    if (!session.workspaceKey) {
       throw new Error(
         'Workspace key not configured. Set RELAY_API_KEY at startup, or call "workspace.create" or "workspace.set_key" first.',
       );
     }
+    if (!wsRouting && !asAgent) {
+      return createInternalRelayCast({
+        apiKey: session.workspaceKey,
+        baseUrl: options.baseUrl,
+      }, mcpOrigin);
+    }
+
+    const identity = resolveAgentIdentity(wsRouting, asAgent);
     return createInternalRelayCast({
-      apiKey: workspaceKey,
+      apiKey: identity.workspaceKey,
       baseUrl: options.baseUrl,
-    }, mcpOrigin);
+    }, mcpOrigin).as(identity.agentToken);
   };
   const syncActiveWorkspaceContext = () => {
     if (!session.workspaceKey || !session.agentToken || !session.agentName) {

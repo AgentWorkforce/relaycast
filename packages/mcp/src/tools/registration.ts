@@ -115,7 +115,10 @@ function createRegisteredAgent(agentName: string, agentToken: string): Registere
 
 export function registerRegistrationTools(
   server: McpServer,
-  getRelay: () => RelayCast,
+  getRelay: (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asIdentity?: string,
+  ) => RelayCast,
   getSession: () => SessionState,
   setSession: (state: Partial<SessionState>) => void,
   baseUrl?: string,

@@ -13,7 +13,10 @@ const jsonResult = z.object({}).passthrough();
 
 export function registerProgrammabilityTools(
   server: McpServer,
-  getRelay: () => RelayCast,
+  getRelay: (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asIdentity?: string,
+  ) => RelayCast,
   getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
   // === Inbound Webhooks ===
