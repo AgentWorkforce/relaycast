@@ -30,7 +30,7 @@ describe('feature tools', () => {
     mockAgentClient.react.mockResolvedValue(undefined);
     const result = await client.callTool({
       name: 'message.reaction.add',
-      arguments: { message_id: 'msg1', emoji: '👍' },
+      arguments: { message_id: 'msg1', emoji: '👍', as: 'ReaderBot' },
     });
     expect(mockAgentClient.react).toHaveBeenCalledWith('msg1', '👍');
     expect(result.content).toEqual([{ type: 'text', text: 'Reacted with 👍' }]);
@@ -40,7 +40,7 @@ describe('feature tools', () => {
     mockAgentClient.unreact.mockResolvedValue(undefined);
     await client.callTool({
       name: 'message.reaction.remove',
-      arguments: { message_id: 'msg1', emoji: '👍' },
+      arguments: { message_id: 'msg1', emoji: '👍', as: 'ReaderBot' },
     });
     expect(mockAgentClient.unreact).toHaveBeenCalledWith('msg1', '👍');
   });
@@ -49,7 +49,7 @@ describe('feature tools', () => {
     mockAgentClient.search.mockResolvedValue([]);
     await client.callTool({
       name: 'message.search',
-      arguments: { query: 'hello' },
+      arguments: { query: 'hello', as: 'ReaderBot' },
     });
     expect(mockAgentClient.search).toHaveBeenCalledWith('hello', {
       channel: undefined,
@@ -60,7 +60,7 @@ describe('feature tools', () => {
 
   it('check_inbox calls inbox()', async () => {
     mockAgentClient.inbox.mockResolvedValue({ unread: 0 });
-    await client.callTool({ name: 'message.inbox.check', arguments: {} });
+    await client.callTool({ name: 'message.inbox.check', arguments: { as: 'ReaderBot' } });
     expect(mockAgentClient.inbox).toHaveBeenCalled();
   });
 
@@ -68,7 +68,7 @@ describe('feature tools', () => {
     mockAgentClient.markRead.mockResolvedValue(undefined);
     const result = await client.callTool({
       name: 'message.inbox.mark_read',
-      arguments: { message_id: 'msg1' },
+      arguments: { message_id: 'msg1', as: 'ReaderBot' },
     });
     expect(mockAgentClient.markRead).toHaveBeenCalledWith('msg1');
     expect(result.content).toEqual([
@@ -98,9 +98,119 @@ describe('feature tools', () => {
         filename: 'test.txt',
         content_type: 'text/plain',
         size_bytes: 100,
+        as: 'ReaderBot',
       },
     });
     expect(mockAgentClient.files.upload).toHaveBeenCalledWith({
+      filename: 'test.txt',
+      contentType: 'text/plain',
+      sizeBytes: 100,
+    });
+  });
+});
+
+describe('feature tools with identity overrides', () => {
+  let mcpServer: McpServer;
+  let client: Client;
+  const defaultClient = {
+    react: vi.fn(),
+    unreact: vi.fn(),
+    search: vi.fn(),
+    inbox: vi.fn(),
+    markRead: vi.fn(),
+    readers: vi.fn(),
+    files: { upload: vi.fn() },
+  };
+  const identityClient = {
+    react: vi.fn(),
+    unreact: vi.fn(),
+    search: vi.fn(),
+    inbox: vi.fn(),
+    markRead: vi.fn(),
+    readers: vi.fn(),
+    files: { upload: vi.fn() },
+  };
+
+  const getAgentClient = vi.fn((_wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => {
+    if (as === 'ReaderBot') {
+      return identityClient as any;
+    }
+    return defaultClient as any;
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mcpServer = new McpServer({ name: 'test', version: '0.1.0' });
+    registerFeatureTools(mcpServer, getAgentClient);
+    client = new Client({ name: 'test-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), mcpServer.connect(st)]);
+  });
+
+  it('message.reaction.add passes as to getAgentClient', async () => {
+    identityClient.react.mockResolvedValue(undefined);
+    await client.callTool({
+      name: 'message.reaction.add',
+      arguments: { message_id: 'msg1', emoji: '👍', as: 'ReaderBot' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'ReaderBot');
+    expect(identityClient.react).toHaveBeenCalledWith('msg1', '👍');
+  });
+
+  it('message.reaction.remove passes as to getAgentClient', async () => {
+    identityClient.unreact.mockResolvedValue(undefined);
+    await client.callTool({
+      name: 'message.reaction.remove',
+      arguments: { message_id: 'msg1', emoji: '👍', as: 'ReaderBot' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'ReaderBot');
+    expect(identityClient.unreact).toHaveBeenCalledWith('msg1', '👍');
+  });
+
+  it('message.search passes workspace routing and as to getAgentClient', async () => {
+    identityClient.search.mockResolvedValue([]);
+    await client.callTool({
+      name: 'message.search',
+      arguments: { query: 'hello', workspace_id: 'ws_beta', as: 'ReaderBot' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined }, 'ReaderBot');
+    expect(identityClient.search).toHaveBeenCalledWith('hello', {
+      channel: undefined,
+      from: undefined,
+      limit: undefined,
+    });
+  });
+
+  it('message.inbox.check falls back to the active identity when as is omitted', async () => {
+    defaultClient.inbox.mockResolvedValue({ unread: 0 });
+    await client.callTool({ name: 'message.inbox.check', arguments: {} });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, undefined);
+    expect(defaultClient.inbox).toHaveBeenCalled();
+  });
+
+  it('message.inbox.mark_read passes as to getAgentClient', async () => {
+    identityClient.markRead.mockResolvedValue(undefined);
+    await client.callTool({
+      name: 'message.inbox.mark_read',
+      arguments: { message_id: 'msg1', as: 'ReaderBot' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'ReaderBot');
+    expect(identityClient.markRead).toHaveBeenCalledWith('msg1');
+  });
+
+  it('message.file.upload passes as to getAgentClient', async () => {
+    identityClient.files.upload.mockResolvedValue({ id: 'f1', upload_url: 'https://...' });
+    await client.callTool({
+      name: 'message.file.upload',
+      arguments: {
+        filename: 'test.txt',
+        content_type: 'text/plain',
+        size_bytes: 100,
+        as: 'ReaderBot',
+      },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'ReaderBot');
+    expect(identityClient.files.upload).toHaveBeenCalledWith({
       filename: 'test.txt',
       contentType: 'text/plain',
       sizeBytes: 100,

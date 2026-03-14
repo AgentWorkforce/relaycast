@@ -27,6 +27,7 @@ import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
 import { resolveToolName } from './tool-aliases.js';
 import type { McpWorkspaceConfig } from './workspaces.js';
 import { findWorkspaceContext } from './workspaces.js';
+import type { RegisteredAgent } from './types.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -48,6 +49,18 @@ export interface McpServerOptions {
   /** Default workspace ID or alias to use as the active workspace. */
   defaultWorkspace?: string;
 }
+
+type AgentRouting = {
+  workspace_id?: string;
+  workspace_alias?: string;
+  as?: string;
+};
+
+type ResolvedAgentIdentity = {
+  workspaceKey: string;
+  agentToken: string;
+  agentName: string;
+};
 
 type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
   request: TRequest,
@@ -100,17 +113,44 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       baseUrl: options.baseUrl,
     }, mcpOrigin);
   };
-  const setSession = (partial: Partial<SessionState>) => {
-    const switchingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+  const syncActiveWorkspaceContext = () => {
+    if (!session.workspaceKey || !session.agentToken || !session.agentName) {
+      return;
+    }
 
-    if (switchingToken && session.wsBridge) {
-      session.wsBridge.stop();
+    const existing = session.workspaces.get(session.workspaceKey);
+    const agents = new Map(existing?.agents ?? []);
+    for (const [agentName, agent] of session.agents) {
+      agents.set(agentName, agent);
+    }
+    agents.set(session.agentName, {
+      agentName: session.agentName,
+      agentToken: session.agentToken,
+    });
+
+    session.workspaces.set(session.workspaceKey, {
+      workspaceKey: session.workspaceKey,
+      agentToken: session.agentToken,
+      agentName: session.agentName,
+      agents,
+      workspaceName: existing?.workspaceName,
+      workspaceLabel: existing?.workspaceLabel,
+      wsBridge: session.wsBridge,
+      subscriptions: session.subscriptions,
+      wsInitAttempted: session.wsInitAttempted,
+    });
+  };
+  const setSession = (partial: Partial<SessionState>) => {
+    const switchingWorkspace = partial.workspaceKey !== undefined && partial.workspaceKey !== session.workspaceKey;
+
+    // In a single MCP process the bridge tracks the active workspace, not
+    // every agent token update inside that workspace. Rebuild it only when
+    // the workspace itself changes.
+    if (switchingWorkspace) {
+      session.wsBridge?.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;
       session.subscriptions = null;
-    }
-
-    if (switchingToken) {
       session.wsInitAttempted = false;
     }
 
@@ -150,12 +190,22 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         agent_name: session.agentName,
       });
     }
+
+    syncActiveWorkspaceContext();
   };
 
-  const getAgentClient = (
+  const resolveRegisteredToken = (
+    agents: Map<string, RegisteredAgent>,
+    agentName?: string,
+  ): string | null => {
+    if (!agentName) return null;
+    return agents.get(agentName)?.agentToken ?? null;
+  };
+
+  const resolveAgentIdentity = (
     wsRouting?: { workspace_id?: string; workspace_alias?: string },
-  ): AgentClient => {
-    // If workspace routing is specified, resolve the target workspace context
+    asAgent?: string,
+  ): ResolvedAgentIdentity => {
     if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias)) {
       const ctx = findWorkspaceContext(session, wsRouting, options.workspaces);
       if (!ctx) {
@@ -164,25 +214,54 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           'Join the workspace first via "workspace.join" or bootstrap via RELAY_WORKSPACES_JSON.',
         );
       }
-      return createInternalRelayCast({
-        apiKey: ctx.agentToken,
-        baseUrl: options.baseUrl,
-      }, mcpOrigin).as(ctx.agentToken);
+      const routedToken = resolveRegisteredToken(ctx.agents, asAgent) ?? ctx.agentToken;
+      if (asAgent && !resolveRegisteredToken(ctx.agents, asAgent)) {
+        throw new Error(
+          `Unknown agent identity "${asAgent}" for workspace ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. Register it first.`,
+        );
+      }
+      return {
+        workspaceKey: ctx.workspaceKey,
+        agentToken: routedToken,
+        agentName: asAgent ?? ctx.agentName,
+      };
     }
 
-    if (!session.agentToken) {
+    const activeToken = resolveRegisteredToken(session.agents, asAgent) ?? session.agentToken;
+    if (asAgent && !resolveRegisteredToken(session.agents, asAgent)) {
+      throw new Error(`Unknown agent identity "${asAgent}". Register it first.`);
+    }
+
+    if (!activeToken) {
       throw new Error('Not registered. Call the "agent.register" tool first.');
     }
+
+    return {
+      workspaceKey: session.workspaceKey ?? activeToken,
+      agentToken: activeToken,
+      agentName: asAgent ?? session.agentName ?? '',
+    };
+  };
+
+  const getAgentClient = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ): AgentClient => {
+    const identity = resolveAgentIdentity(wsRouting, asAgent);
     return createInternalRelayCast({
-      apiKey: session.agentToken,
+      apiKey: identity.agentToken,
       baseUrl: options.baseUrl,
-    }, mcpOrigin).as(
-      session.agentToken,
-    );
+    }, mcpOrigin).as(identity.agentToken);
   };
 
   // Enable piggybacking of unread messages on all tool responses
-  enablePiggyback(mcpServer, getSession, getAgentClient, telemetry);
+  enablePiggyback(
+    mcpServer,
+    getSession,
+    getAgentClient,
+    telemetry,
+    (routing?: AgentRouting) => resolveAgentIdentity(routing, routing?.as),
+  );
 
   // Register resource definitions (inbox, agents, channels, etc.)
   registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
@@ -260,17 +339,40 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   if (options.workspaces?.length) {
     for (const ws of options.workspaces) {
       if (ws.agent_token && ws.agent_name) {
+        const existing = session.workspaces.get(ws.api_key);
+        const agents = new Map(existing?.agents ?? []);
+        agents.set(ws.agent_name, {
+          agentName: ws.agent_name,
+          agentToken: ws.agent_token,
+        });
         session.workspaces.set(ws.api_key, {
           workspaceKey: ws.api_key,
           agentToken: ws.agent_token,
           agentName: ws.agent_name,
-          workspaceName: ws.workspace_name,
+          agents,
+          workspaceName: ws.workspace_name ?? existing?.workspaceName,
+          workspaceLabel: existing?.workspaceLabel,
           wsBridge: null,
           subscriptions: null,
           wsInitAttempted: false,
         });
       }
     }
+  }
+
+  if (session.workspaceKey && session.agentToken && session.agentName) {
+    const existing = session.workspaces.get(session.workspaceKey);
+    session.workspaces.set(session.workspaceKey, {
+      workspaceKey: session.workspaceKey,
+      agentToken: session.agentToken,
+      agentName: session.agentName,
+      agents: new Map(session.agents),
+      workspaceName: existing?.workspaceName,
+      workspaceLabel: existing?.workspaceLabel,
+      wsBridge: existing?.wsBridge ?? session.wsBridge,
+      subscriptions: existing?.subscriptions ?? session.subscriptions,
+      wsInitAttempted: existing?.wsInitAttempted ?? session.wsInitAttempted,
+    });
   }
 
   return mcpServer;

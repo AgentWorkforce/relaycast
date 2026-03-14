@@ -331,6 +331,38 @@ describe('createRelayMcpServer', () => {
     expect(result.isError).toBeFalsy();
   });
 
+  it('lists the bootstrapped active workspace in workspace.list', async () => {
+    const bootstrappedServer = createRelayMcpServer({
+      apiKey: 'rk_live_bootstrap123',
+      agentToken: 'tok_preregistered',
+      agentName: 'pre-registered-bot',
+    });
+    const bootstrappedClient = new Client({ name: 'workspace-list-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bootstrappedClient.connect(ct), bootstrappedServer.connect(st)]);
+
+    const result = await bootstrappedClient.callTool({
+      name: 'workspace.list',
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    const firstContent = result.content?.[0] as { text?: string } | undefined;
+    const text = typeof firstContent?.text === 'string' ? firstContent.text : '{}';
+    const payload = JSON.parse(text) as {
+      active_workspace_ref?: string | null;
+      workspaces?: Array<{ agent_name: string; is_active: boolean }>;
+    };
+
+    expect(payload.active_workspace_ref).toMatch(/^ws_[a-f0-9]{12}$/);
+    expect(payload.workspaces).toEqual([
+      expect.objectContaining({
+        agent_name: 'pre-registered-bot',
+        is_active: true,
+      }),
+    ]);
+  });
+
   it('retries WS bridge initialization after switching away from a token that failed WS init', async () => {
     const wsFactory = vi.mocked(createInternalWsClient);
     wsFactory.mockImplementationOnce(() => {

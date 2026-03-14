@@ -145,6 +145,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot-ws2',
+      agents: new Map([['bot-ws2', { agentName: 'bot-ws2', agentToken: 'at_live_ws2' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -189,7 +190,52 @@ describe('registration tools', () => {
     });
     expect(session.agentToken).toBe('tok_abc');
     expect(session.agentName).toBe('bot1');
+    expect(session.agents.get('bot1')).toEqual({ agentName: 'bot1', agentToken: 'tok_abc' });
     expect(result.content).toBeDefined();
+  });
+
+  it('strict register prefers the configured broker identity from the registry', async () => {
+    const strictSession = createInitialSession({
+      workspaceKey: 'rk_live_test',
+      agentToken: 'tok_worker',
+      agentName: 'worker-bot',
+    });
+    strictSession.agents.set('Lead', { agentName: 'Lead', agentToken: 'tok_lead' });
+
+    const strictServer = new McpServer({ name: 'strict-test', version: '0.1.0' });
+    registerRegistrationTools(
+      strictServer,
+      () => mockRelay as any,
+      () => strictSession,
+      (partial) => {
+        Object.assign(strictSession, partial);
+      },
+      'https://api.test.dev',
+      true,
+      'Lead',
+      'agent',
+    );
+
+    const strictClient = new Client({ name: 'strict-client', version: '0.1.0' });
+    const [strictCt, strictSt] = InMemoryTransport.createLinkedPair();
+    await Promise.all([strictClient.connect(strictCt), strictServer.connect(strictSt)]);
+
+    const result = await strictClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'someone-else', type: 'human' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockRelay.agents.registerOrRotate).not.toHaveBeenCalled();
+    expect(strictSession.agentToken).toBe('tok_lead');
+    expect(strictSession.agentName).toBe('Lead');
+    expect(strictSession.agents.get('Lead')).toEqual({ agentName: 'Lead', agentToken: 'tok_lead' });
+
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.token).toBe('tok_lead');
+    expect(parsed.registered_name).toBe('Lead');
+    expect(parsed.warnings.some((warning: string) => warning.includes('ignoring requested name'))).toBe(true);
+    expect(parsed.warnings.some((warning: string) => warning.includes('ignoring requested type'))).toBe(true);
   });
 
   it('list_agents tool calls relay.agents.list', async () => {
@@ -226,6 +272,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws1_abcdefgh',
       agentToken: 'at_live_ws1',
       agentName: 'bot1',
+      agents: new Map([['bot1', { agentName: 'bot1', agentToken: 'at_live_ws1' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -234,6 +281,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2_abcdefgh',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
+      agents: new Map([['bot2', { agentName: 'bot2', agentToken: 'at_live_ws2' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -281,6 +329,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
+      agents: new Map([['bot2', { agentName: 'bot2', agentToken: 'at_live_ws2' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -324,6 +373,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws1',
       agentToken: 'at_live_ws1',
       agentName: 'bot1',
+      agents: new Map([['bot1', { agentName: 'bot1', agentToken: 'at_live_ws1' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -332,6 +382,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
+      agents: new Map([['bot2', { agentName: 'bot2', agentToken: 'at_live_ws2' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -356,6 +407,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws1',
       agentToken: 'at_live_ws1',
       agentName: 'bot1',
+      agents: new Map([['bot1', { agentName: 'bot1', agentToken: 'at_live_ws1' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -364,6 +416,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
+      agents: new Map([['bot2', { agentName: 'bot2', agentToken: 'at_live_ws2' }]]),
       wsBridge: null,
       subscriptions: null,
       wsInitAttempted: false,
@@ -392,6 +445,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws1',
       agentToken: 'at_live_ws1',
       agentName: 'bot1',
+      agents: new Map([['bot1', { agentName: 'bot1', agentToken: 'at_live_ws1' }]]),
       workspaceName: 'Primary Workspace',
       wsBridge: null,
       subscriptions: null,
@@ -401,6 +455,7 @@ describe('registration tools', () => {
       workspaceKey: 'rk_live_ws2',
       agentToken: 'at_live_ws2',
       agentName: 'bot2',
+      agents: new Map([['bot2', { agentName: 'bot2', agentToken: 'at_live_ws2' }]]),
       workspaceName: 'Workspace Two',
       wsBridge: null,
       subscriptions: null,
@@ -446,5 +501,40 @@ describe('registration tools', () => {
     expect(saved!.agentToken).toBe('tok_abc');
     expect(saved!.agentName).toBe('bot1');
     expect(saved!.workspaceName).toBe('Test Workspace');
+  });
+
+  it('register preserves prior agent identities in the workspace registry', async () => {
+    session.workspaceKey = 'rk_live_test';
+    mockRelay.agents.registerOrRotate
+      .mockResolvedValueOnce({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      })
+      .mockResolvedValueOnce({
+        agent: { name: 'bot2' },
+        token: 'tok_def',
+      });
+
+    await client.callTool({
+      name: 'agent.register',
+      arguments: { name: 'bot1' },
+    });
+    await client.callTool({
+      name: 'agent.register',
+      arguments: { name: 'bot2' },
+    });
+
+    const saved = session.workspaces.get('rk_live_test');
+    expect(saved).toBeDefined();
+    expect(saved!.agentName).toBe('bot2');
+    expect(saved!.agentToken).toBe('tok_def');
+    expect(saved!.agents?.get('bot1')).toEqual({
+      agentName: 'bot1',
+      agentToken: 'tok_abc',
+    });
+    expect(saved!.agents?.get('bot2')).toEqual({
+      agentName: 'bot2',
+      agentToken: 'tok_def',
+    });
   });
 });

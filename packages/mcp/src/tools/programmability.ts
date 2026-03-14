@@ -2,6 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { RelayCast, AgentClient } from '@relaycast/sdk';
 import { SubscribableEventTypeSchema } from '@relaycast/types';
+import {
+  identityOverrideInputShape,
+  workspaceRoutingInputShape,
+  workspaceRefFromArgs,
+} from '../workspaces.js';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -9,7 +14,7 @@ const jsonResult = z.object({}).passthrough();
 export function registerProgrammabilityTools(
   server: McpServer,
   getRelay: () => RelayCast,
-  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
   // === Inbound Webhooks ===
 
@@ -255,11 +260,16 @@ export function registerProgrammabilityTools(
       channel: z.string().describe('Name of the channel providing context for the command invocation'),
       args: z.string().optional().describe('Raw argument string passed to the command handler (e.g. "production --force")'),
       parameters: z.string().optional().describe('JSON-encoded object of structured parameters matching the command\'s parameter definitions'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ command, channel, args, parameters }) => {
-    const client = getAgentClient();
+  }, async ({ command, channel, args, parameters, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(
+      workspaceRefFromArgs({ workspace_id, workspace_alias }),
+      asIdentity,
+    );
     const parsedParams = parameters ? JSON.parse(parameters) : undefined;
     const result = await client.commands.invoke(command, { channel, args, parameters: parsedParams });
     return {

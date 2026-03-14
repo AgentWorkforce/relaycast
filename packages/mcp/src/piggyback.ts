@@ -28,6 +28,9 @@ type RegisterToolFn = (
   handler: ToolHandler | undefined,
 ) => unknown;
 type ContentCarrier = { content: Array<Record<string, unknown>> };
+type WorkspaceRouting = { workspace_id?: string; workspace_alias?: string };
+type AgentRouting = WorkspaceRouting & { as?: string };
+type ResolvedAgentIdentity = { agentName: string };
 
 function hasContentArray(value: unknown): value is ContentCarrier {
   return (
@@ -37,11 +40,26 @@ function hasContentArray(value: unknown): value is ContentCarrier {
   );
 }
 
+function extractAgentRouting(args: unknown[]): AgentRouting | undefined {
+  const [input] = args;
+  if (typeof input !== 'object' || input === null) return undefined;
+
+  const raw = input as Record<string, unknown>;
+  const workspace_id = typeof raw.workspace_id === 'string' ? raw.workspace_id : undefined;
+  const workspace_alias = typeof raw.workspace_alias === 'string' ? raw.workspace_alias : undefined;
+  const as = typeof raw.as === 'string' ? raw.as : undefined;
+
+  if (!workspace_id && !workspace_alias && !as) return undefined;
+
+  return { workspace_id, workspace_alias, as };
+}
+
 export function enablePiggyback(
   mcpServer: McpServer,
   getSession: () => SessionState,
-  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
+  getAgentClient: (wsRouting?: WorkspaceRouting, asAgent?: string) => AgentClient,
   telemetry?: McpTelemetry,
+  resolveAgentIdentity?: (routing?: AgentRouting) => ResolvedAgentIdentity,
 ): void {
   const original = mcpServer.registerTool.bind(mcpServer) as RegisterToolFn;
   const mutableServer = mcpServer as unknown as { registerTool: RegisterToolFn };
@@ -101,10 +119,18 @@ export function enablePiggyback(
         });
       }
 
-      if (!shouldPiggybackInbox || !getSession().agentToken) return result;
+      const routing = extractAgentRouting(args);
+      const hasRoutedIdentity = Boolean(routing?.workspace_id || routing?.workspace_alias || routing?.as);
+      if (!shouldPiggybackInbox || (!getSession().agentToken && !hasRoutedIdentity)) return result;
 
       try {
-        const client = getAgentClient();
+        const workspaceRouting = routing?.workspace_id || routing?.workspace_alias
+          ? {
+              workspace_id: routing.workspace_id,
+              workspace_alias: routing.workspace_alias,
+            }
+          : undefined;
+        const client = getAgentClient(workspaceRouting, routing?.as);
         const inbox = await client.inbox();
 
         const hasUnread =
@@ -121,7 +147,7 @@ export function enablePiggyback(
         );
 
         if (hasUnread && hasContentArray(result)) {
-          const selfName = getSession().agentName;
+          const selfName = resolveAgentIdentity?.(routing)?.agentName ?? routing?.as ?? getSession().agentName;
           const inboxText = formatInbox(inbox, selfName);
           if (inboxText) {
             result.content.push({

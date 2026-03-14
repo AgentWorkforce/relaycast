@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RelayCast } from '@relaycast/sdk';
-import type { SessionState, WorkspaceContext } from '../types.js';
+import type { RegisteredAgent, SessionState, WorkspaceContext } from '../types.js';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
@@ -98,6 +98,7 @@ function saveWorkspaceContext(
     workspaceKey,
     agentToken,
     agentName,
+    agents: new Map(session.agents),
     // Preserve existing workspace metadata if not explicitly provided.
     workspaceName: metadata.workspaceName ?? existing?.workspaceName,
     workspaceLabel: metadata.workspaceLabel ?? existing?.workspaceLabel,
@@ -106,6 +107,10 @@ function saveWorkspaceContext(
     subscriptions: null,
     wsInitAttempted: false,
   });
+}
+
+function createRegisteredAgent(agentName: string, agentToken: string): RegisteredAgent {
+  return { agentName, agentToken };
 }
 
 export function registerRegistrationTools(
@@ -148,7 +153,7 @@ export function registerRegistrationTools(
           session.agentName,
         );
       }
-      setSession({ workspaceKey, agentToken: null, agentName: null });
+      setSession({ workspaceKey, agentToken: null, agentName: null, agents: new Map() });
 
       return {
         content: [{ type: 'text', text: JSON.stringify(workspace, null, 2) }],
@@ -197,9 +202,10 @@ export function registerRegistrationTools(
             workspaceKey: api_key,
             agentToken: saved.agentToken,
             agentName: saved.agentName,
+            agents: new Map(saved.agents),
           });
         } else {
-          setSession({ workspaceKey: api_key, agentToken: null, agentName: null });
+          setSession({ workspaceKey: api_key, agentToken: null, agentName: null, agents: new Map() });
         }
       } else {
         setSession({ workspaceKey: api_key });
@@ -239,10 +245,18 @@ export function registerRegistrationTools(
       const session = getSession();
       requireWorkspaceKey(session);
 
-      const configuredName = session.agentName
-        ?? preferredAgentName?.trim()
-        ?? null;
+      const configuredName = strictAgentName
+        ? preferredAgentName?.trim()
+          ?? session.agentName
+          ?? null
+        : session.agentName
+          ?? preferredAgentName?.trim()
+          ?? null;
       const warnings: string[] = [];
+      const registeredConfiguredToken = configuredName
+        ? session.agents.get(configuredName)?.agentToken
+          ?? (session.agentName === configuredName ? session.agentToken : null)
+        : null;
 
       // In strict mode, enforce the pre-registered name from the broker.
       // This prevents spawned agents from re-registering under a different name.
@@ -263,22 +277,30 @@ export function registerRegistrationTools(
 
       // If already pre-registered with a token, skip the API call and return
       // the existing registration to avoid overwriting the pre-registered identity.
-      if (session.agentToken && effectiveName && strictAgentName) {
+      if (registeredConfiguredToken && effectiveName && strictAgentName) {
         const workspaceName = session.workspaceKey
           ? await fetchWorkspaceName(session.workspaceKey, baseUrl)
           : undefined;
+        setSession({
+          agentToken: registeredConfiguredToken,
+          agentName: effectiveName,
+          agents: new Map(session.agents).set(
+            effectiveName,
+            createRegisteredAgent(effectiveName, registeredConfiguredToken),
+          ),
+        });
         if (session.workspaceKey) {
           saveWorkspaceContext(
             session,
             session.workspaceKey,
-            session.agentToken,
+            registeredConfiguredToken,
             effectiveName,
             { workspaceName },
           );
         }
         const existing = {
           name: effectiveName,
-          token: session.agentToken,
+          token: registeredConfiguredToken,
           registered_name: effectiveName,
           warnings,
         };
@@ -295,8 +317,10 @@ export function registerRegistrationTools(
         persona,
         metadata,
       });
+      const nextAgents = new Map(session.agents);
+      nextAgents.set(effectiveName, createRegisteredAgent(effectiveName, result.token));
       // Store the agent token in session state
-      setSession({ agentToken: result.token, agentName: effectiveName });
+      setSession({ agentToken: result.token, agentName: effectiveName, agents: nextAgents });
 
       // Update multi-workspace context map.
       const updatedSession = getSession();
@@ -441,6 +465,7 @@ export function registerRegistrationTools(
           workspaceKey: api_key,
           agentToken: existing.agentToken,
           agentName: existing.agentName,
+          agents: new Map(existing.agents),
         });
         const result = {
           message: `Already joined workspace as "${existing.agentName}". Switched to it.`,
@@ -453,11 +478,15 @@ export function registerRegistrationTools(
       }
 
       // Switch to new workspace and register.
-      setSession({ workspaceKey: api_key, agentToken: null, agentName: null });
+      setSession({ workspaceKey: api_key, agentToken: null, agentName: null, agents: new Map() });
 
       const relay = getRelay();
       const regResult = await relay.agents.registerOrRotate({ name, type, persona });
-      setSession({ agentToken: regResult.token, agentName: name });
+      setSession({
+        agentToken: regResult.token,
+        agentName: name,
+        agents: new Map([[name, createRegisteredAgent(name, regResult.token)]]),
+      });
 
       // Save the new workspace context.
       const updatedSession = getSession();
@@ -528,6 +557,7 @@ export function registerRegistrationTools(
         workspaceKey: targetWorkspaceKey,
         agentToken: saved.agentToken,
         agentName: saved.agentName,
+        agents: new Map(saved.agents),
       });
 
       const result = {
