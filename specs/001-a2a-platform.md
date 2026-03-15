@@ -29,7 +29,7 @@ We build five capabilities:
                           │   Agent Relay Platform       │
                           │                             │
   External A2A Agent ────►│  ┌──────────┐              │◄──── Relay SDK Agent
-  (any framework)         │  │ A2A      │  ┌─────────┐ │      (Python/TS)
+  (any framework)         │  │ A2A      │  ┌─────────┐ │      (Python/TS/Rust)
                           │  │ Gateway  │──│Relaycast│ │
   External A2A Agent ────►│  │          │  │ Server  │ │◄──── Relay SDK Agent
                           │  └──────────┘  └─────────┘ │
@@ -70,11 +70,12 @@ External Agent                     Relaycast Gateway
      │ ──────────────────────────────────► │
      │                                    │
      │  { ok: true,                        │
-     │    relay_name: "ext-billing-a3f2",  │
-     │    relay_token: "at_live_...",      │
-     │    webhook_url: "https://gateway    │
-     │      .relaycast.dev/a2a/webhook/    │
-     │      ext-billing-a3f2" }            │
+     │    data: {                           │
+     │      relay_name: "ext-billing-a3f2", │
+     │      relay_token: "at_live_...",     │
+     │      webhook_url: "https://gateway   │
+     │        .relaycast.dev/a2a/webhook/   │
+     │        ext-billing-a3f2" }}          │
      │ ◄────────────────────────────────── │
      │                                    │
 ```
@@ -82,7 +83,7 @@ External Agent                     Relaycast Gateway
 After registration:
 - The external agent appears in `relay.list_agents()` with its A2A skills
 - Relay agents can `relay.send("ext-billing-a3f2", "process refund")` 
-- Relaycast translates the DM into an A2A `message/send` JSON-RPC call to the external agent's URL
+- Relaycast translates the DM into an A2A `SendMessage` JSON-RPC call to the external agent's URL
 - Responses flow back as Relay DMs
 
 ### 3.4 Message Flow (Relay → External A2A)
@@ -95,7 +96,7 @@ Relay Agent                 Relaycast                  External A2A Agent
      │ ───────────────────────►│                              │
      │  POST /v1/dm            │                              │
      │                         │  POST {agent_card.url}       │
-     │                         │  JSON-RPC: message/send      │
+     │                         │  JSON-RPC: SendMessage      │
      │                         │  { message: {                │
      │                         │    role: "user",             │
      │                         │    parts: [{text: msg}] }}   │
@@ -119,7 +120,7 @@ External A2A Agent          Relaycast                  Relay Agent
      │                         │                          │
      │  POST /a2a/webhook/     │                          │
      │    ext-billing-a3f2     │                          │
-     │  JSON-RPC: message/send │                          │
+     │  JSON-RPC: SendMessage │                          │
      │  { message: {           │                          │
      │    parts: [{text:...}], │                          │
      │    extensions: [{       │                          │
@@ -145,40 +146,101 @@ GET    /v1/a2a/agents            List all A2A agents in workspace
 GET    /v1/a2a/agents/:name/card Agent Card for a specific agent
 
 # A2A-compliant endpoints (served per-workspace)
-GET    /.well-known/agent.json   Workspace Agent Card (lists all agents)
+GET    /.well-known/agent-card.json   Workspace Agent Card (lists all agents)
 POST   /a2a/rpc                  JSON-RPC 2.0 endpoint for workspace
-GET    /a2a/webhook/:agent_name  Webhook endpoint for external agents
 POST   /a2a/webhook/:agent_name  Receive A2A messages for proxied agents
 ```
 
 ### 3.7 Database Schema
 
-```sql
-CREATE TABLE a2a_agents (
-    id              BIGINT PRIMARY KEY,
-    workspace_id    BIGINT NOT NULL REFERENCES workspaces(id),
-    relay_agent_id  BIGINT NOT NULL REFERENCES agents(id),
-    agent_card      JSONB NOT NULL,           -- full A2A AgentCard
-    external_url    TEXT NOT NULL,             -- agent's A2A endpoint
-    auth_scheme     TEXT,                      -- "bearer", "api_key", etc
-    auth_credential TEXT,                      -- encrypted credential
-    status          TEXT DEFAULT 'active',     -- active, suspended, revoked
-    messages_sent   BIGINT DEFAULT 0,
-    messages_recv   BIGINT DEFAULT 0,
-    last_health     TIMESTAMPTZ,              -- last successful health check
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    updated_at      TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+// Drizzle schema (D1/SQLite compatible)
+export const a2aAgents = sqliteTable('a2a_agents', {
+    id:              text('id').primaryKey(),
+    workspaceId:     text('workspace_id').notNull().references(() => workspaces.id),
+    relayAgentId:    text('relay_agent_id').notNull().references(() => agents.id),
+    agentCard:       text('agent_card', { mode: 'json' }).notNull(),  // full A2A AgentCard
+    externalUrl:     text('external_url').notNull(),
+    authScheme:      text('auth_scheme'),                              // "bearer", "api_key"
+    authCredential:  text('auth_credential'),                          // encrypted
+    status:          text('status').default('active'),                  // active, suspended, revoked
+    messagesSent:    integer('messages_sent').default(0),
+    messagesRecv:    integer('messages_recv').default(0),
+    lastHealth:      integer('last_health', { mode: 'timestamp' }),
+    createdAt:       integer('created_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
+    updatedAt:       integer('updated_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
+});
 
-CREATE INDEX idx_a2a_agents_workspace ON a2a_agents(workspace_id);
+// Index
+export const a2aAgentsWorkspaceIdx = index('idx_a2a_agents_workspace')
+    .on(a2aAgents.workspaceId);
 ```
 
-### 3.8 Health Checking
+### 3.8 A2A Task State Mapping
+
+A2A Tasks have a full lifecycle. The gateway maps them to Relaycast thread states:
+
+| A2A Task State | Relaycast Equivalent | Notes |
+|---|---|---|
+| `SUBMITTED` | Message received | Initial DM or channel post |
+| `WORKING` | Agent processing | Agent has read the message |
+| `INPUT_REQUIRED` | Human-in-the-loop | Route to `identity_type: human` agent in workspace |
+| `AUTH_REQUIRED` | N/A (handle at gateway) | Gateway returns auth challenge to caller |
+| `COMPLETED` | Reply sent | Resolution DM sent back |
+| `FAILED` | Error event | Broadcast error to workspace |
+| `CANCELED` | N/A | Gateway sends cancel to external agent |
+| `REJECTED` | N/A | Agent declined the task |
+
+### 3.9 Context Preservation
+
+A2A uses `contextId` to group related messages into conversations. The gateway preserves this:
+
+- **Inbound A2A → Relay:** `contextId` maps to a Relaycast thread. All messages with the same `contextId` are routed to the same thread.
+- **Relay → Outbound A2A:** Relaycast thread ID is sent as `contextId` in outbound A2A messages.
+- **Cross-agent conversations:** When Agent A and Agent B exchange multiple messages about the same ticket, all messages share a `contextId`/thread.
+
+### 3.10 SSE ↔ WebSocket Streaming Bridge
+
+The gateway translates between A2A SSE streaming and Relay WebSocket events:
+
+```
+External A2A (SSE)              Gateway                 Relay Agent (WS)
+     │                            │                          │
+     │  SendStreamingMessage      │                          │
+     │  ────────────────────────►│                          │
+     │                            │  WS: dm.received         │
+     │                            │ ────────────────────────►│
+     │                            │                          │
+     │                            │  WS: agent.typing        │
+     │  SSE: TaskStatusUpdate     │◄─────────────────────────│
+     │  (state: WORKING)          │                          │
+     │ ◄──────────────────────────│                          │
+     │                            │  WS: dm.sent (response)  │
+     │  SSE: TaskStatusUpdate     │◄─────────────────────────│
+     │  (state: COMPLETED)        │                          │
+     │  SSE: TaskArtifactUpdate   │                          │
+     │ ◄──────────────────────────│                          │
+     │  [stream closes]           │                          │
+```
+
+### 3.11 A2H (Agent-to-Human) Bridging
+
+When an A2A task enters `INPUT_REQUIRED` state, the gateway routes to a human agent:
+
+1. External A2A agent returns `INPUT_REQUIRED` with a prompt message
+2. Gateway looks up human agents in the workspace (`identity_type: human`)
+3. Creates a Relaycast notification for the human agent
+4. Human responds via Relaycast UI/API
+5. Gateway forwards human response as a new A2A `SendMessage` to the external agent
+
+This is a key differentiator — Relaycast already supports `identity_type: human`, so A2H bridging comes naturally. No other A2A implementation handles this.
+
+### 3.12 Health Checking
 
 Relaycast periodically (every 5 minutes) pings registered external A2A agents:
 
 ```
-GET {external_url}/.well-known/agent.json
+GET {external_url}/.well-known/agent-card.json
 ```
 
 If 3 consecutive checks fail, the agent is marked `suspended` and removed from `list_agents()`. Re-registration is required to reactivate.
@@ -209,7 +271,7 @@ interface DirectoryEntry {
     organization: string;          // "AgentWorkforce"
     
     // A2A Agent Card (embedded)
-    agentCard: A2AAgentCard;
+    agent_card: A2AAgentCard;
     
     // Directory metadata
     category: string;              // "billing", "security", "devtools"
@@ -219,20 +281,20 @@ interface DirectoryEntry {
     
     // Quality signals
     rating: number;                // 4.2 (aggregate)
-    totalTasks: number;            // 12,450
-    avgResponseMs: number;         // 1,200
-    successRate: number;           // 0.942
-    uptimePercent: number;         // 99.8
+    total_tasks: number;           // 12,450
+    avg_response_ms: number;       // 1,200
+    success_rate: number;          // 0.942
+    uptime_percent: number;        // 99.8
     certified: boolean;            // passed A2A compliance suite
     
     // Pricing
-    pricingModel: "free" | "per_task" | "monthly";
-    pricePerTask?: number;         // $0.002
-    monthlyPrice?: number;         // $49
+    pricing_model: "free" | "per_task" | "monthly";
+    price_per_task?: number;       // $0.002
+    monthly_price?: number;        // $49
     
     // Dates
-    publishedAt: string;
-    updatedAt: string;
+    published_at: string;
+    updated_at: string;
 }
 ```
 
@@ -256,7 +318,7 @@ GET    /v1/directory/featured            Featured/promoted agents
 GET /v1/directory?q=billing&category=finance&min_rating=4.0&certified=true&sort=rating
 ```
 
-Backed by PostgreSQL full-text search initially, Elasticsearch when volume warrants it.
+Backed by D1 FTS5 full-text search (already used for message search in Relaycast).
 
 ---
 
@@ -316,26 +378,25 @@ Click any message to see:
 
 ### 5.3 Data Model
 
-```sql
-CREATE TABLE message_logs (
-    id              BIGINT PRIMARY KEY,
-    workspace_id    BIGINT NOT NULL,
-    sender_agent_id BIGINT NOT NULL,
-    target_agent_id BIGINT,
-    channel_id      BIGINT,
-    message_type    TEXT NOT NULL,          -- "dm", "channel", "reply"
-    payload_hash    TEXT,                   -- for dedup
-    payload_size    INT,
-    latency_ms      INT,
-    a2a_task_id     TEXT,                   -- if bridged via A2A gateway
-    metadata        JSONB,                 -- model, tokens, cost, etc
-    created_at      TIMESTAMPTZ DEFAULT now()
-);
-
--- Partitioned by month for query performance
-CREATE INDEX idx_msg_workspace_time ON message_logs(workspace_id, created_at);
-CREATE INDEX idx_msg_sender ON message_logs(sender_agent_id, created_at);
-CREATE INDEX idx_msg_a2a ON message_logs(a2a_task_id) WHERE a2a_task_id IS NOT NULL;
+```typescript
+// Drizzle schema (D1/SQLite) — extends existing activity/message tables
+// NOTE: Relaycast already has activity feeds, read receipts, message history,
+// and WorkspaceStreamDO. This table adds A2A-specific observability fields
+// to the existing infrastructure rather than creating a parallel system.
+export const messageLogs = sqliteTable('message_logs', {
+    id:              text('id').primaryKey(),
+    workspaceId:     text('workspace_id').notNull(),
+    senderAgentId:   text('sender_agent_id').notNull(),
+    targetAgentId:   text('target_agent_id'),
+    channelId:       text('channel_id'),
+    messageType:     text('message_type').notNull(),        // "dm", "channel", "reply"
+    payloadHash:     text('payload_hash'),
+    payloadSize:     integer('payload_size'),
+    latencyMs:       integer('latency_ms'),
+    a2aTaskId:       text('a2a_task_id'),                   // if bridged via A2A gateway
+    metadata:        text('metadata', { mode: 'json' }),    // model, tokens, cost
+    createdAt:       integer('created_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
+});
 ```
 
 ### 5.4 API Endpoints
@@ -365,17 +426,17 @@ A certification suite at `agentrelay.dev/certify` that tests any A2A endpoint:
 
 ```
 Level 1: Basic Compliance (required)
-  ✓ Agent Card served at /.well-known/agent.json
+  ✓ Agent Card served at /.well-known/agent-card.json
   ✓ Agent Card contains required fields (name, url, version)
-  ✓ message/send returns valid Task or Message
-  ✓ tasks/get returns task by ID
+  ✓ SendMessage returns valid Task or Message
+  ✓ GetTask returns task by ID
   ✓ Error responses follow A2A error format
   ✓ JSON-RPC 2.0 compliance (id, jsonrpc, method, params)
 
 Level 2: Full Protocol (recommended)
-  ✓ Streaming via SSE (message/stream)
+  ✓ Streaming via SSE (SendStreamingMessage)
   ✓ Task lifecycle: submitted → working → completed
-  ✓ Task cancellation (tasks/cancel)
+  ✓ Task cancellation (CancelTask)
   ✓ Context ID grouping
   ✓ Multiple content types in Parts
   ✓ Concurrent task handling
@@ -389,7 +450,30 @@ Level 3: Production Ready (premium)
   ✓ No data leakage between contexts
 ```
 
-### 6.4 Certification Badge
+### 6.4 Auto-Certification on Registration
+
+Level 1 certification runs automatically when an external A2A agent registers via `POST /v1/a2a/register`. The registration response includes:
+
+```json
+{
+    "ok": true,
+    "data": {
+        "relay_name": "ext-billing-a3f2",
+        "relay_token": "at_live_...",
+        "certification": {
+            "level": 1,
+            "passed": true,
+            "tests_run": 6,
+            "tests_passed": 6,
+            "details_url": "/v1/certify/ext-billing-a3f2"
+        }
+    }
+}
+```
+
+If Level 1 fails, the agent is still registered but flagged as `uncertified` in the directory.
+
+### 6.5 Certification Badge
 
 Passing agents get:
 - A badge for their README/website: `[Relay Certified: Level 2]`
