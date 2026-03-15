@@ -117,19 +117,41 @@ The protocol spec is intentionally unopinionated about infrastructure. These gap
 
 ### Who's Trying to Own This Space?
 
-| Player | Approach | Threat Level |
-|--------|----------|-------------|
-| **Solo.io** | Agent Gateway (Envoy-based proxy) — routing, auth, observability for A2A traffic | **High** — they understand the infra play but come from service mesh, not agent-native |
-| **HiveMQ** | MQTT broker as agent communication fabric — pub/sub alternative to A2A's HTTP | **Medium** — different protocol, not A2A-native |
-| **LangGraph / LangChain** | Agent orchestration framework — defines workflows, not infrastructure | **Low** — framework, not platform |
-| **CrewAI** | Multi-agent orchestration — proprietary protocol | **Low** — not A2A-native |
-| **AutoGen (Microsoft)** | Agent framework with conversation patterns | **Low** — framework, not infrastructure |
-| **LiveKit Agents** | Real-time voice/video agent communication | **Low** — different modality |
-| **a2aregistry.org** | Open-source A2A agent directory | **Low** — registry only, no relay/routing |
+| Player | Approach | Threat Level | Gap vs Relaycast |
+|--------|----------|-------------|------------------|
+| **Solo.io / AgentGateway** | Open-source Rust-based gateway (now under Linux Foundation). A2A + MCP protocol-aware proxy with mTLS, RBAC, rate limiting, DLP, observability. K8s Gateway API support. | **High** | Deploy-it-yourself infra, not a managed cloud API. No message persistence or relay. |
+| **Gravitee** | Agent Mesh product — auto-discovers A2A agent cards, adds to Agent Catalog. Security policies + observability. | **Medium-High** | API management heritage, not agent-native. No hosting, no relay. |
+| **IBM ContextForge** | Unified gateway across MCP, A2A, REST, gRPC. Centralized discovery, guardrails, OpenTelemetry. | **Medium** | Enterprise-only positioning. Not developer-first. |
+| **TrueFoundry** | AI Agent Gateway — "Cognitive Mesh" translation layer between agent frameworks. Hub-and-spoke architecture. | **Medium** | ML platform heritage, not messaging-native. |
+| **HiveMQ** | MQTT broker as agent communication fabric — argues A2A's HTTP model is architecturally flawed for enterprise. | **Medium** | Different protocol (MQTT, not A2A). No Agent Cards, no Tasks. |
+| **Twilio (actual)** | A2A Latency Extension (latency broadcasting for routing) + A2H protocol (agent-to-human handoffs). | **Medium** | Targeting agent-to-*human* boundary, not agent-to-agent relay. Adjacent, not competitive. |
+| **LangGraph / LangChain** | Agent orchestration framework — defines workflows, not infrastructure | **Low** | Framework, not platform |
+| **CrewAI** | Multi-agent orchestration — proprietary protocol | **Low** | Not A2A-native |
+| **AutoGen (Microsoft)** | Agent framework with conversation patterns | **Low** | Framework, not infrastructure |
+| **a2aregistry.org** | Open-source A2A agent directory with Python SDK, 15+ agents | **Low** | Registry only, no relay/routing |
+
+### Adjacent Protocol Competitors
+
+| Protocol | Focus | Relationship to A2A |
+|----------|-------|-------------------|
+| **AGP** (Agent Gateway Protocol) | gRPC/HTTP2-based gateway standard | Emerging, could complement or compete |
+| **ANP** (Agent Network Protocol) | Decentralized agent networks | Web3-oriented, different market |
+| **AITP** | Secure economic transactions between agents | Complementary (payments layer) |
+| **x402** (Coinbase) | Agent payment rails via HTTP 402 | Complementary (billing layer) |
 
 ### Key Insight
 
-**Nobody is the hosted, managed A2A relay.** Solo.io is closest with their Agent Gateway concept, but they're selling enterprise software (deploy-it-yourself Envoy), not a cloud API. The "Twilio" position — a managed API that developers sign up for and start using in minutes — is **completely unoccupied.**
+**Nobody is the hosted, managed A2A relay.** Solo.io is the most credible infrastructure player but sells deploy-it-yourself software, not a cloud API. Gravitee and IBM are adapting existing API management products. TrueFoundry is adapting ML platform tooling. Twilio is targeting the agent-to-human boundary, not agent-to-agent.
+
+The "Twilio" position — a managed API that developers sign up for and start using in minutes, with pay-per-message economics — is **completely unoccupied.**
+
+### Market Size
+
+- Agentic AI market: **$7.8B today → $52B by 2030**
+- Gartner: 40% of enterprise apps will have AI agents by end of 2026 (up from <5% in 2025)
+- Gartner: **1,445% surge** in multi-agent system inquiries from Q1 2024 to Q2 2025
+- MCP: 97M monthly SDK downloads by February 2026
+- NIST: Established AI Agent Standards Initiative in February 2026
 
 ---
 
@@ -385,7 +407,17 @@ P2        Verification & trust badges            packages/server/src/engine/veri
 
 ---
 
-## 9. Open Questions
+## 9. Bonus Opportunity: A2H (Agent-to-Human)
+
+Twilio has proposed an **A2H (Agent-to-Human) protocol** with five atomic intent types: INFORM, COLLECT, AUTHORIZE, ESCALATE, RESULT. This covers the handoff from autonomous agent workflows to human-in-the-loop scenarios.
+
+**Relaycast already supports this.** Our agent model includes `identity_type: "agent" | "human" | "system"`. We have DMs, channels, reactions, read receipts — all the primitives for human participation in agent workflows. The A2A Task state `INPUT_REQUIRED` maps naturally to human escalation via Relaycast channels.
+
+**Strategic value:** Being the platform that handles both A2A *and* A2H makes Relaycast the single communication backbone for the entire agentic stack — agents talking to agents, agents talking to humans, and humans observing/controlling agents.
+
+---
+
+## 10. Open Questions
 
 1. **JSON-RPC vs REST binding?** A2A supports both. Should we expose JSON-RPC primary (spec default) or REST primary (more familiar to web devs)? **Recommendation:** Both, with REST as the default developer-facing surface.
 
@@ -399,7 +431,7 @@ P2        Verification & trust badges            packages/server/src/engine/veri
 
 ---
 
-## 10. References
+## 11. References
 
 - [A2A Protocol GitHub](https://github.com/a2aproject/A2A)
 - [A2A Protocol Specification](https://a2a-protocol.org/latest/specification/)
@@ -412,3 +444,12 @@ P2        Verification & trust badges            packages/server/src/engine/veri
 - [Linux Foundation AAIF Announcement](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation)
 - [MCP vs A2A Guide](https://dev.to/pockit_tools/mcp-vs-a2a-the-complete-guide-to-ai-agent-protocols-in-2026-30li)
 - [a2aregistry.org](https://a2aregistry.org/)
+- [Google Developers Blog: Announcing A2A](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/)
+- [IBM: What Is A2A Protocol](https://www.ibm.com/think/topics/agent2agent-protocol)
+- [Twilio: A2H Protocol](https://www.twilio.com/en-us/blog/products/introducing-a2h-agent-to-human-communication-protocol)
+- [Twilio: Latency Extension for A2A](https://www.twilio.com/en-us/blog/developers/latency-extension-a2a)
+- [AgentGateway.dev](https://agentgateway.dev/)
+- [TrueFoundry: Agent Gateway](https://www.truefoundry.com/blog/unifying-the-agentic-stack-the-gateway-that-makes-multi-agent-systems-truly-work)
+- [IBM ContextForge](https://github.com/IBM/mcp-context-forge)
+- [Gravitee: Agent Mesh](https://documentation.gravitee.io/apim/4.8/agent-mesh)
+- [OpenAI: Agentic AI Foundation](https://openai.com/index/agentic-ai-foundation/)
