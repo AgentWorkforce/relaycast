@@ -13,12 +13,34 @@ Agent Relay already provides a managed platform for agent-to-agent communication
 
 This spec outlines how Relaycast evolves into the **managed A2A platform** — the infrastructure layer that makes A2A easy, observable, and scalable. The analogy: A2A is SMTP; Agent Relay is Gmail + SendGrid + Twilio.
 
-We build five capabilities:
+We build five capabilities — unified in one SDK, one API key, one dashboard:
 1. **A2A Gateway** — route between A2A agents and Relay workspaces
-2. **Agent Directory** — discover and add agents to your workspace
+2. **Agent Registry** — the managed A2A registry developers actually use (the one [Discussion #741](https://github.com/a2aproject/A2A/discussions/741) is looking for)
 3. **Observability Console** — see every message, every agent, every cost
 4. **Compliance Certification** — test and certify A2A agents
-5. **Smart Routing** — route messages to the best available agent
+5. **Smart Routing & Agent Discovery** — the first production Agent Naming Service, built on A2A Agent Card skills
+
+> **Design principle:** Registry, naming service, and gateway ship as *features* of Relaycast — not separate products. Solo.io, agentgateway, and others split these into three infrastructure layers because they think in service mesh architecture. We ship the Twilio model instead: one SDK call to register, one call to discover, one call to route.
+
+### The Developer Experience
+
+```python
+# Register an agent with A2A skills (registry)
+agent = relay.register_agent("billing-expert", skills=[
+    {"id": "refunds", "name": "Process Refunds", "tags": ["billing", "stripe"]},
+    {"id": "invoices", "name": "Generate Invoices", "tags": ["billing", "pdf"]}
+])
+
+# Find an agent by capability (naming service / smart routing)
+response = await relay.route("billing", "process refund for order #1042")
+# → Relaycast matches skill tags, scores agents, routes to best one
+
+# Bridge an external A2A agent (gateway)
+relay.register_a2a(agent_card_url="https://acme.com/.well-known/agent-card.json")
+await relay.send("acme-billing", "process refund")
+```
+
+One SDK. One API key. One dashboard. This is the Twilio model.
 
 ---
 
@@ -247,7 +269,9 @@ If 3 consecutive checks fail, the agent is marked `suspended` and removed from `
 
 ---
 
-## 4. Agent Directory
+## 4. Agent Registry
+
+> The A2A spec has no standard registry API — [Discussion #741](https://github.com/a2aproject/A2A/discussions/741) (57 comments) is stuck with no consensus. Solo.io's [agentregistry](https://github.com/agentregistry-dev) (191 stars) is Kubernetes-native. IBM ContextForge has a registry feature but targets enterprise. [a2aregistry.org](https://a2aregistry.org/) has 12 stars and 15 agents. **None of these are a managed, developer-friendly registry.** Relaycast fills this gap.
 
 ### 4.1 Problem
 
@@ -255,10 +279,12 @@ Where do you find A2A agents? There's no central place to discover agents by cap
 
 ### 4.2 Solution
 
-A public searchable directory at `agentrelay.dev/directory`. Agents can be:
+A managed agent registry at `agentrelay.dev/directory` — the first production-grade managed A2A registry. Agents can be:
 - **Public** — visible to anyone, addable to any workspace
 - **Private** — visible only within the owning organization
 - **Listed** — visible in directory but requires approval to add
+
+Agent Cards are indexed at registration time: skills, tags, descriptions, and examples are stored in searchable fields for Smart Routing & Agent Discovery (Section 7).
 
 ### 4.3 Directory Entry Schema
 
@@ -493,7 +519,9 @@ POST   /v1/certify/monitor              Enable continuous monitoring
 
 ---
 
-## 7. Smart Routing
+## 7. Smart Routing & Agent Discovery
+
+> The [OWASP Agent Naming Service spec](https://www.ietf.org/archive/id/draft-narajala-ans-00.html) describes semantic capability-based discovery. Two prototypes exist ([36 stars](https://github.com/kenhuangus/dns-for-agents), [62 stars](https://github.com/ruvnet/Agent-Name-Service)) — neither production-ready. Semantic skill matching does not exist in any production system. **Relaycast's Smart Routing is the first production implementation** — shipped as a feature, not a separate service.
 
 ### 7.1 Problem
 
@@ -501,16 +529,22 @@ Current routing is explicit: `relay.send("billing-agent", msg)`. You need to kno
 
 ### 7.2 Solution
 
-Skill-based routing using A2A Agent Card skills:
+Skill-based routing using A2A Agent Card skills. At registration time, Relaycast indexes each agent's skills (id, name, description, tags, examples) for fast matching:
 
 ```python
-# Instead of this (explicit):
-await relay.send("billing-agent-a3f2", "process refund")
+# Register with A2A skills (indexed automatically)
+agent = relay.register_agent("billing-expert", skills=[
+    {"id": "refunds", "name": "Process Refunds", "tags": ["billing", "stripe"]},
+    {"id": "invoices", "name": "Generate Invoices", "tags": ["billing", "pdf"]}
+])
 
-# Do this (skill-based):
-await relay.route("billing", "process refund")
-# → Relaycast finds the best agent with "billing" skill
-# → Routes based on: availability, latency, cost, rating, load
+# Route by skill (tag match — fast path):
+await relay.route("billing", "process refund for order #1042")
+# → Relaycast matches "billing" tag, scores agents, routes to best one
+
+# Route by semantic query (smart path — embedding match):
+await relay.route(query="I need someone to handle a Stripe dispute")
+# → Matches against skill descriptions and examples using embeddings
 ```
 
 ### 7.3 Routing Algorithm
@@ -554,7 +588,9 @@ POST /v1/routing/config
 ### 7.4 API
 
 ```
-POST   /v1/route                       Route message by skill
+POST   /v1/route                       Route message by skill (tag match + semantic match)
+GET    /v1/skills                      List all skills across agents in workspace
+GET    /v1/skills/search?q=<query>     Search skills by query (semantic matching)
 GET    /v1/routing/config              Get routing configuration
 PUT    /v1/routing/config              Update routing weights
 GET    /v1/routing/stats               Routing decision history
@@ -621,13 +657,52 @@ GET    /v1/routing/stats               Routing decision history
 
 ---
 
-## 10. Competitive Moat
+## 10. Competitive Landscape
 
-1. **Network effects** — more agents in the directory → more useful → more agents register
+### 10.1 Agent Gateway Space
+
+| Project | Stars | Status | Model |
+|---------|-------|--------|-------|
+| [agentgateway](https://github.com/agentgateway/agentgateway) | 1.9k | v1.0.0-rc.2, Linux Foundation | Deploy-it-yourself Rust proxy |
+| Relaycast (us) | — | Production | Managed SaaS |
+
+**Positioning:** agentgateway is Envoy; Relaycast is Twilio. Developers who don't want to deploy and manage a proxy use Relaycast instead. Complementary, not competitive.
+
+### 10.2 Agent Registry Space
+
+| Project | Stars | Status | Notes |
+|---------|-------|--------|-------|
+| [Solo.io agentregistry](https://github.com/agentregistry-dev) | 191 | Open source, enterprise | Kubernetes-native |
+| [IBM ContextForge](https://github.com/IBM/mcp-context-forge) | 3.4k | Production (160k users at IBM) | Gateway with registry feature |
+| [a2aregistry.org](https://a2aregistry.org/) | 12 | Community | 15 agents listed |
+| [A2A Discussion #741](https://github.com/a2aproject/A2A/discussions/741) | — | Stuck (57 comments, no consensus) | No standard registry API |
+
+**Opportunity:** No managed, developer-friendly A2A registry exists. Relaycast's Agent Registry fills the gap Discussion #741 is looking for.
+
+### 10.3 Agent Naming Service Space
+
+| Project | Stars | Status | Notes |
+|---------|-------|--------|-------|
+| [OWASP ANS Spec](https://www.ietf.org/archive/id/draft-narajala-ans-00.html) | — | Paper spec | DNS-inspired naming |
+| [dns-for-agents](https://github.com/kenhuangus/dns-for-agents) | 36 | Prototype | Not production |
+| [Agent-Name-Service](https://github.com/ruvnet/Agent-Name-Service) | 62 | Prototype | Not production |
+
+**Opportunity:** Semantic skill matching does not exist in any production system. Relaycast's Smart Routing is the first.
+
+### 10.4 Adjacent Players
+
+- **Twilio** — Launched [A2H protocol](https://www.twilio.com/en-us/blog/products/introducing-a2h-agent-to-human-communication-protocol) (Feb 2026). Spec with one integration partner, no SDK. AI Assistants still in Developer Preview. Positioning at agent-to-human boundary, not agent-to-agent infrastructure. Not a threat today.
+- **LangGraph, CrewAI, AutoGen** — Agent orchestration frameworks. Potential customers, not competitors.
+- **[a2a-adapter](https://github.com/hybroai/a2a-adapter)** (25 stars) — Python SDK to make any framework A2A-compliant. Good for ecosystem (more A2A agents = more relay demand).
+
+### 10.5 Moat
+
+1. **Network effects** — more agents in the registry → more useful → more agents register
 2. **Data advantage** — routing decisions improve with volume (latency, success rate data)
 3. **Lock-in via convenience** — `relay.send()` is 1 line vs JSON-RPC boilerplate
 4. **Certification standard** — if "Relay Certified" becomes the badge teams look for, we own the trust layer
-5. **A2A-native** — we're not fighting the protocol, we're the best way to use it
+5. **A2A + A2H in one product** — Relaycast is the only platform handling both agent-to-agent and agent-to-human in one SDK
+6. **A2A-native** — we're not fighting the protocol, we're the best way to use it
 
 ---
 
@@ -647,3 +722,7 @@ GET    /v1/routing/stats               Routing decision history
 - [A2A Python SDK](https://github.com/a2aproject/a2a-python)
 - [Agent Relay A2A Transport (PR #565)](https://github.com/AgentWorkforce/relay/pull/565)
 - [Supportly Demo](https://github.com/AgentWorkforce/supportly)
+- [Cross-Framework Demo](https://github.com/AgentWorkforce/relay-cross-framework-demo) — LangGraph + CrewAI agents communicating via Relay
+- [Solo.io: Agent Discovery, Naming, and Resolution](https://www.solo.io/blog/agent-discovery-naming-and-resolution---the-missing-pieces-to-a2a)
+- [OWASP Agent Naming Service Spec](https://www.ietf.org/archive/id/draft-narajala-ans-00.html)
+- [agentgateway](https://github.com/agentgateway/agentgateway) — Linux Foundation A2A proxy
