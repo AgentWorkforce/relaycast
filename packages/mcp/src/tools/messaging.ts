@@ -1,7 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
-import { workspaceRoutingInputShape, workspaceRefFromArgs } from '../workspaces.js';
+import {
+  identityOverrideInputShape,
+  workspaceRoutingInputShape,
+  workspaceRefFromArgs,
+} from '../workspaces.js';
 
 /** Workspace routing arg type extracted from tool input. */
 type WsRouting = { workspace_id?: string; workspace_alias?: string };
@@ -11,7 +15,7 @@ const jsonResult = z.object({}).passthrough();
 
 export function registerMessagingTools(
   server: McpServer,
-  getAgentClient: (wsRouting?: WsRouting) => AgentClient,
+  getAgentClient: (wsRouting?: WsRouting, as?: string) => AgentClient,
 ): void {
   server.registerTool('message.post', {
     title: 'Post Message',
@@ -21,11 +25,12 @@ export function registerMessagingTools(
       text: z.string().describe('The message body text, which may include @mentions of other agents'),
       attachments: z.array(z.string()).optional().describe('Array of file attachment IDs obtained from the upload_file tool'),
       ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ channel, text, attachments, workspace_id, workspace_alias }) => {
-    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }));
+  }, async ({ channel, text, attachments, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const msg = await client.send(channel, text, attachments ? { attachments } : undefined);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(msg, null, 2) }],
@@ -63,11 +68,12 @@ export function registerMessagingTools(
       message_id: z.string().describe('ID of the parent message to reply to, which becomes the thread root'),
       text: z.string().describe('The reply body text, which may include @mentions of other agents'),
       ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ message_id, text, workspace_id, workspace_alias }) => {
-    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }));
+  }, async ({ message_id, text, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const reply = await client.reply(message_id, text);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(reply, null, 2) }],
@@ -101,11 +107,12 @@ export function registerMessagingTools(
       to: z.string().describe('Name of the registered agent to send the direct message to'),
       text: z.string().describe('The direct message body text'),
       ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ to, text, workspace_id, workspace_alias }) => {
-    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }));
+  }, async ({ to, text, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const result = await client.dm(to, text);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -119,13 +126,14 @@ export function registerMessagingTools(
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of conversations to return'),
       ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: {
       conversations: z.array(z.object({}).passthrough()).describe('Array of DM conversation summaries'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ workspace_id, workspace_alias }) => {
-    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }));
+  }, async ({ workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const convos = await client.dms.conversations();
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(convos, null, 2) }],
@@ -141,11 +149,12 @@ export function registerMessagingTools(
       name: z.string().optional().describe('Optional display name for the group conversation (e.g. "Backend Team", "Project Alpha")'),
       text: z.string().describe('The first message to send to the group, which initiates the conversation'),
       ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ participants, name, text, workspace_id, workspace_alias }) => {
-    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }));
+  }, async ({ participants, name, text, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const conversation = await client.dms.createGroup({ participants, name });
     const message = await client.dms.sendMessage(conversation.id, text);
     const result = { conversation, message };

@@ -116,7 +116,7 @@ describe('multi-workspace server setup', () => {
   });
 
   it('message.post with workspace_id routes to correct workspace', async () => {
-    const { createInternalRelayCast, __mockClient } = await import('@relaycast/sdk/internal') as any;
+    const { createInternalRelayCast, __mockClient, __mockRelay } = await import('@relaycast/sdk/internal') as any;
 
     // Workspace contexts are now populated during server creation
     const server = createRelayMcpServer({
@@ -143,7 +143,110 @@ describe('multi-workspace server setup', () => {
     });
 
     expect(result.content).toBeDefined();
-    // The createInternalRelayCast should have been called with beta's token
-    expect(createInternalRelayCast).toHaveBeenCalled();
+    expect(createInternalRelayCast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'at_beta',
+      }),
+      expect.anything(),
+    );
+    expect(__mockRelay.as).toHaveBeenLastCalledWith('at_beta');
+  });
+
+  it('message.post without workspace routing uses the active workspace identity', async () => {
+    const { createInternalRelayCast, __mockClient, __mockRelay } = await import('@relaycast/sdk/internal') as any;
+
+    const server = createRelayMcpServer({
+      apiKey: 'rk_live_alpha_key_full',
+      agentToken: 'at_alpha',
+      agentName: 'AlphaBot',
+      workspaces,
+    });
+
+    const client = new Client({ name: 'test-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), server.connect(st)]);
+
+    __mockClient.send.mockResolvedValue({ id: 'msg_alpha', text: 'hello alpha' });
+
+    const result = await client.callTool({
+      name: 'message.post',
+      arguments: {
+        channel: 'general',
+        text: 'hello alpha',
+      },
+    });
+
+    expect(result.content).toBeDefined();
+    expect(createInternalRelayCast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'at_alpha',
+      }),
+      expect.anything(),
+    );
+    expect(__mockRelay.as).toHaveBeenLastCalledWith('at_alpha');
+  });
+
+  it('message.post with workspace_id and as uses the registered workspace identity', async () => {
+    const { createInternalRelayCast, __mockClient, __mockRelay } = await import('@relaycast/sdk/internal') as any;
+
+    const server = createRelayMcpServer({
+      apiKey: 'rk_live_alpha_key_full',
+      agentToken: 'at_alpha',
+      agentName: 'AlphaBot',
+      workspaces,
+    });
+
+    const client = new Client({ name: 'test-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), server.connect(st)]);
+
+    __mockRelay.as.mockClear();
+    __mockClient.send.mockResolvedValue({ id: 'msg_beta_as', text: 'hello beta as beta' });
+
+    const result = await client.callTool({
+      name: 'message.post',
+      arguments: {
+        channel: 'general',
+        text: 'hello beta as beta',
+        workspace_id: 'ws_beta',
+        as: 'BetaBot',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(createInternalRelayCast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'at_beta',
+      }),
+      expect.anything(),
+    );
+    expect(__mockRelay.as).toHaveBeenLastCalledWith('at_beta');
+  });
+
+  it('message.post returns an error for unknown as identity in a routed workspace', async () => {
+    const server = createRelayMcpServer({
+      apiKey: 'rk_live_alpha_key_full',
+      agentToken: 'at_alpha',
+      agentName: 'AlphaBot',
+      workspaces,
+    });
+
+    const client = new Client({ name: 'test-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), server.connect(st)]);
+
+    const result = await client.callTool({
+      name: 'message.post',
+      arguments: {
+        channel: 'general',
+        text: 'ghost write',
+        workspace_id: 'ws_beta',
+        as: 'GhostBot',
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const firstContent = result.content?.[0] as { text?: string } | undefined;
+    expect(firstContent?.text).toContain('Unknown agent identity "GhostBot"');
   });
 });

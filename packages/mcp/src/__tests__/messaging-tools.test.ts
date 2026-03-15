@@ -33,7 +33,7 @@ describe('messaging tools', () => {
     mockAgentClient.send.mockResolvedValue({ id: 'msg1', text: 'hello' });
     const result = await client.callTool({
       name: 'message.post',
-      arguments: { channel: 'general', text: 'hello' },
+      arguments: { channel: 'general', text: 'hello', as: 'WriterBot' },
     });
     expect(mockAgentClient.send).toHaveBeenCalledWith('general', 'hello', undefined);
     expect(result.content).toBeDefined();
@@ -53,7 +53,7 @@ describe('messaging tools', () => {
     mockAgentClient.reply.mockResolvedValue({ id: 'reply1' });
     await client.callTool({
       name: 'message.reply',
-      arguments: { message_id: 'msg1', text: 'reply' },
+      arguments: { message_id: 'msg1', text: 'reply', as: 'WriterBot' },
     });
     expect(mockAgentClient.reply).toHaveBeenCalledWith('msg1', 'reply');
   });
@@ -66,13 +66,13 @@ describe('messaging tools', () => {
 
   it('send_dm calls dm()', async () => {
     mockAgentClient.dm.mockResolvedValue({});
-    await client.callTool({ name: 'message.dm.send', arguments: { to: 'bot2', text: 'hi' } });
+    await client.callTool({ name: 'message.dm.send', arguments: { to: 'bot2', text: 'hi', as: 'WriterBot' } });
     expect(mockAgentClient.dm).toHaveBeenCalledWith('bot2', 'hi');
   });
 
   it('get_dms calls dms.conversations()', async () => {
     mockAgentClient.dms.conversations.mockResolvedValue([]);
-    await client.callTool({ name: 'message.dm.list', arguments: {} });
+    await client.callTool({ name: 'message.dm.list', arguments: { as: 'WriterBot' } });
     expect(mockAgentClient.dms.conversations).toHaveBeenCalled();
   });
 
@@ -81,7 +81,7 @@ describe('messaging tools', () => {
     mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });
     await client.callTool({
       name: 'message.dm.send_group',
-      arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group' },
+      arguments: { participants: ['a', 'b'], name: 'grp', text: 'hello group', as: 'WriterBot' },
     });
     expect(mockAgentClient.dms.createGroup).toHaveBeenCalledWith({
       participants: ['a', 'b'],
@@ -91,10 +91,22 @@ describe('messaging tools', () => {
   });
 });
 
-describe('messaging tools with workspace routing', () => {
+describe('messaging tools with workspace routing and identity overrides', () => {
   let mcpServer: McpServer;
   let client: Client;
   const defaultClient = {
+    send: vi.fn(),
+    messages: vi.fn(),
+    reply: vi.fn(),
+    thread: vi.fn(),
+    dm: vi.fn(),
+    dms: {
+      conversations: vi.fn(),
+      createGroup: vi.fn(),
+      sendMessage: vi.fn(),
+    },
+  };
+  const identityClient = {
     send: vi.fn(),
     messages: vi.fn(),
     reply: vi.fn(),
@@ -119,7 +131,10 @@ describe('messaging tools with workspace routing', () => {
     },
   };
 
-  const getAgentClient = vi.fn((wsRouting?: { workspace_id?: string; workspace_alias?: string }) => {
+  const getAgentClient = vi.fn((wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => {
+    if (as === 'WriterBot') {
+      return identityClient as any;
+    }
     if (wsRouting?.workspace_id === 'ws_beta' || wsRouting?.workspace_alias === 'beta') {
       return routedClient as any;
     }
@@ -141,47 +156,70 @@ describe('messaging tools with workspace routing', () => {
       name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
-    expect(getAgentClient).toHaveBeenCalledWith(undefined);
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, undefined);
     expect(defaultClient.send).toHaveBeenCalledWith('general', 'hello', undefined);
   });
 
-  it('message.post with workspace_id routes to correct client', async () => {
-    routedClient.send.mockResolvedValue({ id: 'msg2', text: 'hello beta' });
+  it('message.post with workspace_alias and as routes to identity-scoped client', async () => {
+    identityClient.send.mockResolvedValue({ id: 'msg2', text: 'hello beta' });
     await client.callTool({
       name: 'message.post',
-      arguments: { channel: 'general', text: 'hello beta', workspace_id: 'ws_beta' },
+      arguments: {
+        channel: 'general',
+        text: 'hello beta',
+        workspace_alias: 'beta',
+        as: 'WriterBot',
+      },
     });
-    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined });
-    expect(routedClient.send).toHaveBeenCalledWith('general', 'hello beta', undefined);
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' }, 'WriterBot');
+    expect(identityClient.send).toHaveBeenCalledWith('general', 'hello beta', undefined);
   });
 
-  it('message.post with workspace_alias routes to correct client', async () => {
-    routedClient.send.mockResolvedValue({ id: 'msg3', text: 'hello beta alias' });
+  it('message.reply with workspace_id and as routes to identity-scoped client', async () => {
+    identityClient.reply.mockResolvedValue({ id: 'reply1' });
     await client.callTool({
-      name: 'message.post',
-      arguments: { channel: 'general', text: 'hello beta alias', workspace_alias: 'beta' },
+      name: 'message.reply',
+      arguments: { message_id: 'msg1', text: 'reply', workspace_id: 'ws_beta', as: 'WriterBot' },
     });
-    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' });
-    expect(routedClient.send).toHaveBeenCalledWith('general', 'hello beta alias', undefined);
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined }, 'WriterBot');
+    expect(identityClient.reply).toHaveBeenCalledWith('msg1', 'reply');
   });
 
-  it('message.dm.send with workspace_id routes correctly', async () => {
-    routedClient.dm.mockResolvedValue({});
+  it('message.dm.send with workspace_id and as routes to identity-scoped client', async () => {
+    identityClient.dm.mockResolvedValue({});
     await client.callTool({
       name: 'message.dm.send',
-      arguments: { to: 'bot2', text: 'hi', workspace_id: 'ws_beta' },
+      arguments: { to: 'bot2', text: 'hi', workspace_id: 'ws_beta', as: 'WriterBot' },
     });
-    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined });
-    expect(routedClient.dm).toHaveBeenCalledWith('bot2', 'hi');
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: 'ws_beta', workspace_alias: undefined }, 'WriterBot');
+    expect(identityClient.dm).toHaveBeenCalledWith('bot2', 'hi');
   });
 
-  it('message.list with workspace_alias routes correctly', async () => {
-    routedClient.messages.mockResolvedValue([]);
+  it('message.dm.list with as routes to identity-scoped client', async () => {
+    identityClient.dms.conversations.mockResolvedValue([]);
     await client.callTool({
-      name: 'message.list',
-      arguments: { channel: 'general', workspace_alias: 'beta' },
+      name: 'message.dm.list',
+      arguments: { as: 'WriterBot' },
     });
-    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' });
-    expect(routedClient.messages).toHaveBeenCalled();
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'WriterBot');
+    expect(identityClient.dms.conversations).toHaveBeenCalled();
+  });
+
+  it('message.dm.send_group with workspace_alias and as routes to identity-scoped client', async () => {
+    identityClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
+    identityClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });
+    await client.callTool({
+      name: 'message.dm.send_group',
+      arguments: {
+        participants: ['a', 'b'],
+        name: 'grp',
+        text: 'hello group',
+        workspace_alias: 'beta',
+        as: 'WriterBot',
+      },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' }, 'WriterBot');
+    expect(identityClient.dms.createGroup).toHaveBeenCalledWith({ participants: ['a', 'b'], name: 'grp' });
+    expect(identityClient.dms.sendMessage).toHaveBeenCalledWith('conv1', 'hello group');
   });
 });

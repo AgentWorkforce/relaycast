@@ -1,6 +1,15 @@
 import { z } from 'zod';
 import type { SessionState, WorkspaceContext } from './types.js';
 
+export type WorkspaceRouting = {
+  workspace_id?: string;
+  workspace_alias?: string;
+};
+
+export type AgentRouting = WorkspaceRouting & {
+  as?: string;
+};
+
 /**
  * Configuration for a single workspace provided via RELAY_WORKSPACES_JSON.
  */
@@ -92,12 +101,42 @@ export const workspaceRoutingInputShape = {
 };
 
 /**
+ * Optional agent identity override for tools whose behavior depends on the
+ * authenticated agent.
+ */
+export const identityOverrideInputShape = {
+  as: z.string().optional().describe(
+    'Act as a specific registered agent name in the target workspace. If omitted, uses the active agent identity.',
+  ),
+};
+
+const agentRoutingSchema = z.object({
+  ...workspaceRoutingInputShape,
+  ...identityOverrideInputShape,
+}).passthrough();
+
+/**
+ * Extract optional workspace and identity routing from loose request params.
+ * Throws on invalid types so resource requests match tool-layer validation.
+ */
+export function parseAgentRouting(raw: unknown): AgentRouting | undefined {
+  const parsed = agentRoutingSchema.parse(raw ?? {});
+  const { workspace_id, workspace_alias, as } = parsed;
+
+  if (!workspace_id && !workspace_alias && !as) {
+    return undefined;
+  }
+
+  return { workspace_id, workspace_alias, as };
+}
+
+/**
  * Extract workspace routing info from tool arguments.
  * Returns the workspace_id or workspace_alias if provided, or undefined.
  */
 export function workspaceRefFromArgs(
-  args: { workspace_id?: string; workspace_alias?: string },
-): { workspace_id?: string; workspace_alias?: string } | undefined {
+  args: WorkspaceRouting,
+): WorkspaceRouting | undefined {
   if (args.workspace_id || args.workspace_alias) {
     return {
       workspace_id: args.workspace_id,

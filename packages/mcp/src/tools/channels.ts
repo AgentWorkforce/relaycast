@@ -1,13 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { AgentClient } from '@relaycast/sdk';
+import type { AgentClient } from '@relaycast/sdk';
+import {
+  identityOverrideInputShape,
+  workspaceRoutingInputShape,
+  workspaceRefFromArgs,
+} from '../workspaces.js';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
 
 export function registerChannelTools(
   server: McpServer,
-  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }) => AgentClient,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
   server.registerTool(
     'channel.create',
@@ -17,12 +22,13 @@ export function registerChannelTools(
       inputSchema: {
         name: z.string().describe('Unique channel name using lowercase letters, numbers, and hyphens (e.g. "build-alerts", "team-chat")'),
         topic: z.string().optional().describe('Short description of the channel\'s purpose, visible to all members when they view channel details'),
+        ...identityOverrideInputShape,
       },
       outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ name, topic }) => {
-      const client = getAgentClient();
+    async ({ name, topic, as: asIdentity }) => {
+      const client = getAgentClient(undefined, asIdentity);
       const channel = await client.channels.create({ name, topic });
       return {
         content: [{ type: 'text', text: JSON.stringify(channel, null, 2) }],
@@ -38,14 +44,19 @@ export function registerChannelTools(
       description: 'List all channels available in the workspace. Returns each channel\'s name, topic, member count, and creation date. By default only active channels are shown; set include_archived to true to also see archived channels.',
       inputSchema: {
         include_archived: z.boolean().optional().describe('When true, include archived channels in the response alongside active ones'),
+        ...workspaceRoutingInputShape,
+        ...identityOverrideInputShape,
       },
       outputSchema: {
         channels: z.array(z.object({}).passthrough()).describe('Array of channel objects with name, topic, and member details'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ include_archived }) => {
-      const client = getAgentClient();
+    async ({ include_archived, workspace_id, workspace_alias, as: asIdentity }) => {
+      const client = getAgentClient(
+        workspaceRefFromArgs({ workspace_id, workspace_alias }),
+        asIdentity,
+      );
       const channels = await client.channels.list(
         include_archived ? { includeArchived: include_archived } : undefined,
       );
@@ -63,14 +74,15 @@ export function registerChannelTools(
       description: 'Join an existing channel to start receiving its messages. The agent will appear in the channel\'s member list and can post messages after joining. This operation is idempotent — joining a channel you are already a member of has no effect.',
       inputSchema: {
         channel: z.string().describe('Name of the channel to join (e.g. "general", "build-alerts")'),
+        ...identityOverrideInputShape,
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating the channel was joined'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ channel }) => {
-      const client = getAgentClient();
+    async ({ channel, as: asIdentity }) => {
+      const client = getAgentClient(undefined, asIdentity);
       await client.channels.join(channel);
       const message = `Joined channel #${channel}`;
       return {
@@ -87,14 +99,15 @@ export function registerChannelTools(
       description: 'Leave a channel to stop receiving its messages. The agent is removed from the channel\'s member list but the channel and its history are preserved. You can rejoin at any time. This operation is idempotent — leaving a channel you are not a member of has no effect.',
       inputSchema: {
         channel: z.string().describe('Name of the channel to leave (e.g. "general", "build-alerts")'),
+        ...identityOverrideInputShape,
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating the channel was left'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ channel }) => {
-      const client = getAgentClient();
+    async ({ channel, as: asIdentity }) => {
+      const client = getAgentClient(undefined, asIdentity);
       await client.channels.leave(channel);
       const message = `Left channel #${channel}`;
       return {
@@ -112,14 +125,15 @@ export function registerChannelTools(
       inputSchema: {
         channel: z.string().describe('Name of the channel to invite the agent to (e.g. "general", "build-alerts")'),
         agent: z.string().describe('Name of the registered agent to invite into the channel'),
+        ...identityOverrideInputShape,
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating the agent was invited'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ channel, agent }) => {
-      const client = getAgentClient();
+    async ({ channel, agent, as: asIdentity }) => {
+      const client = getAgentClient(undefined, asIdentity);
       await client.channels.invite(channel, agent);
       const message = `Invited ${agent} to #${channel}`;
       return {
@@ -137,12 +151,17 @@ export function registerChannelTools(
       inputSchema: {
         channel: z.string().describe('Name of the channel whose topic should be updated'),
         topic: z.string().describe('New topic text describing the channel\'s purpose or current focus'),
+        ...workspaceRoutingInputShape,
+        ...identityOverrideInputShape,
       },
       outputSchema: jsonResult,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ channel, topic }) => {
-      const client = getAgentClient();
+    async ({ channel, topic, workspace_id, workspace_alias, as: asIdentity }) => {
+      const client = getAgentClient(
+        workspaceRefFromArgs({ workspace_id, workspace_alias }),
+        asIdentity,
+      );
       const updated = await client.channels.setTopic(channel, topic);
       return {
         content: [{ type: 'text', text: JSON.stringify(updated, null, 2) }],
@@ -158,14 +177,19 @@ export function registerChannelTools(
       description: 'Archive a channel to remove it from the active channel list. Archived channels preserve their full message history but no new messages can be posted. This is a soft delete — the channel can be restored later if needed. Use this to clean up channels that are no longer in use.',
       inputSchema: {
         channel: z.string().describe('Name of the channel to archive (e.g. "old-project", "temp-discussion")'),
+        ...workspaceRoutingInputShape,
+        ...identityOverrideInputShape,
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating the channel was archived'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ channel }) => {
-      const client = getAgentClient();
+    async ({ channel, workspace_id, workspace_alias, as: asIdentity }) => {
+      const client = getAgentClient(
+        workspaceRefFromArgs({ workspace_id, workspace_alias }),
+        asIdentity,
+      );
       await client.channels.archive(channel);
       const message = `Archived channel #${channel}`;
       return {
