@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
   type CallToolRequest,
   type ListToolsRequest,
   type ListToolsResult,
@@ -150,13 +152,23 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       wsInitAttempted: session.wsInitAttempted,
     });
   };
+  const notifySubscribers = () => {
+    const uris = session.subscriptions?.getAll() ?? [];
+    for (const uri of uris) {
+      mcpServer.server.sendResourceUpdated({ uri }).catch(() => {});
+    }
+  };
+
   const setSession = (partial: Partial<SessionState>) => {
     const switchingWorkspace = partial.workspaceKey !== undefined && partial.workspaceKey !== session.workspaceKey;
+    const changingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
 
     // In a single MCP process the bridge tracks the active workspace, not
     // every agent token update inside that workspace. Rebuild it only when
     // the workspace itself changes.
     if (switchingWorkspace) {
+      // Notify subscribers before tearing down so clients know data changed
+      notifySubscribers();
       session.wsBridge?.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;
@@ -166,6 +178,12 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
     // Apply the partial state update
     Object.assign(session, partial);
+
+    // When the agent token changes within the same workspace, notify
+    // subscribers that resource data may have changed.
+    if (!switchingWorkspace && changingToken) {
+      notifySubscribers();
+    }
 
     // If we have a token but no bridge yet, and we haven't failed initialization, try to start it.
     if (session.agentToken && !session.wsBridge && !session.wsInitAttempted) {
@@ -275,6 +293,16 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
 
   // Register resource definitions (inbox, agents, channels, etc.)
   registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
+
+  // Register subscribe/unsubscribe handlers so clients can track resource changes
+  mcpServer.server.setRequestHandler(SubscribeRequestSchema, async (req) => {
+    session.subscriptions?.subscribe(req.params.uri);
+    return {};
+  });
+  mcpServer.server.setRequestHandler(UnsubscribeRequestSchema, async (req) => {
+    session.subscriptions?.unsubscribe(req.params.uri);
+    return {};
+  });
 
   // Register all tools
   registerRegistrationTools(
