@@ -481,7 +481,7 @@ Passing agents get:
 - "Certified" filter in directory search
 - Trust signal for enterprise buyers
 
-### 6.5 API
+### 6.6 API
 
 ```
 POST   /v1/certify                      Submit endpoint for testing
@@ -570,7 +570,7 @@ GET    /v1/routing/stats               Routing decision history
 - [ ] A2A → Relay webhook handling  
 - [ ] Health checking for external agents
 - [ ] Agent Card serving per workspace
-- [ ] SDK updates: `relay.register_a2a()`, `relay.list_a2a_agents()`
+- [ ] SDK updates: `TS: relay.registerA2a() / Python: relay.register_a2a()`, `TS: relay.listA2aAgents() / Python: relay.list_a2a_agents()`
 - [ ] E2E test: Relay agent ↔ external A2A agent roundtrip
 
 ### Phase 2: Observability Console (4-6 weeks)
