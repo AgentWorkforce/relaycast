@@ -25,15 +25,24 @@ We build five capabilities — unified in one SDK, one API key, one dashboard:
 ### The Developer Experience
 
 ```python
-# Register an agent with A2A skills (registry)
+# Register an agent with AgentSkills-compatible skills (registry)
+# Skills follow the AgentSkills standard (agentskills.io) — same format used by
+# Cursor, Claude Code, Codex, Gemini CLI, VS Code Copilot, and 25+ tools
 agent = relay.register_agent("billing-expert", skills=[
-    {"id": "refunds", "name": "Process Refunds", "tags": ["billing", "stripe"]},
-    {"id": "invoices", "name": "Generate Invoices", "tags": ["billing", "pdf"]}
+    {"id": "refunds", "name": "Process Refunds",
+     "description": "Handle refund requests for Stripe payments. Use for disputes and returns.",
+     "tags": ["billing", "stripe"]},
+    {"id": "invoices", "name": "Generate Invoices",
+     "description": "Create and send PDF invoices from order data.",
+     "tags": ["billing", "pdf"]}
 ])
+
+# Or import directly from an existing SKILL.md file
+await relay.import_skills("./skills/billing/SKILL.md")
 
 # Find an agent by capability (naming service / smart routing)
 response = await relay.route("billing", "process refund for order #1042")
-# → Relaycast matches skill tags, scores agents, routes to best one
+# → Relaycast matches skill tags + semantic description, scores agents, routes to best one
 
 # Bridge an external A2A agent (gateway)
 relay.register_a2a(agent_card_url="https://acme.com/.well-known/agent-card.json")
@@ -41,6 +50,8 @@ await relay.send("acme-billing", "process refund")
 ```
 
 One SDK. One API key. One dashboard. This is the Twilio model.
+
+**Three standards, unified:** AgentSkills defines what agents can do → A2A Agent Cards declare those skills on the wire → Relaycast indexes and routes to the best agent.
 
 ---
 
@@ -529,16 +540,28 @@ Current routing is explicit: `relay.send("billing-agent", msg)`. You need to kno
 
 ### 7.2 Solution
 
-Skill-based routing using A2A Agent Card skills. At registration time, Relaycast indexes each agent's skills (id, name, description, tags, examples) for fast matching:
+Skill-based routing built on the [AgentSkills standard](https://agentskills.io/) — the open format for defining agent capabilities, adopted by Cursor, Claude Code, Codex, Gemini CLI, VS Code Copilot, OpenHands, and 25+ other tools. AgentSkills defines **what** an agent can do (via `SKILL.md` with name, description, tags). A2A Agent Cards declare those skills on the wire. Relaycast indexes and matches them.
+
+The three layers work together:
+1. **AgentSkills spec** → defines the skill format (`SKILL.md` frontmatter: name, description, metadata)
+2. **A2A Agent Card** → declares skills on the wire (JSON at `/.well-known/agent-card.json`)
+3. **Relaycast Smart Routing** → indexes skills at registration, matches by tag or semantic query, routes to the best agent
+
+At registration time, Relaycast indexes each agent's skills (id, name, description, tags, examples) for fast matching:
 
 ```python
-# Register with A2A skills (indexed automatically)
+# Register with AgentSkills-compatible skills (indexed automatically)
 agent = relay.register_agent("billing-expert", skills=[
-    {"id": "refunds", "name": "Process Refunds", "tags": ["billing", "stripe"]},
-    {"id": "invoices", "name": "Generate Invoices", "tags": ["billing", "pdf"]}
+    {"id": "refunds", "name": "Process Refunds",
+     "description": "Handle customer refund requests for Stripe payments",
+     "tags": ["billing", "stripe", "refunds"],
+     "examples": ["Process refund for order #1042", "Issue partial refund of $50"]},
+    {"id": "invoices", "name": "Generate Invoices",
+     "description": "Create and send PDF invoices from order data",
+     "tags": ["billing", "pdf", "invoices"]}
 ])
 
-# Route by skill (tag match — fast path):
+# Route by skill tag (fast path):
 await relay.route("billing", "process refund for order #1042")
 # → Relaycast matches "billing" tag, scores agents, routes to best one
 
@@ -546,6 +569,39 @@ await relay.route("billing", "process refund for order #1042")
 await relay.route(query="I need someone to handle a Stripe dispute")
 # → Matches against skill descriptions and examples using embeddings
 ```
+
+### 7.2.1 AgentSkills Integration
+
+Agents that already publish `SKILL.md` files (per the [AgentSkills spec](https://agentskills.io/specification)) get automatic discoverability in Relaycast:
+
+```python
+# Import skills from an AgentSkills directory
+await relay.import_skills("./skills/billing/SKILL.md")
+# → Parses SKILL.md frontmatter (name, description, metadata)
+# → Maps to A2A Agent Card skills
+# → Indexed for Smart Routing
+
+# Or declare inline (same format)
+agent = relay.register_agent("billing-expert", agent_skills=[
+    {
+        "name": "refund-processing",                    # AgentSkills name field
+        "description": "Extract refund requests and "   # AgentSkills description field
+                       "process via Stripe. Use when "
+                       "handling payment disputes.",
+        "metadata": {"author": "acme-corp", "version": "1.0"}
+    }
+])
+```
+
+The AgentSkills `description` field is critical — it's what agents use to decide when to activate a skill, and it's what Relaycast uses for semantic matching. A good description like `"Extract refund requests and process via Stripe. Use when handling payment disputes."` enables both agent-side activation and platform-side routing.
+
+| AgentSkills Field | A2A Agent Card Field | Relaycast Index |
+|-------------------|---------------------|-----------------|
+| `name` | `skills[].id` | Tag-based matching |
+| `description` | `skills[].description` | Semantic matching (embeddings) |
+| `metadata.tags` | `skills[].tags` | Fast tag filtering |
+| `metadata.version` | `skills[].metadata.version` | Version pinning |
+| `compatibility` | — | Environment filtering |
 
 ### 7.3 Routing Algorithm
 
@@ -694,6 +750,7 @@ GET    /v1/routing/stats               Routing decision history
 - **Twilio** — Launched [A2H protocol](https://www.twilio.com/en-us/blog/products/introducing-a2h-agent-to-human-communication-protocol) (Feb 2026). Spec with one integration partner, no SDK. AI Assistants still in Developer Preview. Positioning at agent-to-human boundary, not agent-to-agent infrastructure. Not a threat today.
 - **LangGraph, CrewAI, AutoGen** — Agent orchestration frameworks. Potential customers, not competitors.
 - **[a2a-adapter](https://github.com/hybroai/a2a-adapter)** (25 stars) — Python SDK to make any framework A2A-compliant. Good for ecosystem (more A2A agents = more relay demand).
+- **[AgentSkills](https://agentskills.io/)** — Open standard for agent capabilities, adopted by Cursor, Claude Code, Codex, Gemini CLI, VS Code Copilot, Junie, OpenHands, Roo Code, Spring AI, and 25+ tools. Defines `SKILL.md` format (name, description, metadata). Not a competitor — it's the skill definition layer we build routing on top of. Every agent that publishes AgentSkills becomes automatically routable in Relaycast.
 
 ### 10.5 Moat
 
@@ -726,3 +783,5 @@ GET    /v1/routing/stats               Routing decision history
 - [Solo.io: Agent Discovery, Naming, and Resolution](https://www.solo.io/blog/agent-discovery-naming-and-resolution---the-missing-pieces-to-a2a)
 - [OWASP Agent Naming Service Spec](https://www.ietf.org/archive/id/draft-narajala-ans-00.html)
 - [agentgateway](https://github.com/agentgateway/agentgateway) — Linux Foundation A2A proxy
+- [AgentSkills Specification](https://agentskills.io/specification) — open format for agent capabilities (adopted by 25+ tools)
+- [AgentSkills Overview](https://agentskills.io/home) — ecosystem overview
