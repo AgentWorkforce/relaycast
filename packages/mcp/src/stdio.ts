@@ -25,7 +25,11 @@ function parseAgentType(value: string | undefined): 'agent' | 'human' | undefine
   return undefined;
 }
 
-const workspaces = parseWorkspaceEnv(process.env.RELAY_WORKSPACES_JSON);
+// When RELAY_SKIP_BOOTSTRAP is set (broker-spawned agents with a pre-registered
+// token), omit workspaces to prevent redundant bootstrap HTTP calls that would
+// delay the MCP initialize handshake.
+const skipBootstrap = parseStrictAgentName(process.env.RELAY_SKIP_BOOTSTRAP);
+const workspaces = skipBootstrap ? [] : parseWorkspaceEnv(process.env.RELAY_WORKSPACES_JSON);
 
 startStdio({
   apiKey: resolveApiKey(),
