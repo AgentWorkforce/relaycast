@@ -69,10 +69,13 @@ async function bootstrapOneWorkspace(
   };
 
   try {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Bootstrap timed out after ${timeoutMs}ms`)), timeoutMs),
-    );
-    return await Promise.race([doBootstrap(), timeout]);
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Bootstrap timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    const result = await Promise.race([doBootstrap(), timeout]);
+    clearTimeout(timer!);
+    return result;
   } catch (err) {
     console.error(
       `[bootstrap] Failed to bootstrap workspace ${ws.workspace_id}: ${err instanceof Error ? err.message : String(err)}`,
