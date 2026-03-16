@@ -82,6 +82,7 @@ export const MessageWithMetaSchema = z.object({
   reactions: z.array(ReactionGroupSchema),
   read_by_count: z.number(),
   mentions: z.array(z.string()).optional(),
+  injection_mode: z.enum(['wait', 'steer']).optional(),
 });
 export type MessageWithMeta = z.infer<typeof MessageWithMetaSchema>;
 

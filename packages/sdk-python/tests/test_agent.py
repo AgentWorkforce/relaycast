@@ -28,6 +28,10 @@ def ok(data):
     return httpx.Response(200, json={"ok": True, "data": data})
 
 
+def request_json(request: httpx.Request):
+    return json.loads(request.content.decode())
+
+
 MSG = {
     "id": "m1",
     "agent_name": "Bot",
@@ -81,7 +85,7 @@ class TestAgentClientMessages:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.send("general", "See file", attachments=["f1", "f2"])
         assert route.called
-        assert route.calls[0].request.content == b'{"text":"See file","mode":"wait","attachments":["f1","f2"]}'
+        assert request_json(route.calls[0].request) == {"text": "See file", "mode": "wait", "attachments": ["f1", "f2"]}
 
     @respx.mock
     def test_send_defaults_mode_wait(self):
@@ -89,7 +93,7 @@ class TestAgentClientMessages:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.send("general", "Hello")
         assert route.called
-        assert route.calls[0].request.content == b'{"text":"Hello","mode":"wait"}'
+        assert request_json(route.calls[0].request) == {"text": "Hello", "mode": "wait"}
 
     @respx.mock
     def test_send_forwards_steer_mode(self):

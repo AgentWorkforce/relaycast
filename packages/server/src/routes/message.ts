@@ -93,7 +93,12 @@ messageRoutes.post(
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, channel_name: channelName, from_name: agent?.name, injection_mode: mode };
+        const eventData = {
+          ...idempotent.data,
+          channel_name: channelName,
+          from_name: agent?.name,
+          injection_mode: idempotent.data.injection_mode ?? mode,
+        };
         runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
         runInBackground(
           c,
