@@ -81,6 +81,23 @@ class TestAgentClientMessages:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.send("general", "See file", attachments=["f1", "f2"])
         assert route.called
+        assert route.calls[0].request.content == b'{"text":"See file","mode":"wait","attachments":["f1","f2"]}'
+
+    @respx.mock
+    def test_send_defaults_mode_wait(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.send("general", "Hello")
+        assert route.called
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"wait"}'
+
+    @respx.mock
+    def test_send_forwards_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.send("general", "Hello", mode="steer")
+        assert route.called
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"steer"}'
 
     @respx.mock
     def test_messages_with_pagination(self):
@@ -405,10 +422,20 @@ class TestAsyncAgentClient:
     @pytest.mark.asyncio
     @respx.mock
     async def test_send(self):
-        respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         result = await c.send("#general", "Hello")
         assert isinstance(result, MessageWithMeta)
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"wait"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_send_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.send("#general", "Hello", mode="steer")
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"steer"}'
         await c.client.close()
 
     @pytest.mark.asyncio

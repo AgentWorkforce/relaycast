@@ -31,7 +31,7 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
     });
 
     it('strips # prefix from channel name', async () => {
@@ -58,7 +58,25 @@ describe('AgentClient', () => {
       await me.send('#general', 'hello', { attachments: ['att_1', 'att_2'] });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['att_1', 'att_2'] }));
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['att_1', 'att_2'], mode: 'wait' }));
+    });
+
+    it('defaults mode to wait when omitted', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello');
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
+    });
+
+    it('forwards steer mode when requested', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello', { mode: 'steer' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'steer' }));
     });
 
     it('forwards Idempotency-Key when provided', async () => {

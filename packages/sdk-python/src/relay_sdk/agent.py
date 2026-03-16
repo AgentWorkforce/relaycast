@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from .client import AsyncHttpClient, HttpClient
@@ -174,10 +174,15 @@ class AgentClient:
     # ── Messages ──
 
     def send(
-        self, channel: str, text: str, *, attachments: list[str] | None = None
+        self,
+        channel: str,
+        text: str,
+        *,
+        attachments: list[str] | None = None,
+        mode: Literal["wait", "steer"] = "wait",
     ) -> MessageWithMeta:
         name = _strip_hash(channel)
-        body: dict[str, Any] = {"text": text}
+        body: dict[str, Any] = {"text": text, "mode": mode}
         if attachments:
             body["attachments"] = attachments
         result = self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
@@ -430,10 +435,15 @@ class AsyncAgentClient:
     # ── Messages ──
 
     async def send(
-        self, channel: str, text: str, *, attachments: list[str] | None = None
+        self,
+        channel: str,
+        text: str,
+        *,
+        attachments: list[str] | None = None,
+        mode: Literal["wait", "steer"] = "wait",
     ) -> MessageWithMeta:
         name = _strip_hash(channel)
-        body: dict[str, Any] = {"text": text}
+        body: dict[str, Any] = {"text": text, "mode": mode}
         if attachments:
             body["attachments"] = attachments
         result = await self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
