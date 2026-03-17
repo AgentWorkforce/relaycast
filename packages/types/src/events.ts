@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MessageInjectionModeSchema } from './message.js';
+import { CoreMessagePayloadSchema } from './message.js';
 
 // WebSocket client -> server
 export const SubscribeEventSchema = z.object({
@@ -27,15 +27,6 @@ export const ClientEventSchema = z.discriminatedUnion('type', [
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
 // WebSocket server -> client
-export const CoreMessagePayloadSchema = z.object({
-  id: z.string(),
-  agent_id: z.string().optional(),
-  agent_name: z.string(),
-  text: z.string(),
-  injection_mode: MessageInjectionModeSchema.optional(),
-});
-export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
-
 export const ChannelMessagePayloadSchema = CoreMessagePayloadSchema.extend({
   attachments: z.array(z.object({
     file_id: z.string(),

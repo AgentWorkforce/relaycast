@@ -92,6 +92,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
+          injection_mode: d.injection_mode as 'wait' | 'steer' | undefined,
         },
       };
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MessageInjectionModeSchema } from './message.js';
+import { CoreMessagePayloadSchema, MessageInjectionModeSchema } from './message.js';
 
 export const DmTypeSchema = z.enum(['1:1', 'group']);
 export type DmType = z.infer<typeof DmTypeSchema>;
@@ -70,6 +70,8 @@ export const SendDmResponseSchema = z.object({
   text: z.string(),
   created_at: z.string(),
   injection_mode: DmInjectionModeSchema.optional(),
+  // Converged shape (additive, legacy fields retained above)
+  message: CoreMessagePayloadSchema.optional(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
 
@@ -88,17 +90,13 @@ export const GroupDmMessageResponseSchema = z.object({
   conversation_id: z.string(),
   agent_id: z.string(),
   text: z.string(),
+  injection_mode: DmInjectionModeSchema.optional(),
   created_at: z.string(),
 });
 export type GroupDmMessageResponse = z.infer<typeof GroupDmMessageResponseSchema>;
 
-export const DmMessageSchema = z.object({
-  id: z.string(),
-  agent_id: z.string(),
-  agent_name: z.string(),
-  text: z.string(),
+export const DmMessageSchema = CoreMessagePayloadSchema.extend({
   created_at: z.string(),
-  injection_mode: DmInjectionModeSchema.optional(),
 });
 export type DmMessage = z.infer<typeof DmMessageSchema>;
 

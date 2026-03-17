@@ -73,7 +73,7 @@ export async function postGroupMessage(
   workspaceId: string,
   conversationId: string,
   agentId: string,
-  data: { text: string },
+  data: { text: string; mode?: 'wait' | 'steer' },
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -120,6 +120,7 @@ export async function postGroupMessage(
       agentId,
       body: data.text,
       hasAttachments: false,
+      metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
 
@@ -128,6 +129,7 @@ export async function postGroupMessage(
     conversation_id: conversationId,
     agent_id: message.agentId,
     text: message.body,
+    injection_mode: data.mode ?? 'wait',
     created_at: message.createdAt.toISOString(),
   };
 }
