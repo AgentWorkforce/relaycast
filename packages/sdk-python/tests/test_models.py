@@ -204,6 +204,11 @@ def test_message_with_meta_creation_with_nested_attachment_and_reaction_group():
     assert msg.reactions[0].agents == ["ag_1", "ag_2"]
 
 
+def test_message_with_meta_accepts_injection_mode():
+    msg = MessageWithMeta(**_message_with_meta_dict(injection_mode="steer"))
+    assert msg.injection_mode == "steer"
+
+
 def test_message_with_meta_defaults_empty_lists_and_counters():
     msg = MessageWithMeta(
         id="m_1",
@@ -303,11 +308,13 @@ def test_ws_message_created_event_model():
                 "attachments": [
                     {"file_id": "f_1", "filename": "a.txt", "url": "https://x/y", "size": 1}
                 ],
+                "injection_mode": "wait",
             },
         }
     )
     assert ev.type == "message.created"
     assert ev.message.attachments[0].file_id == "f_1"
+    assert ev.message.injection_mode == "wait"
 
 
 def test_ws_message_created_event_rejects_wrong_type_literal():

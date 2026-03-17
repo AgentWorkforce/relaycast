@@ -1,5 +1,7 @@
 """Tests for AgentClient and AsyncAgentClient."""
 
+import json
+
 import httpx
 import pytest
 import respx
