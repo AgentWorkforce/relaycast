@@ -62,7 +62,9 @@ dmRoutes.post(
         scope: 'dm:direct',
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ to, text, mode }),
+        // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
+        // Only include mode when explicit steer is requested.
+        fingerprint: mode === 'steer' ? JSON.stringify({ to, text, mode }) : JSON.stringify({ to, text }),
         kv: c.env.KV,
         operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text, mode }),
       });

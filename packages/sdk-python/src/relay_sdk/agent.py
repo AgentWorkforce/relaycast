@@ -15,6 +15,7 @@ from .models import (
     DmConversationSummary,
     FileInfo,
     InboxResponse,
+    MessageInjectionMode,
     MessageWithMeta,
     ReactionGroup,
     ReaderInfo,

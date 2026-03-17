@@ -102,12 +102,19 @@ describe('POST /v1/dm', () => {
     }, bindings);
 
     expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    expect(body.data.injection_mode).toBe('steer');
     expect(vi.mocked(dmEngine.sendDm)).toHaveBeenCalledWith(
       expect.anything(),
       FAKE_WORKSPACE.id,
       'agent_123',
       expect.objectContaining({ to: 'OtherBot', text: 'Take over', mode: 'steer' }),
     );
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dm.received',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ conversation_id: 'conv_456', injection_mode: 'steer' }),
+    }));
   });
 
   it('returns 400 when text is missing', async () => {

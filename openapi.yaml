@@ -137,19 +137,19 @@ components:
           type: string
         conversation_id:
           type: string
-        from_id:
+        from_agent_id:
           type: string
-        from_name:
-          type: string
-        to_id:
-          type: string
-        to_name:
+        to:
           type: string
         text:
           type: string
         created_at:
           type: string
           format: date-time
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+          description: Delivery/injection mode used when the DM was sent
 
     Conversation:
       type: object
@@ -1332,6 +1332,11 @@ paths:
                   description: Recipient agent name
                 text:
                   type: string
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for the DM
       responses:
         '201':
           description: DM sent
