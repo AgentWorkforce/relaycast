@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/sdk",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,7 +22,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@relaycast/types": "0.5.2",
+    "@relaycast/types": "0.5.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {

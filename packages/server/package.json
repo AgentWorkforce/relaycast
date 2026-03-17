@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/server",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "main": "dist/worker.js",
   "types": "dist/worker.d.ts",
@@ -13,8 +13,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.985.0",
     "@aws-sdk/s3-request-presigner": "^3.985.0",
-    "@relaycast/mcp": "0.5.2",
-    "@relaycast/types": "0.5.2",
+    "@relaycast/mcp": "0.5.3",
+    "@relaycast/types": "0.5.3",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.9",
     "zod": "^4.3.6"
