@@ -40,6 +40,11 @@ export async function sendDm(
     throw err;
   }
 
+  const [fromAgent] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
+
   const existing = await db.all<{ id: string; channel_id: string }>(sql`
     SELECT dc.id, dc.channel_id
     FROM dm_conversations dc
@@ -120,14 +125,26 @@ export async function sendDm(
     })
     .returning();
 
+  const injectionMode = data.mode ?? 'wait';
   return {
-    id: message.id,
+    // Canonical converged shape (new)
     conversation_id: conv.id,
+    message: {
+      id: message.id,
+      agent_id: message.agentId,
+      agent_name: fromAgent?.name ?? '',
+      text: message.body,
+      injection_mode: injectionMode,
+    },
+    created_at: message.createdAt.toISOString(),
+
+    // Deprecated legacy shape (kept for backward compatibility)
+    // TODO(major): remove legacy top-level DM fields after client major rollout.
+    id: message.id,
     from_agent_id: message.agentId,
     to: data.to,
     text: message.body,
-    created_at: message.createdAt.toISOString(),
-    injection_mode: data.mode ?? 'wait',
+    injection_mode: injectionMode,
   };
 }
 
@@ -288,6 +305,7 @@ export async function getDmMessages(
       agentId: messages.agentId,
       agentName: agents.name,
       body: messages.body,
+      metadata: messages.metadata,
       createdAt: messages.createdAt,
     })
     .from(messages)
@@ -301,6 +319,7 @@ export async function getDmMessages(
     agent_id: r.agentId,
     agent_name: r.agentName,
     text: r.body,
+    injection_mode: (r.metadata as any)?.injection_mode,
     created_at: r.createdAt.toISOString(),
   }));
 }

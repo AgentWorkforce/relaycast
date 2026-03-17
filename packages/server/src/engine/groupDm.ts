@@ -73,7 +73,7 @@ export async function postGroupMessage(
   workspaceId: string,
   conversationId: string,
   agentId: string,
-  data: { text: string },
+  data: { text: string; mode?: 'wait' | 'steer' },
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -110,6 +110,11 @@ export async function postGroupMessage(
     throw err;
   }
 
+  const [fromAgent] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+
   const messageId = generateId();
   const [message] = await db
     .insert(messages)
@@ -120,15 +125,29 @@ export async function postGroupMessage(
       agentId,
       body: data.text,
       hasAttachments: false,
+      metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
 
+  const injectionMode = data.mode ?? 'wait';
   return {
-    id: message.id,
+    // Canonical converged shape (new)
     conversation_id: conversationId,
+    message: {
+      id: message.id,
+      agent_id: message.agentId,
+      agent_name: fromAgent?.name ?? '',
+      text: message.body,
+      injection_mode: injectionMode,
+    },
+    created_at: message.createdAt.toISOString(),
+
+    // Deprecated legacy shape (kept for backward compatibility)
+    // TODO(major): remove legacy top-level group-DM fields after client major rollout.
+    id: message.id,
     agent_id: message.agentId,
     text: message.body,
-    created_at: message.createdAt.toISOString(),
+    injection_mode: injectionMode,
   };
 }
 

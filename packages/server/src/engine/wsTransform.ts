@@ -75,11 +75,11 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         type: 'dm.received',
         conversation_id: d.conversation_id as string,
         message: {
-          id: d.id as string,
-          agent_id: (d.from_agent_id ?? d.agent_id) as string,
-          agent_name: d.from_name as string,
-          text: d.text as string,
-          injection_mode: d.injection_mode as 'wait' | 'steer' | undefined,
+          id: (d.message?.id ?? d.id) as string,
+          agent_id: (d.message?.agent_id ?? d.from_agent_id ?? d.agent_id) as string,
+          agent_name: (d.message?.agent_name ?? d.from_name) as string,
+          text: (d.message?.text ?? d.text) as string,
+          injection_mode: (d.message?.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined,
         },
       };
 
@@ -88,10 +88,11 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         type: 'group_dm.received',
         conversation_id: d.conversation_id as string,
         message: {
-          id: d.id as string,
-          agent_id: d.agent_id as string,
-          agent_name: d.from_name as string,
-          text: d.text as string,
+          id: (d.message?.id ?? d.id) as string,
+          agent_id: (d.message?.agent_id ?? d.agent_id) as string,
+          agent_name: (d.message?.agent_name ?? d.from_name) as string,
+          text: (d.message?.text ?? d.text) as string,
+          injection_mode: (d.message?.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined,
         },
       };
 
