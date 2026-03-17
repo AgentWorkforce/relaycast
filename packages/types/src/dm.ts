@@ -21,12 +21,12 @@ export const DmParticipantSchema = z.object({
 });
 export type DmParticipant = z.infer<typeof DmParticipantSchema>;
 
-export const MessageInjectionModeSchema = z.enum(['wait', 'steer']);
+export const DmInjectionModeSchema = z.enum(['wait', 'steer']);
 
 export const SendDmRequestSchema = z.object({
   to: z.string(),
   text: z.string(),
-  mode: MessageInjectionModeSchema.default('wait'),
+  mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 
@@ -68,6 +68,7 @@ export const SendDmResponseSchema = z.object({
   to: z.string(),
   text: z.string(),
   created_at: z.string(),
+  injection_mode: DmInjectionModeSchema.optional(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
 
