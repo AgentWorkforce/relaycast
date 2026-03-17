@@ -1,6 +1,6 @@
 use relaycast::{
-    AgentClient, DmConversationSummary, MessageListQuery, RelayCast, RelayCastOptions,
-    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
+    AgentClient, DmConversationSummary, MessageInjectionMode, MessageListQuery, RelayCast,
+    RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -185,6 +185,83 @@ async fn list_messages_strips_hash_and_passes_pagination_query() {
 }
 
 #[tokio::test]
+async fn send_defaults_mode_wait() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/channels/general/messages"))
+        .and(body_json(json!({
+            "text": "Hello",
+            "mode": "wait"
+        })))
+        .respond_with(ok(json!({
+            "id": "m_1",
+            "agent_name": "alice",
+            "agent_id": "a_1",
+            "text": "Hello",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "reply_count": 0,
+            "reactions": [],
+            "read_by_count": 0,
+            "attachments": [],
+            "injection_mode": "wait"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let sent = agent
+        .send("#general", "Hello", None, None, None)
+        .await
+        .expect("send failed");
+    assert!(matches!(sent.injection_mode, Some(MessageInjectionMode::Wait)));
+}
+
+#[tokio::test]
+async fn send_with_mode_forwards_steer() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/channels/general/messages"))
+        .and(body_json(json!({
+            "text": "Ping",
+            "mode": "steer"
+        })))
+        .respond_with(ok(json!({
+            "id": "m_2",
+            "agent_name": "alice",
+            "agent_id": "a_1",
+            "text": "Ping",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "reply_count": 0,
+            "reactions": [],
+            "read_by_count": 0,
+            "attachments": [],
+            "injection_mode": "steer"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let sent = agent
+        .send_with_mode(
+            "#general",
+            "Ping",
+            None,
+            None,
+            MessageInjectionMode::Steer,
+            None,
+        )
+        .await
+        .expect("send_with_mode failed");
+    assert!(matches!(sent.injection_mode, Some(MessageInjectionMode::Steer)));
+}
+
+#[tokio::test]
 async fn create_workspace_sends_origin_headers() {
     let server = MockServer::start().await;
 
@@ -236,7 +313,8 @@ fn ws_message_created_deserializes_optional_agent_id() {
             "agent_id": "a_123",
             "agent_name": "alice",
             "text": "hello",
-            "attachments": []
+            "attachments": [],
+            "injection_mode": "steer"
         }
     }))
     .expect("failed to parse ws message.created");
@@ -245,6 +323,7 @@ fn ws_message_created_deserializes_optional_agent_id() {
         WsEvent::MessageCreated(msg) => {
             assert_eq!(msg.message.agent_id.as_deref(), Some("a_123"));
             assert_eq!(msg.message.agent_name, "alice");
+            assert!(matches!(msg.message.injection_mode, Some(MessageInjectionMode::Steer)));
         }
         other => panic!("unexpected event variant: {other:?}"),
     }

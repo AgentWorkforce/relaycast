@@ -319,6 +319,13 @@ pub struct ReactionGroup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageInjectionMode {
+    Wait,
+    Steer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageWithMeta {
     pub id: String,
     pub agent_name: String,
@@ -336,6 +343,8 @@ pub struct MessageWithMeta {
     pub reactions: Vec<ReactionGroup>,
     #[serde(default)]
     pub read_by_count: i64,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -347,6 +356,8 @@ pub struct PostMessageRequest {
     pub attachments: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -759,6 +770,8 @@ pub struct MessageEventPayload {
     pub agent_name: String,
     pub text: String,
     pub attachments: Vec<FileAttachment>,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

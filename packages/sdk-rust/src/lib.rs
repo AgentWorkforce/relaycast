@@ -143,6 +143,7 @@ pub use types::{
     // Messages
     MessageBlock,
     MessageCreatedEvent,
+    MessageInjectionMode,
     MessageListQuery,
     MessageReadEvent,
     MessageUpdatedEvent,
