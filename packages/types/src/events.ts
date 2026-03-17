@@ -40,6 +40,7 @@ export const MessageCreatedEventSchema = z.object({
       content_type: z.string(),
       size_bytes: z.number(),
     })),
+    injection_mode: z.enum(['wait', 'steer']).optional(),
   }),
 });
 export type MessageCreatedEvent = z.infer<typeof MessageCreatedEventSchema>;

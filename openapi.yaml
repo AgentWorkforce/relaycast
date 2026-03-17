@@ -118,6 +118,10 @@ components:
           type: object
         content_type:
           type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+          description: Delivery/injection mode used when the message was sent
         thread_id:
           type: string
         reply_count:
@@ -1029,6 +1033,11 @@ paths:
                   type: object
                 content_type:
                   type: string
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for relay delivery
       responses:
         '201':
           description: Message posted

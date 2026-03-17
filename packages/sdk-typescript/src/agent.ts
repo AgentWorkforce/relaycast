@@ -261,13 +261,19 @@ export class AgentClient {
   async send(
     channel: string,
     text: string,
-    opts?: { attachments?: string[]; blocks?: MessageBlock[]; idempotencyKey?: string },
+    opts?: {
+      attachments?: string[];
+      blocks?: MessageBlock[];
+      mode?: 'wait' | 'steer';
+      idempotencyKey?: string;
+    },
   ): Promise<MessageWithMeta> {
     const name = stripHash(channel);
     const body: PostMessageRequest = {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      mode: opts?.mode ?? 'wait',
     };
     return this.client.post(
       `/v1/channels/${encodeURIComponent(name)}/messages`,

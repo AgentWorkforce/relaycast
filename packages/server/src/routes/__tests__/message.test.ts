@@ -95,10 +95,13 @@ describe('POST /v1/channels/:name/messages', () => {
     expect(body.ok).toBe(true);
     expect(body.data.text).toBe('Hello world');
     expect(body.data.id).toBe('msg_001');
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[1]).toBe(FAKE_WORKSPACE.id);
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[2]).toBe('ch_789');
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[4]).toEqual(expect.objectContaining({ mode: 'wait' }));
     expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
       type: 'message.created',
       workspaceId: FAKE_WORKSPACE.id,
-      data: expect.objectContaining({ channel_name: 'general' }),
+      data: expect.objectContaining({ channel_name: 'general', injection_mode: 'wait' }),
     }));
     expect(emitServerEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -108,6 +111,33 @@ describe('POST /v1/channels/:name/messages', () => {
         channel_id: 'ch_789',
       }),
     );
+  });
+
+  it('forwards steer mode through fanout payloads', async () => {
+    vi.mocked(messageEngine.postMessage).mockResolvedValue({
+      id: 'msg_steer',
+      channel_id: 'ch_789',
+      agent_id: 'agent_456',
+      text: 'Take control',
+      has_attachments: false,
+      thread_id: null,
+      created_at: '2025-01-01T00:00:00.000Z',
+      mentions: [],
+    });
+
+    const res = await app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ text: 'Take control', mode: 'steer' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[1]).toBe(FAKE_WORKSPACE.id);
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[2]).toBe('ch_789');
+    expect(vi.mocked(messageEngine.postMessage).mock.calls[0]?.[4]).toEqual(expect.objectContaining({ mode: 'steer' }));
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ injection_mode: 'steer' }),
+    }));
   });
 
   it('returns 400 when text is missing', async () => {

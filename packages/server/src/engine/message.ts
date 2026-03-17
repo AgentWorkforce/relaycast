@@ -41,7 +41,14 @@ export async function postMessage(
   workspaceId: string,
   channelId: string,
   agentId: string,
-  data: { text: string; blocks?: unknown[] | null; attachments?: string[]; data?: Record<string, unknown> | null; content_type?: string },
+  data: {
+    text: string;
+    blocks?: unknown[] | null;
+    attachments?: string[];
+    data?: Record<string, unknown> | null;
+    content_type?: string;
+    mode?: 'wait' | 'steer';
+  },
 ) {
   const messageId = generateId();
 
@@ -95,6 +102,7 @@ export async function postMessage(
     created_at: message.createdAt.toISOString(),
     mentions: mentionMatches.map((m: string) => m.slice(1)),
     attachments,
+    injection_mode: data.mode ?? 'wait',
   };
 }
 

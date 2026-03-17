@@ -25,6 +25,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_name: d.from_name as string,
           text: d.text as string,
           attachments: (d.attachments as unknown[]) ?? [],
+          injection_mode: d.injection_mode as 'wait' | 'steer' | undefined,
         },
       };
 
