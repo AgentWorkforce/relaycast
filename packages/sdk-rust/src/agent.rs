@@ -146,7 +146,7 @@ impl AgentClient {
             text,
             attachments,
             blocks,
-            Some(MessageInjectionMode::Wait),
+            MessageInjectionMode::Wait,
             idempotency_key,
         )
         .await
@@ -159,7 +159,7 @@ impl AgentClient {
         text: &str,
         attachments: Option<Vec<String>>,
         blocks: Option<Vec<MessageBlock>>,
-        mode: Option<MessageInjectionMode>,
+        mode: MessageInjectionMode,
         idempotency_key: Option<String>,
     ) -> Result<MessageWithMeta> {
         let name = strip_hash(channel);
@@ -168,7 +168,7 @@ impl AgentClient {
             attachments,
             blocks,
             data: None,
-            mode,
+            mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client

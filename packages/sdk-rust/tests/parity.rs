@@ -253,7 +253,7 @@ async fn send_with_mode_forwards_steer() {
             "Ping",
             None,
             None,
-            Some(MessageInjectionMode::Steer),
+            MessageInjectionMode::Steer,
             None,
         )
         .await
