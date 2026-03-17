@@ -26,7 +26,7 @@ export async function sendDm(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
-  data: { to: string; text: string },
+  data: { to: string; text: string; mode?: 'wait' | 'steer' },
 ) {
   // Resolve the target agent by name
   const [toAgent] = await db
@@ -116,6 +116,7 @@ export async function sendDm(
       agentId: fromAgentId,
       body: data.text,
       hasAttachments: false,
+      metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
 
@@ -126,6 +127,7 @@ export async function sendDm(
     to: data.to,
     text: message.body,
     created_at: message.createdAt.toISOString(),
+    injection_mode: data.mode ?? 'wait',
   };
 }
 

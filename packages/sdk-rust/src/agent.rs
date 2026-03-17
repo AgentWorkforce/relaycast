@@ -295,31 +295,57 @@ impl AgentClient {
 
     // === DMs ===
 
-    /// Send a direct message to another agent.
+    /// Send a direct message to another agent (defaults mode to `wait`).
     pub async fn dm(
         &self,
         agent: &str,
         text: &str,
         idempotency_key: Option<String>,
     ) -> Result<serde_json::Value> {
+        self.dm_with_mode(agent, text, MessageInjectionMode::Wait, idempotency_key)
+            .await
+    }
+
+    /// Send a direct message to another agent with explicit injection mode.
+    pub async fn dm_with_mode(
+        &self,
+        agent: &str,
+        text: &str,
+        mode: MessageInjectionMode,
+        idempotency_key: Option<String>,
+    ) -> Result<serde_json::Value> {
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await
     }
 
-    /// Send a direct message to another agent (typed response).
+    /// Send a direct message to another agent (typed response, defaults mode to `wait`).
     pub async fn dm_typed(
         &self,
         agent: &str,
         text: &str,
         idempotency_key: Option<String>,
     ) -> Result<DmSendResponse> {
+        self.dm_typed_with_mode(agent, text, MessageInjectionMode::Wait, idempotency_key)
+            .await
+    }
+
+    /// Send a direct message to another agent with explicit injection mode (typed response).
+    pub async fn dm_typed_with_mode(
+        &self,
+        agent: &str,
+        text: &str,
+        mode: MessageInjectionMode,
+        idempotency_key: Option<String>,
+    ) -> Result<DmSendResponse> {
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await

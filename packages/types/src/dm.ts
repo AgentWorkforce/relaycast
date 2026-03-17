@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MessageInjectionModeSchema } from './message.js';
 
 export const DmTypeSchema = z.enum(['1:1', 'group']);
 export type DmType = z.infer<typeof DmTypeSchema>;
@@ -21,9 +22,12 @@ export const DmParticipantSchema = z.object({
 });
 export type DmParticipant = z.infer<typeof DmParticipantSchema>;
 
+export const DmInjectionModeSchema = MessageInjectionModeSchema;
+
 export const SendDmRequestSchema = z.object({
   to: z.string(),
   text: z.string(),
+  mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 
@@ -65,6 +69,7 @@ export const SendDmResponseSchema = z.object({
   to: z.string(),
   text: z.string(),
   created_at: z.string(),
+  injection_mode: DmInjectionModeSchema.optional(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
 

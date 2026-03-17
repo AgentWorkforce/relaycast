@@ -222,6 +222,7 @@ class DmConversationSummary(BaseModel):
 class SendDmRequest(BaseModel):
     to: str
     text: str
+    mode: MessageInjectionMode = "wait"
 
 
 class CreateGroupDmRequest(BaseModel):
