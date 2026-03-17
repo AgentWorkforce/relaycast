@@ -98,6 +98,7 @@ export const DmMessageSchema = z.object({
   agent_name: z.string(),
   text: z.string(),
   created_at: z.string(),
+  injection_mode: DmInjectionModeSchema.optional(),
 });
 export type DmMessage = z.infer<typeof DmMessageSchema>;
 

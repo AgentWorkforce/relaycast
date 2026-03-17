@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MessageInjectionModeSchema } from './message.js';
 
 // WebSocket client -> server
 export const SubscribeEventSchema = z.object({
@@ -26,29 +27,36 @@ export const ClientEventSchema = z.discriminatedUnion('type', [
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
 // WebSocket server -> client
+export const CoreMessagePayloadSchema = z.object({
+  id: z.string(),
+  agent_id: z.string().optional(),
+  agent_name: z.string(),
+  text: z.string(),
+  injection_mode: MessageInjectionModeSchema.optional(),
+});
+export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
+
+export const ChannelMessagePayloadSchema = CoreMessagePayloadSchema.extend({
+  attachments: z.array(z.object({
+    file_id: z.string(),
+    filename: z.string(),
+    content_type: z.string(),
+    size_bytes: z.number(),
+  })),
+});
+export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
+
 export const MessageCreatedEventSchema = z.object({
   type: z.literal('message.created'),
   channel: z.string(),
-  message: z.object({
-    id: z.string(),
-    agent_id: z.string().optional(),
-    agent_name: z.string(),
-    text: z.string(),
-    attachments: z.array(z.object({
-      file_id: z.string(),
-      filename: z.string(),
-      content_type: z.string(),
-      size_bytes: z.number(),
-    })),
-    injection_mode: z.enum(['wait', 'steer']).optional(),
-  }),
+  message: ChannelMessagePayloadSchema,
 });
 export type MessageCreatedEvent = z.infer<typeof MessageCreatedEventSchema>;
 
 export const MessageUpdatedEventSchema = z.object({
   type: z.literal('message.updated'),
   channel: z.string(),
-  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
+  message: CoreMessagePayloadSchema,
 });
 export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
@@ -56,7 +64,7 @@ export const ThreadReplyEventSchema = z.object({
   type: z.literal('thread.reply'),
   channel: z.string(),
   parent_id: z.string(),
-  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
+  message: CoreMessagePayloadSchema,
 });
 export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
@@ -79,20 +87,14 @@ export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 export const DmReceivedEventSchema = z.object({
   type: z.literal('dm.received'),
   conversation_id: z.string(),
-  message: z.object({
-    id: z.string(),
-    agent_id: z.string().optional(),
-    agent_name: z.string(),
-    text: z.string(),
-    injection_mode: z.enum(['wait', 'steer']).optional(),
-  }),
+  message: CoreMessagePayloadSchema,
 });
 export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 
 export const GroupDmReceivedEventSchema = z.object({
   type: z.literal('group_dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
+  message: CoreMessagePayloadSchema,
 });
 export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 
