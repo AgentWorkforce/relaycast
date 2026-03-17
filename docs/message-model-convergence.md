@@ -16,18 +16,17 @@ Shared fields:
 - Introduces/reuses a shared `CoreMessagePayloadSchema` in `@relaycast/types`.
 - Uses core payload for WS events (`message.updated`, `thread.reply`, `dm.received`, `group_dm.received`).
 - Keeps channel-specific extensions (`attachments`) in channel payload.
-- Adds additive converged shape in DM send response (`data.message` optional).
-- Adds `injection_mode` propagation for DM and group DM message flows.
+- Makes **client-facing DM response models breaking** to converge on core message payloads:
+  - `SendDmResponse` now expects `{ conversation_id, message, created_at }`
+  - `GroupDmMessageResponse` now expects `{ conversation_id, message, created_at }`
+- Keeps server wire compatibility for now; the breaking surface is in typed clients/models.
 
-## Expected breaking changes (future major)
+## Breaking changes in this PR (client major)
 
-Not part of this PR, but likely in a future major release:
-1. Deprecate DM legacy response fields (`from_agent_id`, `to`) in favor of unified `message` object + explicit recipient/target objects.
-2. Normalize DM list responses to a full `MessageWithMeta`-like envelope.
-3. Consolidate send endpoints around a shared request schema with thin convenience wrappers.
+1. Removed legacy DM typed response fields in client models (`id`, `from_agent_id`, `to`, `text`, `injection_mode` at top level).
+2. Consumers must read DM send payloads from nested `message` object.
 
-## Compatibility in this PR
+## Future follow-ups
 
-- Legacy DM fields remain.
-- New converged fields are additive.
-- Existing clients continue to work unchanged.
+1. Normalize DM list responses to a full `MessageWithMeta`-style envelope.
+2. Consolidate send endpoints around a shared request schema with thin convenience wrappers.

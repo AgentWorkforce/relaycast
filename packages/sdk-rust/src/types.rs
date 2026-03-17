@@ -415,14 +415,9 @@ pub struct DmConversationSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmSendResponse {
-    pub id: String,
     pub conversation_id: String,
-    pub from_agent_id: String,
-    pub to: String,
-    pub text: String,
+    pub message: DmEventPayload,
     pub created_at: String,
-    #[serde(default)]
-    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,10 +437,8 @@ pub struct GroupDmConversationResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupDmMessageResponse {
-    pub id: String,
     pub conversation_id: String,
-    pub agent_id: String,
-    pub text: String,
+    pub message: DmEventPayload,
     pub created_at: String,
 }
 

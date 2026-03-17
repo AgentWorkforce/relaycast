@@ -40,11 +40,6 @@ export async function sendDm(
     throw err;
   }
 
-  const [fromAgent] = await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
-
   const existing = await db.all<{ id: string; channel_id: string }>(sql`
     SELECT dc.id, dc.channel_id
     FROM dm_conversations dc
@@ -125,7 +120,6 @@ export async function sendDm(
     })
     .returning();
 
-  const injectionMode = data.mode ?? 'wait';
   return {
     id: message.id,
     conversation_id: conv.id,
@@ -133,14 +127,7 @@ export async function sendDm(
     to: data.to,
     text: message.body,
     created_at: message.createdAt.toISOString(),
-    injection_mode: injectionMode,
-    message: {
-      id: message.id,
-      agent_id: message.agentId,
-      agent_name: fromAgent?.name ?? '',
-      text: message.body,
-      injection_mode: injectionMode,
-    },
+    injection_mode: data.mode ?? 'wait',
   };
 }
 
@@ -301,7 +288,6 @@ export async function getDmMessages(
       agentId: messages.agentId,
       agentName: agents.name,
       body: messages.body,
-      metadata: messages.metadata,
       createdAt: messages.createdAt,
     })
     .from(messages)
@@ -315,7 +301,6 @@ export async function getDmMessages(
     agent_id: r.agentId,
     agent_name: r.agentName,
     text: r.body,
-    injection_mode: (r.metadata as any)?.injection_mode,
     created_at: r.createdAt.toISOString(),
   }));
 }

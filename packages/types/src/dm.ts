@@ -63,15 +63,9 @@ export const DmConversationSummarySchema = z.object({
 export type DmConversationSummary = z.infer<typeof DmConversationSummarySchema>;
 
 export const SendDmResponseSchema = z.object({
-  id: z.string(),
   conversation_id: z.string(),
-  from_agent_id: z.string(),
-  to: z.string(),
-  text: z.string(),
+  message: CoreMessagePayloadSchema,
   created_at: z.string(),
-  injection_mode: DmInjectionModeSchema.optional(),
-  // Converged shape (additive, legacy fields retained above)
-  message: CoreMessagePayloadSchema.optional(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
 
@@ -86,11 +80,8 @@ export const CreateGroupDmResponseSchema = z.object({
 export type CreateGroupDmResponse = z.infer<typeof CreateGroupDmResponseSchema>;
 
 export const GroupDmMessageResponseSchema = z.object({
-  id: z.string(),
   conversation_id: z.string(),
-  agent_id: z.string(),
-  text: z.string(),
-  injection_mode: DmInjectionModeSchema.optional(),
+  message: CoreMessagePayloadSchema,
   created_at: z.string(),
 });
 export type GroupDmMessageResponse = z.infer<typeof GroupDmMessageResponseSchema>;
