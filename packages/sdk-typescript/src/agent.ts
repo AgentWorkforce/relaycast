@@ -333,8 +333,12 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<SendDmResponse> {
-    const body: SendDmRequest = { to: agent, text };
+  async dm(
+    agent: string,
+    text: string,
+    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer' }),
+  ): Promise<SendDmResponse> {
+    const body: SendDmRequest = { to: agent, text, mode: opts?.mode ?? 'wait' };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 

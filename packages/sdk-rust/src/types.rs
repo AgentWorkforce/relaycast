@@ -388,6 +388,8 @@ pub struct ThreadResponse {
 pub struct SendDmRequest {
     pub to: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -419,6 +421,8 @@ pub struct DmSendResponse {
     pub to: String,
     pub text: String,
     pub created_at: String,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -799,6 +803,8 @@ pub struct DmEventPayload {
     pub agent_id: Option<String>,
     pub agent_name: String,
     pub text: String,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -16,6 +16,7 @@ export const dmRoutes = new Hono<AppEnv>();
 const sendDmSchema = z.object({
   to: z.string().min(1),
   text: z.string().min(1),
+  mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
 // POST /v1/dm - send a DM
@@ -45,7 +46,7 @@ dmRoutes.post(
           },
         }, 400);
       }
-      const { to, text } = parsed.data;
+      const { to, text, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -61,9 +62,9 @@ dmRoutes.post(
         scope: 'dm:direct',
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ to, text }),
+        fingerprint: JSON.stringify({ to, text, mode }),
         kv: c.env.KV,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text }),
+        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text, mode }),
       });
 
       if (idempotent.replayed) {

@@ -218,7 +218,16 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi' }));
+      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', mode: 'wait' }));
+    });
+
+    it('forwards steer mode when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi', { mode: 'steer' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', mode: 'steer' }));
     });
 
     it('forwards Idempotency-Key when provided', async () => {

@@ -148,6 +148,14 @@ class TestAgentClientDMs:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.dm("Alice", "Hi")
         assert route.called
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait"}'
+
+    @respx.mock
+    def test_dm_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dm("Alice", "Hi", mode="steer")
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
 
     @respx.mock
     def test_dms_conversations(self):
@@ -470,6 +478,16 @@ class TestAsyncAgentClient:
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         await c.dm("Alice", "Hi")
         assert route.called
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_dm_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.dm("Alice", "Hi", mode="steer")
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
         await c.client.close()
 
     @pytest.mark.asyncio

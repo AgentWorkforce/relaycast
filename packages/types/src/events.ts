@@ -79,7 +79,13 @@ export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 export const DmReceivedEventSchema = z.object({
   type: z.literal('dm.received'),
   conversation_id: z.string(),
-  message: z.object({ id: z.string(), agent_id: z.string().optional(), agent_name: z.string(), text: z.string() }),
+  message: z.object({
+    id: z.string(),
+    agent_id: z.string().optional(),
+    agent_name: z.string(),
+    text: z.string(),
+    injection_mode: z.enum(['wait', 'steer']).optional(),
+  }),
 });
 export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 

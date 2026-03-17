@@ -51,6 +51,7 @@ describe('POST /v1/dm', () => {
       to: 'OtherBot',
       text: 'Hello DM',
       created_at: '2025-01-01T00:00:00.000Z',
+      injection_mode: 'wait',
     });
 
     const res = await app.request('/v1/dm', {
@@ -63,6 +64,7 @@ describe('POST /v1/dm', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.conversation_id).toBe('conv_123');
+    expect(body.data.injection_mode).toBe('wait');
     expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
       type: 'dm.received',
       workspaceId: FAKE_WORKSPACE.id,

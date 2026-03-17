@@ -235,8 +235,8 @@ class AgentClient:
 
     # ── DMs ──
 
-    def dm(self, agent: str, text: str) -> Any:
-        return self.client.post("/v1/dm", {"to": agent, "text": text})
+    def dm(self, agent: str, text: str, mode: MessageInjectionMode = "wait") -> Any:
+        return self.client.post("/v1/dm", {"to": agent, "text": text, "mode": mode})
 
     # ── Reactions ──
 
@@ -496,8 +496,8 @@ class AsyncAgentClient:
 
     # ── DMs ──
 
-    async def dm(self, agent: str, text: str) -> Any:
-        return await self.client.post("/v1/dm", {"to": agent, "text": text})
+    async def dm(self, agent: str, text: str, mode: MessageInjectionMode = "wait") -> Any:
+        return await self.client.post("/v1/dm", {"to": agent, "text": text, "mode": mode})
 
     # ── Reactions ──
 
