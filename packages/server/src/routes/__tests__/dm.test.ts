@@ -84,6 +84,32 @@ describe('POST /v1/dm', () => {
     expect(body.error.code).toBe('invalid_request');
   });
 
+  it('forwards steer mode to dm engine', async () => {
+    vi.mocked(dmEngine.sendDm).mockResolvedValue({
+      id: 'msg_002',
+      conversation_id: 'conv_456',
+      from_agent_id: 'agent_456',
+      to: 'OtherBot',
+      text: 'Take over',
+      created_at: '2025-01-01T00:00:00.000Z',
+      injection_mode: 'steer',
+    });
+
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ to: 'OtherBot', text: 'Take over', mode: 'steer' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(dmEngine.sendDm)).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'agent_123',
+      expect.objectContaining({ to: 'OtherBot', text: 'Take over', mode: 'steer' }),
+    );
+  });
+
   it('returns 400 when text is missing', async () => {
     const res = await app.request('/v1/dm', {
       method: 'POST',
