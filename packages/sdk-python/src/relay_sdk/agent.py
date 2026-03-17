@@ -236,8 +236,17 @@ class AgentClient:
 
     # ── DMs ──
 
-    def dm(self, agent: str, text: str, mode: MessageInjectionMode = "wait") -> Any:
-        return self.client.post("/v1/dm", {"to": agent, "text": text, "mode": mode})
+    def dm(
+        self,
+        agent: str,
+        text: str,
+        mode: MessageInjectionMode = "wait",
+        attachments: list[str] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"to": agent, "text": text, "mode": mode}
+        if attachments:
+            payload["attachments"] = attachments
+        return self.client.post("/v1/dm", payload)
 
     # ── Reactions ──
 
@@ -497,8 +506,17 @@ class AsyncAgentClient:
 
     # ── DMs ──
 
-    async def dm(self, agent: str, text: str, mode: MessageInjectionMode = "wait") -> Any:
-        return await self.client.post("/v1/dm", {"to": agent, "text": text, "mode": mode})
+    async def dm(
+        self,
+        agent: str,
+        text: str,
+        mode: MessageInjectionMode = "wait",
+        attachments: list[str] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"to": agent, "text": text, "mode": mode}
+        if attachments:
+            payload["attachments"] = attachments
+        return await self.client.post("/v1/dm", payload)
 
     # ── Reactions ──
 

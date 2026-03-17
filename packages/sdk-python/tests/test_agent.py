@@ -158,6 +158,13 @@ class TestAgentClientDMs:
         assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
 
     @respx.mock
+    def test_dm_with_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dm("Alice", "Hi", attachments=["file_1", "file_2"])
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait","attachments":["file_1","file_2"]}'
+
+    @respx.mock
     def test_dms_conversations(self):
         conv = {"id": "c1", "type": "1:1", "participants": ["A", "B"], "unread_count": 0}
         respx.get(f"{BASE}/v1/dm/conversations").mock(return_value=ok([conv]))
@@ -488,6 +495,15 @@ class TestAsyncAgentClient:
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         await c.dm("Alice", "Hi", mode="steer")
         assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_dm_with_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.dm("Alice", "Hi", attachments=["file_1", "file_2"])
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait","attachments":["file_1","file_2"]}'
         await c.client.close()
 
     @pytest.mark.asyncio

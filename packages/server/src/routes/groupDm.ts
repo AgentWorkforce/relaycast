@@ -20,6 +20,7 @@ const createGroupDmSchema = z.object({
 
 const postGroupDmMessageSchema = z.object({
   text: z.string().min(1),
+  attachments: z.array(z.string()).optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
@@ -84,7 +85,7 @@ groupDmRoutes.post(
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
-      const { text, mode } = parsed.data;
+      const { text, attachments, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -102,8 +103,8 @@ groupDmRoutes.post(
         key: idempotencyKey,
         status: 201,
         fingerprint: mode === 'steer'
-          ? JSON.stringify({ conversationId, text, mode })
-          : JSON.stringify({ conversationId, text }),
+          ? JSON.stringify({ conversationId, text, attachments, mode })
+          : JSON.stringify({ conversationId, text, attachments }),
         kv: c.env.KV,
         operation: () =>
           groupDmEngine.postGroupMessage(
@@ -111,7 +112,7 @@ groupDmRoutes.post(
             workspace.id,
             conversationId,
             agent!.id,
-            { text, mode },
+            { text, attachments, mode },
           ),
       });
 

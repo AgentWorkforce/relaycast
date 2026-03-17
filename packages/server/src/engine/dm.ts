@@ -8,10 +8,43 @@ import {
   agents,
   dmConversations,
   dmParticipants,
+  messageAttachments,
+  files,
 } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
+
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(inArray(messageAttachments.messageId, msgIds));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
+}
 
 function getDmPairKey(workspaceId: string, agentA: string, agentB: string): string {
   const [first, second] = [agentA, agentB].sort();
@@ -26,7 +59,7 @@ export async function sendDm(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
-  data: { to: string; text: string; mode?: 'wait' | 'steer' },
+  data: { to: string; text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
 ) {
   // Resolve the target agent by name
   const [toAgent] = await db
@@ -112,6 +145,7 @@ export async function sendDm(
 
   // Post the message
   const messageId = generateId();
+  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const [message] = await db
     .insert(messages)
     .values({
@@ -120,10 +154,24 @@ export async function sendDm(
       channelId: conv.channelId,
       agentId: fromAgentId,
       body: data.text,
-      hasAttachments: false,
+      hasAttachments,
       metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
+
+  if (data.attachments && data.attachments.length > 0) {
+    const attachmentValues = data.attachments.map((fileId, idx) => ({
+      messageId,
+      fileId,
+      position: idx,
+    }));
+    await db.insert(messageAttachments).values(attachmentValues);
+  }
+
+  const attachmentMap = hasAttachments
+    ? await fetchAttachmentsBatch(db, [messageId])
+    : new Map<string, AttachmentRow[]>();
+  const attachments = attachmentMap.get(messageId) || [];
 
   const injectionMode = data.mode ?? 'wait';
   return {
@@ -135,6 +183,7 @@ export async function sendDm(
       agent_name: fromAgent?.name ?? '',
       text: message.body,
       injection_mode: injectionMode,
+      attachments,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -144,6 +193,7 @@ export async function sendDm(
     to: data.to,
     text: message.body,
     injection_mode: injectionMode,
+    attachments,
   };
 }
 
@@ -313,12 +363,15 @@ export async function getDmMessages(
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
 
+  const attachmentMap = await fetchAttachmentsBatch(db, rows.map((r) => r.id));
+
   return rows.map((r) => ({
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
     text: r.body,
     injection_mode: (r.metadata as any)?.injection_mode,
+    attachments: attachmentMap.get(r.id) || [],
     created_at: r.createdAt.toISOString(),
   }));
 }

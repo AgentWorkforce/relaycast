@@ -75,6 +75,7 @@ export const CoreMessagePayloadSchema = z.object({
   agent_name: z.string(),
   text: z.string(),
   injection_mode: MessageInjectionModeSchema.optional(),
+  attachments: z.array(FileAttachmentSchema).optional(),
 });
 export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
 

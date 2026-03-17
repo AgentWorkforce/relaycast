@@ -27,6 +27,7 @@ export const DmInjectionModeSchema = MessageInjectionModeSchema;
 export const SendDmRequestSchema = z.object({
   to: z.string(),
   text: z.string(),
+  attachments: z.array(z.string()).optional(),
   mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;

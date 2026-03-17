@@ -16,6 +16,7 @@ export const dmRoutes = new Hono<AppEnv>();
 const sendDmSchema = z.object({
   to: z.string().min(1),
   text: z.string().min(1),
+  attachments: z.array(z.string()).optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
@@ -46,7 +47,7 @@ dmRoutes.post(
           },
         }, 400);
       }
-      const { to, text, mode } = parsed.data;
+      const { to, text, attachments, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -64,9 +65,11 @@ dmRoutes.post(
         status: 201,
         // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
         // Only include mode when explicit steer is requested.
-        fingerprint: mode === 'steer' ? JSON.stringify({ to, text, mode }) : JSON.stringify({ to, text }),
+        fingerprint: mode === 'steer'
+          ? JSON.stringify({ to, text, attachments, mode })
+          : JSON.stringify({ to, text, attachments }),
         kv: c.env.KV,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text, mode }),
+        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text, attachments, mode }),
       });
 
       if (idempotent.replayed) {

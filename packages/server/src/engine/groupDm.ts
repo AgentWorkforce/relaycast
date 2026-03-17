@@ -1,9 +1,40 @@
-import { eq, and, sql, isNull } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, dmParticipants } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
+
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(inArray(messageAttachments.messageId, msgIds));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
+}
 
 export async function createGroupDm(
   db: Db,
@@ -73,7 +104,7 @@ export async function postGroupMessage(
   workspaceId: string,
   conversationId: string,
   agentId: string,
-  data: { text: string; mode?: 'wait' | 'steer' },
+  data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -116,6 +147,7 @@ export async function postGroupMessage(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
 
   const messageId = generateId();
+  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const [message] = await db
     .insert(messages)
     .values({
@@ -124,10 +156,24 @@ export async function postGroupMessage(
       channelId: conv.channelId,
       agentId,
       body: data.text,
-      hasAttachments: false,
+      hasAttachments,
       metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
+
+  if (data.attachments && data.attachments.length > 0) {
+    const attachmentValues = data.attachments.map((fileId, idx) => ({
+      messageId,
+      fileId,
+      position: idx,
+    }));
+    await db.insert(messageAttachments).values(attachmentValues);
+  }
+
+  const attachmentMap = hasAttachments
+    ? await fetchAttachmentsBatch(db, [messageId])
+    : new Map<string, AttachmentRow[]>();
+  const attachments = attachmentMap.get(messageId) || [];
 
   const injectionMode = data.mode ?? 'wait';
   return {
@@ -139,6 +185,7 @@ export async function postGroupMessage(
       agent_name: fromAgent?.name ?? '',
       text: message.body,
       injection_mode: injectionMode,
+      attachments,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -147,6 +194,7 @@ export async function postGroupMessage(
     agent_id: message.agentId,
     text: message.body,
     injection_mode: injectionMode,
+    attachments,
   };
 }
 
