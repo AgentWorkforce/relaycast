@@ -132,7 +132,7 @@ impl AgentClient {
 
     // === Messages ===
 
-    /// Send a message to a channel.
+    /// Send a message to a channel (defaults mode to `wait`).
     pub async fn send(
         &self,
         channel: &str,
@@ -141,12 +141,34 @@ impl AgentClient {
         blocks: Option<Vec<MessageBlock>>,
         idempotency_key: Option<String>,
     ) -> Result<MessageWithMeta> {
+        self.send_with_mode(
+            channel,
+            text,
+            attachments,
+            blocks,
+            Some(MessageInjectionMode::Wait),
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Send a message to a channel with explicit injection mode.
+    pub async fn send_with_mode(
+        &self,
+        channel: &str,
+        text: &str,
+        attachments: Option<Vec<String>>,
+        blocks: Option<Vec<MessageBlock>>,
+        mode: Option<MessageInjectionMode>,
+        idempotency_key: Option<String>,
+    ) -> Result<MessageWithMeta> {
         let name = strip_hash(channel);
         let body = PostMessageRequest {
             text: text.to_string(),
             attachments,
             blocks,
             data: None,
+            mode,
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
