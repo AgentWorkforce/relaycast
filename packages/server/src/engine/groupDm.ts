@@ -142,8 +142,7 @@ export async function postGroupMessage(
     },
     created_at: message.createdAt.toISOString(),
 
-    // Deprecated legacy shape (kept for backward compatibility)
-    // TODO(major): remove legacy top-level group-DM fields after client major rollout.
+    // Legacy compatibility fields (scheduled for removal in next major).
     id: message.id,
     agent_id: message.agentId,
     text: message.body,

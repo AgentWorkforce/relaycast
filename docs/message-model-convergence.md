@@ -11,22 +11,24 @@ Shared fields:
 - `text`
 - `injection_mode`
 
-## This PR phase
+## Current convergence state
 
-- Introduces/reuses a shared `CoreMessagePayloadSchema` in `@relaycast/types`.
-- Uses core payload for WS events (`message.updated`, `thread.reply`, `dm.received`, `group_dm.received`).
-- Keeps channel-specific extensions (`attachments`) in channel payload.
-- Makes **client-facing DM response models breaking** to converge on core message payloads:
-  - `SendDmResponse` now expects `{ conversation_id, message, created_at }`
-  - `GroupDmMessageResponse` now expects `{ conversation_id, message, created_at }`
-- Keeps server wire compatibility for now; the breaking surface is in typed clients/models.
+- Shared `CoreMessagePayloadSchema` is used for WS events (`message.updated`, `thread.reply`, `dm.received`, `group_dm.received`).
+- DM typed responses converge on nested message payloads:
+  - `SendDmResponse` => `{ conversation_id, message, created_at }`
+  - `GroupDmMessageResponse` => `{ conversation_id, message, created_at }`
+- Server currently returns canonical fields plus legacy compatibility fields.
 
-## Breaking changes in this PR (client major)
+## Required client migration
 
-1. Removed legacy DM typed response fields in client models (`id`, `from_agent_id`, `to`, `text`, `injection_mode` at top level).
-2. Consumers must read DM send payloads from nested `message` object.
+1. DM typed consumers should read from nested `message` instead of legacy top-level fields.
+2. Plan for legacy field removal in the next major release.
 
-## Future follow-ups
+## Attachments policy (DM + threads)
 
-1. Normalize DM list responses to a full `MessageWithMeta`-style envelope.
-2. Consolidate send endpoints around a shared request schema with thin convenience wrappers.
+DMs and thread replies should support attachments. This is a desired end-state for model parity.
+
+Planned follow-up work:
+1. Add attachment upload references to DM send/group-DM send and thread reply request schemas.
+2. Persist and return attachments in DM/group-DM responses and events.
+3. Align SDK helpers so `send`, `reply`, and `dm` attachment APIs are symmetric.

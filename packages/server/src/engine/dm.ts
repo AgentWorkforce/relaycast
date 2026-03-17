@@ -138,8 +138,7 @@ export async function sendDm(
     },
     created_at: message.createdAt.toISOString(),
 
-    // Deprecated legacy shape (kept for backward compatibility)
-    // TODO(major): remove legacy top-level DM fields after client major rollout.
+    // Legacy compatibility fields (scheduled for removal in next major).
     id: message.id,
     from_agent_id: message.agentId,
     to: data.to,
