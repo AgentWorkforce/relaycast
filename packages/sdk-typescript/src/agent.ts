@@ -374,11 +374,15 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: IdempotencyOption,
+      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
-        { text },
+        {
+          text,
+          ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          mode: opts?.mode ?? 'wait',
+        },
         idempotencyHeaders(opts),
       ),
 

@@ -142,13 +142,32 @@ components:
         size_bytes:
           type: integer
 
-    DmMessage:
+    CoreDmMessagePayload:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        text:
+          type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
+
+    DmSendResponse:
       type: object
       properties:
         conversation_id:
           type: string
         message:
-          $ref: '#/components/schemas/Message'
+          $ref: '#/components/schemas/CoreDmMessagePayload'
         created_at:
           type: string
           format: date-time
@@ -169,6 +188,28 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileAttachment'
+
+    FlatDmMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        text:
+          type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
+        created_at:
+          type: string
+          format: date-time
 
     Conversation:
       type: object
@@ -1372,7 +1413,7 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    $ref: '#/components/schemas/DmMessage'
+                    $ref: '#/components/schemas/DmSendResponse'
 
   /dm/conversations:
     get:
@@ -1482,7 +1523,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/DmMessage'
+                      $ref: '#/components/schemas/FlatDmMessage'
 
   /search:
     get:

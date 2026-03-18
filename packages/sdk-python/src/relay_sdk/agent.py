@@ -70,9 +70,19 @@ class _DmsNamespace:
         data = CreateGroupDmRequest(participants=participants, text=text, name=name)
         return self._client.post("/v1/dm/group", data.model_dump(exclude_none=True))
 
-    def send_message(self, conversation_id: str, text: str) -> Any:
+    def send_message(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        mode: MessageInjectionMode = "wait",
+        attachments: list[str] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"text": text, "mode": mode}
+        if attachments:
+            payload["attachments"] = attachments
         return self._client.post(
-            f"/v1/dm/{_enc(conversation_id)}/messages", {"text": text}
+            f"/v1/dm/{_enc(conversation_id)}/messages", payload
         )
 
     def add_participant(self, conversation_id: str, agent: str) -> Any:
@@ -343,9 +353,19 @@ class _AsyncDmsNamespace:
         data = CreateGroupDmRequest(participants=participants, text=text, name=name)
         return await self._client.post("/v1/dm/group", data.model_dump(exclude_none=True))
 
-    async def send_message(self, conversation_id: str, text: str) -> Any:
+    async def send_message(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        mode: MessageInjectionMode = "wait",
+        attachments: list[str] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"text": text, "mode": mode}
+        if attachments:
+            payload["attachments"] = attachments
         return await self._client.post(
-            f"/v1/dm/{_enc(conversation_id)}/messages", {"text": text}
+            f"/v1/dm/{_enc(conversation_id)}/messages", payload
         )
 
     async def add_participant(self, conversation_id: str, agent: str) -> Any:

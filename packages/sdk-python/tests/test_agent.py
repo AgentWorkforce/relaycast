@@ -193,6 +193,14 @@ class TestAgentClientDMs:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.dms.send_message("c1", "Hey")
         assert route.called
+        assert route.calls[0].request.content == b'{"text":"Hey","mode":"wait"}'
+
+    @respx.mock
+    def test_dms_send_message_with_mode_and_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm/c1/messages").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dms.send_message("c1", "Hey", mode="steer", attachments=["file_1"])
+        assert route.calls[0].request.content == b'{"text":"Hey","mode":"steer","attachments":["file_1"]}'
 
     @respx.mock
     def test_dms_add_participant(self):
