@@ -130,6 +130,18 @@ components:
           type: string
           format: date-time
 
+    FileAttachment:
+      type: object
+      properties:
+        file_id:
+          type: string
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+
     DmMessage:
       type: object
       properties:

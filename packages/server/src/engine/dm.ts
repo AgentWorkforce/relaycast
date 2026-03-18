@@ -149,22 +149,7 @@ export async function sendDm(
     throw err;
   }
 
-  // Post the message
-  const messageId = generateId();
-  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId: conv.channelId,
-      agentId: fromAgentId,
-      body: data.text,
-      hasAttachments,
-      metadata: { injection_mode: data.mode ?? 'wait' },
-    })
-    .returning();
-
+  // Validate attachments before writing message row to avoid partial persistence on 400s.
   if (data.attachments && data.attachments.length > 0) {
     const validFiles = await db
       .select({ id: files.id })
@@ -183,7 +168,25 @@ export async function sendDm(
       Object.assign(err, { code: 'invalid_attachments', status: 400 });
       throw err;
     }
+  }
 
+  // Post the message
+  const messageId = generateId();
+  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
+  const [message] = await db
+    .insert(messages)
+    .values({
+      id: messageId,
+      workspaceId,
+      channelId: conv.channelId,
+      agentId: fromAgentId,
+      body: data.text,
+      hasAttachments,
+      metadata: { injection_mode: data.mode ?? 'wait' },
+    })
+    .returning();
+
+  if (data.attachments && data.attachments.length > 0) {
     const attachmentValues = data.attachments.map((fileId, idx) => ({
       messageId,
       fileId,
