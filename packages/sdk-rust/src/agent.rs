@@ -430,10 +430,22 @@ impl AgentClient {
         &self,
         conversation_id: &str,
         text: &str,
-        idempotency_key: Option<String>,
+        opts: Option<DmOptions>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({ "text": text });
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let opts = opts.unwrap_or_default();
+        let mut body = serde_json::Map::new();
+        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "mode".to_string(),
+            serde_json::Value::String(match opts.mode {
+                MessageInjectionMode::Wait => "wait".to_string(),
+                MessageInjectionMode::Steer => "steer".to_string(),
+            }),
+        );
+        if let Some(attachments) = opts.attachments {
+            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+        }
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
@@ -448,10 +460,22 @@ impl AgentClient {
         &self,
         conversation_id: &str,
         text: &str,
-        idempotency_key: Option<String>,
+        opts: Option<DmOptions>,
     ) -> Result<GroupDmMessageResponse> {
-        let body = serde_json::json!({ "text": text });
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let opts = opts.unwrap_or_default();
+        let mut body = serde_json::Map::new();
+        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "mode".to_string(),
+            serde_json::Value::String(match opts.mode {
+                MessageInjectionMode::Wait => "wait".to_string(),
+                MessageInjectionMode::Steer => "steer".to_string(),
+            }),
+        );
+        if let Some(attachments) = opts.attachments {
+            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+        }
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
