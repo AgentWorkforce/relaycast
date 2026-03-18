@@ -17,7 +17,7 @@ type Db = ReturnType<typeof getDb>;
 
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
-async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
 
@@ -31,7 +31,7 @@ async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<stri
     })
     .from(messageAttachments)
     .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(inArray(messageAttachments.messageId, msgIds));
+    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
 
   for (const row of rows) {
     const list = map.get(row.messageId) || [];
@@ -77,6 +77,12 @@ export async function sendDm(
     .select({ name: agents.name })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
+
+  if (!fromAgent?.name) {
+    const err = new Error('Sender agent not found');
+    Object.assign(err, { code: 'internal_error', status: 500 });
+    throw err;
+  }
 
   const existing = await db.all<{ id: string; channel_id: string }>(sql`
     SELECT dc.id, dc.channel_id
@@ -160,6 +166,24 @@ export async function sendDm(
     .returning();
 
   if (data.attachments && data.attachments.length > 0) {
+    const validFiles = await db
+      .select({ id: files.id })
+      .from(files)
+      .where(
+        and(
+          eq(files.workspaceId, workspaceId),
+          eq(files.status, 'uploaded'),
+          inArray(files.id, data.attachments),
+        ),
+      );
+    const validIds = new Set(validFiles.map((f) => f.id));
+    const invalid = data.attachments.filter((id) => !validIds.has(id));
+    if (invalid.length > 0) {
+      const err = new Error('Invalid attachments: file ids must exist in workspace and be uploaded');
+      Object.assign(err, { code: 'invalid_attachments', status: 400 });
+      throw err;
+    }
+
     const attachmentValues = data.attachments.map((fileId, idx) => ({
       messageId,
       fileId,
@@ -169,7 +193,7 @@ export async function sendDm(
   }
 
   const attachmentMap = hasAttachments
-    ? await fetchAttachmentsBatch(db, [messageId])
+    ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
     : new Map<string, AttachmentRow[]>();
   const attachments = attachmentMap.get(messageId) || [];
 
@@ -180,7 +204,7 @@ export async function sendDm(
     message: {
       id: message.id,
       agent_id: message.agentId,
-      agent_name: fromAgent?.name ?? '',
+      agent_name: fromAgent.name,
       text: message.body,
       injection_mode: injectionMode,
       attachments,
@@ -363,7 +387,7 @@ export async function getDmMessages(
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
 
-  const attachmentMap = await fetchAttachmentsBatch(db, rows.map((r) => r.id));
+  const attachmentMap = await fetchAttachmentsBatch(db, workspaceId, rows.map((r) => r.id));
 
   return rows.map((r) => ({
     id: r.id,

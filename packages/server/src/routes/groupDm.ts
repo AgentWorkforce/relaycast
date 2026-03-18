@@ -80,9 +80,19 @@ groupDmRoutes.post(
       const agent = c.get('agent');
       const parsed = postGroupDmMessageSchema.safeParse(await c.req.json());
       if (!parsed.success) {
+        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
+        const hasModeIssue = parsed.error.issues.some((issue) => issue.path[0] === 'mode');
+        const hasAttachmentsIssue = parsed.error.issues.some((issue) => issue.path[0] === 'attachments');
+        const message = hasTextIssue
+          ? 'text is required'
+          : hasModeIssue
+            ? 'mode must be one of: wait, steer'
+            : hasAttachmentsIssue
+              ? 'attachments must be an array of file ids'
+              : 'invalid group dm body';
         return c.json({
           ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
+          error: { code: 'invalid_request', message },
         }, 400);
       }
       const { text, attachments, mode } = parsed.data;

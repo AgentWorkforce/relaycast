@@ -317,6 +317,26 @@ impl AgentClient {
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            attachments: None,
+            mode: Some(mode),
+        };
+        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        self.client.post("/v1/dm", Some(body), options).await
+    }
+
+    /// Send a direct message to another agent with explicit injection mode and attachments.
+    pub async fn dm_with_mode_and_attachments(
+        &self,
+        agent: &str,
+        text: &str,
+        attachments: Option<Vec<String>>,
+        mode: MessageInjectionMode,
+        idempotency_key: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let body = SendDmRequest {
+            to: agent.to_string(),
+            text: text.to_string(),
+            attachments,
             mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
@@ -345,6 +365,26 @@ impl AgentClient {
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            attachments: None,
+            mode: Some(mode),
+        };
+        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        self.client.post("/v1/dm", Some(body), options).await
+    }
+
+    /// Send a direct message to another agent with explicit injection mode and attachments (typed response).
+    pub async fn dm_typed_with_mode_and_attachments(
+        &self,
+        agent: &str,
+        text: &str,
+        attachments: Option<Vec<String>>,
+        mode: MessageInjectionMode,
+        idempotency_key: Option<String>,
+    ) -> Result<DmSendResponse> {
+        let body = SendDmRequest {
+            to: agent.to_string(),
+            text: text.to_string(),
+            attachments,
             mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);

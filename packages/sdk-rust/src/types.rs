@@ -389,6 +389,8 @@ pub struct SendDmRequest {
     pub to: String,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<MessageInjectionMode>,
 }
 

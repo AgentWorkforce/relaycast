@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CoreMessagePayloadSchema } from './message.js';
+import { FileAttachmentSchema } from './file.js';
 
 // WebSocket client -> server
 export const SubscribeEventSchema = z.object({
@@ -28,12 +29,7 @@ export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
 // WebSocket server -> client
 export const ChannelMessagePayloadSchema = CoreMessagePayloadSchema.extend({
-  attachments: z.array(z.object({
-    file_id: z.string(),
-    filename: z.string(),
-    content_type: z.string(),
-    size_bytes: z.number(),
-  })),
+  attachments: z.array(FileAttachmentSchema),
 });
 export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
 

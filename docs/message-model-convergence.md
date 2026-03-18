@@ -26,9 +26,12 @@ Shared fields:
 
 ## Attachments policy (DM + threads)
 
-DMs and thread replies should support attachments. This is a desired end-state for model parity.
+Current state:
+- DM and group-DM send requests support `attachments` file-id arrays.
+- DM/group-DM persistence and response/event payloads include attachments.
+- TypeScript + Python SDK DM helpers support attachments.
 
-Planned follow-up work:
-1. Add attachment upload references to DM send/group-DM send and thread reply request schemas.
-2. Persist and return attachments in DM/group-DM responses and events.
-3. Align SDK helpers so `send`, `reply`, and `dm` attachment APIs are symmetric.
+Remaining parity work:
+1. Add thread-reply attachment support end-to-end.
+2. Add full Rust DM attachment helper parity in public API ergonomics.
+3. Align all helper signatures (`send`, `reply`, `dm`) for symmetric attachment options.

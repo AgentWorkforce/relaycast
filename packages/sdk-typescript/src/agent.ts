@@ -341,7 +341,7 @@ export class AgentClient {
     const body: SendDmRequest = {
       to: agent,
       text,
-      attachments: opts?.attachments,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));

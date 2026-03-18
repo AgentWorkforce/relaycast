@@ -133,9 +133,15 @@ components:
     DmMessage:
       type: object
       properties:
-        id:
-          type: string
         conversation_id:
+          type: string
+        message:
+          $ref: '#/components/schemas/Message'
+        created_at:
+          type: string
+          format: date-time
+        # Legacy compatibility fields (scheduled for removal in next major)
+        id:
           type: string
         from_agent_id:
           type: string
@@ -143,13 +149,14 @@ components:
           type: string
         text:
           type: string
-        created_at:
-          type: string
-          format: date-time
         injection_mode:
           type: string
           enum: [wait, steer]
           description: Delivery/injection mode used when the DM was sent
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
 
     Conversation:
       type: object
@@ -1332,6 +1339,11 @@ paths:
                   description: Recipient agent name
                 text:
                   type: string
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional file ids to attach to this DM
                 mode:
                   type: string
                   enum: [wait, steer]
@@ -1402,6 +1414,16 @@ paths:
               properties:
                 text:
                   type: string
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional file ids to attach to this group DM message
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for the group DM message
       responses:
         '201':
           description: Message sent
