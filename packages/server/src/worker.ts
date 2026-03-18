@@ -26,7 +26,7 @@ import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
-import { createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
+import { captureException, createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
 
@@ -279,10 +279,28 @@ app.onError((err, c) => {
     ...toErrorDetails(error),
   });
 
+  // Send to PostHog Error Tracking (fire-and-forget via waitUntil when available)
+  const status = error.status || 500;
+  if (status >= 500) {
+    const exceptionPromise = captureException(c.env, error, {
+      properties: {
+        path: c.req.path,
+        method: c.req.method,
+        status_code: status,
+        error_code: error.code ?? 'internal_error',
+        request_id: c.get('requestId'),
+      },
+    });
+    try {
+      c.executionCtx?.waitUntil(exceptionPromise);
+    } catch {
+      void exceptionPromise;
+    }
+  }
+
   if (error.message?.includes('JSON')) {
     return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
   }
-  const status = error.status || 500;
   return c.json({
     ok: false,
     error: {
@@ -315,6 +333,9 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
     } catch (error) {
       logger.error('Webhook queue message processing failed; retrying', {
         ...toErrorDetails(error),
+      });
+      void captureException(env, error, {
+        properties: { source: 'worker.queue', event_type: (msg.body as { type?: string }).type },
       });
       msg.retry();
     }
