@@ -149,7 +149,6 @@ export async function sendDm(
     throw err;
   }
 
-  // Validate attachments before writing message row to avoid partial persistence on 400s.
   if (data.attachments && data.attachments.length > 0) {
     const validFiles = await db
       .select({ id: files.id })
