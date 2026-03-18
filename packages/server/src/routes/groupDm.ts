@@ -96,6 +96,7 @@ groupDmRoutes.post(
         }, 400);
       }
       const { text, attachments, mode } = parsed.data;
+      const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -113,8 +114,8 @@ groupDmRoutes.post(
         key: idempotencyKey,
         status: 201,
         fingerprint: mode === 'steer'
-          ? JSON.stringify({ conversationId, text, attachments, mode })
-          : JSON.stringify({ conversationId, text, attachments }),
+          ? JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
+          : JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
         kv: c.env.KV,
         operation: () =>
           groupDmEngine.postGroupMessage(
@@ -122,7 +123,11 @@ groupDmRoutes.post(
             workspace.id,
             conversationId,
             agent!.id,
-            { text, attachments, mode },
+            {
+              text,
+              attachments: normalizedAttachments,
+              mode,
+            },
           ),
       });
 

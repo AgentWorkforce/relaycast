@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { eq, and, sql, lt, gt, isNull, inArray } from 'drizzle-orm';
+import { eq, and, sql, lt, gt, isNull, inArray, asc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -31,7 +31,8 @@ async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string
     })
     .from(messageAttachments)
     .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
+    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)))
+    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position));
 
   for (const row of rows) {
     const list = map.get(row.messageId) || [];
@@ -150,20 +151,27 @@ export async function sendDm(
   }
 
   if (data.attachments && data.attachments.length > 0) {
+    const unique = new Set(data.attachments);
+    if (unique.size !== data.attachments.length) {
+      const err = new Error('Invalid attachments: duplicate file ids are not allowed');
+      Object.assign(err, { code: 'invalid_attachments', status: 400 });
+      throw err;
+    }
+
     const validFiles = await db
       .select({ id: files.id })
       .from(files)
       .where(
         and(
           eq(files.workspaceId, workspaceId),
-          eq(files.status, 'uploaded'),
+          eq(files.status, 'complete'),
           inArray(files.id, data.attachments),
         ),
       );
     const validIds = new Set(validFiles.map((f) => f.id));
     const invalid = data.attachments.filter((id) => !validIds.has(id));
     if (invalid.length > 0) {
-      const err = new Error('Invalid attachments: file ids must exist in workspace and be uploaded');
+      const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
       Object.assign(err, { code: 'invalid_attachments', status: 400 });
       throw err;
     }
