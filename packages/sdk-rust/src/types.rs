@@ -299,8 +299,10 @@ pub struct ChannelWithMembers {
 pub struct FileAttachment {
     pub file_id: String,
     pub filename: String,
-    pub url: String,
-    pub size: i64,
+    #[serde(alias = "contentType")]
+    pub content_type: String,
+    #[serde(alias = "size")]
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
