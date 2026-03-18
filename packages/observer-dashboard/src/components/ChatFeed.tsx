@@ -170,7 +170,7 @@ function DmMessages({
           id: m.id,
           channelId: '',
           agentName: m.agentName,
-          agentId: m.agentId ?? '',
+          agentId: m.agentId,
           text: m.text,
           blocks: null,
           metadata: {},

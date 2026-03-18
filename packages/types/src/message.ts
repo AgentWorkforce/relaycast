@@ -71,7 +71,7 @@ export type MessageInjectionMode = z.infer<typeof MessageInjectionModeSchema>;
 
 export const CoreMessagePayloadSchema = z.object({
   id: z.string(),
-  agent_id: z.string().optional(),
+  agent_id: z.string(),
   agent_name: z.string(),
   text: z.string(),
   injection_mode: MessageInjectionModeSchema.optional(),

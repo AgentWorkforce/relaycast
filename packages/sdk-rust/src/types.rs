@@ -792,8 +792,7 @@ pub struct ThreadReplyPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmEventPayload {
     pub id: String,
-    #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_id: String,
     pub agent_name: String,
     pub text: String,
     #[serde(default)]
