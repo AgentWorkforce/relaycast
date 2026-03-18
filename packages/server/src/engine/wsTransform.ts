@@ -72,6 +72,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
 
     case 'dm.received': {
       const msg = (d.message as Record<string, unknown> | undefined) ?? {};
+      const injectionMode = (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined;
+      const attachments = (msg.attachments ?? d.attachments ?? []) as unknown[];
       return {
         type: 'dm.received',
         conversation_id: d.conversation_id as string,
@@ -80,14 +82,16 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: (msg.agent_id ?? d.from_agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
           text: (msg.text ?? d.text) as string,
-          injection_mode: (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined,
-          attachments: (msg.attachments ?? d.attachments ?? []) as unknown[],
+          ...(injectionMode ? { injection_mode: injectionMode } : {}),
+          ...(attachments.length ? { attachments } : {}),
         },
       };
     }
 
     case 'group_dm.received': {
       const msg = (d.message as Record<string, unknown> | undefined) ?? {};
+      const injectionMode = (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined;
+      const attachments = (msg.attachments ?? d.attachments ?? []) as unknown[];
       return {
         type: 'group_dm.received',
         conversation_id: d.conversation_id as string,
@@ -96,8 +100,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: (msg.agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
           text: (msg.text ?? d.text) as string,
-          injection_mode: (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined,
-          attachments: (msg.attachments ?? d.attachments ?? []) as unknown[],
+          ...(injectionMode ? { injection_mode: injectionMode } : {}),
+          ...(attachments.length ? { attachments } : {}),
         },
       };
     }
