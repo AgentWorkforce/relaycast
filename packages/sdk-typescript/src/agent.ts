@@ -336,9 +336,14 @@ export class AgentClient {
   async dm(
     agent: string,
     text: string,
-    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer' }),
+    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer'; attachments?: string[] }),
   ): Promise<SendDmResponse> {
-    const body: SendDmRequest = { to: agent, text, mode: opts?.mode ?? 'wait' };
+    const body: SendDmRequest = {
+      to: agent,
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      mode: opts?.mode ?? 'wait',
+    };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
@@ -369,11 +374,15 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: IdempotencyOption,
+      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
-        { text },
+        {
+          text,
+          ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          mode: opts?.mode ?? 'wait',
+        },
         idempotencyHeaders(opts),
       ),
 

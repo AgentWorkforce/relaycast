@@ -20,6 +20,8 @@ const createGroupDmSchema = z.object({
 
 const postGroupDmMessageSchema = z.object({
   text: z.string().min(1),
+  attachments: z.array(z.string()).optional(),
+  mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
 const addGroupDmParticipantSchema = z.object({
@@ -78,12 +80,23 @@ groupDmRoutes.post(
       const agent = c.get('agent');
       const parsed = postGroupDmMessageSchema.safeParse(await c.req.json());
       if (!parsed.success) {
+        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
+        const hasModeIssue = parsed.error.issues.some((issue) => issue.path[0] === 'mode');
+        const hasAttachmentsIssue = parsed.error.issues.some((issue) => issue.path[0] === 'attachments');
+        const message = hasTextIssue
+          ? 'text is required'
+          : hasModeIssue
+            ? 'mode must be one of: wait, steer'
+            : hasAttachmentsIssue
+              ? 'attachments must be an array of file ids'
+              : 'invalid group dm body';
         return c.json({
           ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
+          error: { code: 'invalid_request', message },
         }, 400);
       }
-      const { text } = parsed.data;
+      const { text, attachments, mode } = parsed.data;
+      const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -100,7 +113,9 @@ groupDmRoutes.post(
         scope: `dm-group-message:${conversationId}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ conversationId, text }),
+        fingerprint: mode === 'steer'
+          ? JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
+          : JSON.stringify({ conversationId, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
         kv: c.env.KV,
         operation: () =>
           groupDmEngine.postGroupMessage(
@@ -108,7 +123,11 @@ groupDmRoutes.post(
             workspace.id,
             conversationId,
             agent!.id,
-            { text },
+            {
+              text,
+              attachments: normalizedAttachments,
+              mode,
+            },
           ),
       });
 
