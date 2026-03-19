@@ -135,11 +135,12 @@ class TestRelay:
         assert created.token == "at_xxx"
 
     @respx.mock
-    def test_agents_register_or_rotate_rotates_existing_agent(self):
+    @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
+    def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
-                json={"ok": False, "error": {"code": "name_conflict", "message": "exists"}},
+                json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
         get_route = respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
@@ -221,12 +222,13 @@ class TestAsyncRelay:
             assert rotated.token == "at_rotated"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])
     @respx.mock
-    async def test_agents_register_or_rotate_rotates_existing_agent(self):
+    async def test_agents_register_or_rotate_rotates_existing_agent(self, error_code):
         respx.post(f"{BASE}/v1/agents").mock(
             return_value=httpx.Response(
                 409,
-                json={"ok": False, "error": {"code": "name_conflict", "message": "exists"}},
+                json={"ok": False, "error": {"code": error_code, "message": "exists"}},
             )
         )
         respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))

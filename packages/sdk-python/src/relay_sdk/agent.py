@@ -177,7 +177,7 @@ class _PresenceNamespace:
         self._client = client
 
     def mark_online(self) -> None:
-        self._client.post("/v1/agents/heartbeat", {})
+        self.heartbeat()
 
     def heartbeat(self) -> None:
         self._client.post("/v1/agents/heartbeat", {})
@@ -494,7 +494,7 @@ class _AsyncPresenceNamespace:
         self._client = client
 
     async def mark_online(self) -> None:
-        await self._client.post("/v1/agents/heartbeat", {})
+        await self.heartbeat()
 
     async def heartbeat(self) -> None:
         await self._client.post("/v1/agents/heartbeat", {})

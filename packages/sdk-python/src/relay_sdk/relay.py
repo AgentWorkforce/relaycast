@@ -16,6 +16,10 @@ def _enc(value: str) -> str:
     return quote(value, safe="")
 
 
+def _is_duplicate_agent_error(err: RelayError) -> bool:
+    return err.status == 409 and err.code in {"agent_already_exists", "name_conflict"}
+
+
 class _WorkspaceNamespace:
     """Sync workspace operations."""
 
@@ -70,7 +74,7 @@ class _AgentsNamespace:
         try:
             return self.register(name, type=type, persona=persona, metadata=metadata)
         except RelayError as err:
-            if err.code != "name_conflict":
+            if not _is_duplicate_agent_error(err):
                 raise
 
         agent = self.get(name)
@@ -222,7 +226,7 @@ class _AsyncAgentsNamespace:
         try:
             return await self.register(name, type=type, persona=persona, metadata=metadata)
         except RelayError as err:
-            if err.code != "name_conflict":
+            if not _is_duplicate_agent_error(err):
                 raise
 
         agent = await self.get(name)
