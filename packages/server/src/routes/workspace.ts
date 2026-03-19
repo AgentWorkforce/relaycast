@@ -50,6 +50,21 @@ workspaceRoutes.post('/workspaces', async (c) => {
   }
 });
 
+// GET /workspaces/by-name/:name - lookup public workspace metadata by name
+workspaceRoutes.get('/workspaces/by-name/:name', async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = await workspaceEngine.getWorkspaceByName(db, c.req.param('name'));
+    if (!workspace) {
+      return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
+    }
+    return c.json({ ok: true, data: workspace });
+  } catch (err: unknown) {
+    const error = err as Error & { code?: string; status?: number };
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+  }
+});
+
 // GET /workspace - get current workspace
 workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
   try {

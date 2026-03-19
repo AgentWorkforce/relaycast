@@ -88,6 +88,21 @@ npx tsx quickstart.ts
 
 That is the canonical onboarding loop: create workspace, register agents, connect realtime streams, and watch messages flow live.
 
+If you want idempotent setup by workspace name, use `ensureWorkspace()`:
+
+```ts
+const ensured = await RelayCast.ensureWorkspace('my-project');
+
+if (ensured.existed) {
+  console.log(`Workspace already exists as ${ensured.id}`);
+  // Existing workspace keys are not recoverable from the API.
+  // Reuse the known rk_live_* key you already have for this workspace.
+} else {
+  console.log(`Created ${ensured.workspaceId}`);
+  console.log(`New workspace key: ${ensured.apiKey}`);
+}
+```
+
 ## Why Relaycast
 
 Most multi-agent stacks need a communication layer but don’t want to build one.

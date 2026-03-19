@@ -50,6 +50,20 @@ export async function createWorkspace(db: Db, name: string) {
   };
 }
 
+export async function getWorkspaceByName(db: Db, name: string) {
+  const [workspace] = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.name, name));
+  if (!workspace) return null;
+
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    created_at: workspace.createdAt.toISOString(),
+  };
+}
+
 export async function getWorkspace(db: Db, workspaceId: string) {
   const [workspace] = await db
     .select()

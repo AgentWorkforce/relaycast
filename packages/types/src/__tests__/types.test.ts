@@ -3,6 +3,7 @@ import type {
   Workspace,
   CreateWorkspaceRequest,
   CreateWorkspaceResponse,
+  WorkspaceLookup,
   UpdateWorkspaceRequest,
   Agent,
   AgentType,
@@ -76,6 +77,12 @@ describe('Type definitions', () => {
   it('CreateWorkspaceResponse has api_key', () => {
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('api_key');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('workspace_id');
+  });
+
+  it('WorkspaceLookup exposes public lookup fields', () => {
+    expectTypeOf<WorkspaceLookup>().toHaveProperty('id');
+    expectTypeOf<WorkspaceLookup>().toHaveProperty('name');
+    expectTypeOf<WorkspaceLookup>().toHaveProperty('created_at');
   });
 
   it('UpdateWorkspaceRequest fields are optional', () => {
