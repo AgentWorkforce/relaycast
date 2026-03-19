@@ -551,3 +551,64 @@ class TestAsyncAgentClient:
         result = await c.files.upload("test.txt", "text/plain", 1024)
         assert isinstance(result, UploadResponse)
         await c.client.close()
+
+
+class TestAgentPresence:
+    @respx.mock
+    def test_presence_mark_online_posts_heartbeat(self):
+        route = respx.post(f"{BASE}/v1/agents/heartbeat").mock(return_value=ok(None))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.mark_online()
+        assert route.called
+        assert route.calls[0].request.content == b"{}"
+
+    @respx.mock
+    def test_presence_heartbeat_posts_heartbeat(self):
+        route = respx.post(f"{BASE}/v1/agents/heartbeat").mock(return_value=ok(None))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.heartbeat()
+        assert route.called
+
+    @respx.mock
+    def test_presence_mark_offline_posts_disconnect(self):
+        route = respx.post(f"{BASE}/v1/agents/disconnect").mock(return_value=ok(None))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.mark_offline()
+        assert route.called
+        assert route.calls[0].request.content == b"{}"
+
+    @respx.mock
+    def test_presence_disconnect_alias_posts_disconnect(self):
+        route = respx.post(f"{BASE}/v1/agents/disconnect").mock(return_value=ok(None))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.disconnect()
+        assert route.called
+
+
+class TestAsyncAgentPresence:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_presence_mark_online_posts_heartbeat(self):
+        route = respx.post(f"{BASE}/v1/agents/heartbeat").mock(return_value=ok(None))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.mark_online()
+        assert route.called
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_presence_mark_offline_posts_disconnect(self):
+        route = respx.post(f"{BASE}/v1/agents/disconnect").mock(return_value=ok(None))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.mark_offline()
+        assert route.called
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_presence_disconnect_alias_posts_disconnect(self):
+        route = respx.post(f"{BASE}/v1/agents/disconnect").mock(return_value=ok(None))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.disconnect()
+        assert route.called
+        await c.client.close()

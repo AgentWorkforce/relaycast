@@ -117,6 +117,42 @@ class TestRelay:
         agent = r.agents.get("Coder")
         assert agent.name == "Coder"
 
+    @respx.mock
+    def test_agents_rotate_token(self):
+        route = respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(
+            return_value=ok({"token": "at_rotated"})
+        )
+        r = Relay(KEY, base_url=BASE)
+        rotated = r.agents.rotate_token("Coder")
+        assert rotated.token == "at_rotated"
+        assert route.called
+
+    @respx.mock
+    def test_agents_register_or_rotate_registers_new_agent(self):
+        respx.post(f"{BASE}/v1/agents").mock(return_value=ok(CREATE_AGENT_DATA))
+        r = Relay(KEY, base_url=BASE)
+        created = r.agents.register_or_rotate("Coder", persona="Senior dev")
+        assert created.token == "at_xxx"
+
+    @respx.mock
+    def test_agents_register_or_rotate_rotates_existing_agent(self):
+        respx.post(f"{BASE}/v1/agents").mock(
+            return_value=httpx.Response(
+                409,
+                json={"ok": False, "error": {"code": "name_conflict", "message": "exists"}},
+            )
+        )
+        get_route = respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
+        rotate_route = respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(
+            return_value=ok({"token": "at_rotated"})
+        )
+        r = Relay(KEY, base_url=BASE)
+        created = r.agents.register_or_rotate("Coder")
+        assert created.id == "a1"
+        assert created.token == "at_rotated"
+        assert get_route.called
+        assert rotate_route.called
+
     def test_as_agent_returns_agent_client(self):
         r = Relay(KEY, base_url=BASE)
         ac = r.as_agent("at_xxx")
@@ -175,6 +211,30 @@ class TestAsyncRelay:
         async with AsyncRelay(KEY, base_url=BASE) as r:
             agent = await r.agents.get("Coder")
             assert agent.status == "online"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_agents_rotate_token(self):
+        respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            rotated = await r.agents.rotate_token("Coder")
+            assert rotated.token == "at_rotated"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_agents_register_or_rotate_rotates_existing_agent(self):
+        respx.post(f"{BASE}/v1/agents").mock(
+            return_value=httpx.Response(
+                409,
+                json={"ok": False, "error": {"code": "name_conflict", "message": "exists"}},
+            )
+        )
+        respx.get(f"{BASE}/v1/agents/Coder").mock(return_value=ok(AGENT_DATA))
+        respx.post(f"{BASE}/v1/agents/Coder/rotate-token").mock(return_value=ok({"token": "at_rotated"}))
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            created = await r.agents.register_or_rotate("Coder")
+            assert created.id == "a1"
+            assert created.token == "at_rotated"
 
     @pytest.mark.asyncio
     async def test_as_agent_returns_async_client(self):
