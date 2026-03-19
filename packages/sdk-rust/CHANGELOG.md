@@ -7,7 +7,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Changed
-- No unreleased changes yet.
+- Made `agent.spawn_requested` websocket parsing tolerant of missing or `null` `task`, `channel`, and `already_existed` fields.
+- Kept `AgentSpawnRequestedPayload.task` as a `String` for API compatibility by deserializing missing or `null` values to an empty string.
+- Added websocket parity coverage for tolerant spawn-request event parsing.
 
 ## [0.2.6] - 2026-02-25
 

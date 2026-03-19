@@ -354,6 +354,52 @@ fn ws_command_invoked_deserializes_handler_agent_id() {
 }
 
 #[test]
+fn ws_agent_spawn_requested_tolerates_missing_or_null_optional_fields() {
+    let missing = serde_json::from_value::<WsEvent>(json!({
+        "type": "agent.spawn_requested",
+        "agent": {
+            "name": "worker-1",
+            "cli": "codex"
+        }
+    }))
+    .expect("failed to parse spawn request with missing fields");
+
+    match missing {
+        WsEvent::AgentSpawnRequested(event) => {
+            assert_eq!(event.agent.name, "worker-1");
+            assert_eq!(event.agent.cli, "codex");
+            assert_eq!(event.agent.task, "");
+            assert_eq!(event.agent.channel, None);
+            assert!(!event.agent.already_existed);
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+
+    let nulled = serde_json::from_value::<WsEvent>(json!({
+        "type": "agent.spawn_requested",
+        "agent": {
+            "name": "worker-2",
+            "cli": "claude",
+            "task": null,
+            "channel": null,
+            "already_existed": true
+        }
+    }))
+    .expect("failed to parse spawn request with null task/channel");
+
+    match nulled {
+        WsEvent::AgentSpawnRequested(event) => {
+            assert_eq!(event.agent.name, "worker-2");
+            assert_eq!(event.agent.cli, "claude");
+            assert_eq!(event.agent.task, "");
+            assert_eq!(event.agent.channel, None);
+            assert!(event.agent.already_existed);
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+#[test]
 fn ws_command_invoked_requires_handler_agent_id() {
     let err = serde_json::from_value::<WsEvent>(json!({
         "type": "command.invoked",
