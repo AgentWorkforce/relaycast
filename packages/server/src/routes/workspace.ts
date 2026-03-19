@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
@@ -30,6 +32,110 @@ const updateWorkspaceStreamSchema = z.object({
   mode: z.string().optional(),
 }).passthrough();
 
+const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
+const publicWorkspaceLookupBuckets = new Map<string, { count: number; lastSeen: number }>();
+let lastPublicWorkspaceLookupCleanup = Date.now();
+
+function getPublicLookupClientId(c: Context<AppEnv>) {
+  const forwardedFor = c.req.header('X-Forwarded-For');
+  const clientIp = c.req.header('CF-Connecting-IP')
+    ?? forwardedFor?.split(',')[0]?.trim()
+    ?? 'unknown';
+  return clientIp;
+}
+
+function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
+  const now = Date.now();
+
+  if (now - lastPublicWorkspaceLookupCleanup > 60_000) {
+    lastPublicWorkspaceLookupCleanup = now;
+    for (const [key, bucket] of publicWorkspaceLookupBuckets) {
+      if (now - bucket.lastSeen > 120_000) {
+        publicWorkspaceLookupBuckets.delete(key);
+      }
+    }
+  }
+
+  const window = Math.floor(now / 60_000);
+  const bucketKey = `${clientId}:${window}`;
+  const bucket = publicWorkspaceLookupBuckets.get(bucketKey) ?? { count: 0, lastSeen: now };
+  bucket.count += 1;
+  bucket.lastSeen = now;
+  publicWorkspaceLookupBuckets.set(bucketKey, bucket);
+
+  return {
+    allowed: bucket.count <= limit,
+    remaining: Math.max(0, limit - bucket.count),
+  };
+}
+
+const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
+  const clientId = getPublicLookupClientId(c);
+  const limit = PUBLIC_WORKSPACE_LOOKUP_LIMIT;
+  const window = Math.floor(Date.now() / 60_000);
+  const bucketKey = `GET:/workspaces/by-name:${window}`;
+
+  try {
+    const id = c.env.RATE_LIMIT_DO.idFromName(`public-workspace-lookup:${clientId}`);
+    const stub = c.env.RATE_LIMIT_DO.get(id);
+    const res = await stub.fetch(new Request('http://do/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bucketKey,
+        limit,
+        windowMs: 60_000,
+      }),
+    }));
+
+    if (!res.ok) {
+      throw new Error(`RateLimitDO returned HTTP ${res.status}`);
+    }
+
+    const payload = await res.json() as {
+      ok?: boolean;
+      data?: {
+        count?: number;
+        remaining?: number;
+        allowed?: boolean;
+      };
+    };
+
+    const count = payload.data?.count ?? 1;
+    const remaining = payload.data?.remaining ?? Math.max(0, limit - count);
+    const allowed = payload.data?.allowed ?? count <= limit;
+
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(remaining));
+
+    if (!allowed) {
+      return c.json({
+        ok: false,
+        error: {
+          code: 'rate_limit_exceeded',
+          message: `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`,
+        },
+      }, 429);
+    }
+  } catch {
+    const { allowed, remaining } = inMemoryPublicLookupRateCheck(clientId, limit);
+    c.header('X-RateLimit-Limit', String(limit));
+    c.header('X-RateLimit-Remaining', String(remaining));
+
+    if (!allowed) {
+      return c.json({
+        ok: false,
+        error: {
+          code: 'rate_limit_exceeded',
+          message: `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`,
+        },
+      }, 429);
+    }
+  }
+
+  await next();
+});
+
 // POST /workspaces - create workspace (no auth required)
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
@@ -51,7 +157,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
 });
 
 // GET /workspaces/by-name/:name - lookup public workspace metadata by name
-workspaceRoutes.get('/workspaces/by-name/:name', async (c) => {
+workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = await workspaceEngine.getWorkspaceByName(db, c.req.param('name'));
