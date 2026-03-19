@@ -36,7 +36,7 @@ import type {
   ReleaseAgentRequest,
   ReleaseAgentResponse,
 } from './types.js';
-import { ApiErrorSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
+import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
@@ -127,7 +127,8 @@ export class RelayCast {
       );
     }
 
-    if (typeof parsed !== 'object' || parsed === null || !('ok' in parsed) || typeof parsed.ok !== 'boolean') {
+    const envelope = ApiResponseSchema(CreateWorkspaceResponseSchema).safeParse(parsed);
+    if (!envelope.success) {
       throw new RelayError(
         'transport_error',
         'Response is not a valid Relay API response object',
@@ -135,23 +136,11 @@ export class RelayCast {
       );
     }
 
-    if (!parsed.ok) {
-      const errResult = ApiErrorSchema.safeParse(parsed);
-      const rawCode = errResult.success ? errResult.data.error.code : undefined;
-      const message = errResult.success ? errResult.data.error.message : 'Unknown error';
-      throw relayErrorFromApi(rawCode, message, res.status);
+    if (!envelope.data.ok) {
+      throw relayErrorFromApi(envelope.data.error.code, envelope.data.error.message, res.status);
     }
 
-    if (!('data' in parsed)) {
-      throw new RelayError(
-        'transport_error',
-        'Response is missing required "data" field',
-        { statusCode: res.status, retryable: false },
-      );
-    }
-
-    const data = (parsed as { data: unknown }).data;
-    return camelizeKeys(CreateWorkspaceResponseSchema.parse(data));
+    return camelizeKeys(envelope.data.data);
   }
 
   static async lookupWorkspace(name: string, baseUrl?: string): Promise<WorkspaceLookup | null> {
@@ -180,7 +169,8 @@ export class RelayCast {
       );
     }
 
-    if (typeof parsed !== 'object' || parsed === null || !('ok' in parsed) || typeof parsed.ok !== 'boolean') {
+    const envelope = ApiResponseSchema(WorkspaceLookupSchema).safeParse(parsed);
+    if (!envelope.success) {
       throw new RelayError(
         'transport_error',
         'Response is not a valid Relay API response object',
@@ -188,26 +178,14 @@ export class RelayCast {
       );
     }
 
-    if (!parsed.ok) {
-      const errResult = ApiErrorSchema.safeParse(parsed);
-      const rawCode = errResult.success ? errResult.data.error.code : undefined;
-      const message = errResult.success ? errResult.data.error.message : 'Unknown error';
+    if (!envelope.data.ok) {
       if (res.status === 404) {
         return null;
       }
-      throw relayErrorFromApi(rawCode, message, res.status);
+      throw relayErrorFromApi(envelope.data.error.code, envelope.data.error.message, res.status);
     }
 
-    if (!('data' in parsed)) {
-      throw new RelayError(
-        'transport_error',
-        'Response is missing required "data" field',
-        { statusCode: res.status, retryable: false },
-      );
-    }
-
-    const data = (parsed as { data: unknown }).data;
-    return camelizeKeys(WorkspaceLookupSchema.parse(data));
+    return camelizeKeys(envelope.data.data);
   }
 
   static async ensureWorkspace(name: string, baseUrl?: string): Promise<EnsureWorkspaceResponse> {
