@@ -4,7 +4,7 @@
  */
 export async function setAuth(apiKey: string): Promise<boolean> {
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch('/observer/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiKey }),
@@ -21,7 +21,7 @@ export async function setAuth(apiKey: string): Promise<boolean> {
  */
 export async function clearAuth(): Promise<void> {
   try {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch('/observer/api/auth/logout', { method: 'POST' });
   } catch {
     // Best effort
   }
@@ -33,7 +33,7 @@ export async function clearAuth(): Promise<void> {
  */
 export async function isAuthenticated(): Promise<boolean> {
   try {
-    const res = await fetch('/api/auth/session');
+    const res = await fetch('/observer/api/auth/session');
     return res.ok;
   } catch {
     return false;

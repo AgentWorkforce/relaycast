@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createInternalWsClient } from '@relaycast/sdk/internal';
 
 // Mock the SDK so we don't need a real server
 vi.mock('@relaycast/sdk', () => {
@@ -36,6 +37,10 @@ vi.mock('@relaycast/sdk', () => {
   class MockRelay {
     agents = {
       register: vi.fn().mockResolvedValue({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      }),
+      registerOrRotate: vi.fn().mockResolvedValue({
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
@@ -107,6 +112,10 @@ vi.mock('@relaycast/sdk/internal', () => {
         agent: { name: 'bot1' },
         token: 'tok_abc',
       }),
+      registerOrRotate: vi.fn().mockResolvedValue({
+        agent: { name: 'bot1' },
+        token: 'tok_abc',
+      }),
       list: vi.fn().mockResolvedValue([]),
     };
     webhooks = {
@@ -149,69 +158,92 @@ describe('createRelayMcpServer', () => {
   let client: Client;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     const mcpServer = createRelayMcpServer({ apiKey: 'test-key' });
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it('lists all 39 tools', async () => {
+  it('lists all 42 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(39);
+    expect(tools.tools.length).toBe(42);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
-      'add_agent',
-      'add_reaction',
-      'archive_channel',
-      'check_inbox',
-      'create_channel',
-      'create_subscription',
-      'create_webhook',
-      'create_workspace',
-      'delete_command',
-      'delete_subscription',
-      'delete_webhook',
-      'get_dms',
-      'get_messages',
-      'get_readers',
-      'get_subscription',
-      'get_thread',
-      'invite_to_channel',
-      'invoke_command',
-      'join_channel',
-      'leave_channel',
-      'list_agents',
-      'list_channels',
-      'list_commands',
-      'list_subscriptions',
-      'list_webhooks',
-      'mark_read',
-      'post_message',
-      'register',
-      'register_command',
-      'remove_agent',
-      'remove_reaction',
-      'reply_to_thread',
-      'search_messages',
-      'send_dm',
-      'send_group_dm',
-      'set_channel_topic',
-      'set_workspace_key',
-      'trigger_webhook',
-      'upload_file',
+      'agent.add',
+      'agent.list',
+      'agent.register',
+      'agent.remove',
+      'channel.archive',
+      'channel.create',
+      'channel.invite',
+      'channel.join',
+      'channel.leave',
+      'channel.list',
+      'channel.set_topic',
+      'integration.command.delete',
+      'integration.command.invoke',
+      'integration.command.list',
+      'integration.command.register',
+      'integration.subscription.create',
+      'integration.subscription.delete',
+      'integration.subscription.get',
+      'integration.subscription.list',
+      'integration.webhook.create',
+      'integration.webhook.delete',
+      'integration.webhook.list',
+      'integration.webhook.trigger',
+      'message.dm.list',
+      'message.dm.send',
+      'message.dm.send_group',
+      'message.file.upload',
+      'message.get_thread',
+      'message.inbox.check',
+      'message.inbox.get_readers',
+      'message.inbox.mark_read',
+      'message.list',
+      'message.post',
+      'message.reaction.add',
+      'message.reaction.remove',
+      'message.reply',
+      'message.search',
+      'workspace.create',
+      'workspace.join',
+      'workspace.list',
+      'workspace.set_key',
+      'workspace.switch',
     ]);
+  });
+
+  it('supports legacy flat tool calls without advertising legacy names', async () => {
+    const tools = await client.listTools();
+    const toolNames = tools.tools.map((tool) => tool.name);
+    expect(toolNames).not.toContain('register');
+    expect(toolNames).not.toContain('post_message');
+
+    const registerResult = await client.callTool({
+      name: 'register',
+      arguments: { name: 'bot1' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+
+    const messageResult = await client.callTool({
+      name: 'post_message',
+      arguments: { channel: 'general', text: 'hello from legacy alias' },
+    });
+    expect(messageResult.isError).toBeFalsy();
   });
 
   it('register tool works and enables other tools', async () => {
     const result = await client.callTool({
-      name: 'register',
+      name: 'agent.register',
       arguments: { name: 'bot1' },
     });
     expect(result.content).toBeDefined();
 
     // Now post_message should work (uses agent token from register)
     const msgResult = await client.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(msgResult.content).toBeDefined();
@@ -229,7 +261,7 @@ describe('createRelayMcpServer', () => {
 
   it('tool call without register returns error', async () => {
     const result = await client.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello' },
     });
     expect(result.isError).toBe(true);
@@ -247,7 +279,7 @@ describe('createRelayMcpServer', () => {
 
     // Should be able to call tools immediately without calling register first
     const result = await bootstrappedClient.callTool({
-      name: 'post_message',
+      name: 'message.post',
       arguments: { channel: 'general', text: 'hello from pre-registered agent' },
     });
     expect(result.isError).toBeFalsy();
@@ -265,7 +297,7 @@ describe('createRelayMcpServer', () => {
     await Promise.all([strictClient.connect(ct), strictServer.connect(st)]);
 
     const result = await strictClient.callTool({
-      name: 'register',
+      name: 'agent.register',
       arguments: { name: 'Claude', type: 'human' },
     });
 
@@ -292,10 +324,73 @@ describe('createRelayMcpServer', () => {
     await Promise.all([keylessClient.connect(ct), keylessServer.connect(st)]);
 
     const result = await keylessClient.callTool({
-      name: 'set_workspace_key',
+      name: 'workspace.set_key',
       arguments: { api_key: 'rk_live_bootstrap123' },
     });
 
     expect(result.isError).toBeFalsy();
+  });
+
+  it('lists the bootstrapped active workspace in workspace.list', async () => {
+    const bootstrappedServer = createRelayMcpServer({
+      apiKey: 'rk_live_bootstrap123',
+      agentToken: 'tok_preregistered',
+      agentName: 'pre-registered-bot',
+    });
+    const bootstrappedClient = new Client({ name: 'workspace-list-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bootstrappedClient.connect(ct), bootstrappedServer.connect(st)]);
+
+    const result = await bootstrappedClient.callTool({
+      name: 'workspace.list',
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    const firstContent = result.content?.[0] as { text?: string } | undefined;
+    const text = typeof firstContent?.text === 'string' ? firstContent.text : '{}';
+    const payload = JSON.parse(text) as {
+      active_workspace_ref?: string | null;
+      workspaces?: Array<{ agent_name: string; is_active: boolean }>;
+    };
+
+    expect(payload.active_workspace_ref).toMatch(/^ws_[a-f0-9]{12}$/);
+    expect(payload.workspaces).toEqual([
+      expect.objectContaining({
+        agent_name: 'pre-registered-bot',
+        is_active: true,
+      }),
+    ]);
+  });
+
+  it('retries WS bridge initialization after switching away from a token that failed WS init', async () => {
+    const wsFactory = vi.mocked(createInternalWsClient);
+    wsFactory.mockImplementationOnce(() => {
+      throw new Error('ws unsupported');
+    });
+
+    const bootstrappedServer = createRelayMcpServer({
+      apiKey: 'rk_live_bootstrap123',
+      agentToken: 'tok_old',
+      agentName: 'pre-registered-bot',
+    });
+    const bootstrappedClient = new Client({ name: 'ws-retry-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bootstrappedClient.connect(ct), bootstrappedServer.connect(st)]);
+
+    expect(wsFactory).toHaveBeenCalledTimes(1);
+
+    const setKeyResult = await bootstrappedClient.callTool({
+      name: 'workspace.set_key',
+      arguments: { api_key: 'rk_live_retry456' },
+    });
+    expect(setKeyResult.isError).toBeFalsy();
+
+    const registerResult = await bootstrappedClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'retry-bot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+    expect(wsFactory).toHaveBeenCalledTimes(2);
   });
 });

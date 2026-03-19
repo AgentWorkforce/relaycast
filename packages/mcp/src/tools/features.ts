@@ -2,27 +2,33 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AgentClient } from '@relaycast/sdk';
 import { resolveEmoji } from '@relaycast/types';
+import {
+  identityOverrideInputShape,
+  workspaceRoutingInputShape,
+  workspaceRefFromArgs,
+} from '../workspaces.js';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
 
 export function registerFeatureTools(
   server: McpServer,
-  getAgentClient: () => AgentClient,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
-  server.registerTool('add_reaction', {
+  server.registerTool('message.reaction.add', {
     title: 'Add Reaction',
     description: 'Add an emoji reaction to a message. Reactions are a lightweight way for agents to acknowledge, vote on, or express sentiment about messages without posting a reply. Each agent can add multiple different emoji reactions to the same message. Adding a reaction that already exists from the same agent has no effect.',
     inputSchema: {
       message_id: z.string().describe('ID of the message to react to'),
       emoji: z.string().describe('Emoji character or shortcode to react with (e.g. "thumbsup", "rocket", "check")'),
+      ...identityOverrideInputShape,
     },
     outputSchema: {
       message: z.string().describe('Confirmation message indicating the reaction was added'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ message_id, emoji }) => {
-    const client = getAgentClient();
+  }, async ({ message_id, emoji, as: asIdentity }) => {
+    const client = getAgentClient(undefined, asIdentity);
     const resolved = resolveEmoji(emoji);
     await client.react(message_id, resolved);
     const message = `Reacted with ${resolved}`;
@@ -32,19 +38,20 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('remove_reaction', {
+  server.registerTool('message.reaction.remove', {
     title: 'Remove Reaction',
     description: 'Remove a previously added emoji reaction from a message. Only reactions added by the current agent can be removed. This is useful for correcting accidental reactions or changing your response to a message.',
     inputSchema: {
       message_id: z.string().describe('ID of the message to remove the reaction from'),
       emoji: z.string().describe('Emoji character or shortcode to remove (must match a reaction previously added by this agent)'),
+      ...identityOverrideInputShape,
     },
     outputSchema: {
       message: z.string().describe('Confirmation message indicating the reaction was removed'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ message_id, emoji }) => {
-    const client = getAgentClient();
+  }, async ({ message_id, emoji, as: asIdentity }) => {
+    const client = getAgentClient(undefined, asIdentity);
     const resolved = resolveEmoji(emoji);
     await client.unreact(message_id, resolved);
     const message = `Removed reaction ${resolved}`;
@@ -54,7 +61,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('search_messages', {
+  server.registerTool('message.search', {
     title: 'Search Messages',
     description: 'Search for messages across all channels in the workspace using a text query. Results can be filtered by channel name or sender agent to narrow down matches. Returns matching messages with their channel, author, text content, and timestamp.',
     inputSchema: {
@@ -62,13 +69,18 @@ export function registerFeatureTools(
       channel: z.string().optional().describe('Restrict search results to messages in this channel only'),
       from: z.string().optional().describe('Restrict search results to messages sent by this agent name'),
       limit: z.number().optional().describe('Maximum number of search results to return'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     },
     outputSchema: {
       results: z.array(z.object({}).passthrough()).describe('Array of matching message objects'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ query, channel, from, limit }) => {
-    const client = getAgentClient();
+  }, async ({ query, channel, from, limit, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(
+      workspaceRefFromArgs({ workspace_id, workspace_alias }),
+      asIdentity,
+    );
     const results = await client.search(query, { channel, from, limit });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }],
@@ -76,35 +88,37 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('check_inbox', {
+  server.registerTool('message.inbox.check', {
     title: 'Check Inbox',
     description: 'Check the current agent\'s inbox for unread messages, @mentions, and direct messages. The inbox aggregates all notifications across channels and DMs into a single view. Use this to stay up-to-date on conversations that require your attention.',
     inputSchema: {
       limit: z.number().optional().describe('Maximum number of inbox items to return'),
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
-    const client = getAgentClient();
-    const inbox = await client.inbox();
+  }, async ({ limit, as: asIdentity }) => {
+    const client = getAgentClient(undefined, asIdentity);
+    const inbox = await client.inbox(limit != null ? { limit } : undefined);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(inbox, null, 2) }],
       structuredContent: inbox as unknown as Record<string, unknown>,
     };
   });
 
-  server.registerTool('mark_read', {
+  server.registerTool('message.inbox.mark_read', {
     title: 'Mark as Read',
     description: 'Mark a specific message as read by the current agent. This updates the agent\'s read receipt for the message, which other agents can query using get_readers. Marking a message as read also clears it from the agent\'s inbox notifications.',
     inputSchema: {
       message_id: z.string().describe('ID of the message to mark as read by the current agent'),
+      ...identityOverrideInputShape,
     },
     outputSchema: {
       message: z.string().describe('Confirmation message indicating the message was marked as read'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ message_id }) => {
-    const client = getAgentClient();
+  }, async ({ message_id, as: asIdentity }) => {
+    const client = getAgentClient(undefined, asIdentity);
     await client.markRead(message_id);
     const message = `Marked message ${message_id} as read`;
     return {
@@ -113,7 +127,7 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('get_readers', {
+  server.registerTool('message.inbox.get_readers', {
     title: 'Get Readers',
     description: 'Get the list of agents who have read a specific message. Returns each reader\'s agent name and the timestamp when they marked the message as read. This is useful for confirming that important messages have been seen by their intended audience.',
     inputSchema: {
@@ -132,18 +146,19 @@ export function registerFeatureTools(
     };
   });
 
-  server.registerTool('upload_file', {
+  server.registerTool('message.file.upload', {
     title: 'Upload File',
     description: 'Upload a file to the workspace and receive an attachment ID that can be used when posting messages. Files are stored securely and can be shared across channels and DMs. Provide the filename, MIME type, and size in bytes to initiate the upload. The returned attachment ID should be passed to post_message or send_dm to attach the file.',
     inputSchema: {
       filename: z.string().describe('Name of the file including extension (e.g. "report.pdf", "screenshot.png")'),
       content_type: z.string().describe('MIME type of the file content (e.g. "text/plain", "image/png", "application/pdf")'),
       size_bytes: z.number().describe('Size of the file in bytes, used for upload validation and storage allocation'),
+      ...identityOverrideInputShape,
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ filename, content_type, size_bytes }) => {
-    const client = getAgentClient();
+  }, async ({ filename, content_type, size_bytes, as: asIdentity }) => {
+    const client = getAgentClient(undefined, asIdentity);
     const upload = await client.files.upload({ filename, contentType: content_type, sizeBytes: size_bytes });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(upload, null, 2) }],

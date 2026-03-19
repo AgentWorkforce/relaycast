@@ -251,3 +251,114 @@ export function toErrorDetails(error: unknown): { error_name: string; error_mess
     error_message: String(error),
   };
 }
+
+/* ------------------------------------------------------------------ */
+/*  PostHog Error Tracking — $exception capture                       */
+/* ------------------------------------------------------------------ */
+
+interface ExceptionFrame {
+  filename?: string;
+  function?: string;
+  lineno?: number;
+  colno?: number;
+  in_app?: boolean;
+}
+
+interface ExceptionEntry {
+  type: string;
+  value: string;
+  mechanism?: { type: string; handled: boolean };
+  stacktrace?: { frames: ExceptionFrame[] };
+}
+
+function parseStackFrames(stack: string): ExceptionFrame[] {
+  const frames: ExceptionFrame[] = [];
+  for (const line of stack.split('\n')) {
+    const match = line.match(/^\s+at\s+(.+?)\s+\((.+):(\d+):(\d+)\)/) ??
+                  line.match(/^\s+at\s+(.+):(\d+):(\d+)/);
+    if (!match) continue;
+    if (match.length === 5) {
+      frames.push({
+        function: match[1],
+        filename: match[2],
+        lineno: Number(match[3]),
+        colno: Number(match[4]),
+        in_app: !match[2].includes('node_modules'),
+      });
+    } else if (match.length === 4) {
+      frames.push({
+        filename: match[1],
+        lineno: Number(match[2]),
+        colno: Number(match[3]),
+        in_app: !match[1].includes('node_modules'),
+      });
+    }
+  }
+  // PostHog expects frames in caller-first order (outermost first).
+  return frames;
+}
+
+function buildExceptionList(error: unknown): ExceptionEntry[] {
+  if (error instanceof Error) {
+    const entry: ExceptionEntry = {
+      type: error.name,
+      value: error.message,
+      mechanism: { type: 'generic', handled: false },
+    };
+    if (error.stack) {
+      entry.stacktrace = { frames: parseStackFrames(error.stack) };
+    }
+    return [entry];
+  }
+  return [{ type: 'NonError', value: String(error), mechanism: { type: 'generic', handled: false } }];
+}
+
+export interface CaptureExceptionOptions {
+  /** Extra properties merged into the PostHog event. */
+  properties?: Record<string, unknown>;
+  /** Override the distinct_id (defaults to SERVICE_NAME). */
+  distinctId?: string;
+}
+
+/**
+ * Sends a `$exception` event to PostHog Error Tracking.
+ *
+ * Returns a promise that resolves once the HTTP request completes (best-effort).
+ * Safe to fire-and-forget or pass to `waitUntil`.
+ */
+export async function captureException(
+  env: CloudflareBindings,
+  error: unknown,
+  options: CaptureExceptionOptions = {},
+): Promise<void> {
+  const apiKey = env.POSTHOG_API_KEY;
+  if (!apiKey) return;
+
+  const exceptionList = buildExceptionList(error);
+  const payload = {
+    api_key: apiKey,
+    event: '$exception',
+    distinct_id: options.distinctId ?? SERVICE_NAME,
+    properties: {
+      $exception_list: exceptionList,
+      $exception_type: exceptionList[0]?.type,
+      $exception_message: exceptionList[0]?.value,
+      $exception_level: 'error',
+      service_name: SERVICE_NAME,
+      environment: env.ENVIRONMENT,
+      app_version: getAppVersion(env),
+      ...(options.properties ?? {}),
+    },
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    await fetch(`${getPostHogHost(env)}/capture/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Best effort — never break request handling for telemetry.
+  }
+}

@@ -1,5 +1,17 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
+  type CallToolRequest,
+  type ListToolsRequest,
+  type ListToolsResult,
+  type ServerNotification,
+  type ServerRequest,
+  type ServerResult,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { AgentClient } from '@relaycast/sdk';
 import { createInternalRelayCast, createInternalWsClient } from '@relaycast/sdk/internal';
 import { registerRegistrationTools } from './tools/registration.js';
@@ -14,6 +26,10 @@ import { registerResourceDefinitions } from './resources/definitions.js';
 import { SubscriptionManager } from './resources/subscriptions.js';
 import { WsBridge } from './resources/ws-bridge.js';
 import { createMcpTelemetry, type McpTelemetry } from './telemetry.js';
+import { resolveToolName } from './tool-aliases.js';
+import type { McpWorkspaceConfig } from './workspaces.js';
+import { findWorkspaceContext } from './workspaces.js';
+import type { RegisteredAgent } from './types.js';
 
 export const MCP_VERSION = '0.1.2';
 
@@ -30,7 +46,28 @@ export interface McpServerOptions {
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
+  /** Multi-workspace configs parsed from RELAY_WORKSPACES_JSON. */
+  workspaces?: McpWorkspaceConfig[];
+  /** Default workspace ID or alias to use as the active workspace. */
+  defaultWorkspace?: string;
 }
+
+type AgentRouting = {
+  workspace_id?: string;
+  workspace_alias?: string;
+  as?: string;
+};
+
+type ResolvedAgentIdentity = {
+  workspaceKey: string;
+  agentToken: string;
+  agentName: string;
+};
+
+type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
+  request: TRequest,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+) => TResult | Promise<TResult>;
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const session: SessionState = createInitialSession({
@@ -66,41 +103,94 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   });
 
   const getSession = () => session;
-  const getRelay = () => {
-    const workspaceKey = session.workspaceKey;
-    if (!workspaceKey) {
+  const getRelay = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ) => {
+    if (!session.workspaceKey) {
       throw new Error(
-        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "create_workspace" or "set_workspace_key" first.',
+        'Workspace key not configured. Set RELAY_API_KEY at startup, or call "workspace.create" or "workspace.set_key" first.',
       );
     }
+    if (!wsRouting && !asAgent) {
+      return createInternalRelayCast({
+        apiKey: session.workspaceKey,
+        baseUrl: options.baseUrl,
+      }, mcpOrigin);
+    }
+
+    const identity = resolveAgentIdentity(wsRouting, asAgent);
     return createInternalRelayCast({
-      apiKey: workspaceKey,
+      apiKey: identity.workspaceKey,
       baseUrl: options.baseUrl,
     }, mcpOrigin);
   };
-  const setSession = (partial: Partial<SessionState>) => {
-    const nextAgentToken =
-      partial.agentToken === undefined ? session.agentToken : partial.agentToken;
-    const nextAgentName = partial.agentName ?? session.agentName ?? null;
-    const shouldResetBridge =
-      partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+  const syncActiveWorkspaceContext = () => {
+    if (!session.workspaceKey || !session.agentToken || !session.agentName) {
+      return;
+    }
 
-    if (shouldResetBridge && session.wsBridge) {
-      session.wsBridge.stop();
+    const existing = session.workspaces.get(session.workspaceKey);
+    const agents = new Map(existing?.agents ?? []);
+    for (const [agentName, agent] of session.agents) {
+      agents.set(agentName, agent);
+    }
+    agents.set(session.agentName, {
+      agentName: session.agentName,
+      agentToken: session.agentToken,
+    });
+
+    session.workspaces.set(session.workspaceKey, {
+      workspaceKey: session.workspaceKey,
+      agentToken: session.agentToken,
+      agentName: session.agentName,
+      agents,
+      workspaceName: existing?.workspaceName,
+      workspaceLabel: existing?.workspaceLabel,
+      wsBridge: session.wsBridge,
+      subscriptions: session.subscriptions,
+      wsInitAttempted: session.wsInitAttempted,
+    });
+  };
+  const notifySubscribers = () => {
+    const uris = session.subscriptions?.getAll() ?? [];
+    for (const uri of uris) {
+      mcpServer.server.sendResourceUpdated({ uri }).catch(() => {});
+    }
+  };
+
+  const setSession = (partial: Partial<SessionState>) => {
+    const switchingWorkspace = partial.workspaceKey !== undefined && partial.workspaceKey !== session.workspaceKey;
+    const changingToken = partial.agentToken !== undefined && partial.agentToken !== session.agentToken;
+
+    // In a single MCP process the bridge tracks the active workspace, not
+    // every agent token update inside that workspace. Rebuild it only when
+    // the workspace itself changes.
+    if (switchingWorkspace) {
+      // Notify subscribers before tearing down so clients know data changed
+      notifySubscribers();
+      session.wsBridge?.stop();
       session.subscriptions?.clear();
       session.wsBridge = null;
       session.subscriptions = null;
-    }
-    if (shouldResetBridge) {
       session.wsInitAttempted = false;
     }
 
-    // When an agent token is set, initialize the WebSocket bridge.
-    if (nextAgentToken && !session.wsBridge && !session.wsInitAttempted) {
+    // Apply the partial state update
+    Object.assign(session, partial);
+
+    // When the agent token changes within the same workspace, notify
+    // subscribers that resource data may have changed.
+    if (!switchingWorkspace && changingToken) {
+      notifySubscribers();
+    }
+
+    // If we have a token but no bridge yet, and we haven't failed initialization, try to start it.
+    if (session.agentToken && !session.wsBridge && !session.wsInitAttempted) {
       try {
         const subscriptions = new SubscriptionManager();
         const wsClient = createInternalWsClient({
-          token: nextAgentToken,
+          token: session.agentToken,
           baseUrl: options.baseUrl,
         }, mcpOrigin);
         const wsBridge = new WsBridge(
@@ -113,46 +203,106 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
           },
         );
         wsBridge.start();
-        Object.assign(session, partial, {
-          wsBridge,
-          subscriptions,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = wsBridge;
+        session.subscriptions = subscriptions;
+        session.wsInitAttempted = true;
       } catch {
         // In non-WS runtimes (e.g. some test environments), keep session usable
         // without real-time resource updates.
-        Object.assign(session, partial, {
-          wsBridge: null,
-          subscriptions: null,
-          wsInitAttempted: true,
-        });
+        session.wsBridge = null;
+        session.subscriptions = null;
+        session.wsInitAttempted = true;
       }
       telemetry.capture('relaycast_mcp_session_authenticated', {
         source_surface: 'mcp',
-        agent_name: nextAgentName,
+        agent_name: session.agentName,
       });
-    } else {
-      Object.assign(session, partial);
     }
+
+    syncActiveWorkspaceContext();
   };
 
-  const getAgentClient = (): AgentClient => {
-    if (!session.agentToken) {
-      throw new Error('Not registered. Call the "register" tool first.');
+  const resolveRegisteredToken = (
+    agents: Map<string, RegisteredAgent>,
+    agentName?: string,
+  ): string | null => {
+    if (!agentName) return null;
+    return agents.get(agentName)?.agentToken ?? null;
+  };
+
+  const resolveAgentIdentity = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ): ResolvedAgentIdentity => {
+    if (wsRouting && (wsRouting.workspace_id || wsRouting.workspace_alias)) {
+      const ctx = findWorkspaceContext(session, wsRouting, options.workspaces);
+      if (!ctx) {
+        throw new Error(
+          `Workspace not found: ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. ` +
+          'Join the workspace first via "workspace.join" or bootstrap via RELAY_WORKSPACES_JSON.',
+        );
+      }
+      const routedToken = resolveRegisteredToken(ctx.agents, asAgent) ?? ctx.agentToken;
+      if (asAgent && !resolveRegisteredToken(ctx.agents, asAgent)) {
+        throw new Error(
+          `Unknown agent identity "${asAgent}" for workspace ${wsRouting.workspace_id ?? wsRouting.workspace_alias}. Register it first.`,
+        );
+      }
+      return {
+        workspaceKey: ctx.workspaceKey,
+        agentToken: routedToken,
+        agentName: asAgent ?? ctx.agentName,
+      };
     }
+
+    const activeToken = resolveRegisteredToken(session.agents, asAgent) ?? session.agentToken;
+    if (asAgent && !resolveRegisteredToken(session.agents, asAgent)) {
+      throw new Error(`Unknown agent identity "${asAgent}". Register it first.`);
+    }
+
+    if (!activeToken) {
+      throw new Error('Not registered. Call the "agent.register" tool first.');
+    }
+
+    return {
+      workspaceKey: session.workspaceKey ?? activeToken,
+      agentToken: activeToken,
+      agentName: asAgent ?? session.agentName ?? '',
+    };
+  };
+
+  const getAgentClient = (
+    wsRouting?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ): AgentClient => {
+    const identity = resolveAgentIdentity(wsRouting, asAgent);
     return createInternalRelayCast({
-      apiKey: session.agentToken,
+      apiKey: identity.agentToken,
       baseUrl: options.baseUrl,
-    }, mcpOrigin).as(
-      session.agentToken,
-    );
+    }, mcpOrigin).as(identity.agentToken);
   };
 
   // Enable piggybacking of unread messages on all tool responses
-  enablePiggyback(mcpServer, getSession, getAgentClient, telemetry);
+  enablePiggyback(
+    mcpServer,
+    getSession,
+    getAgentClient,
+    telemetry,
+    (routing?: AgentRouting) => resolveAgentIdentity(routing, routing?.as),
+  );
 
   // Register resource definitions (inbox, agents, channels, etc.)
   registerResourceDefinitions(mcpServer, getAgentClient, getRelay);
+
+  // Register subscribe/unsubscribe handlers so clients can track resource changes
+  mcpServer.server.setRequestHandler(SubscribeRequestSchema, async (req) => {
+    session.subscriptions?.subscribe(req.params.uri);
+    return {};
+  });
+  mcpServer.server.setRequestHandler(UnsubscribeRequestSchema, async (req) => {
+    session.subscriptions?.unsubscribe(req.params.uri);
+    return {};
+  });
 
   // Register all tools
   registerRegistrationTools(
@@ -186,19 +336,80 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   // - `_meta` (internal SDK field)
   // These fields are only stripped from the LIST response; tool call validation
   // still uses the full schemas for structuredContent.
-  type RequestHandlerMap = Map<string, (...args: unknown[]) => unknown>;
+  type RequestHandlerMap = Map<string, ServerRequestHandler<unknown>>;
   const handlers = (mcpServer.server as unknown as { _requestHandlers: RequestHandlerMap })._requestHandlers;
-  const origToolsListHandler = handlers.get('tools/list');
+  const origToolsListHandler = handlers.get('tools/list') as ServerRequestHandler<
+    ListToolsRequest,
+    ListToolsResult
+  > | undefined;
   if (origToolsListHandler) {
     mcpServer.server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
-      const result = (await origToolsListHandler(req, extra)) as { tools?: Record<string, unknown>[] };
+      const result = await origToolsListHandler(req, extra);
       if (result?.tools) {
         result.tools = result.tools.map(t => {
-          const { execution, outputSchema, _meta, ...clean } = t;
+          const { execution: _execution, outputSchema: _outputSchema, _meta, ...clean } = t;
           return clean;
         });
       }
       return result;
+    });
+  }
+
+  const origCallToolHandler = handlers.get('tools/call') as ServerRequestHandler<CallToolRequest> | undefined;
+  if (origCallToolHandler) {
+    mcpServer.server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+      const resolvedName = resolveToolName(req.params.name);
+      const request = resolvedName === req.params.name
+        ? req
+        : {
+            ...req,
+            params: {
+              ...req.params,
+              name: resolvedName,
+            },
+          };
+      return await origCallToolHandler(request, extra);
+    });
+  }
+
+  // Populate workspace contexts from options so routing works without
+  // external code reaching into server internals.
+  if (options.workspaces?.length) {
+    for (const ws of options.workspaces) {
+      if (ws.agent_token && ws.agent_name) {
+        const existing = session.workspaces.get(ws.api_key);
+        const agents = new Map(existing?.agents ?? []);
+        agents.set(ws.agent_name, {
+          agentName: ws.agent_name,
+          agentToken: ws.agent_token,
+        });
+        session.workspaces.set(ws.api_key, {
+          workspaceKey: ws.api_key,
+          agentToken: ws.agent_token,
+          agentName: ws.agent_name,
+          agents,
+          workspaceName: ws.workspace_name ?? existing?.workspaceName,
+          workspaceLabel: existing?.workspaceLabel,
+          wsBridge: null,
+          subscriptions: null,
+          wsInitAttempted: false,
+        });
+      }
+    }
+  }
+
+  if (session.workspaceKey && session.agentToken && session.agentName) {
+    const existing = session.workspaces.get(session.workspaceKey);
+    session.workspaces.set(session.workspaceKey, {
+      workspaceKey: session.workspaceKey,
+      agentToken: session.agentToken,
+      agentName: session.agentName,
+      agents: new Map(session.agents),
+      workspaceName: existing?.workspaceName,
+      workspaceLabel: existing?.workspaceLabel,
+      wsBridge: existing?.wsBridge ?? session.wsBridge,
+      subscriptions: existing?.subscriptions ?? session.subscriptions,
+      wsInitAttempted: existing?.wsInitAttempted ?? session.wsInitAttempted,
     });
   }
 

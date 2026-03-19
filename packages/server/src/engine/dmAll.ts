@@ -1,4 +1,5 @@
 import { eq, and, sql, lt, gt, inArray } from 'drizzle-orm';
+import type { DmMessage, WorkspaceDmConversation } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
   dmConversations,
@@ -9,7 +10,7 @@ import {
 
 type Db = ReturnType<typeof getDb>;
 
-export async function listAllDmConversations(db: Db, workspaceId: string) {
+export async function listAllDmConversations(db: Db, workspaceId: string): Promise<WorkspaceDmConversation[]> {
   const conversations = await db
     .select({
       id: dmConversations.id,
@@ -60,7 +61,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string) {
         agentName: agents.name,
       })
       .from(messages)
-      .leftJoin(agents, eq(messages.agentId, agents.id))
+      .innerJoin(agents, eq(messages.agentId, agents.id))
       .where(inArray(messages.id, lastIds))
     : [];
 
@@ -88,7 +89,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string) {
       last_message: lastMsg
         ? {
           text: lastMsg.body,
-          agent_name: lastMsg.agentName || 'unknown',
+          agent_name: lastMsg.agentName,
           created_at: lastMsg.createdAt.toISOString(),
         }
         : null,
@@ -102,7 +103,7 @@ export async function getDmMessagesForWorkspace(
   workspaceId: string,
   conversationId: string,
   opts: { limit?: number; before?: string; after?: string } = {},
-) {
+): Promise<DmMessage[]> {
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
   const [conv] = await db
@@ -134,7 +135,7 @@ export async function getDmMessagesForWorkspace(
       createdAt: messages.createdAt,
     })
     .from(messages)
-    .leftJoin(agents, eq(messages.agentId, agents.id))
+    .innerJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} DESC`)
     .limit(limit);
@@ -142,7 +143,7 @@ export async function getDmMessagesForWorkspace(
   return rows.map((r) => ({
     id: r.id,
     agent_id: r.agentId,
-    agent_name: r.agentName || 'unknown',
+    agent_name: r.agentName,
     text: r.body,
     created_at: r.createdAt.toISOString(),
   }));

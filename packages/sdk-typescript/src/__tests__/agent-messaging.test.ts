@@ -31,7 +31,7 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
     });
 
     it('strips # prefix from channel name', async () => {
@@ -58,7 +58,25 @@ describe('AgentClient', () => {
       await me.send('#general', 'hello', { attachments: ['att_1', 'att_2'] });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['att_1', 'att_2'] }));
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['att_1', 'att_2'], mode: 'wait' }));
+    });
+
+    it('defaults mode to wait when omitted', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello');
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
+    });
+
+    it('forwards steer mode when requested', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.send('#general', 'hello', { mode: 'steer' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'steer' }));
     });
 
     it('forwards Idempotency-Key when provided', async () => {
@@ -200,7 +218,25 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi' }));
+      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', mode: 'wait' }));
+    });
+
+    it('forwards steer mode when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi', { mode: 'steer' });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', mode: 'steer' }));
+    });
+
+    it('forwards attachments when provided', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'dm_1' }));
+
+      await me.dm('Worker-1', 'hi', { attachments: ['file_1', 'file_2'] });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ to: 'Worker-1', text: 'hi', attachments: ['file_1', 'file_2'], mode: 'wait' }));
     });
 
     it('forwards Idempotency-Key when provided', async () => {
@@ -242,13 +278,26 @@ describe('AgentClient', () => {
     });
 
     it('messages() gets conversation messages', async () => {
-      mockFetch.mockImplementation(() => mockResponse([{ id: 'm_1' }]));
+      mockFetch.mockImplementation(() => mockResponse([{
+        id: 'm_1',
+        agent_id: 'a_1',
+        agent_name: 'Alice',
+        text: 'hello',
+        created_at: '2025-01-01T00:00:00.000Z',
+      }]));
 
-      await me.dms.messages('c_1');
+      const res = await me.dms.messages('c_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('GET');
+      expect(res[0]).toEqual({
+        id: 'm_1',
+        agentId: 'a_1',
+        agentName: 'Alice',
+        text: 'hello',
+        createdAt: '2025-01-01T00:00:00.000Z',
+      });
     });
 
     it('messages() passes query params', async () => {
@@ -295,12 +344,24 @@ describe('AgentClient', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://api.relaycast.dev/v1/dm/c_1/messages');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ text: 'hello' }));
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
       const headers = init.headers as Record<string, string>;
       const generated = headers['Idempotency-Key'];
       expect(typeof generated).toBe('string');
       expect(generated.length).toBeGreaterThan(0);
       expect(headers['X-Idempotency-Key']).toBe(generated);
+    });
+
+    it('sendMessage() forwards mode + attachments', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_2' }));
+
+      await me.dms.sendMessage('c_1', 'hello', {
+        mode: 'steer',
+        attachments: ['file_1'],
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', attachments: ['file_1'], mode: 'steer' }));
     });
 
     it('sendMessage() forwards Idempotency-Key when provided', async () => {

@@ -16,6 +16,8 @@ export const dmRoutes = new Hono<AppEnv>();
 const sendDmSchema = z.object({
   to: z.string().min(1),
   text: z.string().min(1),
+  attachments: z.array(z.string()).optional(),
+  mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
 // POST /v1/dm - send a DM
@@ -45,7 +47,8 @@ dmRoutes.post(
           },
         }, 400);
       }
-      const { to, text } = parsed.data;
+      const { to, text, attachments, mode } = parsed.data;
+      const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -61,9 +64,18 @@ dmRoutes.post(
         scope: 'dm:direct',
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ to, text }),
+        // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
+        // Only include mode when explicit steer is requested.
+        fingerprint: mode === 'steer'
+          ? JSON.stringify({ to, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
+          : JSON.stringify({ to, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
         kv: c.env.KV,
-        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, { to, text }),
+        operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
+          to,
+          text,
+          attachments: normalizedAttachments,
+          mode,
+        }),
       });
 
       if (idempotent.replayed) {

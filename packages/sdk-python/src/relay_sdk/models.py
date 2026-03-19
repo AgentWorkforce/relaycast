@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+MessageInjectionMode = Literal["wait", "steer"]
+
 from pydantic import BaseModel, Field
 
 
@@ -151,6 +153,7 @@ class MessageWithMeta(BaseModel):
     reply_count: int = 0
     reactions: list[ReactionGroup] = Field(default_factory=list)
     read_by_count: int = 0
+    injection_mode: MessageInjectionMode | None = None
 
 
 class Message(BaseModel):
@@ -170,6 +173,7 @@ class PostMessageRequest(BaseModel):
     text: str
     attachments: list[str] | None = None
     data: dict[str, Any] | None = None
+    mode: MessageInjectionMode = "wait"
 
 
 class MessageListQuery(BaseModel):
@@ -218,6 +222,7 @@ class DmConversationSummary(BaseModel):
 class SendDmRequest(BaseModel):
     to: str
     text: str
+    mode: MessageInjectionMode = "wait"
 
 
 class CreateGroupDmRequest(BaseModel):
@@ -350,6 +355,7 @@ class MessageEventPayload(BaseModel):
     agent_name: str
     text: str
     attachments: list[FileAttachment] = Field(default_factory=list)
+    injection_mode: MessageInjectionMode | None = None
 
 
 class MessageUpdatedPayload(BaseModel):

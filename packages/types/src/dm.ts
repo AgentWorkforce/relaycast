@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CoreMessagePayloadSchema, MessageInjectionModeSchema } from './message.js';
 
 export const DmTypeSchema = z.enum(['1:1', 'group']);
 export type DmType = z.infer<typeof DmTypeSchema>;
@@ -21,9 +22,13 @@ export const DmParticipantSchema = z.object({
 });
 export type DmParticipant = z.infer<typeof DmParticipantSchema>;
 
+export const DmInjectionModeSchema = MessageInjectionModeSchema;
+
 export const SendDmRequestSchema = z.object({
   to: z.string(),
   text: z.string(),
+  attachments: z.array(z.string()).optional(),
+  mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 
@@ -59,11 +64,8 @@ export const DmConversationSummarySchema = z.object({
 export type DmConversationSummary = z.infer<typeof DmConversationSummarySchema>;
 
 export const SendDmResponseSchema = z.object({
-  id: z.string(),
   conversation_id: z.string(),
-  from_agent_id: z.string(),
-  to: z.string(),
-  text: z.string(),
+  message: CoreMessagePayloadSchema,
   created_at: z.string(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
@@ -79,13 +81,16 @@ export const CreateGroupDmResponseSchema = z.object({
 export type CreateGroupDmResponse = z.infer<typeof CreateGroupDmResponseSchema>;
 
 export const GroupDmMessageResponseSchema = z.object({
-  id: z.string(),
   conversation_id: z.string(),
-  agent_id: z.string(),
-  text: z.string(),
+  message: CoreMessagePayloadSchema,
   created_at: z.string(),
 });
 export type GroupDmMessageResponse = z.infer<typeof GroupDmMessageResponseSchema>;
+
+export const DmMessageSchema = CoreMessagePayloadSchema.extend({
+  created_at: z.string(),
+});
+export type DmMessage = z.infer<typeof DmMessageSchema>;
 
 export const GroupDmParticipantResponseSchema = z.object({
   conversation_id: z.string(),

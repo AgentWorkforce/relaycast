@@ -32,11 +32,13 @@ export {
   sortMessagesChronologically,
   formatReplyCountLabel,
 } from './adapters/messages.js';
+export { MessageMarkdown } from './components/MessageMarkdown.js';
 export type {
   ThreadSummaryViewModel,
   ChannelMessageViewModel,
   ChannelMessageAdapterOptions,
 } from './adapters/messages.js';
+export type { MessageMarkdownProps } from './components/MessageMarkdown.js';
 
 // Types
 export type {

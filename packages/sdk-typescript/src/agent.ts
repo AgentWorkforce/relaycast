@@ -7,6 +7,7 @@ import type {
   ThreadReplyRequest,
   SendDmRequest,
   SendDmResponse,
+  DmMessage,
   CreateGroupDmRequest,
   CreateGroupDmResponse,
   GroupDmMessageResponse,
@@ -130,6 +131,7 @@ export class AgentClient {
       await this.client.post('/v1/agents/heartbeat', {});
     },
     markOffline: async (): Promise<void> => {
+      this.stopAutoHeartbeat();
       await this.client.post('/v1/agents/disconnect', {});
     },
   };
@@ -259,13 +261,19 @@ export class AgentClient {
   async send(
     channel: string,
     text: string,
-    opts?: { attachments?: string[]; blocks?: MessageBlock[]; idempotencyKey?: string },
+    opts?: {
+      attachments?: string[];
+      blocks?: MessageBlock[];
+      mode?: 'wait' | 'steer';
+      idempotencyKey?: string;
+    },
   ): Promise<MessageWithMeta> {
     const name = stripHash(channel);
     const body: PostMessageRequest = {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+      mode: opts?.mode ?? 'wait',
     };
     return this.client.post(
       `/v1/channels/${encodeURIComponent(name)}/messages`,
@@ -325,8 +333,17 @@ export class AgentClient {
 
   // === DMs ===
 
-  async dm(agent: string, text: string, opts?: IdempotencyOption): Promise<SendDmResponse> {
-    const body: SendDmRequest = { to: agent, text };
+  async dm(
+    agent: string,
+    text: string,
+    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer'; attachments?: string[] }),
+  ): Promise<SendDmResponse> {
+    const body: SendDmRequest = {
+      to: agent,
+      text,
+      ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      mode: opts?.mode ?? 'wait',
+    };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
 
@@ -337,7 +354,7 @@ export class AgentClient {
     messages: (
       conversationId: string,
       opts?: MessageListQuery,
-    ): Promise<MessageWithMeta[]> => {
+    ): Promise<DmMessage[]> => {
       const query: Record<string, string> = {};
       if (opts?.limit) query.limit = String(opts.limit);
       if (opts?.before) query.before = opts.before;
@@ -357,11 +374,15 @@ export class AgentClient {
     sendMessage: (
       conversationId: string,
       text: string,
-      opts?: IdempotencyOption,
+      opts?: (IdempotencyOption & { attachments?: string[]; mode?: 'wait' | 'steer' }),
     ): Promise<GroupDmMessageResponse> =>
       this.client.post(
         `/v1/dm/${encodeURIComponent(conversationId)}/messages`,
-        { text },
+        {
+          text,
+          ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+          mode: opts?.mode ?? 'wait',
+        },
         idempotencyHeaders(opts),
       ),
 
@@ -468,8 +489,10 @@ export class AgentClient {
 
   // === Inbox ===
 
-  async inbox(): Promise<InboxResponse> {
-    return this.client.get('/v1/inbox');
+  async inbox(options?: { limit?: number }): Promise<InboxResponse> {
+    const params: Record<string, string> = {};
+    if (options?.limit != null) params.limit = String(options.limit);
+    return this.client.get('/v1/inbox', params);
   }
 
   // === Read Receipts ===

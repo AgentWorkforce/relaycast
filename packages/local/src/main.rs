@@ -638,13 +638,14 @@ async fn create_workspace(
         );
     }
 
+    let workspace_name = payload.name.trim().to_string();
     let workspace_id = new_id("ws");
     let api_key = random_token("rk_live_");
     let created_at = now_iso();
 
     let workspace = WorkspaceRecord {
         id: workspace_id.clone(),
-        name: payload.name.trim().to_string(),
+        name: workspace_name.clone(),
         api_key: api_key.clone(),
         created_at: created_at.clone(),
         system_prompt: None,
@@ -653,6 +654,14 @@ async fn create_workspace(
     };
 
     let mut store = state.store.write().await;
+    let duplicate = store.workspaces.values().any(|ws| ws.name == workspace_name);
+    if duplicate {
+        return err(
+            StatusCode::CONFLICT,
+            "workspace_already_exists",
+            format!("Workspace \"{}\" already exists", workspace_name),
+        );
+    }
     store
         .workspace_by_key
         .insert(api_key.clone(), workspace_id.clone());
@@ -3076,7 +3085,15 @@ async fn send_dm(
 struct CreateGroupDmRequest {
     participants: Vec<String>,
     name: Option<String>,
-    text: String,
+    text: Option<String>,
+}
+
+fn normalize_initial_group_dm_text(text: Option<String>) -> Result<Option<String>, &'static str> {
+    match text {
+        Some(text) if text.trim().is_empty() => Err("text must not be empty when provided"),
+        Some(text) => Ok(Some(text.trim().to_string())),
+        None => Ok(None),
+    }
 }
 
 async fn create_group_dm(
@@ -3094,13 +3111,12 @@ async fn create_group_dm(
             "participants are required",
         );
     }
-    if payload.text.trim().is_empty() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "text is required",
-        );
-    }
+    let initial_text = match normalize_initial_group_dm_text(payload.text.clone()) {
+        Ok(text) => text,
+        Err(message) => {
+            return err(StatusCode::BAD_REQUEST, "invalid_request", message);
+        }
+    };
 
     let (workspace_id, caller_id, caller_name) = {
         let store = state.store.read().await;
@@ -3140,42 +3156,50 @@ async fn create_group_dm(
         .insert(conv_id.clone(), conversation.clone());
     store.dm_messages.insert(conv_id.clone(), Vec::new());
 
-    let Some(message) = post_dm_message_internal(
-        &mut store,
-        &workspace_id,
-        &conv_id,
-        &caller_id,
-        &caller_name,
-        payload.text.clone(),
-    ) else {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "Failed to create initial group message",
-        );
+    let message = if let Some(text) = initial_text {
+        let Some(msg) = post_dm_message_internal(
+            &mut store,
+            &workspace_id,
+            &conv_id,
+            &caller_id,
+            &caller_name,
+            text,
+        ) else {
+            drop(store);
+            return err(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Failed to create initial group message",
+            );
+        };
+        Some(msg)
+    } else {
+        None
     };
 
     drop(store);
 
-    publish(
-        &state,
-        RealtimeEvent {
-            workspace_id: workspace_id.clone(),
-            audience: EventAudience::Agents {
-                agent_ids: participant_ids.iter().cloned().collect(),
+    if let Some(ref message) = message {
+        publish(
+            &state,
+            RealtimeEvent {
+                workspace_id: workspace_id.clone(),
+                audience: EventAudience::Agents {
+                    agent_ids: participant_ids.iter().cloned().collect(),
+                },
+                payload: json!({
+                    "type": "group_dm.received",
+                    "conversation_id": conv_id,
+                    "message": {
+                        "id": message.id,
+                        "agent_id": message.agent_id,
+                        "agent_name": message.agent_name,
+                        "text": message.text,
+                    }
+                }),
             },
-            payload: json!({
-                "type": "group_dm.received",
-                "conversation_id": conv_id,
-                "message": {
-                    "id": message.id,
-                    "agent_id": message.agent_id,
-                    "agent_name": message.agent_name,
-                    "text": message.text,
-                }
-            }),
-        },
-    );
+        );
+    }
 
     created(json!({
         "id": conversation.id,
@@ -5013,4 +5037,30 @@ async fn main() -> anyhow::Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_initial_group_dm_text;
+
+    #[test]
+    fn normalize_initial_group_dm_text_accepts_absent_text() {
+        assert_eq!(normalize_initial_group_dm_text(None).unwrap(), None);
+    }
+
+    #[test]
+    fn normalize_initial_group_dm_text_rejects_whitespace_only_text() {
+        assert_eq!(
+            normalize_initial_group_dm_text(Some("   ".to_string())).unwrap_err(),
+            "text must not be empty when provided"
+        );
+    }
+
+    #[test]
+    fn normalize_initial_group_dm_text_trims_non_empty_text() {
+        assert_eq!(
+            normalize_initial_group_dm_text(Some("  hello  ".to_string())).unwrap(),
+            Some("hello".to_string())
+        );
+    }
 }

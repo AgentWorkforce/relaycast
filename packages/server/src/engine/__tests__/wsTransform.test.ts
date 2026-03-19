@@ -130,6 +130,37 @@ describe('transformForClient', () => {
     });
   });
 
+  it('transforms dm.received nested payload with mode + attachments', () => {
+    const event = makeEvent('dm.received', {
+      conversation_id: 'dm_1',
+      message: {
+        id: 'msg_6b',
+        agent_id: 'agent_3',
+        agent_name: 'Cara',
+        text: 'dm nested',
+        injection_mode: 'steer',
+        attachments: [
+          { file_id: 'f1', filename: 'a.txt', content_type: 'text/plain', size_bytes: 1 },
+        ],
+      },
+    });
+
+    expect(transformForClient(event)).toEqual({
+      type: 'dm.received',
+      conversation_id: 'dm_1',
+      message: {
+        id: 'msg_6b',
+        agent_id: 'agent_3',
+        agent_name: 'Cara',
+        text: 'dm nested',
+        injection_mode: 'steer',
+        attachments: [
+          { file_id: 'f1', filename: 'a.txt', content_type: 'text/plain', size_bytes: 1 },
+        ],
+      },
+    });
+  });
+
   it('transforms group_dm.received', () => {
     const event = makeEvent('group_dm.received', {
       id: 'msg_7',
@@ -147,6 +178,35 @@ describe('transformForClient', () => {
         agent_id: 'agent_4',
         agent_name: 'Dan',
         text: 'group',
+      },
+    });
+  });
+
+  it('transforms group_dm.received nested payload with attachments', () => {
+    const event = makeEvent('group_dm.received', {
+      conversation_id: 'gdm_1',
+      message: {
+        id: 'msg_7b',
+        agent_id: 'agent_4',
+        agent_name: 'Dan',
+        text: 'group nested',
+        attachments: [
+          { file_id: 'f2', filename: 'b.txt', content_type: 'text/plain', size_bytes: 2 },
+        ],
+      },
+    });
+
+    expect(transformForClient(event)).toEqual({
+      type: 'group_dm.received',
+      conversation_id: 'gdm_1',
+      message: {
+        id: 'msg_7b',
+        agent_id: 'agent_4',
+        agent_name: 'Dan',
+        text: 'group nested',
+        attachments: [
+          { file_id: 'f2', filename: 'b.txt', content_type: 'text/plain', size_bytes: 2 },
+        ],
       },
     });
   });

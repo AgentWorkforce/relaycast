@@ -1,9 +1,41 @@
-import { eq, and, sql, isNull } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, dmParticipants } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
+
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)))
+    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
+}
 
 export async function createGroupDm(
   db: Db,
@@ -73,7 +105,7 @@ export async function postGroupMessage(
   workspaceId: string,
   conversationId: string,
   agentId: string,
-  data: { text: string },
+  data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -110,7 +142,46 @@ export async function postGroupMessage(
     throw err;
   }
 
+  const [fromAgent] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+
+  if (!fromAgent?.name) {
+    const err = new Error('Sender agent not found');
+    Object.assign(err, { code: 'internal_error', status: 500 });
+    throw err;
+  }
+
+  if (data.attachments && data.attachments.length > 0) {
+    const unique = new Set(data.attachments);
+    if (unique.size !== data.attachments.length) {
+      const err = new Error('Invalid attachments: duplicate file ids are not allowed');
+      Object.assign(err, { code: 'invalid_attachments', status: 400 });
+      throw err;
+    }
+
+    const validFiles = await db
+      .select({ id: files.id })
+      .from(files)
+      .where(
+        and(
+          eq(files.workspaceId, workspaceId),
+          eq(files.status, 'complete'),
+          inArray(files.id, data.attachments),
+        ),
+      );
+    const validIds = new Set(validFiles.map((f) => f.id));
+    const invalid = data.attachments.filter((id) => !validIds.has(id));
+    if (invalid.length > 0) {
+      const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
+      Object.assign(err, { code: 'invalid_attachments', status: 400 });
+      throw err;
+    }
+  }
+
   const messageId = generateId();
+  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const [message] = await db
     .insert(messages)
     .values({
@@ -119,16 +190,45 @@ export async function postGroupMessage(
       channelId: conv.channelId,
       agentId,
       body: data.text,
-      hasAttachments: false,
+      hasAttachments,
+      metadata: { injection_mode: data.mode ?? 'wait' },
     })
     .returning();
 
+  if (data.attachments && data.attachments.length > 0) {
+    const attachmentValues = data.attachments.map((fileId, idx) => ({
+      messageId,
+      fileId,
+      position: idx,
+    }));
+    await db.insert(messageAttachments).values(attachmentValues);
+  }
+
+  const attachmentMap = hasAttachments
+    ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
+    : new Map<string, AttachmentRow[]>();
+  const attachments = attachmentMap.get(messageId) || [];
+
+  const injectionMode = data.mode ?? 'wait';
   return {
-    id: message.id,
+    // Canonical converged shape (new)
     conversation_id: conversationId,
+    message: {
+      id: message.id,
+      agent_id: message.agentId,
+      agent_name: fromAgent.name,
+      text: message.body,
+      injection_mode: injectionMode,
+      attachments,
+    },
+    created_at: message.createdAt.toISOString(),
+
+    // Legacy compatibility fields (scheduled for removal in next major).
+    id: message.id,
     agent_id: message.agentId,
     text: message.body,
-    created_at: message.createdAt.toISOString(),
+    injection_mode: injectionMode,
+    attachments,
   };
 }
 

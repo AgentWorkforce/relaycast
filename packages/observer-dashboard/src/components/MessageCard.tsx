@@ -1,6 +1,6 @@
 'use client';
 
-import { formatReplyCountLabel } from '@relaycast/react';
+import { formatReplyCountLabel, MessageMarkdown } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
@@ -20,9 +20,17 @@ interface MessageCardProps {
   message: MessageWithMeta;
   compact?: boolean;
   onOpenThread?: (messageId: string) => void;
+  mentionNames?: string[];
+  onOpenAgent?: (agentName: string | null) => void;
 }
 
-export function MessageCard({ message, compact = false, onOpenThread }: MessageCardProps) {
+export function MessageCard({
+  message,
+  compact = false,
+  onOpenThread,
+  mentionNames,
+  onOpenAgent,
+}: MessageCardProps) {
   return (
     <div className="flex gap-3 px-4 py-2 hover:bg-[var(--color-bg-hover)] group">
       {compact ? (
@@ -41,9 +49,14 @@ export function MessageCard({ message, compact = false, onOpenThread }: MessageC
             </span>
           </div>
         )}
-        <p className="text-sm text-[var(--color-text-secondary)] break-words whitespace-pre-wrap">
-          {message.text}
-        </p>
+        <MessageMarkdown
+          text={message.text}
+          className="text-sm text-[var(--color-text-secondary)] break-words"
+          showCodeCopyButton
+          mentionNames={mentionNames}
+          onMentionClick={onOpenAgent}
+          mentionClassName="font-semibold text-[var(--color-accent-cyan)] hover:underline cursor-pointer"
+        />
         {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
           <div className="flex items-center gap-2 mt-1">
             {(message.reactions ?? []).map((r) => (

@@ -66,6 +66,19 @@ export const MessageSchema = z.object({
 });
 export type Message = z.infer<typeof MessageSchema>;
 
+export const MessageInjectionModeSchema = z.enum(['wait', 'steer']);
+export type MessageInjectionMode = z.infer<typeof MessageInjectionModeSchema>;
+
+export const CoreMessagePayloadSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  text: z.string(),
+  injection_mode: MessageInjectionModeSchema.optional(),
+  attachments: z.array(FileAttachmentSchema).optional(),
+});
+export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
+
 export const MessageWithMetaSchema = z.object({
   id: z.string(),
   channel_id: z.string(),
@@ -82,6 +95,7 @@ export const MessageWithMetaSchema = z.object({
   reactions: z.array(ReactionGroupSchema),
   read_by_count: z.number(),
   mentions: z.array(z.string()).optional(),
+  injection_mode: z.enum(['wait', 'steer']).optional(),
 });
 export type MessageWithMeta = z.infer<typeof MessageWithMetaSchema>;
 
@@ -91,6 +105,7 @@ export const PostMessageRequestSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   content_type: z.string().optional(),
+  mode: MessageInjectionModeSchema.default('wait'),
 });
 export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
 

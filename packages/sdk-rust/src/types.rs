@@ -299,8 +299,10 @@ pub struct ChannelWithMembers {
 pub struct FileAttachment {
     pub file_id: String,
     pub filename: String,
-    pub url: String,
-    pub size: i64,
+    #[serde(alias = "contentType")]
+    pub content_type: String,
+    #[serde(alias = "size")]
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +318,13 @@ pub struct ReactionGroup {
     pub emoji: String,
     pub count: i64,
     pub agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageInjectionMode {
+    Wait,
+    Steer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,6 +345,8 @@ pub struct MessageWithMeta {
     pub reactions: Vec<ReactionGroup>,
     #[serde(default)]
     pub read_by_count: i64,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -347,6 +358,8 @@ pub struct PostMessageRequest {
     pub attachments: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,6 +390,10 @@ pub struct ThreadResponse {
 pub struct SendDmRequest {
     pub to: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -402,11 +419,8 @@ pub struct DmConversationSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmSendResponse {
-    pub id: String,
     pub conversation_id: String,
-    pub from_agent_id: String,
-    pub to: String,
-    pub text: String,
+    pub message: DmEventPayload,
     pub created_at: String,
 }
 
@@ -427,10 +441,8 @@ pub struct GroupDmConversationResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupDmMessageResponse {
-    pub id: String,
     pub conversation_id: String,
-    pub agent_id: String,
-    pub text: String,
+    pub message: DmEventPayload,
     pub created_at: String,
 }
 
@@ -759,6 +771,8 @@ pub struct MessageEventPayload {
     pub agent_name: String,
     pub text: String,
     pub attachments: Vec<FileAttachment>,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -782,10 +796,11 @@ pub struct ThreadReplyPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmEventPayload {
     pub id: String,
-    #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_id: String,
     pub agent_name: String,
     pub text: String,
+    #[serde(default)]
+    pub injection_mode: Option<MessageInjectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

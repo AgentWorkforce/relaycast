@@ -6,6 +6,7 @@ import {
   fanoutToAgents,
   fanoutToWorkspace,
   updateChannelMembers,
+  getDmParticipantAgentIds,
 } from '../../routes/fanout.js';
 import { createMockBindings, FAKE_WORKSPACE } from '../../__tests__/test-helpers.js';
 
@@ -240,6 +241,79 @@ describe('fanout helpers', () => {
     const req = channelFetch.mock.calls[0][0] as Request;
     const body = await req.json();
     expect(body.members).toEqual(['agent_1', 'agent_2']);
+  });
+
+  describe('getDmParticipantAgentIds', () => {
+    function createDbContext(conversationRows: any[], participantRows: any[]) {
+      const whereHandler = vi.fn()
+        .mockResolvedValueOnce(conversationRows)
+        .mockResolvedValueOnce(participantRows);
+
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: whereHandler,
+          }),
+        }),
+      };
+
+      return {
+        env: createMockBindings(),
+        get: vi.fn((key: string) => {
+          if (key === 'db') return db;
+          if (key === 'workspace') return FAKE_WORKSPACE;
+          return undefined;
+        }),
+      } as any;
+    }
+
+    it('returns agent IDs for a DM channel', async () => {
+      const c = createDbContext(
+        [{ id: 'conv_1' }],
+        [{ agentId: 'agent_a' }, { agentId: 'agent_b' }],
+      );
+
+      const result = await getDmParticipantAgentIds(c, 'dmch_123');
+      expect(result).toEqual(['agent_a', 'agent_b']);
+    });
+
+    it('returns null for a non-DM channel', async () => {
+      const c = createDbContext([], []);
+      const result = await getDmParticipantAgentIds(c, 'ch_regular');
+      expect(result).toBeNull();
+    });
+
+    it('returns empty array when all DM participants have left', async () => {
+      const c = createDbContext(
+        [{ id: 'conv_2' }],
+        [], // no active participants
+      );
+
+      const result = await getDmParticipantAgentIds(c, 'dmch_456');
+      expect(result).toEqual([]);
+    });
+
+    it('returns null on DB error instead of throwing', async () => {
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: vi.fn().mockRejectedValue(new Error('DB connection failed')),
+          }),
+        }),
+      };
+
+      const c = {
+        env: createMockBindings(),
+        get: vi.fn((key: string) => {
+          if (key === 'db') return db;
+          if (key === 'workspace') return FAKE_WORKSPACE;
+          return undefined;
+        }),
+      } as any;
+
+      const result = await getDmParticipantAgentIds(c, 'dmch_broken');
+      expect(result).toBeNull();
+    });
   });
 
   it('fanoutToChannel supports workspace override when context workspace is missing', async () => {

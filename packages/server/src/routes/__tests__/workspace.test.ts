@@ -6,6 +6,7 @@ vi.mock('../../engine/activity.js', () => ({
 
 vi.mock('../../engine/dmAll.js', () => ({
   listAllDmConversations: vi.fn(),
+  getDmMessagesForWorkspace: vi.fn(),
 }));
 
 vi.mock('../../engine/tokenRotate.js', () => ({
@@ -149,6 +150,37 @@ describe('Dashboard routes', () => {
       expect(res.status).toBe(500);
       const body = await res.json();
       expect(body.ok).toBe(false);
+    });
+  });
+
+  describe('GET /v1/dm/conversations/:conversation_id/messages', () => {
+    it('returns DM messages with agent_name', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(dmAllEngine.getDmMessagesForWorkspace).mockResolvedValue([
+        {
+          id: 'msg_1',
+          agent_id: 'agent_1',
+          agent_name: 'Alice',
+          text: 'hello',
+          created_at: '2025-01-01T00:00:00.000Z',
+        },
+      ]);
+
+      const res = await app.request('/v1/dm/conversations/c_1/messages', {
+        method: 'GET',
+        headers: wsAuthHeaders(),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data[0].agent_name).toBe('Alice');
+      expect(dmAllEngine.getDmMessagesForWorkspace).toHaveBeenCalledWith(
+        expect.anything(),
+        FAKE_WORKSPACE.id,
+        'c_1',
+        { limit: undefined, before: undefined, after: undefined },
+      );
     });
   });
 

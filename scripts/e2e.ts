@@ -141,8 +141,28 @@ const CHANNEL_MESSAGES: Array<{ from: string; text: string }> = [
   { from: BACKEND, text: 'Will do. I will watch for the deploy and kick off the suite.' },
   { from: INFRA, text: 'Fix is pushed. Staging deploy rolling out now.' },
   { from: BACKEND, text: 'Integration suite passed — all 247 tests green.' },
+  {
+    from: LEAD,
+    text: '### Rollout Notes\n- health timeout: `30s`\n- retries: **enabled**\n- owner: @InfraAgent',
+  },
+  {
+    from: BACKEND,
+    text: 'Validation checklist:\n1. smoke test ✅\n2. integration suite ✅\n3. canary logs ✅',
+  },
+  {
+    from: INFRA,
+    text: 'Deployment command used: `kubectl rollout status deployment/api -n staging`',
+  },
+  {
+    from: BACKEND,
+    text: 'TypeScript patch preview:\n```ts\nconst deployConfig: { timeoutSeconds: number; retries: number } = {\n  timeoutSeconds: 30,\n  retries: 2,\n};\n```',
+  },
   { from: LEAD, text: 'Great work team. Merging to main.' },
 ];
+
+const MARKDOWN_CHANNEL_MESSAGES = CHANNEL_MESSAGES.filter((message) =>
+  /[*_`#[\]\n]/.test(message.text),
+);
 
 // ---------------------------------------------------------------------------
 // Main
@@ -432,6 +452,20 @@ ${B}${CYAN}╔══════════════════════
     await pause();
   }
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  await run('Verify markdown messages in #engineering', async () => {
+    const messages = await lead.messages(channelName, { limit: CHANNEL_MESSAGES.length + 10 });
+    const textSet = new Set(messages.map((message) => message.text));
+    const missing = MARKDOWN_CHANNEL_MESSAGES
+      .map((message) => message.text)
+      .filter((text) => !textSet.has(text));
+
+    if (missing.length > 0) {
+      throw new Error(`Missing markdown message(s): ${missing.map((text) => JSON.stringify(text)).join(', ')}`);
+    }
+
+    log('🧪', `Verified ${MARKDOWN_CHANNEL_MESSAGES.length} markdown message(s) in #${channelName}`);
+  });
 
   // ── 7. Direct messages — Lead ↔ InfraAgent ─────────────────────────
   step('Direct messages');

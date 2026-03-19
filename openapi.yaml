@@ -118,6 +118,10 @@ components:
           type: object
         content_type:
           type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+          description: Delivery/injection mode used when the message was sent
         thread_id:
           type: string
         reply_count:
@@ -126,23 +130,83 @@ components:
           type: string
           format: date-time
 
-    DmMessage:
+    FileAttachment:
+      type: object
+      properties:
+        file_id:
+          type: string
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+
+    CoreDmMessagePayload:
       type: object
       properties:
         id:
           type: string
-        conversation_id:
+        agent_id:
           type: string
-        from_id:
-          type: string
-        from_name:
-          type: string
-        to_id:
-          type: string
-        to_name:
+        agent_name:
           type: string
         text:
           type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
+
+    DmSendResponse:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        message:
+          $ref: '#/components/schemas/CoreDmMessagePayload'
+        created_at:
+          type: string
+          format: date-time
+        # Legacy compatibility fields (scheduled for removal in next major)
+        id:
+          type: string
+        from_agent_id:
+          type: string
+        to:
+          type: string
+        text:
+          type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+          description: Delivery/injection mode used when the DM was sent
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
+
+    FlatDmMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        text:
+          type: string
+        injection_mode:
+          type: string
+          enum: [wait, steer]
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileAttachment'
         created_at:
           type: string
           format: date-time
@@ -265,7 +329,7 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a new workspace and get an API key
+      description: Create a new workspace and get an API key. Workspace names must be unique.
       tags:
         - Workspaces
       requestBody:
@@ -293,6 +357,12 @@ paths:
                     $ref: '#/components/schemas/Workspace'
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Workspace name already exists
           content:
             application/json:
               schema:
@@ -1023,6 +1093,11 @@ paths:
                   type: object
                 content_type:
                   type: string
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for relay delivery
       responses:
         '201':
           description: Message posted
@@ -1317,6 +1392,16 @@ paths:
                   description: Recipient agent name
                 text:
                   type: string
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional file ids to attach to this DM
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for the DM
       responses:
         '201':
           description: DM sent
@@ -1328,7 +1413,7 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    $ref: '#/components/schemas/DmMessage'
+                    $ref: '#/components/schemas/DmSendResponse'
 
   /dm/conversations:
     get:
@@ -1382,6 +1467,16 @@ paths:
               properties:
                 text:
                   type: string
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional file ids to attach to this group DM message
+                mode:
+                  type: string
+                  enum: [wait, steer]
+                  default: wait
+                  description: Injection mode for the group DM message
       responses:
         '201':
           description: Message sent
@@ -1428,7 +1523,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/DmMessage'
+                      $ref: '#/components/schemas/FlatDmMessage'
 
   /search:
     get:

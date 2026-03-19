@@ -33,6 +33,7 @@ export type CreateWebhookRequest = Camelize<Raw.CreateWebhookRequest>;
 export type CreateWebhookResponse = Camelize<Raw.CreateWebhookResponse>;
 export type CreateWorkspaceResponse = Camelize<Raw.CreateWorkspaceResponse>;
 export type SendDmResponse = Camelize<Raw.SendDmResponse>;
+export type DmMessage = Camelize<Raw.DmMessage>;
 export type DmConversationSummary = Camelize<Raw.DmConversationSummary>;
 export type DmConversationParticipant = Camelize<Raw.DmConversationParticipant>;
 export type DmLastMessage = Camelize<Raw.DmLastMessage>;

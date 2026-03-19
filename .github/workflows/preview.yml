@@ -138,7 +138,7 @@ jobs:
       - name: Verify observer preview URL is reachable
         run: |
           set -euo pipefail
-          URL="https://pr${{ github.event.pull_request.number }}-observer.relaycast.dev"
+          URL="https://pr${{ github.event.pull_request.number }}-observer.relaycast.dev/observer"
           echo "Checking ${URL}"
           for i in $(seq 1 20); do
             code="$(curl -s -o /tmp/observer-preview.out -w "%{http_code}" "${URL}" || true)"
@@ -168,7 +168,7 @@ jobs:
           script: |
             const prNum = context.payload.pull_request.number;
             const url = `https://pr${prNum}-api.relaycast.dev`;
-            const observerUrl = `https://pr${prNum}-observer.relaycast.dev`;
+            const observerUrl = `https://pr${prNum}-observer.relaycast.dev/observer`;
             const body = `**Preview deployed!**\n\n` +
               `| Environment | URL |\n` +
               `|-------------|-----|\n` +

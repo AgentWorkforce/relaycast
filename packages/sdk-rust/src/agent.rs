@@ -16,6 +16,24 @@ pub struct AgentClient {
     ws: Option<WsClient>,
 }
 
+/// Send options for DM operations.
+#[derive(Debug, Clone)]
+pub struct DmOptions {
+    pub mode: MessageInjectionMode,
+    pub attachments: Option<Vec<String>>,
+    pub idempotency_key: Option<String>,
+}
+
+impl Default for DmOptions {
+    fn default() -> Self {
+        Self {
+            mode: MessageInjectionMode::Wait,
+            attachments: None,
+            idempotency_key: None,
+        }
+    }
+}
+
 impl AgentClient {
     /// Create a new agent client with the given token.
     pub fn new(token: impl Into<String>, base_url: Option<String>) -> Result<Self> {
@@ -132,7 +150,7 @@ impl AgentClient {
 
     // === Messages ===
 
-    /// Send a message to a channel.
+    /// Send a message to a channel (defaults mode to `wait`).
     pub async fn send(
         &self,
         channel: &str,
@@ -141,12 +159,34 @@ impl AgentClient {
         blocks: Option<Vec<MessageBlock>>,
         idempotency_key: Option<String>,
     ) -> Result<MessageWithMeta> {
+        self.send_with_mode(
+            channel,
+            text,
+            attachments,
+            blocks,
+            MessageInjectionMode::Wait,
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Send a message to a channel with explicit injection mode.
+    pub async fn send_with_mode(
+        &self,
+        channel: &str,
+        text: &str,
+        attachments: Option<Vec<String>>,
+        blocks: Option<Vec<MessageBlock>>,
+        mode: MessageInjectionMode,
+        idempotency_key: Option<String>,
+    ) -> Result<MessageWithMeta> {
         let name = strip_hash(channel);
         let body = PostMessageRequest {
             text: text.to_string(),
             attachments,
             blocks,
             data: None,
+            mode: Some(mode),
         };
         let options = idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
@@ -274,32 +314,28 @@ impl AgentClient {
     // === DMs ===
 
     /// Send a direct message to another agent.
-    pub async fn dm(
-        &self,
-        agent: &str,
-        text: &str,
-        idempotency_key: Option<String>,
-    ) -> Result<serde_json::Value> {
+    pub async fn dm(&self, agent: &str, text: &str, opts: Option<DmOptions>) -> Result<serde_json::Value> {
+        let opts = opts.unwrap_or_default();
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            attachments: opts.attachments,
+            mode: Some(opts.mode),
         };
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await
     }
 
     /// Send a direct message to another agent (typed response).
-    pub async fn dm_typed(
-        &self,
-        agent: &str,
-        text: &str,
-        idempotency_key: Option<String>,
-    ) -> Result<DmSendResponse> {
+    pub async fn dm_typed(&self, agent: &str, text: &str, opts: Option<DmOptions>) -> Result<DmSendResponse> {
+        let opts = opts.unwrap_or_default();
         let body = SendDmRequest {
             to: agent.to_string(),
             text: text.to_string(),
+            attachments: opts.attachments,
+            mode: Some(opts.mode),
         };
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await
     }
 
@@ -394,10 +430,22 @@ impl AgentClient {
         &self,
         conversation_id: &str,
         text: &str,
-        idempotency_key: Option<String>,
+        opts: Option<DmOptions>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({ "text": text });
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let opts = opts.unwrap_or_default();
+        let mut body = serde_json::Map::new();
+        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "mode".to_string(),
+            serde_json::Value::String(match opts.mode {
+                MessageInjectionMode::Wait => "wait".to_string(),
+                MessageInjectionMode::Steer => "steer".to_string(),
+            }),
+        );
+        if let Some(attachments) = opts.attachments {
+            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+        }
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
@@ -412,10 +460,22 @@ impl AgentClient {
         &self,
         conversation_id: &str,
         text: &str,
-        idempotency_key: Option<String>,
+        opts: Option<DmOptions>,
     ) -> Result<GroupDmMessageResponse> {
-        let body = serde_json::json!({ "text": text });
-        let options = idempotency_key.map(RequestOptions::with_idempotency_key);
+        let opts = opts.unwrap_or_default();
+        let mut body = serde_json::Map::new();
+        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "mode".to_string(),
+            serde_json::Value::String(match opts.mode {
+                MessageInjectionMode::Wait => "wait".to_string(),
+                MessageInjectionMode::Steer => "steer".to_string(),
+            }),
+        );
+        if let Some(attachments) = opts.attachments {
+            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+        }
+        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),

@@ -51,6 +51,7 @@ describe('POST /v1/dm', () => {
       to: 'OtherBot',
       text: 'Hello DM',
       created_at: '2025-01-01T00:00:00.000Z',
+      injection_mode: 'wait',
     });
 
     const res = await app.request('/v1/dm', {
@@ -63,6 +64,7 @@ describe('POST /v1/dm', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.conversation_id).toBe('conv_123');
+    expect(body.data.injection_mode).toBe('wait');
     expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
       type: 'dm.received',
       workspaceId: FAKE_WORKSPACE.id,
@@ -80,6 +82,39 @@ describe('POST /v1/dm', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as any;
     expect(body.error.code).toBe('invalid_request');
+  });
+
+  it('forwards steer mode to dm engine', async () => {
+    vi.mocked(dmEngine.sendDm).mockResolvedValue({
+      id: 'msg_002',
+      conversation_id: 'conv_456',
+      from_agent_id: 'agent_456',
+      to: 'OtherBot',
+      text: 'Take over',
+      created_at: '2025-01-01T00:00:00.000Z',
+      injection_mode: 'steer',
+    });
+
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ to: 'OtherBot', text: 'Take over', mode: 'steer' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    expect(body.data.injection_mode).toBe('steer');
+    expect(vi.mocked(dmEngine.sendDm)).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'agent_123',
+      expect.objectContaining({ to: 'OtherBot', text: 'Take over', mode: 'steer' }),
+    );
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dm.received',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ conversation_id: 'conv_456', injection_mode: 'steer' }),
+    }));
   });
 
   it('returns 400 when text is missing', async () => {
@@ -145,6 +180,7 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
       {
         id: 'msg_001',
         agent_id: 'agent_456',
+        agent_name: 'TestBot',
         text: 'Hello',
         created_at: '2025-01-01T00:00:00.000Z',
       },
@@ -158,6 +194,7 @@ describe('GET /v1/dm/:conversation_id/messages', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data).toHaveLength(1);
+    expect(body.data[0].agent_name).toBe('TestBot');
   });
 
   it('returns 403 for non-participant', async () => {

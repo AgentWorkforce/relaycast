@@ -33,6 +33,7 @@ import type {
   DmConversation,
   DmType,
   DmParticipant,
+  DmMessage,
   SendDmRequest,
   CreateGroupDmRequest,
   DmConversationSummary,
@@ -219,6 +220,11 @@ describe('Type definitions', () => {
   it('DmConversationSummary has unread info', () => {
     expectTypeOf<DmConversationSummary>().toHaveProperty('unread_count');
     expectTypeOf<DmConversationSummary>().toHaveProperty('participants');
+  });
+
+  it('DmMessage includes sender identity fields', () => {
+    expectTypeOf<DmMessage>().toHaveProperty('agent_id');
+    expectTypeOf<DmMessage>().toHaveProperty('agent_name');
   });
 
   // ============================================

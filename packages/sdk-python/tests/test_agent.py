@@ -1,5 +1,7 @@
 """Tests for AgentClient and AsyncAgentClient."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -26,6 +28,10 @@ TOKEN = "at_test_token"
 
 def ok(data):
     return httpx.Response(200, json={"ok": True, "data": data})
+
+
+def request_json(request: httpx.Request):
+    return json.loads(request.content.decode())
 
 
 MSG = {
@@ -81,6 +87,23 @@ class TestAgentClientMessages:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.send("general", "See file", attachments=["f1", "f2"])
         assert route.called
+        assert request_json(route.calls[0].request) == {"text": "See file", "mode": "wait", "attachments": ["f1", "f2"]}
+
+    @respx.mock
+    def test_send_defaults_mode_wait(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.send("general", "Hello")
+        assert route.called
+        assert request_json(route.calls[0].request) == {"text": "Hello", "mode": "wait"}
+
+    @respx.mock
+    def test_send_forwards_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.send("general", "Hello", mode="steer")
+        assert route.called
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"steer"}'
 
     @respx.mock
     def test_messages_with_pagination(self):
@@ -125,6 +148,21 @@ class TestAgentClientDMs:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.dm("Alice", "Hi")
         assert route.called
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait"}'
+
+    @respx.mock
+    def test_dm_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dm("Alice", "Hi", mode="steer")
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
+
+    @respx.mock
+    def test_dm_with_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dm("Alice", "Hi", attachments=["file_1", "file_2"])
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait","attachments":["file_1","file_2"]}'
 
     @respx.mock
     def test_dms_conversations(self):
@@ -155,6 +193,14 @@ class TestAgentClientDMs:
         c = AgentClient(HttpClient(TOKEN, BASE))
         c.dms.send_message("c1", "Hey")
         assert route.called
+        assert route.calls[0].request.content == b'{"text":"Hey","mode":"wait"}'
+
+    @respx.mock
+    def test_dms_send_message_with_mode_and_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm/c1/messages").mock(return_value=ok({"sent": True}))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        c.dms.send_message("c1", "Hey", mode="steer", attachments=["file_1"])
+        assert route.calls[0].request.content == b'{"text":"Hey","mode":"steer","attachments":["file_1"]}'
 
     @respx.mock
     def test_dms_add_participant(self):
@@ -405,10 +451,20 @@ class TestAsyncAgentClient:
     @pytest.mark.asyncio
     @respx.mock
     async def test_send(self):
-        respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         result = await c.send("#general", "Hello")
         assert isinstance(result, MessageWithMeta)
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"wait"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_send_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.send("#general", "Hello", mode="steer")
+        assert route.calls[0].request.content == b'{"text":"Hello","mode":"steer"}'
         await c.client.close()
 
     @pytest.mark.asyncio
@@ -437,6 +493,25 @@ class TestAsyncAgentClient:
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         await c.dm("Alice", "Hi")
         assert route.called
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_dm_steer_mode(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.dm("Alice", "Hi", mode="steer")
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"steer"}'
+        await c.client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_dm_with_attachments(self):
+        route = respx.post(f"{BASE}/v1/dm").mock(return_value=ok({"sent": True}))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        await c.dm("Alice", "Hi", attachments=["file_1", "file_2"])
+        assert route.calls[0].request.content == b'{"to":"Alice","text":"Hi","mode":"wait","attachments":["file_1","file_2"]}'
         await c.client.close()
 
     @pytest.mark.asyncio

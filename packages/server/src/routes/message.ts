@@ -18,6 +18,7 @@ const postMessageSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   content_type: z.string().optional(),
+  mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
 // POST /v1/channels/:name/messages - post a message
@@ -37,7 +38,7 @@ messageRoutes.post(
           error: { code: 'invalid_request', message: 'text is required' },
         }, 400);
       }
-      const { text, blocks, attachments, data, content_type } = parsed.data;
+      const { text, blocks, attachments, data, content_type, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -73,7 +74,7 @@ messageRoutes.post(
         scope: `channel-message:${channel.id}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type }),
+        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode }),
         kv: c.env.KV,
         operation: () =>
           messageEngine.postMessage(
@@ -81,7 +82,7 @@ messageRoutes.post(
             workspace.id,
             channel.id,
             agentId,
-            { text, blocks, attachments, data, content_type },
+            { text, blocks, attachments, data, content_type, mode },
           ),
       });
 
@@ -92,7 +93,12 @@ messageRoutes.post(
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
-        const eventData = { ...idempotent.data, channel_name: channelName, from_name: agent?.name };
+        const eventData = {
+          ...idempotent.data,
+          channel_name: channelName,
+          from_name: agent?.name,
+          injection_mode: idempotent.data.injection_mode ?? mode,
+        };
         runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
         runInBackground(
           c,
