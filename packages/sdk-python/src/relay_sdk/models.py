@@ -57,6 +57,10 @@ class CreateAgentResponse(BaseModel):
     created_at: str
 
 
+class TokenRotateResponse(BaseModel):
+    token: str
+
+
 # ── Workspace ─────────────────────────────────────────────────────
 
 class Workspace(BaseModel):
