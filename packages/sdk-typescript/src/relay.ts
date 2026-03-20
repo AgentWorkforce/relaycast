@@ -10,6 +10,7 @@ import type {
   UpdateWorkspaceRequest,
   Workspace,
   CreateWorkspaceResponse,
+  WorkspaceLookup,
   SystemPrompt,
   SetSystemPromptRequest,
   CreateWebhookRequest,
@@ -35,7 +36,7 @@ import type {
   ReleaseAgentRequest,
   ReleaseAgentResponse,
 } from './types.js';
-import { ApiErrorSchema, CreateWorkspaceResponseSchema } from '@relaycast/types';
+import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
@@ -62,6 +63,10 @@ export interface WorkspaceStreamConfig {
   defaultEnabled: boolean;
   override: boolean | null;
 }
+
+export type EnsureWorkspaceResponse =
+  | ({ existed: false; name: string } & CreateWorkspaceResponse)
+  | ({ existed: true } & WorkspaceLookup);
 
 interface ChannelListOptions {
   includeArchived?: boolean;
@@ -122,7 +127,8 @@ export class RelayCast {
       );
     }
 
-    if (typeof parsed !== 'object' || parsed === null || !('ok' in parsed) || typeof parsed.ok !== 'boolean') {
+    const envelope = ApiResponseSchema(CreateWorkspaceResponseSchema).safeParse(parsed);
+    if (!envelope.success) {
       throw new RelayError(
         'transport_error',
         'Response is not a valid Relay API response object',
@@ -130,23 +136,75 @@ export class RelayCast {
       );
     }
 
-    if (!parsed.ok) {
-      const errResult = ApiErrorSchema.safeParse(parsed);
-      const rawCode = errResult.success ? errResult.data.error.code : undefined;
-      const message = errResult.success ? errResult.data.error.message : 'Unknown error';
-      throw relayErrorFromApi(rawCode, message, res.status);
+    if (!envelope.data.ok) {
+      throw relayErrorFromApi(envelope.data.error.code, envelope.data.error.message, res.status);
     }
 
-    if (!('data' in parsed)) {
+    return camelizeKeys(envelope.data.data);
+  }
+
+  static async lookupWorkspace(name: string, baseUrl?: string): Promise<WorkspaceLookup | null> {
+    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+
+    const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-SDK-Version': SDK_VERSION,
+        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
+        'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
+        'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
+      },
+    });
+
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch (err) {
       throw new RelayError(
         'transport_error',
-        'Response is missing required "data" field',
+        `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
+        { statusCode: res.status, retryable: false, cause: err },
+      );
+    }
+
+    const envelope = ApiResponseSchema(WorkspaceLookupSchema).safeParse(parsed);
+    if (!envelope.success) {
+      throw new RelayError(
+        'transport_error',
+        'Response is not a valid Relay API response object',
         { statusCode: res.status, retryable: false },
       );
     }
 
-    const data = (parsed as { data: unknown }).data;
-    return camelizeKeys(CreateWorkspaceResponseSchema.parse(data));
+    if (!envelope.data.ok) {
+      if (res.status === 404) {
+        return null;
+      }
+      throw relayErrorFromApi(envelope.data.error.code, envelope.data.error.message, res.status);
+    }
+
+    return camelizeKeys(envelope.data.data);
+  }
+
+  static async ensureWorkspace(name: string, baseUrl?: string): Promise<EnsureWorkspaceResponse> {
+    try {
+      const created = await RelayCast.createWorkspace(name, baseUrl);
+      return { ...created, existed: false, name };
+    } catch (err) {
+      const statusCode = err instanceof RelayError ? err.statusCode : undefined;
+      if (statusCode !== 409) {
+        throw err;
+      }
+
+      const existing = await RelayCast.lookupWorkspace(name, baseUrl);
+      if (!existing) {
+        throw err;
+      }
+
+      return { ...existing, existed: true };
+    }
   }
 
   private rememberIdentity(agentId: string, name: string): void {

@@ -22,6 +22,13 @@ export const CreateWorkspaceResponseSchema = z.object({
 });
 export type CreateWorkspaceResponse = z.infer<typeof CreateWorkspaceResponseSchema>;
 
+export const WorkspaceLookupSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  created_at: z.string(),
+});
+export type WorkspaceLookup = z.infer<typeof WorkspaceLookupSchema>;
+
 export const UpdateWorkspaceRequestSchema = z.object({
   name: z.string().optional(),
   system_prompt: z.string().nullable().optional(),

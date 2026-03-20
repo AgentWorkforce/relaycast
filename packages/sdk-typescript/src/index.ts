@@ -3,6 +3,7 @@ export { RelayCast, RelayCast as Relay } from './relay.js';
 export type {
   RelayCastOptions,
   RelayCastOptions as RelayOptions,
+  EnsureWorkspaceResponse,
 } from './relay.js';
 export { AgentClient } from './agent.js';
 export type { AgentClientOptions } from './agent.js';

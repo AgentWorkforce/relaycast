@@ -464,6 +464,115 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('RelayCast.lookupWorkspace', () => {
+    it('calls GET /v1/workspaces/by-name/:name without auth', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { id: 'ws_1', name: 'My Workspace', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      const result = await RelayCast.lookupWorkspace('My Workspace');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/workspaces/by-name/My%20Workspace');
+      expect(init.method).toBe('GET');
+      expect(init.headers.Authorization).toBeUndefined();
+      expect(result).toEqual({ id: 'ws_1', name: 'My Workspace', createdAt: '2024-01-01' });
+    });
+
+    it('returns null on 404', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: false,
+          status: 404,
+          json: () =>
+            Promise.resolve({
+              ok: false,
+              error: { code: 'workspace_not_found', message: 'Missing' },
+            }),
+        }),
+      );
+
+      await expect(RelayCast.lookupWorkspace('Missing')).resolves.toBeNull();
+    });
+  });
+
+  describe('RelayCast.ensureWorkspace', () => {
+    it('returns a created workspace when the name is available', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      const result = await RelayCast.ensureWorkspace('Fresh Workspace');
+      expect(result).toEqual({
+        existed: false,
+        name: 'Fresh Workspace',
+        workspaceId: 'ws_1',
+        apiKey: 'rk_live_new',
+        createdAt: '2024-01-01',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('looks up existing workspace metadata after a create conflict', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch
+        .mockImplementationOnce(() =>
+          Promise.resolve({
+            ok: false,
+            status: 409,
+            json: () =>
+              Promise.resolve({
+                ok: false,
+                error: { code: 'workspace_already_exists', message: 'Already exists' },
+              }),
+          }),
+        )
+        .mockImplementationOnce(() =>
+          Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                ok: true,
+                data: { id: 'ws_existing', name: 'Taken Workspace', created_at: '2024-01-02' },
+              }),
+          }),
+        );
+
+      const result = await RelayCast.ensureWorkspace('Taken Workspace');
+      expect(result).toEqual({
+        existed: true,
+        id: 'ws_existing',
+        name: 'Taken Workspace',
+        createdAt: '2024-01-02',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('agents.registerOrGet', () => {
     it('returns register result when agent does not exist', async () => {
       const { RelayCast } = await import('../relay.js');

@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Normalized core SDK request options to camelCase (`includeArchived`, `contentType`, `sizeBytes`, `uploadedBy`, `handlerAgent`, `paymentMethod`).
 - Exported camelized SDK type aliases from the package root.
 - Updated tests to keep camelCase as the canonical SDK style.
+- Added `RelayCast.lookupWorkspace()` and `RelayCast.ensureWorkspace()` for name-based workspace setup flows.
 
 ## [0.3.2] - 2026-02-20
 
