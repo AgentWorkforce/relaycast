@@ -1,8 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { setAuth } from '../../lib/auth';
-import { useState } from 'react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,24 +32,24 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#f6efe2] text-[#22314a]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(48rem_24rem_at_0%_0%,rgba(182,215,255,0.65),transparent_62%),radial-gradient(38rem_22rem_at_100%_100%,rgba(255,163,71,0.18),transparent_60%)]" />
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(150,201,255,0.16),transparent)]" />
+    <main className="relative min-h-screen overflow-hidden bg-[#050816] text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(42rem_22rem_at_15%_18%,rgba(0,217,255,0.14),transparent_62%),radial-gradient(34rem_20rem_at_85%_82%,rgba(99,102,241,0.16),transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent)]" />
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-md items-center justify-center px-4 py-8 sm:px-6">
-        <section className="w-full rounded-[28px] border border-[#d5e4f5] bg-[rgba(255,252,246,0.92)] p-6 shadow-[0_24px_80px_rgba(103,137,179,0.16)] backdrop-blur sm:p-7">
-          <div className="mb-6 flex items-center justify-between gap-4">
+        <section className="w-full rounded-[28px] border border-white/10 bg-[rgba(10,14,30,0.86)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur sm:p-7">
+          <div className="mb-6 flex items-center gap-3">
+            <img src="/observer/favicon.svg" alt="" aria-hidden="true" className="h-10 w-10" />
             <img
-              src="/observer/brand/agent-relay-logo-black.svg"
+              src="/observer/agent-relay-logo-white.svg"
               alt="Agent Relay"
-              className="h-8 w-auto sm:h-9"
+              className="h-6 w-auto sm:h-7"
             />
-            <div className="h-2.5 w-2.5 rounded-full bg-[#f28c28]" />
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="apiKey" className="block text-sm font-medium text-[#324866]">
+              <label htmlFor="apiKey" className="block text-sm font-medium text-[#c7d0ff]">
                 API key
               </label>
               <input
@@ -57,7 +57,7 @@ export default function LoginPage() {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                className="w-full rounded-2xl border border-[#cfe0f2] bg-[#fffdfa] px-4 py-3.5 text-sm text-[#22314a] shadow-[inset_0_0_0_1px_rgba(207,224,242,0.45)] transition focus:border-[#8bbef0] focus:outline-none focus:ring-2 focus:ring-[#8bbef0]/45 placeholder:text-[#8a97a8] [font-family:'IBM_Plex_Mono',monospace]"
+                className="w-full rounded-2xl border border-white/12 bg-white/5 px-4 py-3.5 text-sm text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] transition focus:border-[#00d9ff]/60 focus:outline-none focus:ring-2 focus:ring-[#00d9ff]/25 placeholder:text-[#7d86b4] [font-family:'IBM_Plex_Mono',monospace]"
                 placeholder="rk_live_..."
                 autoComplete="current-password"
                 autoFocus
@@ -68,7 +68,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <p className="rounded-2xl border border-[#f4c7c7] bg-[#fff1f1] px-3.5 py-3 text-sm text-[#9f2f2f]">
+              <p className="rounded-2xl border border-[#fb7185]/35 bg-[#fb7185]/10 px-3.5 py-3 text-sm text-[#ffd5dd]">
                 {error}
               </p>
             )}
@@ -76,7 +76,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !apiKey}
-              className="w-full cursor-pointer rounded-2xl bg-[#6aa9e9] px-4 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#5a9bde] disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full cursor-pointer rounded-2xl bg-[#00d9ff] px-4 py-3.5 text-sm font-semibold text-[#04111f] transition-colors hover:bg-[#33e2ff] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? 'Validating...' : 'Open observer'}
             </button>
