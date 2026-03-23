@@ -5,6 +5,7 @@ import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn, formatDmLabel } from '../lib/utils';
 
 import { AgentAvatar } from './AgentAvatar';
+import { AgentRelayLockup } from './Brand';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
 import type { Agent, Channel, DmConversationSummary } from '@relaycast/sdk';
@@ -76,20 +77,20 @@ export function AgentSidebar({
 
   return (
     <div className={cn('flex h-full w-[280px] shrink-0 flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]', className)}>
-      <div className="flex min-h-14 items-center gap-2 border-b border-[var(--color-border-default)] px-4 py-3">
-        <img
-          src={theme === 'dark' ? '/observer/brand/agent-relay-logo-white.svg' : '/observer/brand/agent-relay-logo-black.svg'}
-          alt="Agent Relay"
-          className="h-5 w-auto shrink-0"
+      <div className="flex min-h-16 items-center gap-3 border-b border-[rgba(255,255,255,0.14)] bg-[linear-gradient(135deg,#4A90C2_0%,#2F6FA3_100%)] px-4 py-3 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
+        <AgentRelayLockup
+          className="min-w-0 flex-1 gap-2"
+          markClassName="h-7 shrink-0 text-white"
+          wordmarkClassName="h-[18px] min-w-0 shrink text-white"
         />
-        <h1 className="truncate text-sm font-semibold tracking-[0.12em] uppercase text-[var(--color-text-secondary)] [font-family:Outfit,sans-serif]">
+        <span className="rounded-full border border-white/20 bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/90 backdrop-blur">
           Observer
-        </h1>
+        </span>
         <span
-          className={cn('ml-auto h-2.5 w-2.5 rounded-full shrink-0', {
-            'bg-green-500': wsStatus === 'connected',
-            'bg-yellow-500 animate-pulse': wsStatus === 'connecting' || wsStatus === 'reconnecting',
-            'bg-red-500': wsStatus === 'disconnected',
+          className={cn('h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-white/25', {
+            'bg-[#34D399]': wsStatus === 'connected',
+            'bg-[#F59E0B] animate-pulse': wsStatus === 'connecting' || wsStatus === 'reconnecting',
+            'bg-[#F87171]': wsStatus === 'disconnected',
           })}
           title={`WebSocket: ${wsStatus}`}
         />
