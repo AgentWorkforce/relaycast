@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Agent Relay Observer',
-  description: 'Agent Relay Observer dashboard',
+  description: 'Observer dashboard for Agent Relay workspaces',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

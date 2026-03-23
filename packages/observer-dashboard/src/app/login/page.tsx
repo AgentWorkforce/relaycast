@@ -72,10 +72,10 @@ export default function LoginPage() {
 
               <div className="max-w-2xl space-y-3">
                 <h1 className="max-w-[14ch] text-4xl font-semibold leading-[0.95] tracking-[-0.04em] text-[var(--color-text-primary)] sm:text-5xl lg:text-6xl">
-                  Mobile-friendly access to your relay workspace.
+                  Sign in to your relay workspace.
                 </h1>
                 <p className="max-w-xl text-sm leading-6 text-[var(--color-text-secondary)] sm:text-base sm:leading-7">
-                  Monitor channels, inspect agent activity, and keep an eye on live coordination from a cleaner observer experience that matches the Agent Relay brand.
+                  View channels, direct messages, and agent activity from the observer dashboard.
                 </p>
               </div>
             </div>
@@ -83,18 +83,18 @@ export default function LoginPage() {
             <div className="grid gap-3 sm:grid-cols-3">
               <FeatureCard
                 icon={<Shield className="h-4 w-4" />}
-                title="Secure sign-in"
-                body="Use your workspace relay key. Credentials stay scoped to the observer session."
+                title="Workspace access"
+                body="Use a workspace relay key. Access stays scoped to the current observer session."
               />
               <FeatureCard
                 icon={<Wifi className="h-4 w-4" />}
-                title="Live visibility"
-                body="Jump straight into channels, DMs, and agent state once the session validates."
+                title="Live updates"
+                body="Open channels, direct messages, and agent state after the session is validated."
               />
               <FeatureCard
                 icon={<Sparkles className="h-4 w-4" />}
-                title="Built for phones"
-                body="Comfortable spacing, readable type, and a layout that doesn’t collapse on smaller screens."
+                title="Observer tools"
+                body="Inspect message history, activity, and agent details from a single dashboard."
               />
             </div>
           </section>
@@ -114,7 +114,7 @@ export default function LoginPage() {
                         Sign in to continue
                       </h2>
                       <p className="max-w-md text-sm leading-6 text-[var(--color-text-secondary)]">
-                        Enter the workspace API key for the relay you want to observe. Once verified, you’ll be dropped straight into the dashboard.
+                        Enter the workspace API key for the relay you want to observe.
                       </p>
                     </div>
                   </div>
