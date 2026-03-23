@@ -2,6 +2,7 @@
 
 import { X, Bot, User, Clock, Cpu, CircleDot, Sparkles } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
+import { cn } from '../lib/utils';
 import type { Agent } from '@relaycast/sdk';
 
 function relativeTime(timestamp: string): string {
@@ -43,9 +44,10 @@ function statusLabel(status: string) {
 interface AgentPanelProps {
   agent: Agent;
   onClose: () => void;
+  className?: string;
 }
 
-export function AgentPanel({ agent, onClose }: AgentPanelProps) {
+export function AgentPanel({ agent, onClose, className }: AgentPanelProps) {
   const status = statusLabel(agent.status);
   const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
   const model = (agent.metadata?.model as string) || '';
@@ -57,44 +59,37 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
       ? <Sparkles className="h-3.5 w-3.5" />
       : <Bot className="h-3.5 w-3.5" />;
 
-  // Collect metadata entries to display (excluding known fields)
   const extraMeta = Object.entries(agent.metadata || {}).filter(
     ([key]) => !['cli', 'current_task', 'model'].includes(key)
   );
 
   return (
-    <div className="w-[360px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center justify-between shrink-0">
-        <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Agent Profile</h2>
+    <div className={cn('flex h-full w-full min-w-0 flex-col bg-[var(--color-bg-primary)] lg:w-[360px] lg:shrink-0 lg:border-l lg:border-[var(--color-border-default)]', className)}>
+      <div className="flex min-h-14 items-center justify-between border-b border-[var(--color-border-default)] px-4 py-3 shrink-0">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Agent Profile</h2>
         <button
           onClick={onClose}
-          className="p-1 rounded-md cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Avatar + name */}
-        <div className="flex flex-col items-center pt-6 pb-4 px-4">
-          <AgentAvatar name={agent.name} size="md" className="h-14 w-14 text-xl mb-3" />
-          <h3 className="text-lg font-bold text-[var(--color-text-primary)]">{agent.name}</h3>
-          <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div className="flex flex-col items-center px-4 pb-4 pt-6 text-center">
+          <AgentAvatar name={agent.name} size="md" className="mb-3 h-14 w-14 text-xl" />
+          <h3 className="break-words text-lg font-bold text-[var(--color-text-primary)]">{agent.name}</h3>
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-1.5 text-center">
             <span className={`h-2 w-2 rounded-full ${status.dot}`} />
             <span className={`text-xs ${status.color}`}>{status.text}</span>
-            <span className="text-xs text-[var(--color-text-dim)] mx-1">&middot;</span>
-            <span className="text-xs text-[var(--color-text-muted)]">
-              {identityLabel}
-            </span>
+            <span className="mx-1 text-xs text-[var(--color-text-dim)]">&middot;</span>
+            <span className="text-xs text-[var(--color-text-muted)]">{identityLabel}</span>
           </div>
         </div>
 
-        {/* Persona / bio */}
         {agent.persona && (
           <div className="px-4 pb-4">
-            <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap">
+            <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--color-text-secondary)]">
               {agent.persona}
             </p>
           </div>
@@ -102,8 +97,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
 
         <div className="mx-4 border-t border-[var(--color-border-subtle)]" />
 
-        {/* Info rows */}
-        <div className="px-4 py-4 space-y-3">
+        <div className="space-y-4 px-4 py-4">
           {currentTask && (
             <InfoRow
               icon={<CircleDot className="h-3.5 w-3.5" />}
@@ -135,19 +129,18 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
           />
         </div>
 
-        {/* Extra metadata */}
         {extraMeta.length > 0 && (
           <>
             <div className="mx-4 border-t border-[var(--color-border-subtle)]" />
             <div className="px-4 py-4">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
+              <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
                 Metadata
               </h4>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {extraMeta.map(([key, value]) => (
-                  <div key={key} className="flex items-start gap-2">
-                    <span className="text-xs text-[var(--color-text-muted)] shrink-0 min-w-[80px]">{key}</span>
-                    <span className="text-xs text-[var(--color-text-secondary)] break-all">
+                  <div key={key} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2">
+                    <span className="shrink-0 text-xs text-[var(--color-text-muted)] sm:min-w-[96px]">{key}</span>
+                    <span className="break-all text-xs leading-5 text-[var(--color-text-secondary)]">
                       {typeof value === 'string' ? value : JSON.stringify(value)}
                     </span>
                   </div>
@@ -163,11 +156,11 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
 
 function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="flex items-start gap-2.5">
-      <span className="text-[var(--color-text-muted)] mt-0.5 shrink-0">{icon}</span>
+    <div className="flex items-start gap-3">
+      <span className="mt-0.5 shrink-0 text-[var(--color-text-muted)]">{icon}</span>
       <div className="min-w-0">
         <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
-        <p className="text-sm text-[var(--color-text-primary)] break-words">{value}</p>
+        <p className="break-words text-sm leading-6 text-[var(--color-text-primary)]">{value}</p>
       </div>
     </div>
   );

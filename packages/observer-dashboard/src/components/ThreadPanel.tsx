@@ -3,6 +3,7 @@
 import { X, MessageSquare } from 'lucide-react';
 import { MessageMarkdown, useThread } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
+import { cn } from '../lib/utils';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
 function relativeTime(timestamp: string): string {
@@ -27,10 +28,10 @@ function ThreadMessageRow({
   onOpenAgent?: (agentName: string | null) => void;
 }) {
   return (
-    <div className="flex gap-3 px-4 py-2">
-      <AgentAvatar name={msg.agentName} />
+    <div className="flex gap-3 px-3 py-3 sm:px-4">
+      <AgentAvatar name={msg.agentName} className="mt-0.5" />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 mb-0.5">
+        <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="font-semibold text-sm text-[var(--color-text-primary)]">
             {msg.agentName}
           </span>
@@ -40,7 +41,7 @@ function ThreadMessageRow({
         </div>
         <MessageMarkdown
           text={msg.text}
-          className="text-sm text-[var(--color-text-secondary)] break-words"
+          className="text-sm leading-6 text-[var(--color-text-secondary)] break-words"
           showCodeCopyButton
           mentionNames={mentionNames}
           onMentionClick={onOpenAgent}
@@ -56,6 +57,7 @@ interface ThreadPanelProps {
   onClose: () => void;
   mentionNames?: string[];
   onOpenAgent?: (agentName: string | null) => void;
+  className?: string;
 }
 
 export function ThreadPanel({
@@ -63,44 +65,40 @@ export function ThreadPanel({
   onClose,
   mentionNames,
   onOpenAgent,
+  className,
 }: ThreadPanelProps) {
   const { parent, replies, loading } = useThread(messageId);
 
   return (
-    <div className="w-[360px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Thread</h2>
+    <div className={cn('flex h-full w-full min-w-0 flex-col bg-[var(--color-bg-primary)] lg:w-[360px] lg:shrink-0 lg:border-l lg:border-[var(--color-border-default)]', className)}>
+      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-[var(--color-border-default)] px-4 py-3 shrink-0">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+            <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">Thread</h2>
+          </div>
           {parent && (
-            <span className="text-xs text-[var(--color-text-dim)]">
+            <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
               {parent.replyCount} {parent.replyCount === 1 ? 'reply' : 'replies'}
-            </span>
+            </div>
           )}
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded-md cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         {loading ? (
-          <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
-            <p className="text-sm">Loading thread...</p>
-          </div>
+          <PanelState label="Loading thread..." loading />
         ) : !parent ? (
-          <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
-            <p className="text-sm">Thread not found</p>
-          </div>
+          <PanelState label="Thread not found" />
         ) : (
           <div>
-            {/* Parent message */}
-            <div className="border-b border-[var(--color-border-subtle)] pb-2 mb-1">
+            <div className="mb-1 border-b border-[var(--color-border-subtle)] pb-2">
               <ThreadMessageRow
                 msg={parent}
                 mentionNames={mentionNames}
@@ -108,9 +106,8 @@ export function ThreadPanel({
               />
             </div>
 
-            {/* Replies */}
             {replies.length === 0 ? (
-              <div className="px-4 py-6 text-center text-xs text-[var(--color-text-dim)]">
+              <div className="px-4 py-8 text-center text-sm text-[var(--color-text-dim)]">
                 No replies yet
               </div>
             ) : (
@@ -128,6 +125,14 @@ export function ThreadPanel({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function PanelState({ loading = false, label }: { loading?: boolean; label: string }) {
+  return (
+    <div className="flex h-32 items-center justify-center px-6 text-center text-[var(--color-text-dim)]">
+      <p className={cn('text-sm', loading ? 'text-[var(--color-text-secondary)]' : '')}>{label}</p>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Hash, MessageSquare, UserRound } from 'lucide-react';
+import { Hash, MessageSquare, UserRound, PanelLeft, PanelRight } from 'lucide-react';
 import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
+import { cn } from '../lib/utils';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
@@ -14,6 +15,10 @@ interface ChatFeedProps {
   onOpenThread?: (messageId: string) => void;
   mentionNames?: string[];
   onOpenAgent?: (agentName: string | null) => void;
+  isMobile?: boolean;
+  onToggleSidebar?: () => void;
+  onToggleInspector?: () => void;
+  inspectorTitle?: string;
 }
 
 export function ChatFeed({
@@ -24,6 +29,10 @@ export function ChatFeed({
   onOpenThread,
   mentionNames,
   onOpenAgent,
+  isMobile = false,
+  onToggleSidebar,
+  onToggleInspector,
+  inspectorTitle = 'Activity',
 }: ChatFeedProps) {
   const isDm = selectedChannel?.startsWith('dm:');
   const channelName = selectedChannel && !isDm ? selectedChannel : null;
@@ -33,35 +42,71 @@ export function ChatFeed({
     ? isDm
       ? dmLabel || 'Direct Message'
       : `#${selectedChannel}`
-    : 'Select a channel';
+    : 'Select a conversation';
   const memberCount = selectedChannelMemberCount ?? 0;
   const showMemberBadge = !!channelName;
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2 shrink-0">
-        {selectedChannel && !isDm ? (
-          <Hash className="h-4 w-4 text-[var(--color-text-muted)]" />
-        ) : (
-          <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
+    <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-14 items-center gap-2 border-b border-[var(--color-border-default)] px-3 py-3 sm:px-4">
+        {isMobile && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-hover)]"
+            aria-label="Open channels and agents"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
         )}
-        <h2 className="font-semibold text-sm text-[var(--color-text-primary)] flex-1">{title}</h2>
-        {showMemberBadge && selectedChannelArchived && (
-          <span className="inline-flex items-center rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-muted)] shrink-0">
-            Archived
-          </span>
-        )}
-        {showMemberBadge && (
-          <span className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-border-default)] px-2.5 py-1 text-sm text-[var(--color-text-primary)] bg-[var(--color-bg-secondary)] shrink-0">
-            <UserRound className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-            <span>{memberCount}</span>
-          </span>
-        )}
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            {selectedChannel && !isDm ? (
+              <Hash className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+            ) : (
+              <MessageSquare className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+            )}
+            <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)] sm:text-base">{title}</h2>
+          </div>
+          {isMobile && (
+            <div className="mt-0.5 text-xs text-[var(--color-text-muted)]">
+              {showMemberBadge
+                ? `${memberCount} ${memberCount === 1 ? 'member' : 'members'}`
+                : selectedChannel
+                  ? 'Direct message conversation'
+                  : 'Pick a channel, DM, or agent from the menu'}
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {showMemberBadge && selectedChannelArchived && (
+            <span className="hidden rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-muted)] sm:inline-flex">
+              Archived
+            </span>
+          )}
+          {showMemberBadge && (
+            <span className="hidden items-center gap-1.5 rounded-2xl border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-2.5 py-1 text-sm text-[var(--color-text-primary)] sm:inline-flex">
+              <UserRound className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
+              <span>{memberCount}</span>
+            </span>
+          )}
+          {isMobile && (
+            <button
+              type="button"
+              onClick={onToggleInspector}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] px-3 text-sm text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-hover)]"
+              aria-label={`Open ${inspectorTitle}`}
+            >
+              <PanelRight className="h-4 w-4" />
+              <span className="hidden sm:inline">{inspectorTitle}</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {channelName ? (
           <ChannelMessages
             channel={channelName}
@@ -76,9 +121,12 @@ export function ChatFeed({
             onOpenAgent={onOpenAgent}
           />
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-            <MessageSquare className="h-8 w-8 mb-2 opacity-40" />
-            <p className="text-sm">Select a channel to view messages</p>
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center text-[var(--color-text-dim)]">
+            <MessageSquare className="mb-3 h-10 w-10 opacity-40" />
+            <p className="text-sm font-medium text-[var(--color-text-secondary)]">Nothing selected yet</p>
+            <p className="mt-1 max-w-sm text-sm text-[var(--color-text-dim)]">
+              Open the menu to jump into a channel, direct message, or agent profile.
+            </p>
           </div>
         )}
       </div>
@@ -107,25 +155,15 @@ function ChannelMessages({
   }, [sorted.length]);
 
   if (loading && sorted.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
-        <p className="text-sm">Loading messages...</p>
-      </div>
-    );
+    return <FeedState loading label="Loading messages..." />;
   }
 
   if (sorted.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <MessageSquare className="h-8 w-8 mb-2 opacity-40" />
-        <p className="text-sm">No messages yet</p>
-      </div>
-    );
+    return <FeedState label="No messages yet" />;
   }
 
   return (
-    <div className="py-2">
+    <div className="py-2 sm:py-3">
       {sorted.map((msg, i) => {
         const prev = i > 0 ? sorted[i - 1] : null;
         const compact =
@@ -194,25 +232,15 @@ function DmMessages({
   }, [sorted.length]);
 
   if (loading && sorted.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <div className="animate-spin h-6 w-6 border-2 border-[var(--color-success)] border-t-transparent rounded-full mb-2" />
-        <p className="text-sm">Loading messages...</p>
-      </div>
-    );
+    return <FeedState loading label="Loading messages..." />;
   }
 
   if (sorted.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-dim)]">
-        <MessageSquare className="h-8 w-8 mb-2 opacity-40" />
-        <p className="text-sm">No messages in this conversation</p>
-      </div>
-    );
+    return <FeedState label="No messages in this conversation" />;
   }
 
   return (
-    <div className="py-2">
+    <div className="py-2 sm:py-3">
       {sorted.map((msg, i) => {
         const prev = i > 0 ? sorted[i - 1] : null;
         const compact =
@@ -230,6 +258,19 @@ function DmMessages({
         );
       })}
       <div ref={bottomRef} />
+    </div>
+  );
+}
+
+function FeedState({ loading = false, label }: { loading?: boolean; label: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center text-[var(--color-text-dim)]">
+      {loading ? (
+        <div className="mb-3 h-7 w-7 animate-spin rounded-full border-2 border-[var(--color-success)] border-t-transparent" />
+      ) : (
+        <MessageSquare className="mb-3 h-10 w-10 opacity-40" />
+      )}
+      <p className={cn('text-sm', loading ? 'text-[var(--color-text-secondary)]' : '')}>{label}</p>
     </div>
   );
 }

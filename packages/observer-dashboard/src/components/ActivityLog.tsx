@@ -17,7 +17,7 @@ function relativeTime(timestamp: string): string {
   return `${days}d`;
 }
 
-export function ActivityLog() {
+export function ActivityLog({ className }: { className?: string }) {
   const { status, events: wsEvents, latestEventAt } = useWebSocketFeed();
 
   const statusClasses = {
@@ -28,13 +28,13 @@ export function ActivityLog() {
   } as const;
 
   return (
-    <div className="w-[260px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] shrink-0 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Activity</h2>
+    <div className={cn('flex h-full w-full min-w-0 flex-col bg-[var(--color-bg-primary)] lg:w-[260px] lg:shrink-0 lg:border-l lg:border-[var(--color-border-default)]', className)}>
+      <div className="space-y-2 border-b border-[var(--color-border-default)] px-4 py-3 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Activity</h2>
           <span
             className={cn(
-              'inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+              'inline-flex items-center rounded border px-2 py-1 text-[10px] font-medium uppercase tracking-wide',
               statusClasses[status]
             )}
             title="Current WebSocket connection status"
@@ -42,11 +42,11 @@ export function ActivityLog() {
             WS {status}
           </span>
         </div>
-        <div className="text-[10px] text-[var(--color-text-dim)]">
+        <div className="text-xs text-[var(--color-text-dim)]">
           {latestEventAt ? `Last WS event ${relativeTime(latestEventAt)}` : 'No WS events yet'}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         <WebSocketFeed events={wsEvents} />
       </div>
     </div>
@@ -56,7 +56,7 @@ export function ActivityLog() {
 function WebSocketFeed({ events }: { events: WebSocketFeedEvent[] }) {
   if (events.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-[var(--color-text-dim)]">
+      <div className="flex h-full items-center justify-center px-6 text-center text-[var(--color-text-dim)]">
         <p className="text-sm">No websocket events yet</p>
       </div>
     );
@@ -67,18 +67,18 @@ function WebSocketFeed({ events }: { events: WebSocketFeedEvent[] }) {
       {events.map((event: WebSocketFeedEvent) => (
         <div
           key={event.id}
-          className="flex items-start gap-2.5 px-4 py-2 text-sm"
+          className="flex items-start gap-3 px-4 py-3 text-sm"
         >
-          <Wifi className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
-          <div className="flex-1 min-w-0">
-            <div className="font-mono text-[10px] text-[var(--color-text-muted)] break-all">
+          <Wifi className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+          <div className="min-w-0 flex-1">
+            <div className="break-all font-mono text-[10px] text-[var(--color-text-muted)]">
               {event.eventType}
             </div>
-            <div className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+            <div className="text-xs leading-5 text-[var(--color-text-secondary)]">
               {event.summary}
             </div>
           </div>
-          <span className="text-[10px] text-[var(--color-text-dim)] shrink-0 mt-0.5">
+          <span className="mt-0.5 shrink-0 text-[10px] text-[var(--color-text-dim)]">
             {relativeTime(event.timestamp)}
           </span>
         </div>

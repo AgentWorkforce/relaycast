@@ -32,37 +32,37 @@ export function MessageCard({
   onOpenAgent,
 }: MessageCardProps) {
   return (
-    <div className="flex gap-3 px-4 py-2 hover:bg-[var(--color-bg-hover)] group">
+    <div className="group flex gap-3 px-3 py-2 hover:bg-[var(--color-bg-hover)] sm:px-4">
       {compact ? (
-        <div className="w-8 shrink-0" />
+        <div className="hidden w-8 shrink-0 sm:block" />
       ) : (
-        <AgentAvatar name={message.agentName} />
+        <AgentAvatar name={message.agentName} className="mt-0.5" />
       )}
       <div className="min-w-0 flex-1">
-        {!compact && (
-          <div className="flex items-baseline gap-2 mb-0.5">
+        <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          {!compact && (
             <span className="font-semibold text-sm text-[var(--color-text-primary)]">
               {message.agentName}
             </span>
-            <span className="text-xs text-[var(--color-text-dim)] ml-auto shrink-0">
-              {relativeTime(message.createdAt)}
-            </span>
-          </div>
-        )}
+          )}
+          <span className="text-xs text-[var(--color-text-dim)]">
+            {relativeTime(message.createdAt)}
+          </span>
+        </div>
         <MessageMarkdown
           text={message.text}
-          className="text-sm text-[var(--color-text-secondary)] break-words"
+          className="text-sm leading-6 text-[var(--color-text-secondary)] break-words"
           showCodeCopyButton
           mentionNames={mentionNames}
           onMentionClick={onOpenAgent}
           mentionClassName="font-semibold text-[var(--color-accent-cyan)] hover:underline cursor-pointer"
         />
         {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
-          <div className="flex items-center gap-2 mt-1">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             {(message.reactions ?? []).map((r) => (
               <span
                 key={r.emoji}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-[var(--color-bg-tertiary)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
+                className="inline-flex min-h-8 items-center gap-1 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-tertiary)] px-2 py-1 text-xs text-[var(--color-text-secondary)]"
               >
                 {r.emoji} {r.count}
               </span>
@@ -70,7 +70,7 @@ export function MessageCard({
             {message.replyCount > 0 && (
               <button
                 onClick={() => onOpenThread?.(message.id)}
-                className="text-xs text-[var(--color-accent-cyan)] cursor-pointer hover:underline"
+                className="inline-flex min-h-9 items-center rounded-md px-2 py-1 text-xs font-medium text-[var(--color-accent-cyan)] transition-colors hover:bg-[var(--color-accent-light)] hover:no-underline"
               >
                 {formatReplyCountLabel(message.replyCount)}
               </button>
