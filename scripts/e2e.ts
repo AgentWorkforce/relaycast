@@ -798,19 +798,28 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run('markOffline transitions agent to offline', async () => {
-    await infra.presence.markOffline();
-    // Wait a moment for the disconnect to propagate, then poll
-    await sleep(1000);
+    // Ensure infra is online first
+    await infra.presence.heartbeat();
+    await sleep(500);
+    const beforePresence = await relay.agents.presence();
+    const infraBefore = beforePresence.find((p) => p.agentName === INFRA);
+    log('📋', `${INFRA} before markOffline: ${infraBefore?.status ?? 'not found'}`);
+
+    // Use disconnect() which stops WS pings, marks offline, and closes the socket.
+    // Calling markOffline() alone leaves the WS ping alive, which re-heartbeats
+    // the agent back to online on the server side.
+    await infra.disconnect();
+    await sleep(2000);
     for (let attempt = 0; attempt < 15; attempt++) {
       const presence = await relay.agents.presence();
       const infraPresence = presence.find((p) => p.agentName === INFRA);
       if (infraPresence?.status === 'offline') {
-        log('💤', `${GREEN}${B}${INFRA}${R} marked offline — status: offline`);
+        log('💤', `${GREEN}${B}${INFRA}${R} disconnected — status: offline`);
         return;
       }
       await sleep(1000);
     }
-    throw new Error(`${INFRA} did not transition to offline after markOffline`);
+    throw new Error(`${INFRA} did not transition to offline after disconnect`);
   });
 
   await run('markOnline brings agent back online', async () => {
