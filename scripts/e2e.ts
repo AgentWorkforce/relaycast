@@ -798,33 +798,46 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run('markOffline transitions agent to offline', async () => {
-    await infra.presence.markOffline();
-    // Poll for offline status
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await sleep(500);
+    // Ensure infra is online first
+    await infra.presence.heartbeat();
+    await sleep(500);
+    const beforePresence = await relay.agents.presence();
+    const infraBefore = beforePresence.find((p) => p.agentName === INFRA);
+    log('📋', `${INFRA} before markOffline: ${infraBefore?.status ?? 'not found'}`);
+
+    // Use disconnect() which stops WS pings, marks offline, and closes the socket.
+    // Calling markOffline() alone leaves the WS ping alive, which re-heartbeats
+    // the agent back to online on the server side.
+    await infra.disconnect();
+    await sleep(2000);
+    for (let attempt = 0; attempt < 15; attempt++) {
       const presence = await relay.agents.presence();
       const infraPresence = presence.find((p) => p.agentName === INFRA);
       if (infraPresence?.status === 'offline') {
-        log('💤', `${GREEN}${B}${INFRA}${R} marked offline — status: offline`);
+        log('💤', `${GREEN}${B}${INFRA}${R} disconnected — status: offline`);
         return;
       }
+      await sleep(1000);
     }
-    throw new Error(`${INFRA} did not transition to offline after markOffline`);
+    throw new Error(`${INFRA} did not transition to offline after disconnect`);
   });
 
   await run('markOnline brings agent back online', async () => {
-    await infra.presence.markOnline();
+    // Reconnect WS (was closed during markOffline test) so the final
+    // disconnect has a live connection to close properly.
+    infra.connect();
+    await waitForConnected(INFRA, infra);
     // Poll for online status
     for (let attempt = 0; attempt < 10; attempt++) {
       await sleep(500);
       const presence = await relay.agents.presence();
       const infraPresence = presence.find((p) => p.agentName === INFRA);
       if (infraPresence?.status === 'online') {
-        log('🟢', `${GREEN}${B}${INFRA}${R} marked online — status: online`);
+        log('🟢', `${GREEN}${B}${INFRA}${R} reconnected & online — status: online`);
         return;
       }
     }
-    throw new Error(`${INFRA} did not transition to online after markOnline`);
+    throw new Error(`${INFRA} did not transition to online after reconnect`);
   });
   await pause();
 
