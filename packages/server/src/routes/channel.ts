@@ -412,12 +412,15 @@ channelRoutes.post(
         // Ignore fanout failures
       }
 
-      // Update member cache after leave
+      // Update member + muted caches after leave
       try {
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.left');
+          // Clear mute state so a rejoin starts unmuted
+          const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
+          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.left');
         }
       } catch {
         // Ignore cache update failures

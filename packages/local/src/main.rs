@@ -57,6 +57,7 @@ struct Store {
     channels: HashMap<String, ChannelRecord>,
     channel_by_workspace_name: HashMap<String, String>,
     channel_members: HashMap<String, HashSet<String>>, // channel_id -> agent_ids
+    #[serde(default)]
     channel_muted: HashMap<String, HashSet<String>>,  // channel_id -> muted agent_ids
 
     messages: HashMap<String, MessageRecord>,
@@ -2088,12 +2089,9 @@ async fn mute_channel(
         .insert(agent_id.clone());
 
     ok(json!({
-        "ok": true,
-        "data": {
-            "channel": name,
-            "agent_id": agent_id,
-            "muted": true
-        }
+        "channel": name,
+        "agent_id": agent_id,
+        "muted": true
     }))
 }
 
@@ -2139,12 +2137,9 @@ async fn unmute_channel(
     }
 
     ok(json!({
-        "ok": true,
-        "data": {
-            "channel": name,
-            "agent_id": agent_id,
-            "muted": false
-        }
+        "channel": name,
+        "agent_id": agent_id,
+        "muted": false
     }))
 }
 
@@ -4945,8 +4940,25 @@ async fn ws_session(mut socket: WebSocket, state: AppState, auth: AuthContext) {
                     (AuthContext::Agent { workspace_id, .. }, EventAudience::Workspace) => {
                         event.workspace_id == *workspace_id
                     }
-                    (AuthContext::Agent { workspace_id, .. }, EventAudience::Channel { channel_name }) => {
-                        event.workspace_id == *workspace_id && subscriptions.contains(channel_name)
+                    (AuthContext::Agent { workspace_id, agent_id, .. }, EventAudience::Channel { channel_name }) => {
+                        if event.workspace_id != *workspace_id || !subscriptions.contains(channel_name) {
+                            false
+                        } else {
+                            // Check mute: suppress message events for muted agents
+                            let event_type = event.payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let is_message = event_type == "message.created" || event_type == "message" || event_type == "thread.reply";
+                            if is_message {
+                                let store = state.store.read().await;
+                                let key = ws_channel_key(&event.workspace_id, channel_name);
+                                let is_muted = store.channel_by_workspace_name.get(&key)
+                                    .and_then(|ch_id| store.channel_muted.get(ch_id))
+                                    .map(|muted| muted.contains(agent_id))
+                                    .unwrap_or(false);
+                                !is_muted
+                            } else {
+                                true
+                            }
+                        }
                     }
                     (AuthContext::Agent { workspace_id, agent_id, .. }, EventAudience::Agents { agent_ids }) => {
                         event.workspace_id == *workspace_id && agent_ids.contains(agent_id)

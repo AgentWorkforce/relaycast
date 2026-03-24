@@ -75,7 +75,7 @@ export class ChannelDO implements DurableObject {
     // (channel.updated, member.joined, member.left, mute/unmute confirmations)
     // must still be delivered so agents stay in sync.
     const eventType = typeof payload.type === 'string' ? payload.type : '';
-    const isMessageEvent = eventType === 'message.created' || eventType === 'message';
+    const isMessageEvent = eventType === 'message.created' || eventType === 'message' || eventType === 'thread.reply';
     const deliverTo = isMessageEvent
       ? members.filter((id) => !muted.has(id))
       : members;
