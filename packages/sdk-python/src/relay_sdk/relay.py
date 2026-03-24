@@ -7,12 +7,17 @@ from urllib.parse import quote
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
+from .errors import RelayError
 from .local_runtime import ensure_local_runtime
-from .models import Agent, CreateAgentRequest, CreateAgentResponse, Workspace
+from .models import Agent, CreateAgentRequest, CreateAgentResponse, TokenRotateResponse, Workspace
 
 
 def _enc(value: str) -> str:
     return quote(value, safe="")
+
+
+def _is_duplicate_agent_error(err: RelayError) -> bool:
+    return err.status == 409 and err.code in {"agent_already_exists", "name_conflict"}
 
 
 class _WorkspaceNamespace:
@@ -58,6 +63,30 @@ class _AgentsNamespace:
         result = self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
 
+    def register_or_rotate(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        try:
+            return self.register(name, type=type, persona=persona, metadata=metadata)
+        except RelayError as err:
+            if not _is_duplicate_agent_error(err):
+                raise
+
+        agent = self.get(name)
+        rotated = self.rotate_token(agent.name)
+        return CreateAgentResponse(
+            id=agent.id,
+            name=agent.name,
+            token=rotated.token,
+            status=agent.status,
+            created_at=agent.created_at,
+        )
+
     def list(self, *, status: str | None = None) -> list[Agent]:
         query: dict[str, str] = {}
         if status:
@@ -68,6 +97,10 @@ class _AgentsNamespace:
     def get(self, name: str) -> Agent:
         result = self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
+
+    def rotate_token(self, name: str) -> TokenRotateResponse:
+        result = self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+        return TokenRotateResponse.model_validate(result)
 
 
 class Relay:
@@ -182,6 +215,30 @@ class _AsyncAgentsNamespace:
         result = await self._client.post("/v1/agents", data.model_dump(exclude_none=True))
         return CreateAgentResponse.model_validate(result)
 
+    async def register_or_rotate(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        try:
+            return await self.register(name, type=type, persona=persona, metadata=metadata)
+        except RelayError as err:
+            if not _is_duplicate_agent_error(err):
+                raise
+
+        agent = await self.get(name)
+        rotated = await self.rotate_token(agent.name)
+        return CreateAgentResponse(
+            id=agent.id,
+            name=agent.name,
+            token=rotated.token,
+            status=agent.status,
+            created_at=agent.created_at,
+        )
+
     async def list(self, *, status: str | None = None) -> list[Agent]:
         query: dict[str, str] = {}
         if status:
@@ -192,6 +249,10 @@ class _AsyncAgentsNamespace:
     async def get(self, name: str) -> Agent:
         result = await self._client.get(f"/v1/agents/{_enc(name)}")
         return Agent.model_validate(result)
+
+    async def rotate_token(self, name: str) -> TokenRotateResponse:
+        result = await self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
+        return TokenRotateResponse.model_validate(result)
 
 
 class AsyncRelay:

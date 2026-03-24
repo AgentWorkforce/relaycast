@@ -332,6 +332,10 @@ fn random_token(prefix: &str) -> String {
     format!("{prefix}{suffix}")
 }
 
+fn normalize_workspace_name(name: &str) -> &str {
+    name.trim()
+}
+
 fn ws_agent_key(workspace_id: &str, name: &str) -> String {
     format!("{workspace_id}:{name}")
 }
@@ -632,7 +636,8 @@ async fn create_workspace(
         return json_error();
     };
 
-    if payload.name.trim().is_empty() {
+    let workspace_name = normalize_workspace_name(&payload.name);
+    if workspace_name.is_empty() {
         return err(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -640,7 +645,7 @@ async fn create_workspace(
         );
     }
 
-    let workspace_name = payload.name.trim().to_string();
+    let workspace_name = workspace_name.to_string();
     let workspace_id = new_id("ws");
     let api_key = random_token("rk_live_");
     let created_at = now_iso();
@@ -710,6 +715,28 @@ async fn health() -> Response {
         .into_response()
 }
 
+async fn get_workspace_by_name(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Response {
+    let store = state.store.read().await;
+    let lookup_name = normalize_workspace_name(&name);
+
+    let Some(ws) = store.workspaces.values().find(|ws| ws.name == lookup_name) else {
+        return err(
+            StatusCode::NOT_FOUND,
+            "workspace_not_found",
+            "Workspace not found",
+        );
+    };
+
+    ok(json!({
+        "id": ws.id,
+        "name": ws.name,
+        "created_at": ws.created_at,
+    }))
+}
+
 async fn get_workspace(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let store = state.store.read().await;
     let workspace_id = match auth_workspace(&store, &headers) {
@@ -758,14 +785,15 @@ async fn patch_workspace(
     };
 
     if let Some(name) = payload.name {
-        if name.trim().is_empty() {
+        let name = normalize_workspace_name(&name);
+        if name.is_empty() {
             return err(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "name cannot be empty",
             );
         }
-        ws.name = name.trim().to_string();
+        ws.name = name.to_string();
     }
 
     if let Some(prompt) = payload.system_prompt {
@@ -5001,6 +5029,10 @@ fn app_router(state: AppState) -> Router {
         .route("/v1/ws", get(ws_upgrade))
         .route("/v1/workspaces", post(create_workspace))
         .route(
+            "/v1/workspaces/by-name/{name}",
+            get(get_workspace_by_name),
+        )
+        .route(
             "/v1/workspace",
             get(get_workspace)
                 .patch(patch_workspace)
@@ -5160,7 +5192,17 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_initial_group_dm_text;
+    use super::{normalize_initial_group_dm_text, normalize_workspace_name};
+
+    #[test]
+    fn normalize_workspace_name_trims_surrounding_whitespace() {
+        assert_eq!(normalize_workspace_name("  test  "), "test");
+    }
+
+    #[test]
+    fn normalize_workspace_name_preserves_inner_whitespace() {
+        assert_eq!(normalize_workspace_name("  test workspace  "), "test workspace");
+    }
 
     #[test]
     fn normalize_initial_group_dm_text_accepts_absent_text() {

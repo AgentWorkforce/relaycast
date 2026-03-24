@@ -4,6 +4,10 @@ vi.mock('../../engine/activity.js', () => ({
   getActivityFeed: vi.fn(),
 }));
 
+vi.mock('../../engine/workspace.js', () => ({
+  getWorkspaceByName: vi.fn(),
+}));
+
 vi.mock('../../engine/dmAll.js', () => ({
   listAllDmConversations: vi.fn(),
   getDmMessagesForWorkspace: vi.fn(),
@@ -26,6 +30,7 @@ import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
 import { workspaceRoutes } from '../../routes/workspace.js';
 import * as activityEngine from '../../engine/activity.js';
+import * as workspaceEngine from '../../engine/workspace.js';
 import * as dmAllEngine from '../../engine/dmAll.js';
 import * as tokenRotateEngine from '../../engine/tokenRotate.js';
 import { getDb } from '../../db/index.js';
@@ -51,6 +56,81 @@ app.route('/v1', v1);
 describe('Dashboard routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (bindings as any).RATE_LIMIT_DO = createMockBindings().RATE_LIMIT_DO;
+  });
+
+  describe('GET /v1/workspaces/by-name/:name', () => {
+    it('returns public workspace metadata without auth', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(workspaceEngine.getWorkspaceByName).mockResolvedValue({
+        id: 'ws_lookup',
+        name: 'lookup-me',
+        created_at: '2026-03-19T00:00:00.000Z',
+      });
+
+      const res = await app.request('/v1/workspaces/by-name/lookup-me', {
+        method: 'GET',
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.data).toEqual({
+        id: 'ws_lookup',
+        name: 'lookup-me',
+        created_at: '2026-03-19T00:00:00.000Z',
+      });
+      expect(workspaceEngine.getWorkspaceByName).toHaveBeenCalledWith(
+        expect.anything(),
+        'lookup-me',
+      );
+    });
+
+    it('returns 404 when workspace does not exist', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(workspaceEngine.getWorkspaceByName).mockResolvedValue(null);
+
+      const res = await app.request('/v1/workspaces/by-name/missing', {
+        method: 'GET',
+      });
+
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe('workspace_not_found');
+    });
+
+    it('rate limits repeated public lookups', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(workspaceEngine.getWorkspaceByName).mockResolvedValue({
+        id: 'ws_lookup',
+        name: 'lookup-me',
+        created_at: '2026-03-19T00:00:00.000Z',
+      });
+
+      (bindings as any).RATE_LIMIT_DO = {
+        idFromName: vi.fn(() => 'public-lookup-do'),
+        get: vi.fn(() => ({
+          fetch: vi.fn(async () => Response.json({
+            ok: true,
+            data: { count: 31, limit: 30, remaining: 0, allowed: false },
+          })),
+        })),
+      } as unknown as DurableObjectNamespace;
+
+      const res = await app.request('/v1/workspaces/by-name/lookup-me', {
+        method: 'GET',
+        headers: {
+          'CF-Connecting-IP': '198.51.100.15',
+        },
+      });
+
+      expect(res.status).toBe(429);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe('rate_limit_exceeded');
+      expect(res.headers.get('X-RateLimit-Limit')).toBe('30');
+    });
   });
 
   describe('GET /v1/activity', () => {

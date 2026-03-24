@@ -170,6 +170,25 @@ class _FilesNamespace:
         return [FileInfo.model_validate(f) for f in result]
 
 
+class _PresenceNamespace:
+    """Sync presence lifecycle helpers."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def mark_online(self) -> None:
+        self.heartbeat()
+
+    def heartbeat(self) -> None:
+        self._client.post("/v1/agents/heartbeat", {})
+
+    def mark_offline(self) -> None:
+        self._client.post("/v1/agents/disconnect", {})
+
+    def disconnect(self) -> None:
+        self.mark_offline()
+
+
 # ── Main AgentClient ──────────────────────────────────────────────
 
 
@@ -181,6 +200,7 @@ class AgentClient:
         self.dms = _DmsNamespace(client)
         self.channels = _ChannelsNamespace(client)
         self.files = _FilesNamespace(client)
+        self.presence = _PresenceNamespace(client)
 
     # ── Messages ──
 
@@ -300,6 +320,20 @@ class AgentClient:
     def inbox(self) -> InboxResponse:
         result = self.client.get("/v1/inbox")
         return InboxResponse.model_validate(result)
+
+    # ── Presence ──
+
+    def mark_online(self) -> None:
+        self.presence.mark_online()
+
+    def heartbeat(self) -> None:
+        self.presence.heartbeat()
+
+    def mark_offline(self) -> None:
+        self.presence.mark_offline()
+
+    def disconnect(self) -> None:
+        self.presence.disconnect()
 
     # ── Read Receipts ──
 
@@ -453,6 +487,25 @@ class _AsyncFilesNamespace:
         return [FileInfo.model_validate(f) for f in result]
 
 
+class _AsyncPresenceNamespace:
+    """Async presence lifecycle helpers."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def mark_online(self) -> None:
+        await self.heartbeat()
+
+    async def heartbeat(self) -> None:
+        await self._client.post("/v1/agents/heartbeat", {})
+
+    async def mark_offline(self) -> None:
+        await self._client.post("/v1/agents/disconnect", {})
+
+    async def disconnect(self) -> None:
+        await self.mark_offline()
+
+
 class AsyncAgentClient:
     """Asynchronous agent client for messaging, channels, DMs, files, etc."""
 
@@ -461,6 +514,7 @@ class AsyncAgentClient:
         self.dms = _AsyncDmsNamespace(client)
         self.channels = _AsyncChannelsNamespace(client)
         self.files = _AsyncFilesNamespace(client)
+        self.presence = _AsyncPresenceNamespace(client)
 
     # ── Messages ──
 
@@ -580,6 +634,20 @@ class AsyncAgentClient:
     async def inbox(self) -> InboxResponse:
         result = await self.client.get("/v1/inbox")
         return InboxResponse.model_validate(result)
+
+    # ── Presence ──
+
+    async def mark_online(self) -> None:
+        await self.presence.mark_online()
+
+    async def heartbeat(self) -> None:
+        await self.presence.heartbeat()
+
+    async def mark_offline(self) -> None:
+        await self.presence.mark_offline()
+
+    async def disconnect(self) -> None:
+        await self.presence.disconnect()
 
     # ── Read Receipts ──
 

@@ -486,6 +486,13 @@ where
         .collect())
 }
 
+fn deserialize_string_or_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum DmLastMessageValue {
@@ -947,8 +954,11 @@ pub struct AgentSpawnRequestedEvent {
 pub struct AgentSpawnRequestedPayload {
     pub name: String,
     pub cli: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub task: String,
+    #[serde(default)]
     pub channel: Option<String>,
+    #[serde(default)]
     pub already_existed: bool,
 }
 
