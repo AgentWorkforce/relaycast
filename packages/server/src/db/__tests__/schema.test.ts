@@ -6,14 +6,20 @@ describe('Database Schema', () => {
   // ============================================
   // All 14 tables exported
   // ============================================
-  it('exports all 14 tables', () => {
+  it('exports all 24 tables', () => {
     expect(schema.workspaces).toBeDefined();
     expect(schema.agents).toBeDefined();
     expect(schema.a2aAgents).toBeDefined();
+    expect(schema.directoryAgents).toBeDefined();
+    expect(schema.directorySkills).toBeDefined();
+    expect(schema.directoryRatings).toBeDefined();
+    expect(schema.routingConfigs).toBeDefined();
+    expect(schema.routingFailures).toBeDefined();
     expect(schema.certifications).toBeDefined();
     expect(schema.channels).toBeDefined();
     expect(schema.channelMembers).toBeDefined();
     expect(schema.messages).toBeDefined();
+    expect(schema.messageLogs).toBeDefined();
     expect(schema.reactions).toBeDefined();
     expect(schema.dmConversations).toBeDefined();
     expect(schema.dmParticipants).toBeDefined();
@@ -21,6 +27,10 @@ describe('Database Schema', () => {
     expect(schema.messageAttachments).toBeDefined();
     expect(schema.readReceipts).toBeDefined();
     expect(schema.usageRecords).toBeDefined();
+    expect(schema.webhooks).toBeDefined();
+    expect(schema.eventSubscriptions).toBeDefined();
+    expect(schema.commands).toBeDefined();
+    expect(schema.pendingEvents).toBeDefined();
   });
 
   // ============================================
@@ -30,10 +40,16 @@ describe('Database Schema', () => {
     expect(getTableName(schema.workspaces)).toBe('workspaces');
     expect(getTableName(schema.agents)).toBe('agents');
     expect(getTableName(schema.a2aAgents)).toBe('a2a_agents');
+    expect(getTableName(schema.directoryAgents)).toBe('directory_agents');
+    expect(getTableName(schema.directorySkills)).toBe('directory_skills');
+    expect(getTableName(schema.directoryRatings)).toBe('directory_ratings');
+    expect(getTableName(schema.routingConfigs)).toBe('routing_configs');
+    expect(getTableName(schema.routingFailures)).toBe('routing_failures');
     expect(getTableName(schema.certifications)).toBe('certifications');
     expect(getTableName(schema.channels)).toBe('channels');
     expect(getTableName(schema.channelMembers)).toBe('channel_members');
     expect(getTableName(schema.messages)).toBe('messages');
+    expect(getTableName(schema.messageLogs)).toBe('message_logs');
     expect(getTableName(schema.reactions)).toBe('reactions');
     expect(getTableName(schema.dmConversations)).toBe('dm_conversations');
     expect(getTableName(schema.dmParticipants)).toBe('dm_participants');
@@ -41,6 +57,10 @@ describe('Database Schema', () => {
     expect(getTableName(schema.messageAttachments)).toBe('message_attachments');
     expect(getTableName(schema.readReceipts)).toBe('read_receipts');
     expect(getTableName(schema.usageRecords)).toBe('usage_records');
+    expect(getTableName(schema.webhooks)).toBe('webhooks');
+    expect(getTableName(schema.eventSubscriptions)).toBe('event_subscriptions');
+    expect(getTableName(schema.commands)).toBe('commands');
+    expect(getTableName(schema.pendingEvents)).toBe('pending_events');
   });
 
   // ============================================
@@ -247,6 +267,157 @@ describe('Database Schema', () => {
     expect(cols.filesUploaded).toBeDefined();
     expect(cols.fileBytes).toBeDefined();
     expect(cols.wsMinutes).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Directory Agents columns
+  // ============================================
+  it('directory_agents table has correct columns', () => {
+    const cols = getTableColumns(schema.directoryAgents);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.sourceAgentId).toBeDefined();
+    expect(cols.slug).toBeDefined();
+    expect(cols.name).toBeDefined();
+    expect(cols.description).toBeDefined();
+    expect(cols.provider).toBeDefined();
+    expect(cols.endpointUrl).toBeDefined();
+    expect(cols.version).toBeDefined();
+    expect(cols.tags).toBeDefined();
+    expect(cols.capabilities).toBeDefined();
+    expect(cols.status).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+    expect(cols.updatedAt).toBeDefined();
+  });
+
+  // ============================================
+  // Directory Skills columns
+  // ============================================
+  it('directory_skills table has correct columns', () => {
+    const cols = getTableColumns(schema.directorySkills);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.directoryAgentId).toBeDefined();
+    expect(cols.skillId).toBeDefined();
+    expect(cols.name).toBeDefined();
+    expect(cols.description).toBeDefined();
+    expect(cols.tags).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Directory Ratings columns
+  // ============================================
+  it('directory_ratings table has correct columns', () => {
+    const cols = getTableColumns(schema.directoryRatings);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.directoryAgentId).toBeDefined();
+    expect(cols.raterAgentId).toBeDefined();
+    expect(cols.score).toBeDefined();
+    expect(cols.review).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Routing Configs columns
+  // ============================================
+  it('routing_configs table has correct columns', () => {
+    const cols = getTableColumns(schema.routingConfigs);
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.weights).toBeDefined();
+    expect(cols.circuitBreakerThreshold).toBeDefined();
+    expect(cols.circuitBreakerCooldownSeconds).toBeDefined();
+    expect(cols.updatedAt).toBeDefined();
+  });
+
+  // ============================================
+  // Routing Failures columns
+  // ============================================
+  it('routing_failures table has correct columns', () => {
+    const cols = getTableColumns(schema.routingFailures);
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.agentId).toBeDefined();
+    expect(cols.consecutiveFailures).toBeDefined();
+    expect(cols.totalFailures).toBeDefined();
+    expect(cols.totalSuccesses).toBeDefined();
+    expect(cols.lastFailureAt).toBeDefined();
+    expect(cols.circuitOpenUntil).toBeDefined();
+    expect(cols.updatedAt).toBeDefined();
+  });
+
+  // ============================================
+  // Message Logs columns
+  // ============================================
+  it('message_logs table has correct columns', () => {
+    const cols = getTableColumns(schema.messageLogs);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.messageId).toBeDefined();
+    expect(cols.channelId).toBeDefined();
+    expect(cols.agentId).toBeDefined();
+    expect(cols.deliveryKind).toBeDefined();
+    expect(cols.body).toBeDefined();
+    expect(cols.contentType).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Webhooks columns
+  // ============================================
+  it('webhooks table has correct columns', () => {
+    const cols = getTableColumns(schema.webhooks);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.name).toBeDefined();
+    expect(cols.channelId).toBeDefined();
+    expect(cols.createdBy).toBeDefined();
+    expect(cols.isActive).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Event Subscriptions columns
+  // ============================================
+  it('event_subscriptions table has correct columns', () => {
+    const cols = getTableColumns(schema.eventSubscriptions);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.events).toBeDefined();
+    expect(cols.filter).toBeDefined();
+    expect(cols.url).toBeDefined();
+    expect(cols.secret).toBeDefined();
+    expect(cols.isActive).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Commands columns
+  // ============================================
+  it('commands table has correct columns', () => {
+    const cols = getTableColumns(schema.commands);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.command).toBeDefined();
+    expect(cols.description).toBeDefined();
+    expect(cols.handlerAgentId).toBeDefined();
+    expect(cols.isActive).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+  });
+
+  // ============================================
+  // Pending Events columns
+  // ============================================
+  it('pending_events table has correct columns', () => {
+    const cols = getTableColumns(schema.pendingEvents);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.eventType).toBeDefined();
+    expect(cols.payload).toBeDefined();
+    expect(cols.status).toBeDefined();
+    expect(cols.attempts).toBeDefined();
+    expect(cols.maxAttempts).toBeDefined();
     expect(cols.createdAt).toBeDefined();
   });
 

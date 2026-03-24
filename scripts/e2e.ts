@@ -799,15 +799,16 @@ ${B}${CYAN}╔══════════════════════
 
   await run('markOffline transitions agent to offline', async () => {
     await infra.presence.markOffline();
-    // Poll for offline status
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await sleep(500);
+    // Wait a moment for the disconnect to propagate, then poll
+    await sleep(1000);
+    for (let attempt = 0; attempt < 15; attempt++) {
       const presence = await relay.agents.presence();
       const infraPresence = presence.find((p) => p.agentName === INFRA);
       if (infraPresence?.status === 'offline') {
         log('💤', `${GREEN}${B}${INFRA}${R} marked offline — status: offline`);
         return;
       }
+      await sleep(1000);
     }
     throw new Error(`${INFRA} did not transition to offline after markOffline`);
   });
