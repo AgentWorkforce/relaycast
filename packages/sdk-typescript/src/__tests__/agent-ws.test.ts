@@ -125,14 +125,18 @@ describe('AgentClient WebSocket integration', () => {
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    await agent.disconnect();
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
     expect(ws.close).toHaveBeenCalled();
   });
 
   it('disconnect() allows reconnect with a fresh WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
-    await agent.disconnect();
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
 
     agent.connect();
     expect(MockWebSocket.instances).toHaveLength(2);
@@ -369,7 +373,9 @@ describe('AgentClient WebSocket integration', () => {
     vi.advanceTimersByTime(30_000);
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
-    await agent.disconnect();
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
     expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/disconnect');
 
