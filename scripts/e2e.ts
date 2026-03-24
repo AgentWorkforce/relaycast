@@ -292,8 +292,21 @@ ${B}${CYAN}╔══════════════════════
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
 
+  async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
+    try {
+      return await relay.agents.register(opts);
+    } catch (err) {
+      if (err instanceof RelayError && /already exists/i.test(err.message)) {
+        log('ℹ️ ', `${opts.name} already exists; deregistering and re-registering...`);
+        try { await relay.agents.deregister({ name: opts.name }); } catch { /* best effort */ }
+        return await relay.agents.register(opts);
+      }
+      throw err;
+    }
+  }
+
   await run(`Register ${LEAD}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: LEAD,
       type: 'agent',
       persona: 'Engineering team lead. Coordinates InfraAgent and BackendAgent, assigns tasks, and unblocks the team.',
@@ -304,7 +317,7 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Register ${INFRA}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: INFRA,
       type: 'agent',
       persona: 'Senior infrastructure engineer. Owns CI/CD pipelines, deploys, health checks, and cloud resources.',
@@ -315,7 +328,7 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Register ${BACKEND}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: BACKEND,
       type: 'agent',
       persona: 'Backend developer focused on testing, reliability, and the message pipeline.',

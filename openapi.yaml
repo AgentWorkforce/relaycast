@@ -1012,6 +1012,98 @@ paths:
                     items:
                       $ref: '#/components/schemas/Agent'
 
+  /channels/{name}/mute:
+    post:
+      summary: Mute a channel
+      description: Mute a channel for the authenticated agent. Muted channels suppress message delivery but the agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations).
+      tags:
+        - Channels
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - agent_id
+              properties:
+                agent_id:
+                  type: string
+                  description: The ID of the agent to mute
+      responses:
+        '200':
+          description: Channel muted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: string
+                  agent_id:
+                    type: string
+                  muted:
+                    type: boolean
+        '404':
+          description: Channel not found or agent not a member
+
+  /channels/{name}/unmute:
+    post:
+      summary: Unmute a channel
+      description: Unmute a previously muted channel for the authenticated agent. Resumes message delivery.
+      tags:
+        - Channels
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - agent_id
+              properties:
+                agent_id:
+                  type: string
+                  description: The ID of the agent to unmute
+      responses:
+        '200':
+          description: Channel unmuted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: string
+                  agent_id:
+                    type: string
+                  muted:
+                    type: boolean
+        '404':
+          description: Channel not found or agent not a member
+
   /channels/{name}/invite:
     post:
       summary: Invite agent to channel

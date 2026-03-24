@@ -71,7 +71,14 @@ export class ChannelDO implements DurableObject {
   ): Promise<void> {
     const members = await this.getMembers();
     const muted = new Set(await this.getMutedMembers());
-    const deliverTo = members.filter((id) => !muted.has(id));
+    // Only suppress message events for muted members — system/control events
+    // (channel.updated, member.joined, member.left, mute/unmute confirmations)
+    // must still be delivered so agents stay in sync.
+    const eventType = typeof payload.type === 'string' ? payload.type : '';
+    const isMessageEvent = eventType === 'message.created' || eventType === 'message';
+    const deliverTo = isMessageEvent
+      ? members.filter((id) => !muted.has(id))
+      : members;
     const promises = deliverTo.map((agentId) => {
       const id = this.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
       const stub = this.env.AGENT_DO.get(id);
