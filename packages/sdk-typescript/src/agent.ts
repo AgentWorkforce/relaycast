@@ -190,12 +190,21 @@ export class AgentClient {
   async disconnect(): Promise<void> {
     this.stopAutoHeartbeat();
     if (this.ws) {
-      // Notify the server before closing the WebSocket so presence
-      // updates immediately (works around local DO hibernation issues).
-      await this.presence.markOffline().catch(() => {});
+      // Close the WebSocket first to stop the client ping timer. Server-side,
+      // each ping triggers a fire-and-forget heartbeat to PresenceDO. If we
+      // called markOffline() while the WS was still open, an in-flight
+      // heartbeat could land at PresenceDO *after* the disconnect, re-adding
+      // the agent as online.
       this.ws.disconnect();
       this.ws = null;
+      // Brief pause so any in-flight server-side heartbeat (from a recent
+      // ping) settles at PresenceDO before we send the authoritative
+      // disconnect.
+      await new Promise((r) => setTimeout(r, 150));
     }
+    // Always send the HTTP disconnect — it works even without a WS and
+    // serves as the authoritative presence update.
+    await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
   }
 
   subscribe(channels: string[]): void {
