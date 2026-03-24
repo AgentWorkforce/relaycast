@@ -133,6 +133,24 @@ describe('AgentClient features', () => {
       expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/members');
       expect(init.method).toBe('GET');
     });
+
+    it('mute() posts to /v1/channels/:name/mute', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.channels.mute('dev');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/mute');
+      expect(init.method).toBe('POST');
+    });
+
+    it('unmute() posts to /v1/channels/:name/unmute', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.channels.unmute('dev');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/dev/unmute');
+      expect(init.method).toBe('POST');
+    });
   });
 
   describe('reactions', () => {

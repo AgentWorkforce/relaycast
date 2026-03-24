@@ -149,6 +149,20 @@ export const MemberLeftEventSchema = z.object({
 });
 export type MemberLeftEvent = z.infer<typeof MemberLeftEventSchema>;
 
+export const ChannelMutedEventSchema = z.object({
+  type: z.literal('member.channel_muted'),
+  channel: z.string(),
+  agent_name: z.string(),
+});
+export type ChannelMutedEvent = z.infer<typeof ChannelMutedEventSchema>;
+
+export const ChannelUnmutedEventSchema = z.object({
+  type: z.literal('member.channel_unmuted'),
+  channel: z.string(),
+  agent_name: z.string(),
+});
+export type ChannelUnmutedEvent = z.infer<typeof ChannelUnmutedEventSchema>;
+
 export const MessageReadEventSchema = z.object({
   type: z.literal('message.read'),
   message_id: z.string(),
@@ -232,6 +246,8 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ChannelArchivedEventSchema,
   MemberJoinedEventSchema,
   MemberLeftEventSchema,
+  ChannelMutedEventSchema,
+  ChannelUnmutedEventSchema,
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
@@ -262,6 +278,8 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   ChannelArchivedEventSchema,
   MemberJoinedEventSchema,
   MemberLeftEventSchema,
+  ChannelMutedEventSchema,
+  ChannelUnmutedEventSchema,
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,

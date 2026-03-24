@@ -10,6 +10,9 @@ vi.mock('../../engine/channel.js', () => ({
   leaveChannel: vi.fn(),
   getMembers: vi.fn(),
   inviteAgent: vi.fn(),
+  muteChannel: vi.fn(),
+  unmuteChannel: vi.fn(),
+  getMutedMemberIds: vi.fn(),
 }));
 
 vi.mock('../../engine/agent.js', () => ({
@@ -322,5 +325,173 @@ describe('POST /v1/channels/:name/invite', () => {
       body: JSON.stringify({}),
     }, bindings);
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /v1/channels/:name/mute', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
+  });
+
+  it('mutes channel and returns 200', async () => {
+    vi.mocked(channelEngine.muteChannel).mockResolvedValue({
+      channel: 'code-review',
+      agent_id: 'agent_123',
+      muted: true,
+    });
+    vi.mocked(channelEngine.getMutedMemberIds).mockResolvedValue(['agent_123']);
+    vi.mocked(channelEngine.getChannel).mockResolvedValue({
+      id: 'ch_1',
+      name: 'code-review',
+      topic: null,
+      member_count: 1,
+      members: [],
+      created_at: '2025-01-01T00:00:00.000Z',
+      is_archived: false,
+    });
+
+    const res = await app.request('/v1/channels/code-review/mute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.muted).toBe(true);
+    expect(body.data.channel).toBe('code-review');
+    expect(channelEngine.muteChannel).toHaveBeenCalled();
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'member.channel_muted',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ channel_name: 'code-review', agent_id: 'agent_123' }),
+    }));
+  });
+
+  it('returns 403 when agent is not a member', async () => {
+    vi.mocked(channelEngine.muteChannel).mockRejectedValue(
+      Object.assign(new Error('You must be a member of the channel to mute it'), {
+        code: 'not_a_member',
+        status: 403,
+      }),
+    );
+
+    const res = await app.request('/v1/channels/code-review/mute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(403);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('not_a_member');
+  });
+
+  it('returns 404 when channel does not exist', async () => {
+    vi.mocked(channelEngine.muteChannel).mockRejectedValue(
+      Object.assign(new Error('Channel "nope" not found'), {
+        code: 'channel_not_found',
+        status: 404,
+      }),
+    );
+
+    const res = await app.request('/v1/channels/nope/mute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('channel_not_found');
+  });
+
+  it('rejects workspace key (requires agent token)', async () => {
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+    const res = await app.request('/v1/channels/code-review/mute', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /v1/channels/:name/unmute', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(mockDbForAgentAuth());
+  });
+
+  it('unmutes channel and returns 200', async () => {
+    vi.mocked(channelEngine.unmuteChannel).mockResolvedValue({
+      channel: 'code-review',
+      agent_id: 'agent_123',
+      muted: false,
+    });
+    vi.mocked(channelEngine.getMutedMemberIds).mockResolvedValue([]);
+    vi.mocked(channelEngine.getChannel).mockResolvedValue({
+      id: 'ch_1',
+      name: 'code-review',
+      topic: null,
+      member_count: 1,
+      members: [],
+      created_at: '2025-01-01T00:00:00.000Z',
+      is_archived: false,
+    });
+
+    const res = await app.request('/v1/channels/code-review/unmute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.muted).toBe(false);
+    expect(body.data.channel).toBe('code-review');
+    expect(channelEngine.unmuteChannel).toHaveBeenCalled();
+    expect(bindings.WEBHOOK_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'member.channel_unmuted',
+      workspaceId: FAKE_WORKSPACE.id,
+      data: expect.objectContaining({ channel_name: 'code-review', agent_id: 'agent_123' }),
+    }));
+  });
+
+  it('returns 403 when agent is not a member', async () => {
+    vi.mocked(channelEngine.unmuteChannel).mockRejectedValue(
+      Object.assign(new Error('You must be a member of the channel to unmute it'), {
+        code: 'not_a_member',
+        status: 403,
+      }),
+    );
+
+    const res = await app.request('/v1/channels/code-review/unmute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(403);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('not_a_member');
+  });
+
+  it('returns 404 when channel does not exist', async () => {
+    vi.mocked(channelEngine.unmuteChannel).mockRejectedValue(
+      Object.assign(new Error('Channel "nope" not found'), {
+        code: 'channel_not_found',
+        status: 404,
+      }),
+    );
+
+    const res = await app.request('/v1/channels/nope/unmute', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('channel_not_found');
+  });
+
+  it('rejects workspace key (requires agent token)', async () => {
+    vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+    const res = await app.request('/v1/channels/code-review/unmute', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+    }, bindings);
+    expect(res.status).toBe(401);
   });
 });

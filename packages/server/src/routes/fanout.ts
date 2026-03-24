@@ -221,6 +221,38 @@ export async function getDmParticipantAgentIds(
   }
 }
 
+export async function updateChannelMuted(
+  c: HonoContext,
+  channelId: string,
+  mutedIds: string[],
+): Promise<void> {
+  const logger = getRequestLogger(c, 'fanout.update_channel_muted');
+  const workspaceId = c.get('workspace').id;
+  try {
+    const doId = c.env.CHANNEL_DO.idFromName(`${workspaceId}:${channelId}`);
+    const stub = c.env.CHANNEL_DO.get(doId);
+    const res = await stub.fetch(new Request('http://do/update-muted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ muted: mutedIds }),
+    }));
+    if (!res.ok) {
+      logger.error(`ChannelDO update-muted failed: ${res.status} for channel ${channelId}`, {
+        workspace_id: workspaceId,
+        channel_id: channelId,
+        status: res.status,
+      });
+    }
+  } catch (err) {
+    logger.error(`ChannelDO update-muted error for channel ${channelId}`, {
+      workspace_id: workspaceId,
+      channel_id: channelId,
+      ...toErrorDetails(err),
+    });
+    throw err;
+  }
+}
+
 export async function updateChannelMembers(
   c: HonoContext,
   channelId: string,

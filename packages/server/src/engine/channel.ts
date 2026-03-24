@@ -141,6 +141,7 @@ export async function getChannel(db: Db, workspaceId: string, name: string) {
       agent_name: agents.name,
       role: channelMembers.role,
       joined_at: channelMembers.joinedAt,
+      is_muted: channelMembers.isMuted,
     })
     .from(channelMembers)
     .innerJoin(agents, eq(channelMembers.agentId, agents.id))
@@ -157,6 +158,7 @@ export async function getChannel(db: Db, workspaceId: string, name: string) {
       agent_name: m.agent_name,
       role: m.role,
       joined_at: m.joined_at.toISOString(),
+      is_muted: m.is_muted,
     })),
     created_at: channel.createdAt.toISOString(),
     is_archived: channel.isArchived,
@@ -354,6 +356,7 @@ export async function getMembers(db: Db, workspaceId: string, channelName: strin
       agent_name: agents.name,
       role: channelMembers.role,
       joined_at: channelMembers.joinedAt,
+      is_muted: channelMembers.isMuted,
     })
     .from(channelMembers)
     .innerJoin(agents, eq(channelMembers.agentId, agents.id))
@@ -364,6 +367,7 @@ export async function getMembers(db: Db, workspaceId: string, channelName: strin
     agent_name: m.agent_name,
     role: m.role,
     joined_at: m.joined_at.toISOString(),
+    is_muted: m.is_muted,
   }));
 }
 
@@ -451,4 +455,140 @@ export async function inviteAgent(
   }
 
   return { channel: channelName, agent: inviteeAgentName };
+}
+
+export async function muteChannel(
+  db: Db,
+  workspaceId: string,
+  channelName: string,
+  agentId: string,
+) {
+  const [channel] = await db
+    .select()
+    .from(channels)
+    .where(
+      and(
+        eq(channels.workspaceId, workspaceId),
+        eq(channels.name, channelName),
+      ),
+    );
+
+  if (!channel) {
+    const err = new Error(`Channel "${channelName}" not found`);
+    Object.assign(err, { code: 'channel_not_found', status: 404 });
+    throw err;
+  }
+
+  const [membership] = await db
+    .select()
+    .from(channelMembers)
+    .where(
+      and(
+        eq(channelMembers.channelId, channel.id),
+        eq(channelMembers.agentId, agentId),
+      ),
+    );
+
+  if (!membership) {
+    const err = new Error('You must be a member of the channel to mute it');
+    Object.assign(err, { code: 'not_a_member', status: 403 });
+    throw err;
+  }
+
+  await db
+    .update(channelMembers)
+    .set({ isMuted: true })
+    .where(
+      and(
+        eq(channelMembers.channelId, channel.id),
+        eq(channelMembers.agentId, agentId),
+      ),
+    );
+
+  await invalidateChannelCache(workspaceId, channelName);
+
+  return { channel: channelName, agent_id: agentId, muted: true };
+}
+
+export async function unmuteChannel(
+  db: Db,
+  workspaceId: string,
+  channelName: string,
+  agentId: string,
+) {
+  const [channel] = await db
+    .select()
+    .from(channels)
+    .where(
+      and(
+        eq(channels.workspaceId, workspaceId),
+        eq(channels.name, channelName),
+      ),
+    );
+
+  if (!channel) {
+    const err = new Error(`Channel "${channelName}" not found`);
+    Object.assign(err, { code: 'channel_not_found', status: 404 });
+    throw err;
+  }
+
+  const [membership] = await db
+    .select()
+    .from(channelMembers)
+    .where(
+      and(
+        eq(channelMembers.channelId, channel.id),
+        eq(channelMembers.agentId, agentId),
+      ),
+    );
+
+  if (!membership) {
+    const err = new Error('You must be a member of the channel to unmute it');
+    Object.assign(err, { code: 'not_a_member', status: 403 });
+    throw err;
+  }
+
+  await db
+    .update(channelMembers)
+    .set({ isMuted: false })
+    .where(
+      and(
+        eq(channelMembers.channelId, channel.id),
+        eq(channelMembers.agentId, agentId),
+      ),
+    );
+
+  await invalidateChannelCache(workspaceId, channelName);
+
+  return { channel: channelName, agent_id: agentId, muted: false };
+}
+
+export async function getMutedMemberIds(
+  db: Db,
+  workspaceId: string,
+  channelName: string,
+): Promise<string[]> {
+  const [channel] = await db
+    .select()
+    .from(channels)
+    .where(
+      and(
+        eq(channels.workspaceId, workspaceId),
+        eq(channels.name, channelName),
+      ),
+    );
+
+  if (!channel) return [];
+
+  const rows = await db
+    .select({ agent_id: channelMembers.agentId })
+    .from(channelMembers)
+    .where(
+      and(
+        eq(channelMembers.channelId, channel.id),
+        eq(channelMembers.isMuted, true),
+      ),
+    );
+
+  return rows.map((r) => r.agent_id);
 }
