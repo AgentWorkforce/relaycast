@@ -4,11 +4,13 @@ import * as schema from '../schema.js';
 
 describe('Database Schema', () => {
   // ============================================
-  // All 12 tables exported
+  // All 14 tables exported
   // ============================================
-  it('exports all 12 tables', () => {
+  it('exports all 14 tables', () => {
     expect(schema.workspaces).toBeDefined();
     expect(schema.agents).toBeDefined();
+    expect(schema.a2aAgents).toBeDefined();
+    expect(schema.certifications).toBeDefined();
     expect(schema.channels).toBeDefined();
     expect(schema.channelMembers).toBeDefined();
     expect(schema.messages).toBeDefined();
@@ -27,6 +29,8 @@ describe('Database Schema', () => {
   it('has correct table names', () => {
     expect(getTableName(schema.workspaces)).toBe('workspaces');
     expect(getTableName(schema.agents)).toBe('agents');
+    expect(getTableName(schema.a2aAgents)).toBe('a2a_agents');
+    expect(getTableName(schema.certifications)).toBe('certifications');
     expect(getTableName(schema.channels)).toBe('channels');
     expect(getTableName(schema.channelMembers)).toBe('channel_members');
     expect(getTableName(schema.messages)).toBe('messages');
@@ -68,6 +72,49 @@ describe('Database Schema', () => {
     expect(cols.metadata).toBeDefined();
     expect(cols.createdAt).toBeDefined();
     expect(cols.lastSeen).toBeDefined();
+  });
+
+  // ============================================
+  // A2A Agents columns
+  // ============================================
+  it('a2a_agents table has correct columns', () => {
+    const cols = getTableColumns(schema.a2aAgents);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.relayAgentId).toBeDefined();
+    expect(cols.agentCard).toBeDefined();
+    expect(cols.externalUrl).toBeDefined();
+    expect(cols.authScheme).toBeDefined();
+    expect(cols.authCredential).toBeDefined();
+    expect(cols.status).toBeDefined();
+    expect(cols.messagesSent).toBeDefined();
+    expect(cols.messagesRecv).toBeDefined();
+    expect(cols.lastHealth).toBeDefined();
+    expect(cols.healthFailures).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+    expect(cols.updatedAt).toBeDefined();
+  });
+
+  // ============================================
+  // Certifications columns
+  // ============================================
+  it('certifications table has correct columns', () => {
+    const cols = getTableColumns(schema.certifications);
+    expect(cols.id).toBeDefined();
+    expect(cols.workspaceId).toBeDefined();
+    expect(cols.agentUrl).toBeDefined();
+    expect(cols.level).toBeDefined();
+    expect(cols.source).toBeDefined();
+    expect(cols.status).toBeDefined();
+    expect(cols.passed).toBeDefined();
+    expect(cols.passedTests).toBeDefined();
+    expect(cols.totalTests).toBeDefined();
+    expect(cols.monitorEnabled).toBeDefined();
+    expect(cols.monitorIntervalMinutes).toBeDefined();
+    expect(cols.lastRunAt).toBeDefined();
+    expect(cols.results).toBeDefined();
+    expect(cols.createdAt).toBeDefined();
+    expect(cols.updatedAt).toBeDefined();
   });
 
   // ============================================
