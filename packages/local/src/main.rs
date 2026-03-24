@@ -2045,6 +2045,10 @@ async fn leave_channel(
     if let Some(members) = store.channel_members.get_mut(&channel_id) {
         removed = members.remove(&agent_id);
     }
+    // Clear mute state so rejoin starts fresh
+    if let Some(muted) = store.channel_muted.get_mut(&channel_id) {
+        muted.remove(&agent_id);
+    }
 
     drop(store);
 

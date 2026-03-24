@@ -70,15 +70,20 @@ export class ChannelDO implements DurableObject {
     payload: Record<string, unknown>,
   ): Promise<void> {
     const members = await this.getMembers();
-    const muted = new Set(await this.getMutedMembers());
-    // Only suppress message events for muted members — system/control events
-    // (channel.updated, member.joined, member.left, mute/unmute confirmations)
-    // must still be delivered so agents stay in sync.
-    const eventType = typeof payload.type === 'string' ? payload.type : '';
-    const isMessageEvent = eventType === 'message.created' || eventType === 'message' || eventType === 'thread.reply';
-    const deliverTo = isMessageEvent
-      ? members.filter((id) => !muted.has(id))
-      : members;
+    const mutedList = await this.getMutedMembers();
+    // Short-circuit: skip mute filtering entirely when nobody is muted
+    let deliverTo = members;
+    if (mutedList.length > 0) {
+      // Only suppress message events for muted members — system/control events
+      // (channel.updated, member.joined, member.left, mute/unmute confirmations)
+      // must still be delivered so agents stay in sync.
+      const eventType = typeof payload.type === 'string' ? payload.type : '';
+      const isMessageEvent = eventType === 'message.created' || eventType === 'message' || eventType === 'thread.reply';
+      if (isMessageEvent) {
+        const muted = new Set(mutedList);
+        deliverTo = members.filter((id) => !muted.has(id));
+      }
+    }
     const promises = deliverTo.map((agentId) => {
       const id = this.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
       const stub = this.env.AGENT_DO.get(id);
