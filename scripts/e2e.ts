@@ -292,37 +292,19 @@ ${B}${CYAN}╔══════════════════════
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
 
+  /** Register agent, using registerOrRotate to handle stale agents from prior runs. */
   async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
-    const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        return await relay.agents.register(opts);
-      } catch (err) {
-        if (err instanceof RelayError && /already exists/i.test(err.message)) {
-          if (attempt === MAX_RETRIES) throw err;
-          log('ℹ️ ', `${opts.name} already exists (attempt ${attempt + 1}/${MAX_RETRIES + 1}); deleting...`);
-          try {
-            await relay.agents.delete(opts.name);
-            log('ℹ️ ', `${opts.name} deleted via DELETE endpoint`);
-          } catch (delErr) {
-            log('⚠️ ', `DELETE failed for ${opts.name}: ${delErr instanceof Error ? delErr.message : delErr}`);
-            try {
-              await relay.agents.release({ name: opts.name, reason: 'e2e-cleanup', delete_agent: true });
-              log('ℹ️ ', `${opts.name} released+deleted via release endpoint`);
-            } catch (relErr) {
-              log('⚠️ ', `Release also failed: ${relErr instanceof Error ? relErr.message : relErr}`);
-            }
-          }
-          // Exponential backoff: 1s, 2s, 4s
-          const delay = 1000 * Math.pow(2, attempt);
-          log('ℹ️ ', `Waiting ${delay}ms for D1 propagation...`);
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
-        }
-        throw err;
+    try {
+      return await relay.agents.register(opts);
+    } catch (err) {
+      if (err instanceof RelayError && /already exists/i.test(err.message)) {
+        // Agent left over from a prior E2E run (D1 read replica lag after delete).
+        // Use registerOrRotate which is the idempotent server-side path.
+        log('ℹ️ ', `${opts.name} already exists; rotating token via registerOrRotate...`);
+        return await relay.registerOrRotate(opts);
       }
+      throw err;
     }
-    throw new Error('unreachable');
   }
 
   await run(`Register ${LEAD}`, async () => {

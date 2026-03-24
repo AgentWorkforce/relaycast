@@ -18,33 +18,37 @@ export async function registerAgent(
     metadata?: Record<string, unknown>;
   },
 ) {
-  // Check for duplicate name within workspace
-  const [existing] = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
-  if (existing) {
-    const err = new Error(`Agent "${data.name}" already exists in this workspace`);
-    Object.assign(err, { code: 'agent_already_exists', status: 409 });
-    throw err;
-  }
-
   const agentId = generateId();
   const token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-  const [agent] = await db
-    .insert(agents)
-    .values({
-      id: agentId,
-      workspaceId,
-      name: data.name,
-      type: data.type || 'agent',
-      tokenHash,
-      persona: data.persona ?? null,
-      metadata: data.metadata ?? {},
-    })
-    .returning();
+  // Use INSERT directly and let the unique index (workspace_id, name) enforce
+  // uniqueness. Avoids TOCTOU race between SELECT check and INSERT that causes
+  // false "already exists" errors on D1 read replicas after delete+re-register.
+  let agent;
+  try {
+    [agent] = await db
+      .insert(agents)
+      .values({
+        id: agentId,
+        workspaceId,
+        name: data.name,
+        type: data.type || 'agent',
+        tokenHash,
+        persona: data.persona ?? null,
+        metadata: data.metadata ?? {},
+      })
+      .returning();
+  } catch (insertErr: unknown) {
+    // Unique constraint violation on (workspace_id, name) → agent already exists
+    const msg = insertErr instanceof Error ? insertErr.message : '';
+    if (msg.includes('UNIQUE constraint failed') || msg.includes('unique') || msg.includes('duplicate')) {
+      const err = new Error(`Agent "${data.name}" already exists in this workspace`);
+      Object.assign(err, { code: 'agent_already_exists', status: 409 });
+      throw err;
+    }
+    throw insertErr;
+  }
 
   // Auto-join #general
   const [generalChannel] = await db
