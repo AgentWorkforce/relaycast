@@ -292,8 +292,23 @@ ${B}${CYAN}╔══════════════════════
   // ── 2. Register agents ───────────────────────────────────────────────
   step('Register agents');
 
+  /** Register agent, using registerOrRotate to handle stale agents from prior runs. */
+  async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
+    try {
+      return await relay.agents.register(opts);
+    } catch (err) {
+      if (err instanceof RelayError && /already exists/i.test(err.message)) {
+        // Agent left over from a prior E2E run (D1 read replica lag after delete).
+        // Use registerOrRotate which is the idempotent server-side path.
+        log('ℹ️ ', `${opts.name} already exists; rotating token via registerOrRotate...`);
+        return await relay.registerOrRotate(opts);
+      }
+      throw err;
+    }
+  }
+
   await run(`Register ${LEAD}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: LEAD,
       type: 'agent',
       persona: 'Engineering team lead. Coordinates InfraAgent and BackendAgent, assigns tasks, and unblocks the team.',
@@ -304,7 +319,7 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Register ${INFRA}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: INFRA,
       type: 'agent',
       persona: 'Senior infrastructure engineer. Owns CI/CD pipelines, deploys, health checks, and cloud resources.',
@@ -315,7 +330,7 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Register ${BACKEND}`, async () => {
-    const res = await relay.agents.register({
+    const res = await registerAgent({
       name: BACKEND,
       type: 'agent',
       persona: 'Backend developer focused on testing, reliability, and the message pipeline.',

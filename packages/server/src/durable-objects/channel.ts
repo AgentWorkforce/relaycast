@@ -17,6 +17,8 @@ export class ChannelDO implements DurableObject {
   private channelSeq: number | null = null;
   /** Cached set of agent IDs that belong to this channel. */
   private members: string[] | null = null;
+  /** Cached set of muted agent IDs for this channel. */
+  private mutedMembers: string[] | null = null;
 
   constructor(state: DurableObjectState, env: CloudflareBindings) {
     this.state = state;
@@ -49,6 +51,13 @@ export class ChannelDO implements DurableObject {
     return this.members;
   }
 
+  private async getMutedMembers(): Promise<string[]> {
+    if (this.mutedMembers === null) {
+      this.mutedMembers = (await this.state.storage.get<string[]>('muted_members')) ?? [];
+    }
+    return this.mutedMembers;
+  }
+
   /**
    * Fan out an event payload to every member AgentDO via POST /deliver.
    *
@@ -61,7 +70,21 @@ export class ChannelDO implements DurableObject {
     payload: Record<string, unknown>,
   ): Promise<void> {
     const members = await this.getMembers();
-    const promises = members.map((agentId) => {
+    const mutedList = await this.getMutedMembers();
+    // Short-circuit: skip mute filtering entirely when nobody is muted
+    let deliverTo = members;
+    if (mutedList.length > 0) {
+      // Only suppress message events for muted members — system/control events
+      // (channel.updated, member.joined, member.left, mute/unmute confirmations)
+      // must still be delivered so agents stay in sync.
+      const eventType = typeof payload.type === 'string' ? payload.type : '';
+      const isMessageEvent = eventType === 'message.created' || eventType === 'message' || eventType === 'thread.reply';
+      if (isMessageEvent) {
+        const muted = new Set(mutedList);
+        deliverTo = members.filter((id) => !muted.has(id));
+      }
+    }
+    const promises = deliverTo.map((agentId) => {
       const id = this.env.AGENT_DO.idFromName(`${workspaceId}:${agentId}`);
       const stub = this.env.AGENT_DO.get(id);
       return stub.fetch(new Request('http://do/deliver', {
@@ -75,15 +98,15 @@ export class ChannelDO implements DurableObject {
     for (let i = 0; i < results.length; i++) {
       const result = results[i];
       if (result.status === 'rejected') {
-        this.logger.error(`fanout failed for agent ${members[i]} in workspace ${workspaceId}`, {
+        this.logger.error(`fanout failed for agent ${deliverTo[i]} in workspace ${workspaceId}`, {
           workspace_id: workspaceId,
-          agent_id: members[i],
+          agent_id: deliverTo[i],
           ...toErrorDetails(result.reason),
         });
       } else if (!result.value.ok) {
-        this.logger.error(`fanout returned ${result.value.status} for agent ${members[i]} in workspace ${workspaceId}`, {
+        this.logger.error(`fanout returned ${result.value.status} for agent ${deliverTo[i]} in workspace ${workspaceId}`, {
           workspace_id: workspaceId,
-          agent_id: members[i],
+          agent_id: deliverTo[i],
           status: result.value.status,
         });
       }
@@ -104,6 +127,10 @@ export class ChannelDO implements DurableObject {
 
       if (request.method === 'POST' && url.pathname === '/update-members') {
         return this.handleUpdateMembers(request);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/update-muted') {
+        return this.handleUpdateMuted(request);
       }
 
       return new Response('Not Found', { status: 404 });
@@ -159,6 +186,23 @@ export class ChannelDO implements DurableObject {
       }
     }
 
+    // Load muted members from D1 on cold start if needed
+    if ((await this.getMutedMembers()).length === 0 && body.channelId && body.workspaceId) {
+      try {
+        const muted = await this.loadMutedFromDb(body.channelId);
+        if (muted.length > 0) {
+          this.mutedMembers = muted;
+          await this.state.storage.put('muted_members', muted);
+        }
+      } catch (err) {
+        this.logger.error('Failed to load muted members from D1', {
+          workspace_id: body.workspaceId,
+          channel_id: body.channelId,
+          ...toErrorDetails(err),
+        });
+      }
+    }
+
     const seq = await this.incrementChannelSeq();
     const payload = { ...body.event, channel_seq: seq };
 
@@ -183,6 +227,22 @@ export class ChannelDO implements DurableObject {
     return result.map((row) => row.agent_id);
   }
 
+  /**
+   * Load muted member IDs from D1 as a fallback when DO cache is empty.
+   */
+  private async loadMutedFromDb(channelId: string): Promise<string[]> {
+    const { getDb } = await import('../db/index.js');
+    const { sql } = await import('drizzle-orm');
+
+    const db = getDb(this.env.DB);
+    const result = await db.all<{ agent_id: string }>(sql`
+      SELECT agent_id FROM channel_members
+      WHERE channel_id = ${channelId} AND is_muted = 1
+    `);
+
+    return result.map((row) => row.agent_id);
+  }
+
   /* ------------------------------------------------------------------ */
   /*  POST /update-members                                               */
   /* ------------------------------------------------------------------ */
@@ -192,6 +252,19 @@ export class ChannelDO implements DurableObject {
 
     this.members = body.members;
     await this.state.storage.put('members', body.members);
+
+    return Response.json({ ok: true });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  POST /update-muted                                                 */
+  /* ------------------------------------------------------------------ */
+
+  private async handleUpdateMuted(request: Request): Promise<Response> {
+    const body = (await request.json()) as { muted: string[] };
+
+    this.mutedMembers = body.muted;
+    await this.state.storage.put('muted_members', body.muted);
 
     return Response.json({ ok: true });
   }

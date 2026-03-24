@@ -47,6 +47,8 @@ import type {
   ChannelArchivedEvent,
   MemberJoinedEvent,
   MemberLeftEvent,
+  ChannelMutedEvent,
+  ChannelUnmutedEvent,
   FileUploadedEvent,
   WebhookReceivedEvent,
   CommandInvokedEvent,
@@ -227,6 +229,8 @@ export class AgentClient {
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
     memberJoined:    (handler: (e: MemberJoinedEvent) => void): (() => void)    => this.onEvent('member.joined', handler),
     memberLeft:      (handler: (e: MemberLeftEvent) => void): (() => void)      => this.onEvent('member.left', handler),
+    channelMuted:    (handler: (e: ChannelMutedEvent) => void): (() => void)    => this.onEvent('member.channel_muted', handler),
+    channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
     fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
     webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
     commandInvoked:  (handler: (e: CommandInvokedEvent) => void): (() => void)  => this.onEvent('command.invoked', handler),
@@ -443,6 +447,14 @@ export class AgentClient {
 
     update: (name: string, data: UpdateChannelRequest): Promise<Channel> =>
       this.client.patch(`/v1/channels/${encodeURIComponent(name)}`, data),
+
+    mute: async (name: string): Promise<void> => {
+      await this.client.post(`/v1/channels/${encodeURIComponent(name)}/mute`);
+    },
+
+    unmute: async (name: string): Promise<void> => {
+      await this.client.post(`/v1/channels/${encodeURIComponent(name)}/unmute`);
+    },
   };
 
   // === Reactions ===

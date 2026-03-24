@@ -5,6 +5,7 @@ export const ChannelMemberInfoSchema = z.object({
   agent_name: z.string(),
   role: z.enum(['owner', 'member']),
   joined_at: z.string(),
+  is_muted: z.boolean().optional(),
 });
 export type ChannelMemberInfo = z.infer<typeof ChannelMemberInfoSchema>;
 
@@ -27,6 +28,7 @@ export const ChannelMemberSchema = z.object({
   role: z.enum(['owner', 'member']),
   joined_at: z.string(),
   last_read_id: z.string().nullable(),
+  is_muted: z.boolean(),
 });
 export type ChannelMember = z.infer<typeof ChannelMemberSchema>;
 
@@ -60,3 +62,10 @@ export const InviteChannelResponseSchema = z.object({
   agent: z.string(),
 });
 export type InviteChannelResponse = z.infer<typeof InviteChannelResponseSchema>;
+
+export const MuteChannelResponseSchema = z.object({
+  channel: z.string(),
+  agent_id: z.string(),
+  muted: z.boolean(),
+});
+export type MuteChannelResponse = z.infer<typeof MuteChannelResponseSchema>;

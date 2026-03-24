@@ -4,7 +4,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
-import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers } from './fanout.js';
+import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
@@ -412,12 +412,15 @@ channelRoutes.post(
         // Ignore fanout failures
       }
 
-      // Update member cache after leave
+      // Update member + muted caches after leave
       try {
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.left');
+          // Clear mute state so a rejoin starts unmuted
+          const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
+          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.left');
         }
       } catch {
         // Ignore cache update failures
@@ -539,6 +542,118 @@ channelRoutes.post(
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_invited', {
         channel_name: name,
         invited_agent_name: agentName,
+      });
+
+      return c.json({ ok: true, data: result });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
+    }
+  },
+);
+
+// POST /v1/channels/:name/mute - mute channel (agent token required)
+channelRoutes.post(
+  '/channels/:name/mute',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const name = c.req.param('name');
+      const result = await channelEngine.muteChannel(
+        db,
+        workspace.id,
+        name,
+        agent!.id,
+      );
+
+      // Update ChannelDO muted set
+      try {
+        const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_muted');
+          const eventData = { channel_name: name, agent_name: agent!.name };
+          runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_muted', eventData), 'fanout member.channel_muted');
+        }
+      } catch {
+        // Ignore cache update failures
+      }
+
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'member.channel_muted',
+          workspaceId: workspace.id,
+          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+        }),
+        'queue member.channel_muted',
+      );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_muted', {
+        channel_name: name,
+        agent_id: agent!.id,
+      });
+
+      return c.json({ ok: true, data: result });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string; status?: number };
+      return c.json({
+        ok: false,
+        error: { code: error.code || 'internal_error', message: error.message },
+      }, (error.status || 500) as any);
+    }
+  },
+);
+
+// POST /v1/channels/:name/unmute - unmute channel (agent token required)
+channelRoutes.post(
+  '/channels/:name/unmute',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const name = c.req.param('name');
+      const result = await channelEngine.unmuteChannel(
+        db,
+        workspace.id,
+        name,
+        agent!.id,
+      );
+
+      // Update ChannelDO muted set
+      try {
+        const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
+        const channel = await channelEngine.getChannel(db, workspace.id, name);
+        if (channel) {
+          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_unmuted');
+          const eventData = { channel_name: name, agent_name: agent!.name };
+          runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_unmuted', eventData), 'fanout member.channel_unmuted');
+        }
+      } catch {
+        // Ignore cache update failures
+      }
+
+      runInBackground(
+        c,
+        c.env.WEBHOOK_QUEUE.send({
+          type: 'member.channel_unmuted',
+          workspaceId: workspace.id,
+          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+        }),
+        'queue member.channel_unmuted',
+      );
+      emitServerEvent(c, workspace.id, 'relaycast_server_channel_unmuted', {
+        channel_name: name,
+        agent_id: agent!.id,
       });
 
       return c.json({ ok: true, data: result });

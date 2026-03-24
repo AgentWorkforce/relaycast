@@ -87,6 +87,7 @@ export const channelMembers = sqliteTable(
     role: text('role').notNull().default('member'),
     joinedAt: integer('joined_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastReadId: text('last_read_id'),
+    isMuted: integer('is_muted', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     primaryKey({ columns: [table.channelId, table.agentId] }),
