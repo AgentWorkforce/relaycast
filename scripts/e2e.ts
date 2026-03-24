@@ -297,8 +297,22 @@ ${B}${CYAN}╔══════════════════════
       return await relay.agents.register(opts);
     } catch (err) {
       if (err instanceof RelayError && /already exists/i.test(err.message)) {
-        log('ℹ️ ', `${opts.name} already exists; deregistering and re-registering...`);
-        try { await relay.agents.delete(opts.name); } catch { /* best effort */ }
+        log('ℹ️ ', `${opts.name} already exists; cleaning up and re-registering...`);
+        // Try delete first, then release with delete flag as fallback
+        try {
+          await relay.agents.delete(opts.name);
+          log('ℹ️ ', `${opts.name} deleted via DELETE endpoint`);
+        } catch (delErr) {
+          log('⚠️ ', `DELETE failed for ${opts.name}: ${delErr instanceof Error ? delErr.message : delErr}`);
+          try {
+            await relay.agents.release({ name: opts.name, reason: 'e2e-cleanup', delete_agent: true });
+            log('ℹ️ ', `${opts.name} released+deleted via release endpoint`);
+          } catch (relErr) {
+            log('⚠️ ', `Release also failed for ${opts.name}: ${relErr instanceof Error ? relErr.message : relErr}`);
+          }
+        }
+        // Small delay to let cleanup propagate
+        await new Promise((r) => setTimeout(r, 500));
         return await relay.agents.register(opts);
       }
       throw err;

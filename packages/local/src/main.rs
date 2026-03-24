@@ -57,6 +57,7 @@ struct Store {
     channels: HashMap<String, ChannelRecord>,
     channel_by_workspace_name: HashMap<String, String>,
     channel_members: HashMap<String, HashSet<String>>, // channel_id -> agent_ids
+    channel_muted: HashMap<String, HashSet<String>>,  // channel_id -> muted agent_ids
 
     messages: HashMap<String, MessageRecord>,
     channel_messages: HashMap<String, Vec<String>>, // channel_id -> message_ids
@@ -2041,6 +2042,110 @@ async fn leave_channel(
 #[derive(Debug, Deserialize)]
 struct InviteChannelRequest {
     agent: String,
+}
+
+async fn mute_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let (workspace_id, agent_id, _agent_name) = {
+        let store = state.store.read().await;
+        match auth_agent(&store, &headers) {
+            Ok(v) => v,
+            Err(r) => return r,
+        }
+    };
+
+    let mut store = state.store.write().await;
+    let key = ws_channel_key(&workspace_id, &name);
+    let Some(channel_id) = store.channel_by_workspace_name.get(&key).cloned() else {
+        return err(
+            StatusCode::NOT_FOUND,
+            "channel_not_found",
+            "Channel not found",
+        );
+    };
+
+    // Check membership
+    let is_member = store
+        .channel_members
+        .get(&channel_id)
+        .map(|m| m.contains(&agent_id))
+        .unwrap_or(false);
+    if !is_member {
+        return err(
+            StatusCode::FORBIDDEN,
+            "not_a_member",
+            "You must be a member of the channel to mute it",
+        );
+    }
+
+    store
+        .channel_muted
+        .entry(channel_id)
+        .or_default()
+        .insert(agent_id.clone());
+
+    ok(json!({
+        "ok": true,
+        "data": {
+            "channel": name,
+            "agent_id": agent_id,
+            "muted": true
+        }
+    }))
+}
+
+async fn unmute_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let (workspace_id, agent_id, _agent_name) = {
+        let store = state.store.read().await;
+        match auth_agent(&store, &headers) {
+            Ok(v) => v,
+            Err(r) => return r,
+        }
+    };
+
+    let mut store = state.store.write().await;
+    let key = ws_channel_key(&workspace_id, &name);
+    let Some(channel_id) = store.channel_by_workspace_name.get(&key).cloned() else {
+        return err(
+            StatusCode::NOT_FOUND,
+            "channel_not_found",
+            "Channel not found",
+        );
+    };
+
+    // Check membership
+    let is_member = store
+        .channel_members
+        .get(&channel_id)
+        .map(|m| m.contains(&agent_id))
+        .unwrap_or(false);
+    if !is_member {
+        return err(
+            StatusCode::FORBIDDEN,
+            "not_a_member",
+            "You must be a member of the channel to unmute it",
+        );
+    }
+
+    if let Some(muted) = store.channel_muted.get_mut(&channel_id) {
+        muted.remove(&agent_id);
+    }
+
+    ok(json!({
+        "ok": true,
+        "data": {
+            "channel": name,
+            "agent_id": agent_id,
+            "muted": false
+        }
+    }))
 }
 
 async fn invite_to_channel(
@@ -4919,6 +5024,8 @@ fn app_router(state: AppState) -> Router {
         .route("/v1/channels/{name}/topic", patch(patch_channel_topic))
         .route("/v1/channels/{name}/join", post(join_channel))
         .route("/v1/channels/{name}/leave", post(leave_channel))
+        .route("/v1/channels/{name}/mute", post(mute_channel))
+        .route("/v1/channels/{name}/unmute", post(unmute_channel))
         .route("/v1/channels/{name}/invite", post(invite_to_channel))
         .route("/v1/channels/{name}/members", get(channel_members))
         .route("/v1/channels/{name}/read-status", get(read_status))
