@@ -25,7 +25,15 @@ jobs:
         with:
           build: 'true'
 
-      # Preview environments share staging data; schema changes run only via main deploy pipeline.
+      # Apply D1 migrations so schema changes in PRs don't break the shared staging DB.
+      - uses: ./.github/actions/apply-d1-migrations
+        with:
+          migration-worker-name: relaycast-d1-migrate-pr-${{ github.event.pull_request.number }}
+          database-id: ${{ vars.STAGING_D1_DATABASE_ID }}
+          database-name: relaycast-staging
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - uses: ./.github/actions/deploy-worker
         with:
           worker-name: relaycast-pr-${{ github.event.pull_request.number }}
