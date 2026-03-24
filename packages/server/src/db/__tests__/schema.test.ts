@@ -4,7 +4,7 @@ import * as schema from '../schema.js';
 
 describe('Database Schema', () => {
   // ============================================
-  // All 14 tables exported
+  // All 24 tables exported
   // ============================================
   it('exports all 24 tables', () => {
     expect(schema.workspaces).toBeDefined();
