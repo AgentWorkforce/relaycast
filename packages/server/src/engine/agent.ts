@@ -8,6 +8,22 @@ type Db = ReturnType<typeof getDb>;
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
+/** Detect unique constraint violations across D1, SQLite, and drizzle error shapes. */
+function isUniqueConstraintError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string; cause?: unknown };
+  // Direct D1/SQLite error codes
+  if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT') return true;
+  // Message-based detection (D1 wraps as "D1_ERROR: UNIQUE constraint failed: ...")
+  if (typeof e.message === 'string') {
+    const msg = e.message.toLowerCase();
+    if (msg.includes('unique constraint failed') || msg.includes('sqlite_constraint_unique')) return true;
+  }
+  // Drizzle may wrap the original error as .cause
+  if (e.cause && isUniqueConstraintError(e.cause)) return true;
+  return false;
+}
+
 export async function registerAgent(
   db: Db,
   workspaceId: string,
@@ -41,14 +57,9 @@ export async function registerAgent(
       .returning();
   } catch (insertErr: unknown) {
     // Unique constraint violation on (workspace_id, name) → agent already exists
-    // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', SQLite uses 'UNIQUE constraint failed' in message
-    const candidate = insertErr as { code?: string; message?: string };
-    const isUnique =
-      candidate.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
-      candidate.code === 'SQLITE_CONSTRAINT' ||
-      (candidate.message?.includes('UNIQUE constraint failed') ?? false) ||
-      (candidate.message?.includes('unique') ?? false);
-    if (isUnique) {
+    // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
+    // and the message may contain 'UNIQUE constraint failed' or 'D1_ERROR: UNIQUE'
+    if (isUniqueConstraintError(insertErr)) {
       const err = new Error(`Agent "${data.name}" already exists in this workspace`);
       Object.assign(err, { code: 'agent_already_exists', status: 409 });
       throw err;
