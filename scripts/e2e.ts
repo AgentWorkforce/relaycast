@@ -293,30 +293,36 @@ ${B}${CYAN}╔══════════════════════
   step('Register agents');
 
   async function registerAgent(opts: Parameters<typeof relay.agents.register>[0]): Promise<{ token: string }> {
-    try {
-      return await relay.agents.register(opts);
-    } catch (err) {
-      if (err instanceof RelayError && /already exists/i.test(err.message)) {
-        log('ℹ️ ', `${opts.name} already exists; cleaning up and re-registering...`);
-        // Try delete first, then release with delete flag as fallback
-        try {
-          await relay.agents.delete(opts.name);
-          log('ℹ️ ', `${opts.name} deleted via DELETE endpoint`);
-        } catch (delErr) {
-          log('⚠️ ', `DELETE failed for ${opts.name}: ${delErr instanceof Error ? delErr.message : delErr}`);
-          try {
-            await relay.agents.release({ name: opts.name, reason: 'e2e-cleanup', delete_agent: true });
-            log('ℹ️ ', `${opts.name} released+deleted via release endpoint`);
-          } catch (relErr) {
-            log('⚠️ ', `Release also failed for ${opts.name}: ${relErr instanceof Error ? relErr.message : relErr}`);
-          }
-        }
-        // Small delay to let cleanup propagate
-        await new Promise((r) => setTimeout(r, 500));
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
         return await relay.agents.register(opts);
+      } catch (err) {
+        if (err instanceof RelayError && /already exists/i.test(err.message)) {
+          if (attempt === MAX_RETRIES) throw err;
+          log('ℹ️ ', `${opts.name} already exists (attempt ${attempt + 1}/${MAX_RETRIES + 1}); deleting...`);
+          try {
+            await relay.agents.delete(opts.name);
+            log('ℹ️ ', `${opts.name} deleted via DELETE endpoint`);
+          } catch (delErr) {
+            log('⚠️ ', `DELETE failed for ${opts.name}: ${delErr instanceof Error ? delErr.message : delErr}`);
+            try {
+              await relay.agents.release({ name: opts.name, reason: 'e2e-cleanup', delete_agent: true });
+              log('ℹ️ ', `${opts.name} released+deleted via release endpoint`);
+            } catch (relErr) {
+              log('⚠️ ', `Release also failed: ${relErr instanceof Error ? relErr.message : relErr}`);
+            }
+          }
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = 1000 * Math.pow(2, attempt);
+          log('ℹ️ ', `Waiting ${delay}ms for D1 propagation...`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    throw new Error('unreachable');
   }
 
   await run(`Register ${LEAD}`, async () => {
