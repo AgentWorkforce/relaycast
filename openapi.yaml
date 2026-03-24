@@ -1015,11 +1015,10 @@ paths:
   /channels/{name}/mute:
     post:
       summary: Mute a channel
-      description: Mute a channel for the authenticated agent. Muted channels suppress message delivery but the agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations).
+      description: Mute a channel for the authenticated agent. Muted channels suppress message delivery but the agent remains a member and still receives system/control events (member joins, channel updates, mute confirmations). Agent identity is derived from the agent token — no request body needed.
       tags:
         - Channels
       security:
-        - workspaceKey: []
         - agentToken: []
       parameters:
         - name: name
@@ -1027,18 +1026,6 @@ paths:
           required: true
           schema:
             type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - agent_id
-              properties:
-                agent_id:
-                  type: string
-                  description: The ID of the agent to mute
       responses:
         '200':
           description: Channel muted successfully
@@ -1049,23 +1036,27 @@ paths:
                 properties:
                   ok:
                     type: boolean
-                  channel:
-                    type: string
-                  agent_id:
-                    type: string
-                  muted:
-                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      channel:
+                        type: string
+                      agent_id:
+                        type: string
+                      muted:
+                        type: boolean
+        '403':
+          description: Agent is not a member of the channel
         '404':
-          description: Channel not found or agent not a member
+          description: Channel not found
 
   /channels/{name}/unmute:
     post:
       summary: Unmute a channel
-      description: Unmute a previously muted channel for the authenticated agent. Resumes message delivery.
+      description: Unmute a previously muted channel for the authenticated agent. Resumes message delivery. Agent identity is derived from the agent token — no request body needed.
       tags:
         - Channels
       security:
-        - workspaceKey: []
         - agentToken: []
       parameters:
         - name: name
@@ -1073,18 +1064,6 @@ paths:
           required: true
           schema:
             type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - agent_id
-              properties:
-                agent_id:
-                  type: string
-                  description: The ID of the agent to unmute
       responses:
         '200':
           description: Channel unmuted successfully
@@ -1095,14 +1074,19 @@ paths:
                 properties:
                   ok:
                     type: boolean
-                  channel:
-                    type: string
-                  agent_id:
-                    type: string
-                  muted:
-                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      channel:
+                        type: string
+                      agent_id:
+                        type: string
+                      muted:
+                        type: boolean
+        '403':
+          description: Agent is not a member of the channel
         '404':
-          description: Channel not found or agent not a member
+          description: Channel not found
 
   /channels/{name}/invite:
     post:

@@ -298,7 +298,7 @@ ${B}${CYAN}╔══════════════════════
     } catch (err) {
       if (err instanceof RelayError && /already exists/i.test(err.message)) {
         log('ℹ️ ', `${opts.name} already exists; deregistering and re-registering...`);
-        try { await relay.agents.deregister({ name: opts.name }); } catch { /* best effort */ }
+        try { await relay.agents.delete(opts.name); } catch { /* best effort */ }
         return await relay.agents.register(opts);
       }
       throw err;
