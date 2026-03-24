@@ -41,8 +41,14 @@ export async function registerAgent(
       .returning();
   } catch (insertErr: unknown) {
     // Unique constraint violation on (workspace_id, name) → agent already exists
-    const msg = insertErr instanceof Error ? insertErr.message : '';
-    if (msg.includes('UNIQUE constraint failed') || msg.includes('unique') || msg.includes('duplicate')) {
+    // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', SQLite uses 'UNIQUE constraint failed' in message
+    const candidate = insertErr as { code?: string; message?: string };
+    const isUnique =
+      candidate.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      candidate.code === 'SQLITE_CONSTRAINT' ||
+      (candidate.message?.includes('UNIQUE constraint failed') ?? false) ||
+      (candidate.message?.includes('unique') ?? false);
+    if (isUnique) {
       const err = new Error(`Agent "${data.name}" already exists in this workspace`);
       Object.assign(err, { code: 'agent_already_exists', status: 409 });
       throw err;
