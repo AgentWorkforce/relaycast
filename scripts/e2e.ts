@@ -14,6 +14,7 @@
  *   npm run e2e -- https://relaycast.dev --ci
  */
 
+import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
@@ -95,6 +96,116 @@ function ws(agent: string, event: string, detail: string) {
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+function extractTextPart(payload: any): string {
+  const parts = payload?.params?.message?.parts;
+  if (!Array.isArray(parts)) return '';
+  const textPart = parts.find((part) => part?.kind === 'text' && typeof part.text === 'string');
+  return textPart?.text ?? '';
+}
+
+async function startMockA2aAgent() {
+  let webhookUrl = '';
+  let relayToken = '';
+  const requests: any[] = [];
+  const callbacks: any[] = [];
+
+  const server = createServer(async (req, res) => {
+    const origin = `http://127.0.0.1:${(server.address() as any)?.port}`;
+
+    if (req.method === 'GET' && req.url === '/.well-known/agent-card.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        name: 'Mock A2A Agent',
+        description: 'Local A2A roundtrip test peer',
+        url: `${origin}/rpc`,
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+      }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/rpc') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      requests.push(payload);
+
+      const inputText = extractTextPart(payload);
+      const callbackPayload = {
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: {
+          message: {
+            message_id: `mock-${payload.id}`,
+            role: 'agent',
+            context_id: payload?.params?.message?.context_id,
+            parts: [{ kind: 'text', text: `Mock A2A reply: ${inputText}` }],
+          },
+        },
+      };
+
+      if (webhookUrl && relayToken) {
+        const callback = fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${relayToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(callbackPayload),
+        }).then(async (response) => {
+          callbacks.push({ status: response.status, body: await response.json().catch(() => null) });
+        });
+        void callback;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: {
+          task: {
+            id: `task-${payload.id}`,
+            context_id: payload?.params?.message?.context_id,
+            status: {
+              state: 'submitted',
+              message: 'Mock agent accepted the request',
+            },
+          },
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(404);
+    res.end('not found');
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const port = (server.address() as any)?.port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return {
+    baseUrl,
+    requests,
+    callbacks,
+    configureWebhook(nextWebhookUrl: string, nextRelayToken: string) {
+      webhookUrl = nextWebhookUrl;
+      relayToken = nextRelayToken;
+    },
+    close() {
+      return new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
 }
 
 /** Random delay to make the run feel more realistic. */
@@ -186,6 +297,7 @@ ${B}${CYAN}╔══════════════════════
   const passed: string[] = [];
   const failed: string[] = [];
   const channelName = 'engineering';
+  let mockA2a: Awaited<ReturnType<typeof startMockA2aAgent>> | null = null;
 
   async function run(name: string, fn: () => Promise<void>) {
     try {
@@ -520,6 +632,414 @@ ${B}${CYAN}╔══════════════════════
   await run(`${BACKEND} DMs ${INFRA}`, async () => {
     log('📤', `${BLUE}${B}${BACKEND}${R} → ${GREEN}${B}${INFRA}${R}: Got it, updated my local config. Thanks!`);
     await backend.dm(INFRA, 'Got it, updated my local config. Thanks!');
+  });
+  await pause();
+  console.log(`${DIM}${'─'.repeat(60)}${R}`);
+
+  // ── 7a. A2A gateway roundtrip ───────────────────────────────────────
+  step('A2A gateway');
+
+  await run('Register mock A2A agent', async () => {
+    if (!isLocalHost(new URL(BASE_URL).hostname.toLowerCase())) {
+      log('ℹ️ ', 'Skipping A2A roundtrip: mock agent is only reachable when Relaycast runs locally.');
+      return;
+    }
+
+    mockA2a = await startMockA2aAgent();
+    const registered = await relay.registerA2a({
+      agentCard: {
+        name: 'Mock A2A Agent',
+        description: 'Local A2A roundtrip test peer',
+        url: `${mockA2a.baseUrl}/rpc`,
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+      },
+    });
+
+    mockA2a.configureWebhook(registered.webhookUrl, registered.relayToken);
+    log('🔗', `Registered ${B}${registered.relayName}${R} with webhook ${DIM}${registered.webhookUrl}${R}`);
+    log('🤖', `Mock A2A agent listening on ${B}${mockA2a.baseUrl}${R}`);
+  });
+  await pause();
+
+  await run(`${LEAD} sends a DM to the mock A2A agent`, async () => {
+    if (!mockA2a) {
+      log('ℹ️ ', 'Skipping A2A send: mock agent was not started.');
+      return;
+    }
+
+    const agents = await relay.listA2aAgents();
+    const target = agents.find((agent) => agent.agentCard.name === 'Mock A2A Agent');
+    if (!target) throw new Error('Mock A2A relay agent not found after registration');
+
+    const sent = await lead.dm(target.relayName, 'Ping from Relaycast to mock A2A');
+    log('📤', `${YELLOW}${B}${LEAD}${R} → ${B}${target.relayName}${R}: Ping from Relaycast to mock A2A`);
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(500);
+      const messages = await lead.dms.messages(sent.conversationId, { limit: 10 });
+      const reply = messages.find((message) => message.text === 'Mock A2A reply: Ping from Relaycast to mock A2A');
+      if (reply) {
+        if (mockA2a.requests.length === 0) {
+          throw new Error('Mock A2A server did not receive the outbound JSON-RPC request');
+        }
+        log('🔁', `A2A roundtrip verified in conversation ${B}${sent.conversationId}${R}`);
+        return;
+      }
+    }
+
+    throw new Error('Timed out waiting for mock A2A roundtrip reply');
+  });
+  await pause();
+
+  // ── 7b. A2A agent card endpoints ────────────────────────────────────
+  step('A2A agent cards');
+
+  await run('Get individual A2A agent card via SDK', async () => {
+    const agents = await relay.listA2aAgents();
+    if (agents.length === 0) {
+      log('ℹ️ ', 'No A2A agents registered — skipping agent card test.');
+      return;
+    }
+    const card = await relay.getA2aAgentCard(agents[0].relayName);
+    if (!card.name) throw new Error('Agent card missing name field');
+    log('🪪', `Agent card: ${B}${card.name}${R} v${card.version}`);
+  });
+
+  await run('Get workspace agent card via query param', async () => {
+    const wsInfo = await relay.workspace.info();
+    const res = await fetch(`${BASE_URL}/.well-known/agent-card.json?workspace=${encodeURIComponent(wsInfo.name)}`);
+    if (!res.ok) throw new Error(`Expected 200, got ${res.status}`);
+    const card = await res.json() as any;
+    if (!card.name) throw new Error('Workspace agent card missing name');
+    log('🪪', `Workspace card: ${B}${card.name}${R} with ${card.skills?.length ?? 0} skill(s)`);
+  });
+
+  await run('Get workspace agent card via auth header', async () => {
+    const res = await fetch(`${BASE_URL}/.well-known/agent-card.json`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    if (!res.ok) throw new Error(`Expected 200, got ${res.status}`);
+    const card = await res.json() as any;
+    if (!card.url) throw new Error('Workspace agent card missing url');
+    log('🪪', `Workspace card via auth: ${B}${card.name}${R}`);
+  });
+
+  await run('Remove A2A agent via SDK', async () => {
+    const agents = await relay.listA2aAgents();
+    if (agents.length === 0) {
+      log('ℹ️ ', 'No A2A agents to remove — skipping.');
+      return;
+    }
+    const name = agents[0].relayName;
+    await relay.removeA2aAgent(name);
+    const after = await relay.listA2aAgents();
+    if (after.find((a) => a.relayName === name)) throw new Error('Agent still present after removal');
+    log('🗑️ ', `Removed A2A agent ${B}${name}${R}`);
+  });
+
+  // Re-register mock A2A agent if it was removed (needed for later steps)
+  await run('Re-register mock A2A agent', async () => {
+    if (!isLocalHost(new URL(BASE_URL).hostname.toLowerCase())) {
+      log('ℹ️ ', 'Skipping A2A re-register: not local.');
+      return;
+    }
+    if (!mockA2a) {
+      mockA2a = await startMockA2aAgent();
+    }
+    const registered = await relay.registerA2a({
+      agentCard: {
+        name: 'Mock A2A Agent',
+        description: 'Local A2A roundtrip test peer',
+        url: `${mockA2a.baseUrl}/rpc`,
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+      },
+    });
+    mockA2a.configureWebhook(registered.webhookUrl, registered.relayToken);
+    log('🔗', `Re-registered ${B}${registered.relayName}${R}`);
+  });
+  await pause();
+
+  // ── 7c. Directory ──────────────────────────────────────────────────
+  step('Directory');
+  let directorySlug = '';
+
+  await run('Publish agent to directory', async () => {
+    const result = await relay.publishToDirectory({
+      name: 'E2E Test Agent',
+      description: 'An agent published during E2E testing',
+      provider: 'e2e-suite',
+      tags: ['testing', 'e2e'],
+      skills: [
+        { name: 'smoke-test', description: 'Run smoke tests', tags: ['testing'] },
+        { name: 'load-test', description: 'Run load tests', tags: ['testing', 'perf'] },
+      ],
+    });
+    directorySlug = result.slug;
+    log('📖', `Published ${B}${result.name}${R} (slug: ${directorySlug}) with ${result.skills.length} skills`);
+  });
+  await pause();
+
+  await run('List directory agents', async () => {
+    const res = await fetch(`${BASE_URL}/v1/directory/agents`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok || !Array.isArray(json.data)) throw new Error('Expected ok + data array');
+    log('📋', `Directory has ${json.data.length} agent(s)`);
+  });
+
+  await run('Search directory by text', async () => {
+    const results = await relay.searchDirectory({ q: 'smoke' });
+    if (!Array.isArray(results)) throw new Error('Expected array');
+    log('🔍', `Directory search "smoke" → ${results.length} result(s)`);
+  });
+
+  await run('Search directory by tag', async () => {
+    const results = await relay.searchDirectory({ tags: ['e2e'] });
+    if (!Array.isArray(results)) throw new Error('Expected array');
+    if (results.length === 0) throw new Error('Expected at least 1 result for tag "e2e"');
+    log('🔍', `Directory search tag=e2e → ${results.length} result(s)`);
+  });
+
+  await run('Get directory agent by slug', async () => {
+    if (!directorySlug) { log('ℹ️ ', 'No slug — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/directory/agents/${directorySlug}`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Expected ok, got ${JSON.stringify(json.error)}`);
+    log('📖', `Got directory agent: ${B}${json.data.name}${R}`);
+  });
+
+  await run('Update directory agent', async () => {
+    if (!directorySlug) { log('ℹ️ ', 'No slug — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/directory/agents/${directorySlug}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${workspaceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'Updated during E2E' }),
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Patch failed: ${JSON.stringify(json.error)}`);
+    log('✏️ ', `Updated directory agent description`);
+  });
+
+  await run('Rate directory agent', async () => {
+    if (!directorySlug) { log('ℹ️ ', 'No slug — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/directory/agents/${directorySlug}/ratings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${lead.client.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: 4, review: 'Solid E2E agent' }),
+    });
+    if (res.status === 403 || res.status === 401) {
+      log('ℹ️ ', 'Rating requires agent token — skipping.');
+      return;
+    }
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Rating failed: ${JSON.stringify(json.error)}`);
+    log('⭐', `Rated ${directorySlug}: ${json.data.score}/5`);
+  });
+
+  await run('List directory agent ratings', async () => {
+    if (!directorySlug) { log('ℹ️ ', 'No slug — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/directory/agents/${directorySlug}/ratings`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Expected ok, got ${JSON.stringify(json.error)}`);
+    log('📊', `Ratings for ${directorySlug}: ${json.data.length} rating(s)`);
+  });
+
+  await run('Delete directory agent', async () => {
+    if (!directorySlug) { log('ℹ️ ', 'No slug — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/directory/agents/${directorySlug}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    if (res.status !== 204) throw new Error(`Expected 204, got ${res.status}`);
+    log('🗑️ ', `Deleted directory agent ${directorySlug}`);
+  });
+  await pause();
+
+  // ── 7d. Routing ────────────────────────────────────────────────────
+  step('Routing');
+
+  // Publish an agent to directory first so routing has something to match
+  let routingSlug = '';
+  await run('Publish agent for routing test', async () => {
+    const result = await relay.publishToDirectory({
+      name: 'Routing Test Agent',
+      description: 'Agent with skills for routing tests',
+      tags: ['routing-test'],
+      skills: [
+        { name: 'refund-processing', description: 'Process customer refunds', tags: ['billing', 'refund'] },
+      ],
+    });
+    routingSlug = result.slug;
+    log('📖', `Published ${B}${result.name}${R} for routing`);
+  });
+  await pause();
+
+  await run('Route by skill', async () => {
+    const result = await relay.route('refund-processing');
+    log('🧭', `Route "refund-processing" → agent=${B}${result.agentName}${R} score=${result.score} fallback=${result.fallback}`);
+  });
+
+  await run('Search skills', async () => {
+    const res = await fetch(`${BASE_URL}/v1/skills/search?q=refund`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Skills search failed: ${JSON.stringify(json.error)}`);
+    log('🔍', `Skills search "refund" → ${json.data.length} result(s)`);
+  });
+
+  await run('Import/sync skills', async () => {
+    const result = await relay.importSkills({
+      agentName: LEAD,
+      skills: [{ name: 'code-review', description: 'Review pull requests', tags: ['dev'] }],
+    });
+    log('📥', `Synced skills for ${B}${LEAD}${R} → ${result ? 'entry updated' : 'null'}`);
+  });
+
+  await run('Get routing config', async () => {
+    const config = await relay.getRoutingConfig();
+    log('⚙️ ', `Routing config: weights=${JSON.stringify(config.weights)}`);
+  });
+
+  await run('Update routing config', async () => {
+    const config = await relay.updateRoutingConfig({
+      weights: { skillMatch: 0.5, rating: 0.3, availability: 0.2 },
+      circuitBreakerThreshold: 5,
+    });
+    log('⚙️ ', `Updated routing config: threshold=${config.circuitBreakerThreshold}`);
+  });
+
+  await run('Route feedback (success)', async () => {
+    const res = await fetch(`${BASE_URL}/v1/route/feedback`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${workspaceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_name: LEAD, success: true }),
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Feedback failed: ${JSON.stringify(json.error)}`);
+    log('👍', `Recorded routing success for ${B}${LEAD}${R}`);
+  });
+
+  await run('Route feedback (failure)', async () => {
+    const res = await fetch(`${BASE_URL}/v1/route/feedback`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${workspaceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_name: LEAD, success: false, error: 'E2E test failure' }),
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Feedback failed: ${JSON.stringify(json.error)}`);
+    log('👎', `Recorded routing failure for ${B}${LEAD}${R}`);
+  });
+
+  // Clean up routing test agent
+  await run('Clean up routing test agent', async () => {
+    if (!routingSlug) return;
+    await fetch(`${BASE_URL}/v1/directory/agents/${routingSlug}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    log('🧹', `Deleted routing test agent ${routingSlug}`);
+  });
+  await pause();
+
+  // ── 7e. Certification ──────────────────────────────────────────────
+  step('Certification');
+  let certId = '';
+
+  await run('Submit certification (Level 1)', async () => {
+    if (!mockA2a) {
+      log('ℹ️ ', 'Skipping certification: mock A2A agent not running.');
+      return;
+    }
+    const res = await fetch(`${BASE_URL}/v1/certify`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${workspaceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_url: `${mockA2a.baseUrl}/rpc`, level: 1 }),
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Certify failed: ${JSON.stringify(json.error)}`);
+    certId = json.data.id;
+    log('🏅', `Certification ${B}${certId}${R}: passed=${json.data.passed} (${json.data.passed_tests}/${json.data.total_tests})`);
+  });
+
+  await run('Get certification result', async () => {
+    if (!certId) { log('ℹ️ ', 'No cert ID — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/certify/${certId}`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Get cert failed: ${JSON.stringify(json.error)}`);
+    log('📋', `Certification ${certId}: status=${json.data.status}`);
+  });
+
+  await run('Get certification badge SVG', async () => {
+    if (!certId) { log('ℹ️ ', 'No cert ID — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/certify/${certId}/badge.svg`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    if (!res.ok) throw new Error(`Badge request failed: ${res.status}`);
+    const svg = await res.text();
+    if (!svg.includes('<svg')) throw new Error('Response is not SVG');
+    log('🏷️ ', `Badge SVG: ${svg.length} bytes`);
+  });
+
+  await run('Enable certification monitoring', async () => {
+    if (!mockA2a) { log('ℹ️ ', 'No mock A2A — skipping.'); return; }
+    const res = await fetch(`${BASE_URL}/v1/certify/monitor`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${workspaceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_url: `${mockA2a.baseUrl}/rpc`, level: 1, interval_minutes: 60 }),
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Monitor failed: ${JSON.stringify(json.error)}`);
+    log('📡', `Monitoring enabled: interval=${json.data.monitor_interval_minutes ?? json.data.monitorIntervalMinutes}min`);
+  });
+  await pause();
+
+  // ── 7f. Console / Observability ────────────────────────────────────
+  step('Console / Observability');
+
+  await run('Get console messages', async () => {
+    const res = await fetch(`${BASE_URL}/v1/console/messages?limit=5`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Console messages failed: ${JSON.stringify(json.error)}`);
+    log('📜', `Console messages: ${json.data.length} log(s)`);
+  });
+
+  await run('Get console stats', async () => {
+    const res = await fetch(`${BASE_URL}/v1/console/stats?days=7`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Console stats failed: ${JSON.stringify(json.error)}`);
+    log('📊', `Console stats: ${JSON.stringify(json.data).slice(0, 120)}`);
+  });
+
+  await run('Get console agent stats', async () => {
+    const res = await fetch(`${BASE_URL}/v1/console/agents?days=7&limit=10`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Console agents failed: ${JSON.stringify(json.error)}`);
+    log('📊', `Console agent stats: ${json.data.length} agent(s)`);
+  });
+
+  await run('Get console costs', async () => {
+    const res = await fetch(`${BASE_URL}/v1/console/costs?days=7`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!json.ok) throw new Error(`Console costs failed: ${JSON.stringify(json.error)}`);
+    log('💰', `Console costs: ${JSON.stringify(json.data).slice(0, 120)}`);
   });
   await pause();
   console.log(`${DIM}${'─'.repeat(60)}${R}`);
@@ -901,6 +1421,11 @@ ${B}${CYAN}╔══════════════════════
   step('Disconnect agents & verify status');
   await Promise.all([lead.disconnect(), infra.disconnect(), backend.disconnect()]);
   log('🔌', `All agents disconnected`);
+
+  if (mockA2a) {
+    await mockA2a.close();
+    log('🧹', 'Stopped local mock A2A agent');
+  }
 
   await run('Agents show offline after disconnect', async () => {
     // Poll presence — the DO hibernation close callback is async

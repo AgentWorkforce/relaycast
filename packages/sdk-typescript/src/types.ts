@@ -1,6 +1,165 @@
 import type * as Raw from '@relaycast/types';
 import type { Camelize } from './casing.js';
 
+export interface A2aAgentCardSkill {
+  id?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+}
+
+export interface A2aAgentCard {
+  name: string;
+  description?: string;
+  url: string;
+  version: string;
+  skills: A2aAgentCardSkill[];
+  provider?: Record<string, unknown>;
+  capabilities?: Record<string, unknown>;
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
+  documentationUrl?: string;
+}
+
+export interface RegisterA2aOptions {
+  agentCardUrl?: string;
+  agentCard?: A2aAgentCard;
+  authScheme?: string;
+  authCredential?: string;
+}
+
+export interface RegisterA2aResponse {
+  relayName: string;
+  relayToken: string;
+  webhookUrl: string;
+  certification: 'level_0' | 'level_1';
+}
+
+export interface A2aAgentRecord {
+  id: string;
+  workspaceId: string;
+  relayAgentId: string;
+  relayName: string;
+  relayStatus: string;
+  relayPersona: string | null;
+  relayMetadata: Record<string, unknown> | null;
+  agentCard: A2aAgentCard;
+  externalUrl: string;
+  authScheme: string | null;
+  authCredential: string | null;
+  status: string;
+  messagesSent: number;
+  messagesRecv: number;
+  lastHealth: string | null;
+  healthFailures: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RemoveA2aAgentResponse {
+  name: string;
+  removed: true;
+}
+
+export interface DirectorySkillInput {
+  id?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface DirectorySkill {
+  id: string;
+  skillId: string | null;
+  name: string;
+  description: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface DirectoryAgent {
+  id: string;
+  sourceAgentId: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  provider: string | null;
+  endpointUrl: string | null;
+  documentationUrl: string | null;
+  version: string | null;
+  tags: string[];
+  capabilities: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  status: string;
+  ratingAvg: number;
+  ratingCount: number;
+  skills: DirectorySkill[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SearchDirectoryQuery {
+  q?: string;
+  tags?: string[];
+  status?: string;
+  limit?: number;
+}
+
+export interface DirectorySearchResult extends DirectoryAgent {
+  relevanceScore: number;
+}
+
+export interface PublishToDirectoryRequest {
+  sourceAgentName?: string;
+  slug?: string;
+  name: string;
+  description?: string;
+  provider?: string;
+  endpointUrl?: string;
+  documentationUrl?: string;
+  version?: string;
+  tags?: string[];
+  capabilities?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  status?: string;
+  skills?: DirectorySkillInput[];
+}
+
+export interface ImportSkillsRequest {
+  agentName: string;
+  metadata?: Record<string, unknown>;
+  status?: string;
+  skills?: DirectorySkillInput[];
+}
+
+export interface RouteResult {
+  agentName: string;
+  score: number;
+  fallback: boolean;
+}
+
+export interface RoutingWeights {
+  skillMatch: number;
+  messageMatch: number;
+  tagMatch: number;
+  rating: number;
+  availability: number;
+}
+
+export interface RoutingConfig {
+  weights: RoutingWeights;
+  circuitBreakerThreshold: number;
+  circuitBreakerCooldownSeconds: number;
+  updatedAt: string | null;
+}
+
+export interface UpdateRoutingConfigRequest {
+  weights?: Partial<RoutingWeights>;
+  circuitBreakerThreshold?: number;
+  circuitBreakerCooldownSeconds?: number;
+}
+
 export type ActivityItem = Camelize<Raw.ActivityItem>;
 export type Agent = Camelize<Raw.Agent>;
 export type AgentCommand = Camelize<Raw.AgentCommand>;

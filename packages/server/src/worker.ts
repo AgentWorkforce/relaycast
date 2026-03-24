@@ -25,10 +25,16 @@ import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { commandRoutes } from './routes/command.js';
+import { a2aRoutes } from './routes/a2a.js';
+import { certifyRoutes } from './routes/certify.js';
+import { consoleRoutes } from './routes/console.js';
+import { directoryRoutes } from './routes/directory.js';
+import { routingRoutes } from './routes/routing.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { captureException, createLogger, getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
+import { runA2aHealthChecks } from './engine/a2a-health.js';
 
 // Durable Object exports
 export { ChannelDO } from './durable-objects/channel.js';
@@ -142,6 +148,9 @@ app.all('/mcp', async (c) => {
 
 // Secure headers for remaining routes
 app.use('*', secureHeaders());
+
+// A2A public and gateway routes before other route groups
+app.route('/', a2aRoutes);
 
 // Health check
 app.route('/health', healthRoutes);
@@ -259,6 +268,10 @@ v1.route('/', fileRoutes);
 v1.route('/', inboundWebhookRoutes);
 v1.route('/', eventSubscriptionRoutes);
 v1.route('/', commandRoutes);
+v1.route('/', certifyRoutes);
+v1.route('/', consoleRoutes);
+v1.route('/', directoryRoutes);
+v1.route('/', routingRoutes);
 
 app.route('/v1', v1);
 
@@ -343,7 +356,40 @@ async function handleQueue(batch: MessageBatch, env: AppEnv['Bindings']) {
   await logger.flush();
 }
 
+async function handleScheduled(
+  _controller: ScheduledController,
+  env: AppEnv['Bindings'],
+  ctx: ExecutionContext,
+) {
+  const { getDb } = await import('./db/index.js');
+  const logger = createLogger(env, { source: 'worker.scheduled.a2a_health' });
+
+  const task = (async () => {
+    try {
+      const result = await runA2aHealthChecks(getDb(env.DB));
+      logger.info('Completed A2A health sweep', {
+        checked: result.checked,
+        healthy: result.healthy,
+        failed: result.failed,
+        suspended: result.suspended,
+      });
+    } catch (error) {
+      logger.error('A2A health sweep failed', {
+        ...toErrorDetails(error),
+      });
+      await captureException(env, error, {
+        properties: { source: 'worker.scheduled.a2a_health' },
+      });
+    } finally {
+      await logger.flush();
+    }
+  })();
+
+  ctx.waitUntil(task);
+}
+
 export default {
   fetch: app.fetch,
   queue: handleQueue,
+  scheduled: handleScheduled,
 };

@@ -17,7 +17,11 @@ function relativeTime(timestamp: string): string {
   return `${days}d`;
 }
 
-export function ActivityLog() {
+interface ActivityLogProps {
+  className?: string;
+}
+
+export function ActivityLog({ className }: ActivityLogProps) {
   const { status, events: wsEvents, latestEventAt } = useWebSocketFeed();
 
   const statusClasses = {
@@ -28,7 +32,10 @@ export function ActivityLog() {
   } as const;
 
   return (
-    <div className="w-[260px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
+    <div className={cn(
+      'w-[260px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]',
+      className,
+    )}>
       <div className="px-4 py-3 border-b border-[var(--color-border-default)] shrink-0 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Activity</h2>

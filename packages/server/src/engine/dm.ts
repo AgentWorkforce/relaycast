@@ -12,10 +12,16 @@ import {
   files,
 } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import * as a2aEngine from './a2a.js';
+import { logMessage } from './console.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+interface SendDmOptions {
+  skipA2aIntercept?: boolean;
+}
 
 async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
@@ -56,35 +62,12 @@ function getDmPairKey(workspaceId: string, agentA: string, agentB: string): stri
     .slice(0, 24);
 }
 
-export async function sendDm(
+async function resolveConversation(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
-  data: { to: string; text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  toAgentId: string,
 ) {
-  // Resolve the target agent by name
-  const [toAgent] = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
-
-  if (!toAgent) {
-    const err = new Error(`Agent "${data.to}" not found`);
-    Object.assign(err, { code: 'agent_not_found', status: 404 });
-    throw err;
-  }
-
-  const [fromAgent] = await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
-
-  if (!fromAgent?.name) {
-    const err = new Error('Sender agent not found');
-    Object.assign(err, { code: 'internal_error', status: 500 });
-    throw err;
-  }
-
   const existing = await db.all<{ id: string; channel_id: string }>(sql`
     SELECT dc.id, dc.channel_id
     FROM dm_conversations dc
@@ -94,7 +77,7 @@ export async function sendDm(
      AND p1.left_at IS NULL
     JOIN dm_participants p2
       ON p2.conversation_id = dc.id
-     AND p2.agent_id = ${toAgent.id}
+     AND p2.agent_id = ${toAgentId}
      AND p2.left_at IS NULL
     WHERE dc.workspace_id = ${workspaceId}
       AND dc.dm_type = '1:1'
@@ -104,7 +87,7 @@ export async function sendDm(
   let conversationId = existing[0]?.id;
 
   if (!conversationId) {
-    const pairKey = getDmPairKey(workspaceId, fromAgentId, toAgent.id);
+    const pairKey = getDmPairKey(workspaceId, fromAgentId, toAgentId);
     const deterministicConversationId = `dm_${pairKey}`;
     const deterministicChannelId = `dmch_${pairKey}`;
 
@@ -128,7 +111,7 @@ export async function sendDm(
     }).onConflictDoNothing();
     await db.insert(dmParticipants).values({
       conversationId: deterministicConversationId,
-      agentId: toAgent.id,
+      agentId: toAgentId,
     }).onConflictDoNothing();
 
     conversationId = deterministicConversationId;
@@ -150,42 +133,66 @@ export async function sendDm(
     throw err;
   }
 
-  if (data.attachments && data.attachments.length > 0) {
-    const unique = new Set(data.attachments);
-    if (unique.size !== data.attachments.length) {
-      const err = new Error('Invalid attachments: duplicate file ids are not allowed');
-      Object.assign(err, { code: 'invalid_attachments', status: 400 });
-      throw err;
-    }
+  return conv;
+}
 
-    const validFiles = await db
-      .select({ id: files.id })
-      .from(files)
-      .where(
-        and(
-          eq(files.workspaceId, workspaceId),
-          eq(files.status, 'complete'),
-          inArray(files.id, data.attachments),
-        ),
-      );
-    const validIds = new Set(validFiles.map((f) => f.id));
-    const invalid = data.attachments.filter((id) => !validIds.has(id));
-    if (invalid.length > 0) {
-      const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
-      Object.assign(err, { code: 'invalid_attachments', status: 400 });
-      throw err;
-    }
+async function resolveAttachments(
+  db: Db,
+  workspaceId: string,
+  attachmentIds?: string[],
+): Promise<AttachmentRow[]> {
+  if (!attachmentIds || attachmentIds.length === 0) return [];
+
+  const unique = new Set(attachmentIds);
+  if (unique.size !== attachmentIds.length) {
+    const err = new Error('Invalid attachments: duplicate file ids are not allowed');
+    Object.assign(err, { code: 'invalid_attachments', status: 400 });
+    throw err;
   }
 
-  // Post the message
-  const messageId = generateId();
+  const validFiles = await db
+    .select({
+      file_id: files.id,
+      filename: files.filename,
+      content_type: files.contentType,
+      size_bytes: files.sizeBytes,
+    })
+    .from(files)
+    .where(
+      and(
+        eq(files.workspaceId, workspaceId),
+        eq(files.status, 'complete'),
+        inArray(files.id, attachmentIds),
+      ),
+    );
+
+  const validIds = new Set(validFiles.map((f) => f.file_id));
+  const invalid = attachmentIds.filter((id) => !validIds.has(id));
+  if (invalid.length > 0) {
+    const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
+    Object.assign(err, { code: 'invalid_attachments', status: 400 });
+    throw err;
+  }
+
+  const ordered = new Map(validFiles.map((file) => [file.file_id, file]));
+  return attachmentIds.map((id) => ordered.get(id)!);
+}
+
+async function persistDmMessage(
+  db: Db,
+  workspaceId: string,
+  fromAgentId: string,
+  channelId: string,
+  data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  messageId = generateId(),
+) {
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const [message] = await db
     .insert(messages)
     .values({
       id: messageId,
       workspaceId,
-      channelId: conv.channelId,
+      channelId,
       agentId: fromAgentId,
       body: data.text,
       hasAttachments,
@@ -202,10 +209,94 @@ export async function sendDm(
     await db.insert(messageAttachments).values(attachmentValues);
   }
 
-  const attachmentMap = hasAttachments
-    ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
-    : new Map<string, AttachmentRow[]>();
-  const attachments = attachmentMap.get(messageId) || [];
+  return message;
+}
+
+export async function sendDm(
+  db: Db,
+  workspaceId: string,
+  fromAgentId: string,
+  data: { to: string; text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  options: SendDmOptions = {},
+) {
+  const startedAtMs = Date.now();
+  // Resolve the target agent by name
+  const [toAgent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
+
+  if (!toAgent) {
+    const err = new Error(`Agent "${data.to}" not found`);
+    Object.assign(err, { code: 'agent_not_found', status: 404 });
+    throw err;
+  }
+
+  const [fromAgent] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
+
+  if (!fromAgent?.name) {
+    const err = new Error('Sender agent not found');
+    Object.assign(err, { code: 'internal_error', status: 500 });
+    throw err;
+  }
+
+  const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
+  const attachments = await resolveAttachments(db, workspaceId, data.attachments);
+  const a2aTarget = options.skipA2aIntercept
+    ? null
+    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
+
+  const messageId = generateId();
+
+  if (a2aTarget) {
+    const payload = a2aEngine.translateRelayToA2a({
+      id: messageId,
+      agent_id: fromAgentId,
+      agent_name: fromAgent.name,
+      text: data.text,
+      created_at: new Date().toISOString(),
+      thread_id: conv.id,
+      attachments,
+    });
+
+    payload.params = {
+      ...payload.params,
+      target_agent: toAgent.name,
+      metadata: {
+        target_agent: fromAgent.name,
+        relay_conversation_id: conv.id,
+      },
+    };
+
+    await a2aEngine.sendToExternalAgent(a2aTarget.external_url, payload, {
+      scheme: a2aTarget.auth_scheme,
+      credential: a2aTarget.auth_credential,
+    });
+    await a2aEngine.incrementA2aMessagesSent(db, a2aTarget.id);
+  }
+
+  const message = await persistDmMessage(db, workspaceId, fromAgentId, conv.channelId, data, messageId);
+  await logMessage(db, {
+    workspaceId,
+    messageId: message.id,
+    channelId: conv.channelId,
+    agentId: fromAgentId,
+    conversationId: conv.id,
+    deliveryKind: 'dm',
+    body: message.body,
+    contentType: 'text/plain',
+    metadata: {
+      target_agent: toAgent.name,
+      injection_mode: data.mode ?? 'wait',
+      ...(a2aTarget ? { a2a_target_url: a2aTarget.external_url } : {}),
+    },
+    attachmentCount: attachments.length,
+    mentionCount: 0,
+    latencyMs: Date.now() - startedAtMs,
+  });
 
   const injectionMode = data.mode ?? 'wait';
   return {
