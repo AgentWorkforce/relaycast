@@ -823,18 +823,21 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run('markOnline brings agent back online', async () => {
-    await infra.presence.markOnline();
+    // Reconnect WS (was closed during markOffline test) so the final
+    // disconnect has a live connection to close properly.
+    infra.connect();
+    await waitForConnected(INFRA, infra);
     // Poll for online status
     for (let attempt = 0; attempt < 10; attempt++) {
       await sleep(500);
       const presence = await relay.agents.presence();
       const infraPresence = presence.find((p) => p.agentName === INFRA);
       if (infraPresence?.status === 'online') {
-        log('🟢', `${GREEN}${B}${INFRA}${R} marked online — status: online`);
+        log('🟢', `${GREEN}${B}${INFRA}${R} reconnected & online — status: online`);
         return;
       }
     }
-    throw new Error(`${INFRA} did not transition to online after markOnline`);
+    throw new Error(`${INFRA} did not transition to online after reconnect`);
   });
   await pause();
 
