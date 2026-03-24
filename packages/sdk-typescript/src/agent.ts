@@ -191,16 +191,12 @@ export class AgentClient {
     this.stopAutoHeartbeat();
     if (this.ws) {
       // Close the WebSocket first to stop the client ping timer. Server-side,
-      // each ping triggers a fire-and-forget heartbeat to PresenceDO. If we
-      // called markOffline() while the WS was still open, an in-flight
-      // heartbeat could land at PresenceDO *after* the disconnect, re-adding
-      // the agent as online.
+      // the ping handler now awaits the heartbeat to PresenceDO, and the DO
+      // runtime serializes handlers, so by the time webSocketClose fires the
+      // heartbeat has already settled. The HTTP disconnect below then arrives
+      // last and is the authoritative presence update.
       this.ws.disconnect();
       this.ws = null;
-      // Brief pause so any in-flight server-side heartbeat (from a recent
-      // ping) settles at PresenceDO before we send the authoritative
-      // disconnect.
-      await new Promise((r) => setTimeout(r, 150));
     }
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.

@@ -379,12 +379,16 @@ export class AgentDO implements DurableObject {
 
       if (parsed.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
-        // Refresh presence so the agent stays "online" in PresenceDO
+        // Refresh presence so the agent stays "online" in PresenceDO.
+        // Await the fetch so the heartbeat completes at PresenceDO before
+        // this handler returns. The DO runtime serializes message handlers
+        // and webSocketClose, so awaiting here guarantees the heartbeat
+        // settles before any subsequent disconnect is processed.
         const meta = await this.state.storage.get<{ workspaceId: string; agentId: string }>('meta');
         if (meta) {
           const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
           const stub = this.env.PRESENCE_DO.get(doId);
-          stub.fetch(new Request('http://do/heartbeat', {
+          await stub.fetch(new Request('http://do/heartbeat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
