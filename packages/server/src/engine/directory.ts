@@ -529,6 +529,16 @@ export async function searchDirectory(
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
   const statusFilter = opts.status || 'active';
 
+  const agentMatchWhere = ftsQuery
+    ? sql`directory_agents_fts MATCH ${ftsQuery}`
+    : sql`1 = 0`;
+  const skillMatchWhere = ftsQuery
+    ? sql`directory_skills_fts MATCH ${ftsQuery}`
+    : sql`1 = 0`;
+  const matchFilter = ftsQuery
+    ? sql`agent_matches.directory_agent_id IS NOT NULL OR skill_matches.directory_agent_id IS NOT NULL`
+    : sql`1 = 1`;
+
   const rows = await db.all<{
     id: string;
     workspace_id: string;
@@ -555,7 +565,7 @@ export async function searchDirectory(
       SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
       FROM directory_agents_fts
       JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-      WHERE ${ftsQuery ? sql`directory_agents_fts MATCH ${ftsQuery}` : sql`1 = 0`}
+      WHERE ${agentMatchWhere}
         AND da.workspace_id = ${workspaceId}
       GROUP BY da.id
     ),
@@ -564,7 +574,7 @@ export async function searchDirectory(
       FROM directory_skills_fts
       JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
       JOIN directory_agents da ON da.id = ds.directory_agent_id
-      WHERE ${ftsQuery ? sql`directory_skills_fts MATCH ${ftsQuery}` : sql`1 = 0`}
+      WHERE ${skillMatchWhere}
         AND da.workspace_id = ${workspaceId}
       GROUP BY ds.directory_agent_id
     )
@@ -595,7 +605,7 @@ export async function searchDirectory(
     WHERE da.workspace_id = ${workspaceId}
       AND da.status = ${statusFilter}
       AND (
-        ${ftsQuery ? sql`agent_matches.directory_agent_id IS NOT NULL OR skill_matches.directory_agent_id IS NOT NULL` : sql`1 = 1`}
+        ${matchFilter}
       )
     ORDER BY
       COALESCE(agent_matches.rank, 999999) ASC,
