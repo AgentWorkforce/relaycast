@@ -111,6 +111,7 @@ export class AgentClient {
   private ws: WsClient | null = null;
   private autoHeartbeatMs: number | false;
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingHeartbeat: Promise<void> | null = null;
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 
   constructor(client: HttpClient, options: AgentClientOptions = {}) {
@@ -142,7 +143,9 @@ export class AgentClient {
     this.stopAutoHeartbeat();
     if (this.autoHeartbeatMs === false) return;
     this.autoHeartbeatTimer = setInterval(() => {
-      void this.presence.heartbeat().catch(() => {});
+      this.pendingHeartbeat = this.presence.heartbeat()
+        .catch(() => {})
+        .finally(() => { this.pendingHeartbeat = null; });
     }, this.autoHeartbeatMs);
   }
 
@@ -189,12 +192,13 @@ export class AgentClient {
 
   async disconnect(): Promise<void> {
     this.stopAutoHeartbeat();
+    // Wait for any in-flight auto heartbeat to settle at PresenceDO so the
+    // HTTP disconnect below is guaranteed to be the last presence mutation.
+    if (this.pendingHeartbeat) {
+      await this.pendingHeartbeat;
+      this.pendingHeartbeat = null;
+    }
     if (this.ws) {
-      // Close the WebSocket first to stop the client ping timer. Server-side,
-      // the ping handler now awaits the heartbeat to PresenceDO, and the DO
-      // runtime serializes handlers, so by the time webSocketClose fires the
-      // heartbeat has already settled. The HTTP disconnect below then arrives
-      // last and is the authoritative presence update.
       this.ws.disconnect();
       this.ws = null;
     }

@@ -395,10 +395,10 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     }, {
       skipA2aIntercept: true,
     });
-    await a2aEngine.incrementA2aMessagesReceived(
-      db,
-      (await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName))!.id,
-    );
+    const a2aRecord = await a2aEngine.getA2aAgentByRelayName(db, relayAgent.workspaceId, relayName);
+    if (a2aRecord) {
+      await a2aEngine.incrementA2aMessagesReceived(db, a2aRecord.id);
+    }
 
     const response = a2aEngine.jsonRpcSuccess(extractCorrelationId(payload) ?? undefined, {
       task: {

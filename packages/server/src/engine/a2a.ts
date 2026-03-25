@@ -608,7 +608,9 @@ export async function sendToExternalAgent(
       };
     } catch (error) {
       lastError = error;
-      const retryable = !(error instanceof Error) || (error as Error & { retryable?: boolean }).retryable !== false;
+      // Only retry errors explicitly marked retryable (5xx, network).
+      // ZodErrors, JSON-RPC errors, and 4xx responses are not retryable.
+      const retryable = error instanceof Error && (error as Error & { retryable?: boolean }).retryable === true;
       if (!retryable || attempt === RETRY_DELAYS_MS.length) break;
       await sleep(RETRY_DELAYS_MS[attempt]);
     }
