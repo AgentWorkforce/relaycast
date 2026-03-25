@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn, formatDmLabel } from '../lib/utils';
-
 import { AgentAvatar } from './AgentAvatar';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
@@ -28,15 +27,15 @@ function statusColor(status: string) {
     case 'online':
       return 'bg-green-500';
     case 'idle':
-      return 'bg-yellow-500';
+      return 'bg-amber-500';
     default:
-      return 'bg-gray-500';
+      return 'bg-stone-400';
   }
 }
 
 function getTheme(): 'dark' | 'light' {
-  if (typeof document === 'undefined') return 'dark';
-  return document.documentElement.classList.contains('theme-light') ? 'light' : 'dark';
+  if (typeof document === 'undefined') return 'light';
+  return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'light';
 }
 
 export function AgentSidebar({
@@ -51,7 +50,7 @@ export function AgentSidebar({
   onSelectAgent,
 }: AgentSidebarProps) {
   const router = useRouter();
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
   useEffect(() => {
     setTheme(getTheme());
@@ -73,36 +72,32 @@ export function AgentSidebar({
   }
 
   return (
-    <div className="w-[260px] shrink-0 flex flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
-        <img
-          src={theme === 'dark' ? '/observer/brand/agent-relay-logo-white.svg' : '/observer/brand/agent-relay-logo-black.svg'}
-          alt="Agent Relay"
-          className="h-5 w-auto shrink-0"
-        />
-        <h1 className="text-sm font-black tracking-wide uppercase [font-family:Outfit,sans-serif] truncate">
-          <span className="bg-gradient-to-r from-[var(--color-success)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent">
-            Observer
-          </span>
-        </h1>
-        <span
-          className={cn('h-2 w-2 rounded-full shrink-0', {
-            'bg-green-500': wsStatus === 'connected',
-            'bg-yellow-500 animate-pulse': wsStatus === 'connecting' || wsStatus === 'reconnecting',
-            'bg-red-500': wsStatus === 'disconnected',
-          })}
-          title={`WebSocket: ${wsStatus}`}
-        />
+    <aside className="brand-glass m-3 mr-0 flex w-[290px] shrink-0 flex-col overflow-hidden">
+      <div className="border-b border-[var(--border-default)] px-5 py-4">
+        <div className="mb-1 flex items-center gap-3">
+          <img
+            src={theme === 'dark' ? '/observer/brand/agent-relay-logo-white.svg' : '/observer/brand/agent-relay-logo-black.svg'}
+            alt="Agent Relay"
+            className="h-5 w-auto shrink-0"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="brand-kicker">Operator Console</div>
+            <h1 className="brand-title truncate text-base font-bold text-[var(--foreground)]">Observer</h1>
+          </div>
+          <span
+            className={cn('h-2.5 w-2.5 rounded-full shrink-0', {
+              'bg-green-500 shadow-[0_0_0_4px_rgba(57,197,143,0.16)]': wsStatus === 'connected',
+              'bg-amber-500 animate-pulse shadow-[0_0_0_4px_rgba(245,158,11,0.14)]': wsStatus === 'connecting' || wsStatus === 'reconnecting',
+              'bg-rose-500 shadow-[0_0_0_4px_rgba(244,63,94,0.14)]': wsStatus === 'disconnected',
+            })}
+            title={`WebSocket: ${wsStatus}`}
+          />
+        </div>
+        <p className="text-xs leading-5 text-[var(--text-secondary)]">Channels, DMs, and active agents with a shared cloud-inspired control surface.</p>
       </div>
 
-      {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Channels */}
-        <div className="px-3 pt-4 pb-2">
-          <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Channels
-          </h2>
+      <div className="flex-1 overflow-y-auto px-3 py-4">
+        <SidebarSection title="Channels">
           {channels.map((ch) => (
             <button
               key={ch.id}
@@ -111,73 +106,58 @@ export function AgentSidebar({
                 onSelectChannel(selectedChannel === ch.name ? null : ch.name);
               }}
               className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
+                'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
                 selectedChannel === ch.name
-                  ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]',
-                ch.isArchived && 'opacity-70'
+                  ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
+                ch.isArchived && 'opacity-70',
               )}
             >
-              <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate flex-1 text-left">{ch.name}</span>
+              <Hash className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              <span className="flex-1 truncate text-left">{ch.name}</span>
               {(unreadChannelCounts[ch.name] ?? 0) > 0 && (
-                <span className="text-[10px] font-semibold text-white bg-red-500 px-1.5 py-0.5 rounded-full shrink-0">
+                <span className="rounded-full bg-[var(--brand-warm)] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                   {unreadChannelCounts[ch.name]}
                 </span>
               )}
             </button>
           ))}
-          {channels.length === 0 && (
-            <p className="px-2 text-xs text-[var(--color-text-dim)]">No channels</p>
-          )}
-        </div>
+          {channels.length === 0 && <EmptyLine>No channels</EmptyLine>}
+        </SidebarSection>
 
-        {/* Direct Messages */}
         {conversations.length > 0 && (
-          <>
-            <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
-            <div className="px-3 pt-3 pb-2">
-              <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-                Direct Messages
-              </h2>
-              {conversations.map((dm) => {
-                const dmKey = `dm:${dm.id}`;
-                const dmLabel = formatDmLabel(dm.participants, dm.name);
-                return (
-                  <button
-                    key={dm.id}
-                    onClick={() => {
-                      onSelectAgent(null);
-                      onSelectChannel(selectedChannel === dmKey ? null : dmKey);
-                    }}
-                    className={cn(
-                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
-                      selectedChannel === dmKey
-                        ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
-                    )}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                    <span className="truncate flex-1 text-left">{dmLabel}</span>
-                    {dm.unreadCount > 0 && (
-                      <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
-                        {dm.unreadCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </>
+          <SidebarSection title="Direct Messages">
+            {conversations.map((dm) => {
+              const dmKey = `dm:${dm.id}`;
+              const dmLabel = formatDmLabel(dm.participants, dm.name);
+              return (
+                <button
+                  key={dm.id}
+                  onClick={() => {
+                    onSelectAgent(null);
+                    onSelectChannel(selectedChannel === dmKey ? null : dmKey);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
+                    selectedChannel === dmKey
+                      ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                  <span className="flex-1 truncate text-left">{dmLabel}</span>
+                  {dm.unreadCount > 0 && (
+                    <span className="rounded-full bg-[var(--surface-soft)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                      {dm.unreadCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </SidebarSection>
         )}
 
-        <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
-
-        {/* Agents */}
-        <div className="px-3 pt-3 pb-2">
-          <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Agents
-          </h2>
+        <SidebarSection title="Agents">
           {agents.map((agent) => (
             <button
               key={agent.name}
@@ -185,43 +165,50 @@ export function AgentSidebar({
                 onSelectAgent(selectedAgent === agent.name ? null : agent.name);
               }}
               className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
+                'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
                 selectedAgent === agent.name
-                  ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
+                  ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
               )}
             >
               <AgentAvatar name={agent.name} size="sm" />
-              <span className="truncate flex-1 text-left">{agent.name}</span>
+              <span className="flex-1 truncate text-left">{agent.name}</span>
               <span className={cn('h-2 w-2 rounded-full shrink-0', statusColor(agent.status))} />
-              <span className="text-[10px] text-[var(--color-text-dim)] shrink-0">
-                {(agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || agent.type}
-              </span>
             </button>
           ))}
-          {agents.length === 0 && (
-            <p className="px-2 text-xs text-[var(--color-text-dim)]">No agents</p>
-          )}
-        </div>
+          {agents.length === 0 && <EmptyLine>No agents</EmptyLine>}
+        </SidebarSection>
       </div>
 
-      {/* Footer */}
-      <div className="px-3 py-3 border-t border-[var(--color-border-default)] flex flex-col gap-1">
+      <div className="border-t border-[var(--border-default)] px-3 py-3">
         <button
           onClick={toggleTheme}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-sidebar-hover)] transition-colors"
+          className="flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]"
         >
           {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </button>
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-sidebar-hover)] transition-colors"
+          className="mt-1 flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]"
         >
           <LogOut className="h-3.5 w-3.5" />
           Sign out
         </button>
       </div>
-    </div>
+    </aside>
   );
+}
+
+function SidebarSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-5">
+      <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">{title}</div>
+      <div className="space-y-1">{children}</div>
+    </section>
+  );
+}
+
+function EmptyLine({ children }: { children: React.ReactNode }) {
+  return <p className="px-3 text-xs text-[var(--text-faint)]">{children}</p>;
 }

@@ -3,14 +3,14 @@
 import { cn } from '../lib/utils';
 
 const COLORS = [
-  'bg-cyan-600',
-  'bg-orange-600',
-  'bg-purple-600',
-  'bg-green-600',
-  'bg-rose-600',
-  'bg-amber-600',
-  'bg-indigo-600',
-  'bg-teal-600',
+  'from-sky-500 to-sky-700',
+  'from-orange-400 to-orange-600',
+  'from-violet-500 to-violet-700',
+  'from-emerald-500 to-emerald-700',
+  'from-rose-500 to-rose-700',
+  'from-amber-400 to-amber-600',
+  'from-indigo-500 to-indigo-700',
+  'from-teal-500 to-teal-700',
 ];
 
 function hashName(name: string): number {
@@ -35,10 +35,10 @@ export function AgentAvatar({ name, className, size = 'md' }: AgentAvatarProps) 
   return (
     <div
       className={cn(
-        'inline-flex items-center justify-center rounded-lg font-semibold text-white shrink-0',
-        size === 'sm' ? 'h-6 w-6 text-xs' : 'h-8 w-8 text-sm',
+        'inline-flex shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] ring-1 ring-black/5',
+        size === 'sm' ? 'h-7 w-7 text-xs' : 'h-9 w-9 text-sm',
         color,
-        className
+        className,
       )}
     >
       {letter}

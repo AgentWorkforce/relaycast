@@ -26,52 +26,27 @@ export function ConsolePanel() {
   const agentStats = useConsoleAgentStats();
   const costStats = useConsoleCostStats();
 
-  const combinedStatsError = useMemo(
-    () => overview.error ?? agentStats.error,
-    [agentStats.error, overview.error],
-  );
+  const combinedStatsError = useMemo(() => overview.error ?? agentStats.error, [agentStats.error, overview.error]);
 
   let content: React.ReactNode;
   if (activeTab === 'feed') {
-    content = (
-      <ConsoleFeed
-        messages={feed.messages}
-        loading={feed.loading}
-        error={feed.error}
-        lastUpdatedAt={feed.lastUpdatedAt}
-      />
-    );
+    content = <ConsoleFeed messages={feed.messages} loading={feed.loading} error={feed.error} lastUpdatedAt={feed.lastUpdatedAt} />;
   } else if (activeTab === 'metrics') {
-    content = (
-      <AgentMetricsCards
-        overview={overview.data}
-        agents={agentStats.data ?? []}
-        recentMessages={feed.messages}
-        loading={overview.loading || agentStats.loading}
-        error={combinedStatsError}
-      />
-    );
+    content = <AgentMetricsCards overview={overview.data} agents={agentStats.data ?? []} recentMessages={feed.messages} loading={overview.loading || agentStats.loading} error={combinedStatsError} />;
   } else if (activeTab === 'costs') {
-    content = (
-      <CostBreakdownChart
-        data={costStats.data}
-        loading={costStats.loading}
-        error={costStats.error}
-      />
-    );
+    content = <CostBreakdownChart data={costStats.data} loading={costStats.loading} error={costStats.error} />;
   } else {
-    content = <ActivityLog className="w-full border-l-0" />;
+    content = <ActivityLog className="w-full border-l-0 border-none bg-transparent" />;
   }
 
   return (
-    <aside className="w-[420px] shrink-0 border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
-      <div className="border-b border-[var(--color-border-default)] px-4 py-3">
+    <aside className="console-surface flex w-[440px] shrink-0 flex-col overflow-hidden">
+      <div className="border-b border-[color-mix(in_srgb,var(--console-accent)_16%,transparent)] px-5 py-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Observer Console</h2>
-            <p className="text-[11px] text-[var(--color-text-muted)]">
-              Realtime operations views for feed, metrics, and cost.
-            </p>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--console-accent)]">Observer console</div>
+            <h2 className="brand-title text-base font-semibold text-[var(--console-fg)]">Realtime operations</h2>
+            <p className="text-xs text-[var(--console-muted)]">Feed, metrics, activity, and spend on dark console surfaces.</p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -82,8 +57,8 @@ export function ConsolePanel() {
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors',
                 activeTab === tab.id
-                  ? 'border-[var(--color-accent-cyan)] bg-[var(--color-accent-light)] text-[var(--color-text-primary)]'
-                  : 'border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]',
+                  ? 'border-[color-mix(in_srgb,var(--console-accent)_50%,transparent)] bg-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] text-[var(--console-fg)]'
+                  : 'border-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] bg-[color-mix(in_srgb,var(--console-elevated)_78%,transparent)] text-[var(--console-muted)] hover:text-[var(--console-fg)]',
               )}
             >
               {tab.icon}
@@ -93,9 +68,7 @@ export function ConsolePanel() {
         </div>
       </div>
 
-      <div className="h-[calc(100vh-73px)] overflow-y-auto p-4">
-        {content}
-      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">{content}</div>
     </aside>
   );
 }

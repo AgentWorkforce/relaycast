@@ -17,34 +17,22 @@ function relativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
-function ThreadMessageRow({
-  msg,
-  mentionNames,
-  onOpenAgent,
-}: {
-  msg: MessageWithMeta;
-  mentionNames?: string[];
-  onOpenAgent?: (agentName: string | null) => void;
-}) {
+function ThreadMessageRow({ msg, mentionNames, onOpenAgent }: { msg: MessageWithMeta; mentionNames?: string[]; onOpenAgent?: (agentName: string | null) => void; }) {
   return (
-    <div className="flex gap-3 px-4 py-2">
+    <div className="flex gap-3 px-4 py-3">
       <AgentAvatar name={msg.agentName} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 mb-0.5">
-          <span className="font-semibold text-sm text-[var(--color-text-primary)]">
-            {msg.agentName}
-          </span>
-          <span className="text-xs text-[var(--color-text-dim)]">
-            {relativeTime(msg.createdAt)}
-          </span>
+        <div className="mb-1 flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-[var(--foreground)]">{msg.agentName}</span>
+          <span className="text-xs text-[var(--text-faint)]">{relativeTime(msg.createdAt)}</span>
         </div>
         <MessageMarkdown
           text={msg.text}
-          className="text-sm text-[var(--color-text-secondary)] break-words"
+          className="text-sm leading-6 text-[var(--text-secondary)] break-words"
           showCodeCopyButton
           mentionNames={mentionNames}
           onMentionClick={onOpenAgent}
-          mentionClassName="font-semibold text-[var(--color-accent-cyan)] hover:underline cursor-pointer"
+          mentionClassName="font-semibold text-[var(--brand-primary-strong)] hover:underline cursor-pointer"
         />
       </div>
     </div>
@@ -58,76 +46,44 @@ interface ThreadPanelProps {
   onOpenAgent?: (agentName: string | null) => void;
 }
 
-export function ThreadPanel({
-  messageId,
-  onClose,
-  mentionNames,
-  onOpenAgent,
-}: ThreadPanelProps) {
+export function ThreadPanel({ messageId, onClose, mentionNames, onOpenAgent }: ThreadPanelProps) {
   const { parent, replies, loading } = useThread(messageId);
 
   return (
-    <div className="w-[360px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center justify-between shrink-0">
+    <aside className="brand-card flex w-[380px] shrink-0 flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[var(--border-default)] px-5 py-4">
         <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Thread</h2>
-          {parent && (
-            <span className="text-xs text-[var(--color-text-dim)]">
-              {parent.replyCount} {parent.replyCount === 1 ? 'reply' : 'replies'}
-            </span>
-          )}
+          <MessageSquare className="h-4 w-4 text-[var(--brand-primary)]" />
+          <h2 className="brand-title text-base font-semibold text-[var(--foreground)]">Thread</h2>
+          {parent && <span className="text-xs text-[var(--text-faint)]">{parent.replyCount} {parent.replyCount === 1 ? 'reply' : 'replies'}</span>}
         </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-md cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
+        <button onClick={onClose} className="rounded-xl p-2 text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-soft)] hover:text-[var(--foreground)]">
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[color-mix(in_srgb,var(--surface-strong)_72%,transparent)]">
         {loading ? (
-          <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
-            <p className="text-sm">Loading thread...</p>
-          </div>
+          <div className="flex h-32 items-center justify-center text-[var(--text-faint)]">Loading thread…</div>
         ) : !parent ? (
-          <div className="flex items-center justify-center h-32 text-[var(--color-text-dim)]">
-            <p className="text-sm">Thread not found</p>
-          </div>
+          <div className="flex h-32 items-center justify-center text-[var(--text-faint)]">Thread not found</div>
         ) : (
           <div>
-            {/* Parent message */}
-            <div className="border-b border-[var(--color-border-subtle)] pb-2 mb-1">
-              <ThreadMessageRow
-                msg={parent}
-                mentionNames={mentionNames}
-                onOpenAgent={onOpenAgent}
-              />
+            <div className="border-b border-[var(--border-default)] pb-2">
+              <ThreadMessageRow msg={parent} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
             </div>
-
-            {/* Replies */}
             {replies.length === 0 ? (
-              <div className="px-4 py-6 text-center text-xs text-[var(--color-text-dim)]">
-                No replies yet
-              </div>
+              <div className="px-4 py-8 text-center text-xs text-[var(--text-faint)]">No replies yet</div>
             ) : (
-              <div className="py-1">
+              <div className="py-2">
                 {replies.map((reply) => (
-                  <ThreadMessageRow
-                    key={reply.id}
-                    msg={reply}
-                    mentionNames={mentionNames}
-                    onOpenAgent={onOpenAgent}
-                  />
+                  <ThreadMessageRow key={reply.id} msg={reply} mentionNames={mentionNames} onOpenAgent={onOpenAgent} />
                 ))}
               </div>
             )}
           </div>
         )}
       </div>
-    </div>
+    </aside>
   );
 }
