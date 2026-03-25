@@ -184,6 +184,296 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('a2a', () => {
+    it('registerA2a() calls POST /v1/a2a/register with JSON body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        relay_name: 'ext-weather-123',
+        relay_token: 'rt_test',
+        webhook_url: 'https://api.relaycast.dev/a2a/webhook/ext-weather-123',
+        certification: 'level_1',
+      }));
+
+      const result = await relay.registerA2a({
+        agentCardUrl: 'https://agent.example/.well-known/agent-card.json',
+        authScheme: 'bearer',
+        authCredential: 'secret',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/a2a/register');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        agent_card_url: 'https://agent.example/.well-known/agent-card.json',
+        auth_scheme: 'bearer',
+        auth_credential: 'secret',
+      }));
+      expect(result).toEqual({
+        relayName: 'ext-weather-123',
+        relayToken: 'rt_test',
+        webhookUrl: 'https://api.relaycast.dev/a2a/webhook/ext-weather-123',
+        certification: 'level_1',
+      });
+    });
+
+    it('listA2aAgents() calls GET /v1/a2a/agents', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.listA2aAgents();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents');
+      expect(init.method).toBe('GET');
+    });
+
+    it('removeA2aAgent() calls DELETE /v1/a2a/agents/:name and returns removal payload', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ name: 'a/b', removed: true }));
+      const result = await relay.removeA2aAgent('a/b');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents/a%2Fb');
+      expect(init.method).toBe('DELETE');
+      expect(result).toEqual({ name: 'a/b', removed: true });
+    });
+
+    it('getA2aAgentCard() calls GET /v1/a2a/agents/:name/card and returns envelope-wrapped card', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: () => Promise.resolve({
+            ok: true,
+            data: {
+              name: 'Weather Agent',
+              url: 'https://agent.example',
+              version: '1.0.0',
+              skills: [{ name: 'forecast_lookup' }],
+              default_input_modes: ['text/plain'],
+              default_output_modes: ['text/plain'],
+            },
+          }),
+        }));
+
+      const result = await relay.getA2aAgentCard('a/b');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents/a%2Fb/card');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({
+        name: 'Weather Agent',
+        url: 'https://agent.example',
+        version: '1.0.0',
+        skills: [{ name: 'forecast_lookup' }],
+        defaultInputModes: ['text/plain'],
+        defaultOutputModes: ['text/plain'],
+      });
+    });
+  });
+
+  describe('directory and routing', () => {
+    it('route() calls POST /v1/route with JSON body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        agent_name: 'router',
+        score: 0.98,
+        fallback: false,
+      }));
+
+      const result = await relay.route('refund_lookup', 'Need a refund decision');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/route');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        skill: 'refund_lookup',
+        message: 'Need a refund decision',
+      }));
+      expect(result).toEqual({
+        agentName: 'router',
+        score: 0.98,
+        fallback: false,
+      });
+    });
+
+    it('searchDirectory() calls GET /v1/directory/search with serialized query params', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.searchDirectory({
+        q: 'refund',
+        tags: ['billing', 'priority'],
+        status: 'active',
+        limit: 5,
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/directory/search?q=refund&tags=billing%2Cpriority&status=active&limit=5');
+      expect(init.method).toBe('GET');
+    });
+
+    it('publishToDirectory() calls POST /v1/directory/agents with snake_case body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'dir_1',
+        source_agent_id: 'agent_1',
+        slug: 'billing-router',
+        name: 'Billing Router',
+        description: 'Routes billing work',
+        provider: 'relaycast',
+        endpoint_url: 'https://agent.example',
+        documentation_url: 'https://docs.example',
+        version: '1.0.0',
+        tags: ['billing'],
+        capabilities: { handoff: true },
+        metadata: { team: 'payments' },
+        status: 'active',
+        rating_avg: 4.5,
+        rating_count: 2,
+        skills: [],
+        created_at: '2026-03-24T00:00:00.000Z',
+        updated_at: '2026-03-24T00:00:00.000Z',
+      }));
+
+      const result = await relay.publishToDirectory({
+        sourceAgentName: 'billing-router',
+        name: 'Billing Router',
+        endpointUrl: 'https://agent.example',
+        documentationUrl: 'https://docs.example',
+        skills: [{ name: 'refund_lookup', tags: ['billing'] }],
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/directory/agents');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        source_agent_name: 'billing-router',
+        name: 'Billing Router',
+        endpoint_url: 'https://agent.example',
+        documentation_url: 'https://docs.example',
+        skills: [{ name: 'refund_lookup', tags: ['billing'] }],
+      }));
+      expect(result.sourceAgentId).toBe('agent_1');
+      expect(result.endpointUrl).toBe('https://agent.example');
+      expect(result.documentationUrl).toBe('https://docs.example');
+      expect(result.ratingAvg).toBe(4.5);
+    });
+
+    it('importSkills() calls POST /v1/skills/sync with snake_case body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse(null));
+      const result = await relay.importSkills({
+        agentName: 'billing-router',
+        status: 'active',
+        metadata: { provider: 'relaycast' },
+        skills: [{ name: 'refund_lookup' }],
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/skills/sync');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        agent_name: 'billing-router',
+        status: 'active',
+        metadata: { provider: 'relaycast' },
+        skills: [{ name: 'refund_lookup' }],
+      }));
+      expect(result).toBeNull();
+    });
+
+    it('getRoutingConfig() calls GET /v1/routing/config and camelizes response', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        weights: {
+          skill_match: 0.45,
+          message_match: 0.2,
+          tag_match: 0.15,
+          rating: 0.1,
+          availability: 0.1,
+        },
+        circuit_breaker_threshold: 3,
+        circuit_breaker_cooldown_seconds: 300,
+        updated_at: '2026-03-24T00:00:00.000Z',
+      }));
+
+      const result = await relay.getRoutingConfig();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/routing/config');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({
+        weights: {
+          skillMatch: 0.45,
+          messageMatch: 0.2,
+          tagMatch: 0.15,
+          rating: 0.1,
+          availability: 0.1,
+        },
+        circuitBreakerThreshold: 3,
+        circuitBreakerCooldownSeconds: 300,
+        updatedAt: '2026-03-24T00:00:00.000Z',
+      });
+    });
+
+    it('updateRoutingConfig() calls PUT /v1/routing/config with snake_case body', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        weights: {
+          skill_match: 0.5,
+          message_match: 0.2,
+          tag_match: 0.1,
+          rating: 0.1,
+          availability: 0.1,
+        },
+        circuit_breaker_threshold: 4,
+        circuit_breaker_cooldown_seconds: 600,
+        updated_at: '2026-03-24T00:00:00.000Z',
+      }));
+
+      const result = await relay.updateRoutingConfig({
+        weights: { skillMatch: 0.5, tagMatch: 0.1 },
+        circuitBreakerThreshold: 4,
+        circuitBreakerCooldownSeconds: 600,
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/routing/config');
+      expect(init.method).toBe('PUT');
+      expect(init.body).toBe(JSON.stringify({
+        weights: {
+          skill_match: 0.5,
+          tag_match: 0.1,
+        },
+        circuit_breaker_threshold: 4,
+        circuit_breaker_cooldown_seconds: 600,
+      }));
+      expect(result.weights.skillMatch).toBe(0.5);
+      expect(result.circuitBreakerThreshold).toBe(4);
+      expect(result.circuitBreakerCooldownSeconds).toBe(600);
+    });
+  });
+
   describe('error handling', () => {
     it('throws RelayError on API error', async () => {
       const { RelayCast } = await import('../relay.js');

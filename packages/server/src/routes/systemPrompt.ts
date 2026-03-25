@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
@@ -24,7 +25,7 @@ systemPromptRoutes.get('/workspace/system-prompt', requireAuth, rateLimit, async
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -66,6 +67,6 @@ systemPromptRoutes.put('/workspace/system-prompt', requireWorkspaceKey, rateLimi
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });

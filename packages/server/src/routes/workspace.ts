@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -152,7 +153,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -167,7 +168,7 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
     return c.json({ ok: true, data: workspace });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -182,7 +183,7 @@ workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
     return c.json({ ok: true, data: workspace });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -207,7 +208,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
     return c.json({ ok: true, data: updated });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -223,7 +224,7 @@ workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) =
     return c.body(null, 204);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
-    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as any);
+    return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -242,7 +243,7 @@ workspaceRoutes.get('/activity', requireWorkspaceKey, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -258,7 +259,7 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceKey, rateLimit, asy
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -282,7 +283,7 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -305,7 +306,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -334,7 +335,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -389,6 +390,6 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });

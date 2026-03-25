@@ -1,4 +1,6 @@
 import type {
+  A2aAgentCard,
+  A2aAgentRecord,
   Agent,
   AgentListQuery,
   AgentPresenceInfo,
@@ -35,6 +37,17 @@ import type {
   SpawnAgentResponse,
   ReleaseAgentRequest,
   ReleaseAgentResponse,
+  RegisterA2aOptions,
+  RegisterA2aResponse,
+  RemoveA2aAgentResponse,
+  DirectoryAgent,
+  DirectorySearchResult,
+  ImportSkillsRequest,
+  PublishToDirectoryRequest,
+  RouteResult,
+  RoutingConfig,
+  SearchDirectoryQuery,
+  UpdateRoutingConfigRequest,
 } from './types.js';
 import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
@@ -306,6 +319,51 @@ export class RelayCast {
 
   system(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
     return this.registerTypedIdentity('system', data);
+  }
+
+  registerA2a(options: RegisterA2aOptions): Promise<RegisterA2aResponse> {
+    return this.client.post('/v1/a2a/register', options);
+  }
+
+  listA2aAgents(): Promise<A2aAgentRecord[]> {
+    return this.client.get('/v1/a2a/agents');
+  }
+
+  removeA2aAgent(name: string): Promise<RemoveA2aAgentResponse> {
+    return this.client.request('DELETE', `/v1/a2a/agents/${encodeURIComponent(name)}`);
+  }
+
+  getA2aAgentCard(name: string): Promise<A2aAgentCard> {
+    return this.client.get(`/v1/a2a/agents/${encodeURIComponent(name)}/card`);
+  }
+
+  route(skill: string, message?: string): Promise<RouteResult> {
+    return this.client.post('/v1/route', { skill, message });
+  }
+
+  searchDirectory(query: SearchDirectoryQuery): Promise<DirectorySearchResult[]> {
+    const params: Record<string, string> = {};
+    if (query.q) params.q = query.q;
+    if (query.tags?.length) params.tags = query.tags.join(',');
+    if (query.status) params.status = query.status;
+    if (query.limit != null) params.limit = String(query.limit);
+    return this.client.get('/v1/directory/search', params);
+  }
+
+  publishToDirectory(data: PublishToDirectoryRequest): Promise<DirectoryAgent> {
+    return this.client.post('/v1/directory/agents', data);
+  }
+
+  importSkills(data: ImportSkillsRequest): Promise<DirectoryAgent | null> {
+    return this.client.post('/v1/skills/sync', data);
+  }
+
+  getRoutingConfig(): Promise<RoutingConfig> {
+    return this.client.get('/v1/routing/config');
+  }
+
+  updateRoutingConfig(data: UpdateRoutingConfigRequest): Promise<RoutingConfig> {
+    return this.client.put('/v1/routing/config', data);
   }
 
   workspace = {

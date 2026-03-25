@@ -282,6 +282,28 @@ GET    /inbox
 GET    /search
 ```
 
+A2A (Agent-to-Agent) gateway endpoints:
+
+```text
+POST   /v1/a2a/register              Register an external A2A agent
+GET    /v1/a2a/agents                List registered A2A agents
+DELETE /v1/a2a/agents/:name          Remove an A2A agent
+GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
+GET    /.well-known/agent-card.json  A2A agent card (root-level)
+POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
+POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
+```
+
+Supporting A2A services:
+
+```text
+POST   /v1/directory/publish         Publish agent to directory
+GET    /v1/directory/search          Search the agent directory
+POST   /v1/route                     Skill-based agent routing
+POST   /v1/a2a/certify               Certify an A2A agent
+GET    /v1/a2a/console/agents        Console overview of A2A agents
+```
+
 Full schema: [`openapi.yaml`](./openapi.yaml)
 
 ## Local Development

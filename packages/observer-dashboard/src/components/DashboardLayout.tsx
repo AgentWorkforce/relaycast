@@ -5,7 +5,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket, useRelay } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
-import { ActivityLog } from './ActivityLog';
+import { ConsolePanel } from './ConsolePanel';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
 import { formatDmLabel } from '../lib/utils';
@@ -201,7 +201,7 @@ export function DashboardLayout() {
       />
     );
   } else {
-    rightPanel = <ActivityLog />;
+    rightPanel = <ConsolePanel />;
   }
 
   return (

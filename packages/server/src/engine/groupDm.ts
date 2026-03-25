@@ -1,4 +1,4 @@
-import { eq, and, sql, isNull, inArray, asc } from 'drizzle-orm';
+import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';

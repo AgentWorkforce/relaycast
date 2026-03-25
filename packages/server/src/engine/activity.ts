@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents } from '../db/schema.js';
 

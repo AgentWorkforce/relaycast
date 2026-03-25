@@ -65,7 +65,7 @@ export class McpSessionDO implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
+    const _url = new URL(request.url);
 
     // Store API key if provided via header (for pre-authenticated sessions).
     if (request.method === 'POST') {

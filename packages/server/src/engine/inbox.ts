@@ -5,7 +5,6 @@ import {
   channels,
   agents,
   dmParticipants,
-  reactions,
 } from '../db/schema.js';
 
 type Db = ReturnType<typeof getDb>;

@@ -212,7 +212,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       };
 
     default: {
-      const { workspace_id, channel_id, timestamp, data, ...rest } = event as WsEvent & Record<string, unknown>;
+      const { workspace_id: _workspace_id, channel_id: _channel_id, timestamp: _timestamp, data, ...rest } = event as WsEvent & Record<string, unknown>;
       return { ...rest, ...data };
     }
   }

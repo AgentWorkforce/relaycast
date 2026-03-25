@@ -1,7 +1,8 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
+import { messages, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { logMessage } from './console.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -50,6 +51,7 @@ export async function postMessage(
     mode?: 'wait' | 'steer';
   },
 ) {
+  const startedAtMs = Date.now();
   const messageId = generateId();
 
   // Parse @mentions from text
@@ -88,6 +90,23 @@ export async function postMessage(
     db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
   ]);
   const attachments = attachmentMap.get(messageId) || [];
+
+  await logMessage(db, {
+    workspaceId,
+    messageId,
+    channelId,
+    agentId,
+    deliveryKind: 'channel',
+    body: message.body,
+    contentType: data.content_type ?? null,
+    metadata: {
+      ...(data.data || {}),
+      injection_mode: data.mode ?? 'wait',
+    },
+    attachmentCount: attachments.length,
+    mentionCount: mentionMatches.length,
+    latencyMs: Date.now() - startedAtMs,
+  });
 
   return {
     id: message.id,

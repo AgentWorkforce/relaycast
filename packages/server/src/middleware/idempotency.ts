@@ -153,7 +153,7 @@ export async function runIdempotent<T>(
         };
       }
     } catch (err) {
-      if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as any).code)) {
+      if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as Error & { code?: string }).code ?? '')) {
         throw err;
       }
       // KV unavailable or decode failure: proceed without idempotency.

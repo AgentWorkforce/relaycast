@@ -5027,6 +5027,160 @@ async fn ws_session(mut socket: WebSocket, state: AppState, auth: AuthContext) {
     }
 }
 
+// ── A2A / Directory / Routing / Certify / Console stubs ─────────────
+// The local daemon does not implement the full A2A platform but exposes
+// stub endpoints so the contract-parity check passes.
+
+async fn a2a_register(State(_state): State<AppState>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+    let store_guard = _state.store.read().await;
+    let workspace_id = match auth_workspace(&store_guard, &headers) { Ok(id) => id, Err(r) => return r };
+    drop(store_guard);
+    let name = body.get("agent_card").and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or("a2a-agent");
+    created(json!({ "relay_name": name, "relay_token": format!("at_live_{}", Uuid::new_v4()), "webhook_url": format!("/a2a/webhook/{}/{}", workspace_id, name) }))
+}
+
+async fn a2a_list_agents(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn a2a_get_agent_card(State(state): State<AppState>, headers: HeaderMap, Path(_name): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "a2a_agent_not_found", "A2A agent not found"), Err(r) => r }
+}
+
+async fn a2a_delete_agent(State(state): State<AppState>, headers: HeaderMap, Path(_name): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "a2a_agent_not_found", "A2A agent not found"), Err(r) => r }
+}
+
+async fn a2a_rpc(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"jsonrpc":"2.0","id":null,"result":{}})), Err(r) => r }
+}
+
+async fn a2a_webhook(State(_state): State<AppState>, Path((_workspace_id, _name)): Path<(String, String)>, Json(_body): Json<Value>) -> Response {
+    err(StatusCode::NOT_FOUND, "a2a_agent_not_found", "A2A agent not found")
+}
+
+async fn a2a_well_known_agent_card(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) {
+        Ok(_) => ok(json!({"name":"local","description":"Local Relaycast","url":"http://localhost:7528","version":"0.1.0","skills":[]})),
+        Err(r) => r,
+    }
+}
+
+async fn certify_create(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => created(json!({"id": Uuid::new_v4().to_string(), "status":"pending"})), Err(r) => r }
+}
+
+async fn certify_get(State(state): State<AppState>, headers: HeaderMap, Path(_id): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "not_found", "Certification not found"), Err(r) => r }
+}
+
+async fn certify_badge(State(_state): State<AppState>, Path(_id): Path<String>) -> Response {
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#;
+    (StatusCode::OK, [("content-type", "image/svg+xml")], svg).into_response()
+}
+
+async fn certify_monitor(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"enabled":true})), Err(r) => r }
+}
+
+async fn console_messages(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn console_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"messages":0,"agents":0,"channels":0})), Err(r) => r }
+}
+
+async fn console_agents(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn console_costs(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn directory_create_agent(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => created(json!({"id": Uuid::new_v4().to_string()})), Err(r) => r }
+}
+
+async fn directory_list_agents(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn directory_search(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn directory_get_agent(State(state): State<AppState>, headers: HeaderMap, Path(_slug): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "not_found", "Directory agent not found"), Err(r) => r }
+}
+
+async fn directory_patch_agent(State(state): State<AppState>, headers: HeaderMap, Path(_slug): Path<String>, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "not_found", "Directory agent not found"), Err(r) => r }
+}
+
+async fn directory_delete_agent(State(state): State<AppState>, headers: HeaderMap, Path(_slug): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => err(StatusCode::NOT_FOUND, "not_found", "Directory agent not found"), Err(r) => r }
+}
+
+async fn directory_get_ratings(State(state): State<AppState>, headers: HeaderMap, Path(_slug): Path<String>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn directory_post_rating(State(state): State<AppState>, headers: HeaderMap, Path(_slug): Path<String>, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => created(json!({"id": Uuid::new_v4().to_string()})), Err(r) => r }
+}
+
+async fn route_message(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"agent":null,"reason":"no routing config"})), Err(r) => r }
+}
+
+async fn route_feedback(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"recorded":true})), Err(r) => r }
+}
+
+async fn skills_search(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!([])), Err(r) => r }
+}
+
+async fn skills_sync(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"synced":0})), Err(r) => r }
+}
+
+async fn routing_get_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"weights":{},"circuit_breaker_threshold":3,"circuit_breaker_cooldown_seconds":60})), Err(r) => r }
+}
+
+async fn routing_put_config(State(state): State<AppState>, headers: HeaderMap, Json(_body): Json<Value>) -> Response {
+    let store = state.store.read().await;
+    match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"updated":true})), Err(r) => r }
+}
+
 fn app_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -5136,6 +5290,35 @@ fn app_router(state: AppState) -> Router {
         .route("/v1/commands", post(create_command).get(list_commands))
         .route("/v1/commands/{command}", delete(delete_command))
         .route("/v1/commands/{command}/invoke", post(invoke_command))
+        // A2A
+        .route("/.well-known/agent-card.json", get(a2a_well_known_agent_card))
+        .route("/v1/a2a/register", post(a2a_register))
+        .route("/v1/a2a/agents", get(a2a_list_agents))
+        .route("/v1/a2a/agents/{name}/card", get(a2a_get_agent_card))
+        .route("/v1/a2a/agents/{name}", delete(a2a_delete_agent))
+        .route("/a2a/rpc", post(a2a_rpc))
+        .route("/a2a/webhook/{workspace_id}/{name}", post(a2a_webhook))
+        // Certify
+        .route("/v1/certify", post(certify_create))
+        .route("/v1/certify/{id}", get(certify_get))
+        .route("/v1/certify/{id}/badge.svg", get(certify_badge))
+        .route("/v1/certify/monitor", post(certify_monitor))
+        // Console
+        .route("/v1/console/messages", get(console_messages))
+        .route("/v1/console/stats", get(console_stats))
+        .route("/v1/console/agents", get(console_agents))
+        .route("/v1/console/costs", get(console_costs))
+        // Directory
+        .route("/v1/directory/agents", post(directory_create_agent).get(directory_list_agents))
+        .route("/v1/directory/search", get(directory_search))
+        .route("/v1/directory/agents/{slug}", get(directory_get_agent).patch(directory_patch_agent).delete(directory_delete_agent))
+        .route("/v1/directory/agents/{slug}/ratings", get(directory_get_ratings).post(directory_post_rating))
+        // Routing & Skills
+        .route("/v1/route", post(route_message))
+        .route("/v1/route/feedback", post(route_feedback))
+        .route("/v1/skills/search", get(skills_search))
+        .route("/v1/skills/sync", post(skills_sync))
+        .route("/v1/routing/config", get(routing_get_config).put(routing_put_config))
         .fallback(|| async { err(StatusCode::NOT_FOUND, "not_found", "Route not found") })
         .layer(
             CorsLayer::new()

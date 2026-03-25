@@ -11,6 +11,10 @@ vi.mock('../../engine/agent.js', () => ({
   touchLastSeen: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../engine/directory.js', () => ({
+  syncSourceAgentDirectoryEntry: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
@@ -193,6 +197,15 @@ describe('PATCH /v1/agents/:name', () => {
   });
 
   it('updates agent', async () => {
+    vi.mocked(agentEngine.getAgentByName).mockResolvedValue({
+      id: 'agent_1',
+      name: 'Bot1',
+      type: 'agent',
+      status: 'online',
+      persona: null,
+      last_seen: '2025-01-01T00:00:00.000Z',
+      metadata: {},
+    });
     vi.mocked(agentEngine.updateAgent).mockResolvedValue({
       id: 'agent_1',
       name: 'Bot1',

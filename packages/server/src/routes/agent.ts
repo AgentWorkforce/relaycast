@@ -1,27 +1,39 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { AgentTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
+import * as directoryEngine from '../engine/directory.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
+const skillSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 const registerAgentSchema = z.object({
   name: z.string().min(1),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  skills: z.array(skillSchema).optional(),
 });
 
 const updateAgentSchema = z.object({
   status: z.string().optional(),
   persona: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  skills: z.array(skillSchema).optional(),
 });
 
 const spawnAgentSchema = z.object({
@@ -55,14 +67,26 @@ agentRoutes.post(
           error: { code: 'invalid_request', message: 'name is required' },
         }, 400);
       }
-      const { name, type, persona, metadata } = parsed.data;
+      const { name, type, persona, metadata, skills } = parsed.data;
+      const nextMetadata = {
+        ...(metadata || {}),
+        ...(skills ? { skills } : {}),
+      };
 
       const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
         type,
         persona,
-        metadata,
+        metadata: nextMetadata,
       });
+      if (skills?.length) {
+        await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
+          id: result.id,
+          name: result.name,
+          status: result.status,
+          metadata: nextMetadata,
+        });
+      }
       emitServerEvent(c, workspace.id, 'relaycast_server_agent_registered', {
         agent_id: result.id,
         agent_name: result.name,
@@ -75,7 +99,7 @@ agentRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, status as any);
+      }, status as ContentfulStatusCode);
     }
   },
 );
@@ -97,7 +121,7 @@ agentRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -125,7 +149,7 @@ agentRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -147,13 +171,41 @@ agentRoutes.patch(
           error: { code: 'invalid_request', message: 'invalid agent update body' },
         }, 400);
       }
+      const existing = await agentEngine.getAgentByName(db, workspace.id, name);
+      if (!existing) {
+        return c.json({
+          ok: false,
+          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
+        }, 404);
+      }
+
       const body = parsed.data;
-      const updated = await agentEngine.updateAgent(db, workspace.id, name, body);
+      const nextMetadata = body.metadata !== undefined || body.skills !== undefined
+        ? {
+          ...(existing.metadata || {}),
+          ...(body.metadata || {}),
+          ...(body.skills ? { skills: body.skills } : body.skills === undefined ? {} : { skills: [] }),
+        }
+        : undefined;
+
+      const updated = await agentEngine.updateAgent(db, workspace.id, name, {
+        status: body.status,
+        persona: body.persona,
+        metadata: nextMetadata,
+      });
       if (!updated) {
         return c.json({
           ok: false,
           error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
         }, 404);
+      }
+      if (body.metadata !== undefined || body.skills !== undefined || body.status !== undefined) {
+        await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
+          id: updated.id,
+          name: updated.name,
+          status: updated.status,
+          metadata: (updated.metadata || {}) as Record<string, unknown>,
+        });
       }
       emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
         agent_name: name,
@@ -166,7 +218,7 @@ agentRoutes.patch(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -197,7 +249,7 @@ agentRoutes.delete(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -273,13 +325,13 @@ agentRoutes.post(
         already_existed: result.already_existed,
       });
 
-      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as any);
+      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as ContentfulStatusCode);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -342,7 +394,7 @@ agentRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );

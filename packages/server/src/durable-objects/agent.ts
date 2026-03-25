@@ -448,7 +448,7 @@ export class AgentDO implements DurableObject {
         if (workspaceId && agentId) {
           const doId = this.env.PRESENCE_DO.idFromName(workspaceId);
           const stub = this.env.PRESENCE_DO.get(doId);
-          stub.fetch(new Request('http://do/disconnect', {
+          await stub.fetch(new Request('http://do/disconnect', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ agentId, workspaceId }),

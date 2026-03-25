@@ -2629,6 +2629,429 @@ paths:
               schema:
                 type: object
 
+  # ── A2A ──────────────────────────────────────────────────────────────
+  /.well-known/agent-card.json:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
+    get:
+      summary: Workspace A2A agent card
+      tags: [A2A]
+      responses:
+        '200':
+          description: Agent card JSON
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/register:
+    post:
+      summary: Register an external A2A agent
+      tags: [A2A]
+      responses:
+        '201':
+          description: Agent registered
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/agents:
+    get:
+      summary: List registered A2A agents
+      tags: [A2A]
+      responses:
+        '200':
+          description: List of A2A agents
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/agents/{name}:
+    delete:
+      summary: Remove an A2A agent
+      tags: [A2A]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent removed
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/agents/{name}/card:
+    get:
+      summary: Get agent card for a registered A2A agent
+      tags: [A2A]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent card
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/rpc:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
+    post:
+      summary: JSON-RPC gateway for A2A messages
+      tags: [A2A]
+      responses:
+        '200':
+          description: JSON-RPC response
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /a2a/webhook/{workspace_id}/{name}:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
+    post:
+      summary: Webhook callback for A2A agents
+      tags: [A2A]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook accepted
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Certify ─────────────────────────────────────────────────────────
+  /certify:
+    post:
+      summary: Create a certification run
+      tags: [Certify]
+      responses:
+        '201':
+          description: Certification created
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /certify/{id}:
+    get:
+      summary: Get certification result
+      tags: [Certify]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Certification result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /certify/{id}/badge.svg:
+    get:
+      summary: Get certification badge SVG
+      tags: [Certify]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SVG badge
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+
+  /certify/monitor:
+    post:
+      summary: Enable certification monitoring
+      tags: [Certify]
+      responses:
+        '200':
+          description: Monitor configured
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Console ─────────────────────────────────────────────────────────
+  /console/messages:
+    get:
+      summary: List console messages
+      tags: [Console]
+      responses:
+        '200':
+          description: Console messages
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /console/stats:
+    get:
+      summary: Get console stats
+      tags: [Console]
+      responses:
+        '200':
+          description: Console stats
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /console/agents:
+    get:
+      summary: List console agents
+      tags: [Console]
+      responses:
+        '200':
+          description: Console agents
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /console/costs:
+    get:
+      summary: Get cost breakdown
+      tags: [Console]
+      responses:
+        '200':
+          description: Cost data
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Directory ───────────────────────────────────────────────────────
+  /directory/agents:
+    get:
+      summary: List directory agents
+      tags: [Directory]
+      responses:
+        '200':
+          description: Directory agents
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      summary: Register a directory agent
+      tags: [Directory]
+      responses:
+        '201':
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /directory/search:
+    get:
+      summary: Search directory agents
+      tags: [Directory]
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /directory/agents/{slug}:
+    get:
+      summary: Get a directory agent
+      tags: [Directory]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Directory agent
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      summary: Update a directory agent
+      tags: [Directory]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Remove a directory agent
+      tags: [Directory]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent removed
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /directory/agents/{slug}/ratings:
+    get:
+      summary: Get agent ratings
+      tags: [Directory]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ratings list
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      summary: Rate a directory agent
+      tags: [Directory]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Rating created
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Routing & Skills ────────────────────────────────────────────────
+  /route:
+    post:
+      summary: Route a message to the best agent
+      tags: [Routing]
+      responses:
+        '200':
+          description: Routing result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /route/feedback:
+    post:
+      summary: Submit routing feedback
+      tags: [Routing]
+      responses:
+        '200':
+          description: Feedback recorded
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/search:
+    get:
+      summary: Search skills
+      tags: [Routing]
+      responses:
+        '200':
+          description: Skills list
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/sync:
+    post:
+      summary: Sync skills from directory
+      tags: [Routing]
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /routing/config:
+    get:
+      summary: Get routing configuration
+      tags: [Routing]
+      responses:
+        '200':
+          description: Routing config
+          content:
+            application/json:
+              schema:
+                type: object
+    put:
+      summary: Update routing configuration
+      tags: [Routing]
+      responses:
+        '200':
+          description: Config updated
+          content:
+            application/json:
+              schema:
+                type: object
+
 tags:
   - name: System
     description: Health and system endpoints
@@ -2664,3 +3087,13 @@ tags:
     description: Inbound webhook management and trigger endpoints
   - name: MCP
     description: MCP discovery and streamable transport endpoints
+  - name: A2A
+    description: Agent-to-Agent protocol gateway
+  - name: Certify
+    description: Agent certification and monitoring
+  - name: Console
+    description: Observability console endpoints
+  - name: Directory
+    description: Agent directory and ratings
+  - name: Routing
+    description: Smart routing and skills management
