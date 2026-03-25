@@ -334,7 +334,7 @@ export class RelayCast {
   }
 
   getA2aAgentCard(name: string): Promise<A2aAgentCard> {
-    return this.client.getRaw(`/v1/a2a/agents/${encodeURIComponent(name)}/card`);
+    return this.client.get(`/v1/a2a/agents/${encodeURIComponent(name)}/card`);
   }
 
   route(skill: string, message?: string): Promise<RouteResult> {

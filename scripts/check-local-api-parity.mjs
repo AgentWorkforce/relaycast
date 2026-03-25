@@ -46,9 +46,14 @@ function extractOpenApiEndpoints(content) {
       continue;
     }
 
-    const fullPath = currentPath === '/health'
-      ? '/health'
-      : `/v1${currentPath}`;
+    // Root-level routes that are NOT behind the /v1 prefix.
+    const isRootLevel =
+      currentPath === '/health' ||
+      currentPath.startsWith('/.well-known/agent') ||
+      currentPath === '/a2a/rpc' ||
+      currentPath.startsWith('/a2a/webhook');
+
+    const fullPath = isRootLevel ? currentPath : `/v1${currentPath}`;
     endpoints.add(endpointKey(methodMatch[1], fullPath));
   }
 

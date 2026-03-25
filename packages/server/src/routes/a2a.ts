@@ -199,7 +199,7 @@ a2aRoutes.get('/v1/a2a/agents/:name/card', requireAuth, rateLimit, async (c) => 
       }, 404);
     }
 
-    return c.json(record.agent_card);
+    return c.json({ ok: true, data: record.agent_card });
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
     return jsonResponse(c, {

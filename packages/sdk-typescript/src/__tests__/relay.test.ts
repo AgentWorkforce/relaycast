@@ -243,7 +243,7 @@ describe('RelayCast', () => {
       expect(result).toEqual({ name: 'a/b', removed: true });
     });
 
-    it('getA2aAgentCard() calls GET /v1/a2a/agents/:name/card and handles raw card response', async () => {
+    it('getA2aAgentCard() calls GET /v1/a2a/agents/:name/card and returns envelope-wrapped card', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
@@ -253,12 +253,15 @@ describe('RelayCast', () => {
           status: 200,
           headers: new Headers(),
           json: () => Promise.resolve({
-            name: 'Weather Agent',
-            url: 'https://agent.example',
-            version: '1.0.0',
-            skills: [{ name: 'forecast_lookup' }],
-            default_input_modes: ['text/plain'],
-            default_output_modes: ['text/plain'],
+            ok: true,
+            data: {
+              name: 'Weather Agent',
+              url: 'https://agent.example',
+              version: '1.0.0',
+              skills: [{ name: 'forecast_lookup' }],
+              default_input_modes: ['text/plain'],
+              default_output_modes: ['text/plain'],
+            },
           }),
         }));
 
