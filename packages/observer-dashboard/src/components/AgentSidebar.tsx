@@ -76,9 +76,9 @@ export function AgentSidebar({
       <div className="border-b border-[var(--border-default)] px-5 py-4">
         <div className="mb-1 flex items-center gap-3">
           <img
-            src={theme === 'dark' ? '/observer/brand/agent-relay-logo-white.svg' : '/observer/brand/agent-relay-logo-black.svg'}
+            src="/observer/brand/agent-relay-mark.svg"
             alt="Agent Relay"
-            className="h-5 w-auto shrink-0"
+            className="h-6 w-auto shrink-0"
           />
           <div className="min-w-0 flex-1">
             <div className="brand-kicker">Operator Console</div>
@@ -93,7 +93,7 @@ export function AgentSidebar({
             title={`WebSocket: ${wsStatus}`}
           />
         </div>
-        <p className="text-xs leading-5 text-[var(--text-secondary)]">Channels, DMs, and active agents with a shared cloud-inspired control surface.</p>
+        <p className="text-xs leading-5 text-[var(--text-secondary)]">Channels, DMs, and active agents with brighter observer accents across the control surface.</p>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4">
