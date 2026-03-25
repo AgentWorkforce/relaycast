@@ -64,7 +64,7 @@ describe('runA2aHealthChecks', () => {
 
     const result = await runA2aHealthChecks(db as never);
 
-    expect(fetch).toHaveBeenCalledWith('https://example.com/agent/.well-known/agent-card.json', {
+    expect(fetch).toHaveBeenCalledWith('https://example.com/.well-known/agent-card.json', {
       method: 'GET',
       headers: { accept: 'application/json' },
     });
