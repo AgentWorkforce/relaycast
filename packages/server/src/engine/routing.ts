@@ -196,7 +196,10 @@ export async function setRoutingConfig(
   }>,
 ): Promise<RoutingConfig> {
   const current = await getRoutingConfig(db, workspaceId);
-  const weights = normalizeWeights(withDefaultWeights(input.weights || current.weights));
+  const weights = normalizeWeights(withDefaultWeights({
+    ...current.weights,
+    ...input.weights,
+  }));
   const circuitBreakerThreshold = input.circuit_breaker_threshold ?? current.circuit_breaker_threshold;
   const circuitBreakerCooldownSeconds = input.circuit_breaker_cooldown_seconds ?? current.circuit_breaker_cooldown_seconds;
   const now = new Date();

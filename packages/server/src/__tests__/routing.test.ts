@@ -499,4 +499,33 @@ describe('routing engine', () => {
     expect(result.fallback).toBe(true);
     expect(result.score).toBeGreaterThan(0);
   });
+
+  it('preserves existing weights when applying a partial routing update', async () => {
+    const { db } = createTestDb();
+    await seedWorkspace(db);
+
+    await setRoutingConfig(db, 'ws_test', {
+      weights: {
+        skill_match: 0.4,
+        message_match: 0.2,
+        tag_match: 0.15,
+        rating: 0.15,
+        availability: 0.1,
+      },
+    });
+
+    const updated = await setRoutingConfig(db, 'ws_test', {
+      weights: {
+        skill_match: 0.5,
+      },
+    });
+
+    expect(updated.weights).toEqual({
+      skill_match: 0.454545,
+      message_match: 0.181818,
+      tag_match: 0.136364,
+      rating: 0.136364,
+      availability: 0.090909,
+    });
+  });
 });

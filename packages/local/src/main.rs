@@ -5059,7 +5059,7 @@ async fn a2a_rpc(State(state): State<AppState>, headers: HeaderMap, Json(_body):
     match auth_workspace(&store, &headers) { Ok(_) => ok(json!({"jsonrpc":"2.0","id":null,"result":{}})), Err(r) => r }
 }
 
-async fn a2a_webhook(State(_state): State<AppState>, Path(_name): Path<String>, Json(_body): Json<Value>) -> Response {
+async fn a2a_webhook(State(_state): State<AppState>, Path((_workspace_id, _name)): Path<(String, String)>, Json(_body): Json<Value>) -> Response {
     err(StatusCode::NOT_FOUND, "a2a_agent_not_found", "A2A agent not found")
 }
 
@@ -5291,13 +5291,13 @@ fn app_router(state: AppState) -> Router {
         .route("/v1/commands/{command}", delete(delete_command))
         .route("/v1/commands/{command}/invoke", post(invoke_command))
         // A2A
-        .route("/v1/.well-known/agent-card.json", get(a2a_well_known_agent_card))
+        .route("/.well-known/agent-card.json", get(a2a_well_known_agent_card))
         .route("/v1/a2a/register", post(a2a_register))
         .route("/v1/a2a/agents", get(a2a_list_agents))
         .route("/v1/a2a/agents/{name}/card", get(a2a_get_agent_card))
         .route("/v1/a2a/agents/{name}", delete(a2a_delete_agent))
-        .route("/v1/a2a/rpc", post(a2a_rpc))
-        .route("/v1/a2a/webhook/{name}", post(a2a_webhook))
+        .route("/a2a/rpc", post(a2a_rpc))
+        .route("/a2a/webhook/{workspace_id}/{name}", post(a2a_webhook))
         // Certify
         .route("/v1/certify", post(certify_create))
         .route("/v1/certify/{id}", get(certify_get))

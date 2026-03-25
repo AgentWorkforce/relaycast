@@ -100,7 +100,7 @@ function extractCorrelationId(payload: a2aEngine.A2aJsonRpcRequest | a2aEngine.A
       ?? null;
 }
 
-async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: string) {
+async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: string, workspaceId: string) {
   const [row] = await db
     .select({
       workspaceId: a2aAgents.workspaceId,
@@ -110,7 +110,7 @@ async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: 
     })
     .from(a2aAgents)
     .innerJoin(agents, eq(a2aAgents.relayAgentId, agents.id))
-    .where(eq(agents.name, relayName));
+    .where(and(eq(agents.name, relayName), eq(a2aAgents.workspaceId, workspaceId)));
 
   return row ?? null;
 }
@@ -326,12 +326,13 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
   }
 });
 
-// POST /a2a/webhook/:agent_name
-a2aRoutes.post('/a2a/webhook/:agent_name', async (c) => {
+// POST /a2a/webhook/:workspace_id/:agent_name
+a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
   try {
     const db = c.get('db');
+    const workspaceId = c.req.param('workspace_id');
     const relayName = c.req.param('agent_name');
-    const relayAgent = await findWebhookAgentByName(db, relayName);
+    const relayAgent = await findWebhookAgentByName(db, relayName, workspaceId);
 
     if (!relayAgent) {
       return c.json({

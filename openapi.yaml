@@ -2631,6 +2631,11 @@ paths:
 
   # ── A2A ──────────────────────────────────────────────────────────────
   /.well-known/agent-card.json:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
     get:
       summary: Workspace A2A agent card
       tags: [A2A]
@@ -2703,6 +2708,11 @@ paths:
                 type: object
 
   /a2a/rpc:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
     post:
       summary: JSON-RPC gateway for A2A messages
       tags: [A2A]
@@ -2714,11 +2724,21 @@ paths:
               schema:
                 type: object
 
-  /a2a/webhook/{name}:
+  /a2a/webhook/{workspace_id}/{name}:
+    servers:
+      - url: https://api.relaycast.dev
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:7528
+        description: Local development server
     post:
       summary: Webhook callback for A2A agents
       tags: [A2A]
       parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
         - name: name
           in: path
           required: true

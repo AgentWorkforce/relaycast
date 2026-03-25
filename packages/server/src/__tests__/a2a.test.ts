@@ -152,7 +152,7 @@ describe('A2A registration', () => {
     vi.spyOn(a2aEngine, 'registerA2aAgent').mockResolvedValue({
       relayName: 'ext-weather-12345678',
       relayToken: 'at_live_proxy_token',
-      webhookUrl: '/a2a/webhook/ext-weather-12345678',
+      webhookUrl: '/a2a/webhook/ws_123/ext-weather-12345678',
       certification: 'level_1',
     });
 
@@ -174,14 +174,14 @@ describe('A2A registration', () => {
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
     expect(body.data.relay_name).toBe('ext-weather-12345678');
-    expect(body.data.webhook_url).toBe('http://localhost/a2a/webhook/ext-weather-12345678');
+    expect(body.data.webhook_url).toBe('http://localhost/a2a/webhook/ws_123/ext-weather-12345678');
   });
 
   it('registers with an inline agent card', async () => {
     vi.spyOn(a2aEngine, 'registerA2aAgent').mockResolvedValue({
       relayName: 'ext-weather-12345678',
       relayToken: 'at_live_proxy_token',
-      webhookUrl: '/a2a/webhook/ext-weather-12345678',
+      webhookUrl: '/a2a/webhook/ws_123/ext-weather-12345678',
       certification: 'level_1',
     });
 
@@ -244,7 +244,7 @@ describe('A2A registration', () => {
       source: 'registration',
       status: 'pending',
     }));
-    expect(result.webhookUrl).toBe(`/a2a/webhook/${result.relayName}`);
+    expect(result.webhookUrl).toBe(`/a2a/webhook/ws_123/${result.relayName}`);
   });
 
   it('fetches the remote agent card URL before provisioning the relay agent', async () => {
@@ -349,7 +349,7 @@ describe('A2A webhook handling', () => {
     } as any);
     vi.spyOn(a2aEngine, 'incrementA2aMessagesReceived').mockResolvedValue();
 
-    const res = await app.request('/a2a/webhook/ext-weather-12345678', {
+    const res = await app.request('/a2a/webhook/ws_123/ext-weather-12345678', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_AGENT_TOKEN}`,
@@ -417,7 +417,7 @@ describe('A2A webhook handling', () => {
     } as any);
     vi.spyOn(a2aEngine, 'incrementA2aMessagesReceived').mockResolvedValue();
 
-    const res = await app.request('/a2a/webhook/ext-weather-12345678', {
+    const res = await app.request('/a2a/webhook/ws_123/ext-weather-12345678', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_AGENT_TOKEN}`,
@@ -505,6 +505,81 @@ describe('A2A health checking', () => {
       failed: 1,
       suspended: 1,
     });
+  });
+});
+
+describe('sendToExternalAgent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('does not retry 4xx upstream responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('bad request', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(a2aEngine.sendToExternalAgent('https://weather.example.com/rpc', {
+      jsonrpc: '2.0',
+      id: 'req_1',
+      method: 'message/send',
+      params: {},
+    } as any)).rejects.toMatchObject({
+      code: 'a2a_upstream_rejected',
+      status: 400,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry JSON-RPC error responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'req_2',
+      error: {
+        code: -32000,
+        message: 'Upstream rejected message',
+      },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(a2aEngine.sendToExternalAgent('https://weather.example.com/rpc', {
+      jsonrpc: '2.0',
+      id: 'req_2',
+      method: 'message/send',
+      params: {},
+    } as any)).rejects.toMatchObject({
+      code: 'a2a_jsonrpc_error',
+      status: 502,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries 5xx upstream responses up to three attempts', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = a2aEngine.sendToExternalAgent('https://weather.example.com/rpc', {
+      jsonrpc: '2.0',
+      id: 'req_3',
+      method: 'message/send',
+      params: {},
+    } as any);
+    const rejection = expect(request).rejects.toMatchObject({
+      code: 'a2a_upstream_unavailable',
+      status: 502,
+    });
+
+    await vi.runAllTimersAsync();
+    await rejection;
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 

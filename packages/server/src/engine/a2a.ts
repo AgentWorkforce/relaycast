@@ -9,7 +9,7 @@ import { createAndRunCertification } from './certify.js';
 
 type Db = ReturnType<typeof getDb>;
 
-const RETRY_DELAYS_MS = [250, 750, 1500] as const;
+const RETRY_DELAYS_MS = [250, 750] as const;
 const DEFAULT_WEBHOOK_BASE_PATH = '/a2a/webhook';
 
 const A2aSkillSchema = z.object({
@@ -215,8 +215,8 @@ function deriveRelayName(card: A2aAgentCard): string {
   return `ext-${slug}-${suffix}`;
 }
 
-function buildWebhookUrl(relayName: string): string {
-  return `${DEFAULT_WEBHOOK_BASE_PATH}/${relayName}`;
+function buildWebhookUrl(workspaceId: string, relayName: string): string {
+  return `${DEFAULT_WEBHOOK_BASE_PATH}/${workspaceId}/${relayName}`;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -407,7 +407,7 @@ export async function registerA2aAgent(
   return {
     relayName,
     relayToken: provisioned.token,
-    webhookUrl: buildWebhookUrl(relayName),
+    webhookUrl: buildWebhookUrl(workspaceId, relayName),
     certification,
   };
 }
@@ -565,7 +565,7 @@ export async function sendToExternalAgent(
 
   let lastError: unknown;
 
-  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       const response = await fetch(targetUrl, {
         method: 'POST',
@@ -582,6 +582,7 @@ export async function sendToExternalAgent(
         Object.assign(err, {
           code: response.status >= 500 ? 'a2a_upstream_unavailable' : 'a2a_upstream_rejected',
           status: response.status >= 500 ? 502 : response.status,
+          retryable: response.status >= 500,
         });
         throw err;
       }
@@ -595,6 +596,7 @@ export async function sendToExternalAgent(
           code: 'a2a_jsonrpc_error',
           status: 502,
           data: parsedResponse.error,
+          retryable: false,
         });
         throw err;
       }
@@ -606,7 +608,8 @@ export async function sendToExternalAgent(
       };
     } catch (error) {
       lastError = error;
-      if (attempt === RETRY_DELAYS_MS.length - 1) break;
+      const retryable = !(error instanceof Error) || (error as Error & { retryable?: boolean }).retryable !== false;
+      if (!retryable || attempt === RETRY_DELAYS_MS.length) break;
       await sleep(RETRY_DELAYS_MS[attempt]);
     }
   }
