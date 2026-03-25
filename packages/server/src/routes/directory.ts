@@ -60,10 +60,12 @@ function parseTagsParam(value: string | undefined): string[] | undefined {
 }
 
 function handleError(c: any, err: unknown) {
-  const error = err as Error & { code?: string; status?: number };
+  const error = err as Error & { code?: string; status?: number; cause?: unknown };
+  const cause = error.cause instanceof Error ? error.cause.message : (error.cause ? String(error.cause) : '');
+  const message = cause ? `${error.message} [cause: ${cause}]` : error.message;
   return c.json({
     ok: false,
-    error: { code: error.code || 'internal_error', message: error.message },
+    error: { code: error.code || 'internal_error', message },
   }, (error.status || 500) as any);
 }
 
