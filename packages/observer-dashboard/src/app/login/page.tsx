@@ -33,32 +33,27 @@ export default function LoginPage() {
 
   return (
     <div className="brand-grid relative min-h-screen overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(58rem_30rem_at_10%_0%,rgba(74,144,194,0.24),transparent_55%),radial-gradient(34rem_24rem_at_82%_18%,rgba(4,209,246,0.14),transparent_50%),radial-gradient(42rem_28rem_at_100%_100%,rgba(193,103,75,0.16),transparent_52%)]" />
-      <div className="pointer-events-none absolute inset-y-0 left-[12%] w-px bg-[linear-gradient(to_bottom,transparent,rgba(74,144,194,0.22),transparent)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(52rem_28rem_at_12%_0%,rgba(74,144,194,0.22),transparent_54%),radial-gradient(30rem_22rem_at_84%_16%,rgba(4,209,246,0.12),transparent_48%),radial-gradient(36rem_24rem_at_100%_100%,rgba(193,103,75,0.12),transparent_50%)]" />
+      <div className="pointer-events-none absolute inset-y-0 left-[12%] w-px bg-[linear-gradient(to_bottom,transparent,rgba(74,144,194,0.18),transparent)]" />
       <div className="relative mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-10">
-        <div className="brand-glass grid w-full max-w-5xl overflow-hidden md:grid-cols-[1.15fr_0.85fr]">
-          <section className="flex flex-col justify-between border-b border-[var(--border-default)] p-8 md:border-b-0 md:border-r md:p-10">
-            <div>
-              <div className="brand-kicker mb-4">Agent Relay / Observer</div>
-              <div className="flex items-end gap-3">
-                <img src="/observer/brand/agent-relay-mark.svg" alt="Agent Relay" className="h-10 w-auto shrink-0" />
-                <h1 className="brand-title text-4xl font-black uppercase tracking-[0.08em] md:text-5xl">
-                  <span className="observer-wordmark">Observer</span>
-                </h1>
-              </div>
-              <p className="mt-5 max-w-lg text-base leading-7 text-[var(--text-secondary)]">
-                Live channels, agents, DMs, and console telemetry in a brighter observer control surface.
-              </p>
-            </div>
+        <section className="brand-glass w-full max-w-xl rounded-[1.5rem] p-7 sm:p-8">
+          <div className="brand-kicker mb-4">Agent Relay / Observer</div>
+          <div className="flex items-end gap-3">
+            <img src="/observer/brand/agent-relay-mark.svg" alt="Agent Relay" className="h-10 w-auto shrink-0" />
+            <h1 className="brand-title text-4xl font-black uppercase tracking-[0.08em] sm:text-[2.7rem]">
+              <span className="observer-wordmark">Observer</span>
+            </h1>
+          </div>
+          <p className="mt-4 max-w-md text-sm leading-6 text-[var(--text-secondary)] sm:text-[0.95rem]">
+            Live channels, agents, DMs, and console telemetry in a brighter observer control surface.
+          </p>
 
-          </section>
-
-          <section className="bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)] p-8 md:p-10">
+          <div className="mt-7 border-t border-[color-mix(in_srgb,var(--brand-primary)_16%,rgba(122,122,114,0.18))] pt-7">
             <div className="brand-kicker mb-3">Secure Workspace Access</div>
-            <h2 className="brand-title text-2xl font-semibold text-[var(--foreground)]">Sign in with your workspace API key</h2>
-            <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">Use an <code className="rounded-md bg-[var(--brand-primary-faint)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code> key to establish your observer session.</p>
+            <h2 className="brand-title text-[1.65rem] font-semibold text-[var(--foreground)]">Sign in with your workspace API key</h2>
+            <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">Use an <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code> key to establish your observer session.</p>
 
-            <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+            <form onSubmit={handleSubmit} className="mt-7 space-y-5">
               <div>
                 <label htmlFor="apiKey" className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
                   API key
@@ -68,7 +63,7 @@ export default function LoginPage() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full rounded-2xl border border-[var(--border-default)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--foreground)] placeholder:text-[var(--text-faint)] shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] focus:border-[var(--brand-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-primary)]/20"
+                  className="w-full rounded-2xl border border-[color-mix(in_srgb,var(--brand-primary)_18%,rgba(122,122,114,0.22))] bg-[color-mix(in_srgb,var(--surface-strong)_92%,rgba(255,255,255,0.55))] px-4 py-3 text-sm text-[var(--foreground)] placeholder:text-[var(--text-faint)] shadow-[inset_0_1px_0_rgba(255,255,255,0.42)] focus:border-[var(--brand-observer)] focus:outline-none focus:ring-2 focus:ring-[rgba(4,209,246,0.18)]"
                   placeholder="rk_live_..."
                   autoFocus
                 />
@@ -88,8 +83,8 @@ export default function LoginPage() {
                 {loading ? 'Validating…' : 'Enter observer'}
               </button>
             </form>
-          </section>
-        </div>
+          </div>
+        </section>
       </div>
     </div>
   );
