@@ -277,7 +277,11 @@ async function levelTwoTests(agentUrl: string): Promise<CertificationTestResult[
     }),
     await runTest('task_lifecycle', 'Task lifecycle state response', async () => {
       const response = await rpcCall(agentUrl, 'tasks/get', { id: taskId, task_id: taskId });
-      const state = (response.body as any)?.result?.task?.status?.state;
+      const body = response.body as Record<string, unknown> | null;
+      const result = body?.result as Record<string, unknown> | undefined;
+      const task = result?.task as Record<string, unknown> | undefined;
+      const statusObj = task?.status as Record<string, unknown> | undefined;
+      const state = statusObj?.state;
       const allowed = ['submitted', 'working', 'input-required', 'completed', 'failed', 'canceled', 'unknown'];
       return {
         passed: response.ok && typeof state === 'string' && allowed.includes(state),
@@ -312,7 +316,9 @@ async function levelTwoTests(agentUrl: string): Promise<CertificationTestResult[
     }),
     await runTest('error_handling', 'Protocol error handling', async () => {
       const response = await rpcCall(agentUrl, 'method/doesNotExist', {});
-      const errorCode = (response.body as any)?.error?.code;
+      const errBody = response.body as Record<string, unknown> | null;
+      const errorObj = errBody?.error as Record<string, unknown> | undefined;
+      const errorCode = errorObj?.code;
       return {
         passed: response.status > 0 && typeof errorCode === 'number',
         message: typeof errorCode === 'number' ? `Unsupported method produced error code ${errorCode}` : 'Unsupported method did not produce a JSON-RPC error',

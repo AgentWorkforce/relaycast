@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { eq, and, lt, sql } from 'drizzle-orm';
+import { eq, and, lt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, channels, channelMembers } from '../db/schema.js';
 import { generateId } from './snowflake.js';

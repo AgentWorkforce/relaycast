@@ -495,7 +495,7 @@ export async function getDmMessages(
     agent_id: r.agentId,
     agent_name: r.agentName,
     text: r.body,
-    injection_mode: (r.metadata as any)?.injection_mode,
+    injection_mode: (r.metadata as Record<string, unknown> | null)?.injection_mode as 'wait' | 'steer' | undefined,
     attachments: attachmentMap.get(r.id) || [],
     created_at: r.createdAt.toISOString(),
   }));

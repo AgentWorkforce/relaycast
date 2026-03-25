@@ -1,6 +1,6 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
+import { messages, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { logMessage } from './console.js';
 

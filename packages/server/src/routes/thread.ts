@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -109,13 +110,13 @@ threadRoutes.post(
         });
       }
 
-      return c.json({ ok: true, data: idempotent.data }, idempotent.status as any);
+      return c.json({ ok: true, data: idempotent.data }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -146,7 +147,7 @@ threadRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );

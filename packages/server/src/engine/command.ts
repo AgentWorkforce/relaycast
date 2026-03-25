@@ -29,9 +29,9 @@ export async function registerCommand(
     );
 
   if (!agent) {
-    const err = new Error(`Agent "${data.handler_agent}" not found`);
-    (err as any).status = 404;
-    (err as any).code = 'agent_not_found';
+    const err = new Error(`Agent "${data.handler_agent}" not found`) as Error & { status: number; code: string };
+    err.status = 404;
+    err.code = 'agent_not_found';
     throw err;
   }
 
@@ -162,9 +162,9 @@ export async function invokeCommand(
     );
 
   if (!cmd) {
-    const err = new Error(`Command "/${name}" not found`);
-    (err as any).status = 404;
-    (err as any).code = 'command_not_found';
+    const err = new Error(`Command "/${name}" not found`) as Error & { status: number; code: string };
+    err.status = 404;
+    err.code = 'command_not_found';
     throw err;
   }
 
@@ -177,9 +177,9 @@ export async function invokeCommand(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${data.channel}" not found`);
-    (err as any).status = 404;
-    (err as any).code = 'channel_not_found';
+    const err = new Error(`Channel "${data.channel}" not found`) as Error & { status: number; code: string };
+    err.status = 404;
+    err.code = 'channel_not_found';
     throw err;
   }
 

@@ -1,4 +1,4 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { reactions, messages, agents, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';

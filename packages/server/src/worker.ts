@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env.js';
@@ -320,7 +321,7 @@ app.onError((err, c) => {
       code: error.code || 'internal_error',
       message: error.message || 'Internal server error',
     },
-  }, status as any);
+  }, status as ContentfulStatusCode);
 });
 
 // Queue consumer for webhook delivery

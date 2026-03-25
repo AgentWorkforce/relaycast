@@ -1,6 +1,6 @@
-import { eq, and, sql, lt, gt } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, agents, channels } from '../db/schema.js';
+import { agents, channels } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
 
 type Db = ReturnType<typeof getDb>;

@@ -61,7 +61,6 @@ export interface DirectoryRatingInput {
 }
 
 type DirectoryAgentRow = typeof directoryAgents.$inferSelect;
-type DirectorySkillRow = typeof directorySkills.$inferSelect;
 
 function createError(message: string, code: string, status: number) {
   const err = new Error(message);
@@ -106,10 +105,6 @@ function parseSourceAgentSkills(metadata?: Record<string, unknown>): DirectorySk
     });
   }
   return skills;
-}
-
-function toIso(date: Date | null | undefined): string | null {
-  return date ? date.toISOString() : null;
 }
 
 function ratingAverage(row: Pick<DirectoryAgentRow, 'ratingSum' | 'ratingCount'>): number {
@@ -556,8 +551,8 @@ export async function searchDirectory(
     skill_rank: number | null;
   };
 
-  let agentRankMap = new Map<string, number>();
-  let skillRankMap = new Map<string, number>();
+  const agentRankMap = new Map<string, number>();
+  const skillRankMap = new Map<string, number>();
 
   if (ftsQuery) {
     const [agentMatches, skillMatches] = await Promise.all([

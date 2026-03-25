@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { AgentTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
@@ -98,7 +99,7 @@ agentRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, status as any);
+      }, status as ContentfulStatusCode);
     }
   },
 );
@@ -120,7 +121,7 @@ agentRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -148,7 +149,7 @@ agentRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -217,7 +218,7 @@ agentRoutes.patch(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -248,7 +249,7 @@ agentRoutes.delete(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -324,13 +325,13 @@ agentRoutes.post(
         already_existed: result.already_existed,
       });
 
-      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as any);
+      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as ContentfulStatusCode);
     } catch (err: unknown) {
       const error = err as Error & { code?: string; status?: number };
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -393,7 +394,7 @@ agentRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
