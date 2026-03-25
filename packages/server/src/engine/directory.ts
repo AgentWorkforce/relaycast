@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
@@ -529,9 +529,8 @@ export async function searchDirectory(
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
   const statusFilter = opts.status || 'active';
 
-  // Two query branches avoid Drizzle sql`` fragment interpolation bug that
-  // produces duplicate/corrupted CTEs (see commit 4bfb631). Each branch uses
-  // only plain value interpolation — no nested sql`` fragments.
+  // Use db.$client.prepare() to bypass Drizzle sql`` template rendering bug
+  // that duplicates query text on D1 for complex CTE queries (see commit 4bfb631).
   type SearchRow = {
     id: string;
     workspace_id: string;
@@ -557,14 +556,16 @@ export async function searchDirectory(
 
   const effectiveLimit = ftsQuery ? Math.max(limit * 3, limit) : Math.max(limit * 10, 250);
 
-  const rows = ftsQuery
-    ? await db.all<SearchRow>(sql`
+  let rows: SearchRow[];
+  if (ftsQuery) {
+    const result = await db.$client
+      .prepare(`
         WITH agent_matches AS (
           SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
           FROM directory_agents_fts
           JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-          WHERE directory_agents_fts MATCH ${ftsQuery}
-            AND da.workspace_id = ${workspaceId}
+          WHERE directory_agents_fts MATCH ?
+            AND da.workspace_id = ?
           GROUP BY da.id
         ),
         skill_matches AS (
@@ -572,8 +573,8 @@ export async function searchDirectory(
           FROM directory_skills_fts
           JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
           JOIN directory_agents da ON da.id = ds.directory_agent_id
-          WHERE directory_skills_fts MATCH ${ftsQuery}
-            AND da.workspace_id = ${workspaceId}
+          WHERE directory_skills_fts MATCH ?
+            AND da.workspace_id = ?
           GROUP BY ds.directory_agent_id
         )
         SELECT
@@ -600,8 +601,8 @@ export async function searchDirectory(
         FROM directory_agents da
         LEFT JOIN agent_matches ON agent_matches.directory_agent_id = da.id
         LEFT JOIN skill_matches ON skill_matches.directory_agent_id = da.id
-        WHERE da.workspace_id = ${workspaceId}
-          AND da.status = ${statusFilter}
+        WHERE da.workspace_id = ?
+          AND da.status = ?
           AND (
             agent_matches.directory_agent_id IS NOT NULL
             OR skill_matches.directory_agent_id IS NOT NULL
@@ -611,9 +612,14 @@ export async function searchDirectory(
           COALESCE(skill_matches.rank, 999999) ASC,
           da.rating_count DESC,
           da.slug ASC
-        LIMIT ${effectiveLimit}
+        LIMIT ?
       `)
-    : await db.all<SearchRow>(sql`
+      .bind(ftsQuery, workspaceId, ftsQuery, workspaceId, workspaceId, statusFilter, effectiveLimit)
+      .all<SearchRow>();
+    rows = result.results ?? [];
+  } else {
+    const result = await db.$client
+      .prepare(`
         SELECT
           da.id,
           da.workspace_id,
@@ -636,13 +642,17 @@ export async function searchDirectory(
           NULL AS agent_rank,
           NULL AS skill_rank
         FROM directory_agents da
-        WHERE da.workspace_id = ${workspaceId}
-          AND da.status = ${statusFilter}
+        WHERE da.workspace_id = ?
+          AND da.status = ?
         ORDER BY
           da.rating_count DESC,
           da.slug ASC
-        LIMIT ${effectiveLimit}
-      `);
+        LIMIT ?
+      `)
+      .bind(workspaceId, statusFilter, effectiveLimit)
+      .all<SearchRow>();
+    rows = result.results ?? [];
+  }
 
   const hydratedRows: DirectoryAgentRow[] = rows.map((row) => ({
     id: row.id,
