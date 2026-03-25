@@ -60,8 +60,8 @@ describe('rateLimit middleware', () => {
     const { app } = makeApp();
     const res = await app.request('/test');
     expect(res.status).toBe(200);
-    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
-    expect(res.headers.get('X-RateLimit-Remaining')).toBe('59');
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('300');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('299');
   });
 
   it('returns 429 when rate limit exceeded', async () => {
@@ -70,7 +70,7 @@ describe('rateLimit middleware', () => {
       get: vi.fn(() => ({
         fetch: vi.fn(async () => Response.json({
           ok: true,
-          data: { count: 61, limit: 60, remaining: 0, allowed: false },
+          data: { count: 301, limit: 300, remaining: 0, allowed: false },
         })),
       })),
     } as unknown as DurableObjectNamespace;
@@ -97,7 +97,7 @@ describe('rateLimit middleware', () => {
 
     const res = await app.request('/test');
     expect(res.status).toBe(200);
-    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('300');
     expect(res.headers.get('X-RateLimit-Remaining')).toBe('49');
   });
 
@@ -105,8 +105,8 @@ describe('rateLimit middleware', () => {
     const { app } = makeApp({ plan: 'pro' });
     const res = await app.request('/test');
     expect(res.status).toBe(200);
-    expect(res.headers.get('X-RateLimit-Limit')).toBe('300');
-    expect(res.headers.get('X-RateLimit-Remaining')).toBe('299');
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('6000');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('5999');
   });
 
   it('uses in-memory fallback when RateLimitDO fails', async () => {
@@ -145,8 +145,8 @@ describe('rateLimit middleware', () => {
       method: 'POST',
     });
     expect(res.status).toBe(200);
-    // POST messages get 0.5 multiplier: ceil(60 * 0.5) = 30
-    expect(res.headers.get('X-RateLimit-Limit')).toBe('30');
+    // POST messages get 0.5 multiplier: ceil(300 * 0.5) = 150
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('150');
   });
 
   it('calls RateLimitDO check endpoint', async () => {

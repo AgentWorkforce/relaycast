@@ -3,9 +3,9 @@ import type { AppEnv } from '../env.js';
 
 // Global rate limits per plan (requests per minute)
 const RATE_LIMITS: Record<string, number> = {
-  free: 60,
-  pro: 300,
-  enterprise: 1000,
+  free: 300,
+  pro: 6000,
+  enterprise: 30000,
 };
 
 // Per-route rate limit multipliers (fraction of global limit)
