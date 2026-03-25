@@ -82,7 +82,7 @@ export function AgentSidebar({
           />
           <div className="min-w-0 flex-1">
             <div className="brand-kicker">Operator Console</div>
-            <h1 className="brand-title truncate text-base font-bold text-[var(--foreground)]">Observer</h1>
+            <h1 className="brand-title truncate text-base font-bold"><span className="observer-wordmark">Observer</span></h1>
           </div>
           <span
             className={cn('h-2.5 w-2.5 rounded-full shrink-0', {

@@ -31,9 +31,9 @@
   --brand-primary-strong: #2d6a9c;
   --brand-primary-soft: #e7eff7;
   --brand-primary-faint: rgba(74, 144, 194, 0.08);
-  --brand-observer: #8b5cf6;
-  --brand-observer-strong: #6d28d9;
-  --brand-observer-soft: rgba(139, 92, 246, 0.12);
+  --brand-observer: #04d1f6;
+  --brand-observer-strong: #5bbaa7;
+  --brand-observer-soft: rgba(4, 209, 246, 0.12);
   --brand-warm: #c1674b;
   --brand-warm-soft: #f5e8df;
   --brand-stone: #7a7a72;
@@ -64,7 +64,7 @@
   --console-accent: #7eb8da;
   --console-warm: #ce9178;
   --console-green: #4ec9b0;
-  --console-observer: #a78bfa;
+  --console-observer: #04d1f6;
 
   --border-default: rgba(102, 123, 214, 0.16);
   --border-strong: rgba(102, 123, 214, 0.28);
@@ -125,9 +125,9 @@
   --brand-primary-strong: #a6cde6;
   --brand-primary-soft: rgba(126, 184, 218, 0.12);
   --brand-primary-faint: rgba(126, 184, 218, 0.12);
-  --brand-observer: #a78bfa;
-  --brand-observer-strong: #c4b5fd;
-  --brand-observer-soft: rgba(167, 139, 250, 0.16);
+  --brand-observer: #04d1f6;
+  --brand-observer-strong: #5bbaa7;
+  --brand-observer-soft: rgba(4, 209, 246, 0.16);
   --brand-warm: #ce9178;
   --brand-warm-soft: rgba(206, 145, 120, 0.12);
   --brand-stone: #b4aa9f;
@@ -158,7 +158,7 @@
   --console-accent: #7eb8da;
   --console-warm: #ce9178;
   --console-green: #4ec9b0;
-  --console-observer: #a78bfa;
+  --console-observer: #04d1f6;
 
   --border-default: rgba(137, 157, 255, 0.2);
   --border-strong: rgba(137, 157, 255, 0.34);
@@ -363,6 +363,13 @@ html.theme-transitioning *::after {
 
 .brand-title {
   font-family: Outfit, Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.observer-wordmark {
+  background: linear-gradient(90deg, var(--brand-observer-strong) 0%, var(--brand-observer) 55%, var(--brand-primary) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .brand-grid {

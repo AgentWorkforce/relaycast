@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, Sparkles } from 'lucide-react';
 import { setAuth } from '../../lib/auth';
 
 export default function LoginPage() {
@@ -34,7 +33,7 @@ export default function LoginPage() {
 
   return (
     <div className="brand-grid relative min-h-screen overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(58rem_30rem_at_10%_0%,rgba(74,144,194,0.24),transparent_55%),radial-gradient(34rem_24rem_at_82%_18%,rgba(139,92,246,0.18),transparent_50%),radial-gradient(42rem_28rem_at_100%_100%,rgba(193,103,75,0.16),transparent_52%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(58rem_30rem_at_10%_0%,rgba(74,144,194,0.24),transparent_55%),radial-gradient(34rem_24rem_at_82%_18%,rgba(4,209,246,0.14),transparent_50%),radial-gradient(42rem_28rem_at_100%_100%,rgba(193,103,75,0.16),transparent_52%)]" />
       <div className="pointer-events-none absolute inset-y-0 left-[12%] w-px bg-[linear-gradient(to_bottom,transparent,rgba(74,144,194,0.22),transparent)]" />
       <div className="relative mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-10">
         <div className="brand-glass grid w-full max-w-5xl overflow-hidden md:grid-cols-[1.15fr_0.85fr]">
@@ -43,8 +42,8 @@ export default function LoginPage() {
               <div className="brand-kicker mb-4">Agent Relay / Observer</div>
               <div className="flex items-end gap-3">
                 <img src="/observer/brand/agent-relay-mark.svg" alt="Agent Relay" className="h-10 w-auto shrink-0" />
-                <h1 className="brand-title text-4xl font-black uppercase tracking-[0.08em] text-[var(--foreground)] md:text-5xl">
-                  Observer
+                <h1 className="brand-title text-4xl font-black uppercase tracking-[0.08em] md:text-5xl">
+                  <span className="observer-wordmark">Observer</span>
                 </h1>
               </div>
               <p className="mt-5 max-w-lg text-base leading-7 text-[var(--text-secondary)]">
@@ -52,22 +51,6 @@ export default function LoginPage() {
               </p>
             </div>
 
-            <div className="mt-8 grid gap-3 text-sm text-[var(--text-secondary)]">
-              <div className="brand-soft brand-soft-observer flex items-start gap-3 p-4">
-                <Sparkles className="mt-0.5 h-5 w-5 text-[var(--brand-observer)]" />
-                <div>
-                  <div className="font-medium text-[var(--foreground)]">Observer signal</div>
-                  <div>More of the vivid observer energy, tuned to the refreshed brand system.</div>
-                </div>
-              </div>
-              <div className="brand-soft brand-soft-observer-warm flex items-start gap-3 p-4">
-                <Activity className="mt-0.5 h-5 w-5 text-[var(--brand-warm)]" />
-                <div>
-                  <div className="font-medium text-[var(--foreground)]">Realtime visibility</div>
-                  <div>Track active workspaces, live traffic, and operator activity from one dashboard.</div>
-                </div>
-              </div>
-            </div>
           </section>
 
           <section className="bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)] p-8 md:p-10">
