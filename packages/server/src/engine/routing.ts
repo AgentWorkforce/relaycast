@@ -386,57 +386,65 @@ export async function routeBySkill(
 
   const config = await getRoutingConfig(db, workspaceId);
   const ftsQuery = buildFtsQuery([skill, message].filter(Boolean).join(' '));
-  const rows = await db.all<CandidateRow>(sql`
-    WITH skill_matches AS (
-      SELECT
-        ds.id AS skill_id,
-        MIN(bm25(directory_skills_fts)) AS rank
+
+  // D1 does not support bm25() inside CTEs, so run FTS matches as separate
+  // direct queries and attach ranks to the main result set in JS.
+  const [skillFtsMatches, agentFtsMatches, baseRows] = await Promise.all([
+    db.all<{ skill_id: string; rank: number }>(sql`
+      SELECT ds.id AS skill_id, MIN(bm25(directory_skills_fts)) AS rank
       FROM directory_skills_fts
       JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
       JOIN directory_agents da ON da.id = ds.directory_agent_id
       WHERE directory_skills_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
       GROUP BY ds.id
-    ),
-    agent_matches AS (
-      SELECT
-        da.id AS directory_agent_id,
-        MIN(bm25(directory_agents_fts)) AS rank
+    `),
+    db.all<{ directory_agent_id: string; rank: number }>(sql`
+      SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
       FROM directory_agents_fts
       JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
       WHERE directory_agents_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
       GROUP BY da.id
-    )
-    SELECT
-      a.id AS agent_id,
-      a.name AS agent_name,
-      a.status AS agent_status,
-      unixepoch(a.last_seen) AS agent_last_seen,
-      da.status AS directory_status,
-      da.rating_sum AS rating_sum,
-      da.rating_count AS rating_count,
-      ds.name AS skill_name,
-      ds.description AS skill_description,
-      ds.tags AS skill_tags,
-      da.tags AS agent_tags,
-      sm.rank AS skill_rank,
-      am.rank AS agent_rank,
-      rf.consecutive_failures AS consecutive_failures,
-      rf.total_failures AS total_failures,
-      rf.total_successes AS total_successes,
-      unixepoch(rf.circuit_open_until) AS circuit_open_until
-    FROM directory_agents da
-    INNER JOIN directory_skills ds ON ds.directory_agent_id = da.id
-    INNER JOIN agents a ON a.id = da.source_agent_id
-    LEFT JOIN skill_matches sm ON sm.skill_id = ds.id
-    LEFT JOIN agent_matches am ON am.directory_agent_id = da.id
-    LEFT JOIN routing_failures rf ON rf.workspace_id = da.workspace_id AND rf.agent_id = a.id
-    WHERE da.workspace_id = ${workspaceId}
-      AND da.status = 'active'
-      AND a.status != 'offline'
-    ORDER BY a.name ASC, ds.position ASC
-  `);
+    `),
+    db.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(sql`
+      SELECT
+        a.id AS agent_id,
+        a.name AS agent_name,
+        a.status AS agent_status,
+        unixepoch(a.last_seen) AS agent_last_seen,
+        da.status AS directory_status,
+        da.id AS directory_agent_id,
+        ds.id AS skill_id,
+        da.rating_sum AS rating_sum,
+        da.rating_count AS rating_count,
+        ds.name AS skill_name,
+        ds.description AS skill_description,
+        ds.tags AS skill_tags,
+        da.tags AS agent_tags,
+        rf.consecutive_failures AS consecutive_failures,
+        rf.total_failures AS total_failures,
+        rf.total_successes AS total_successes,
+        unixepoch(rf.circuit_open_until) AS circuit_open_until
+      FROM directory_agents da
+      INNER JOIN directory_skills ds ON ds.directory_agent_id = da.id
+      INNER JOIN agents a ON a.id = da.source_agent_id
+      LEFT JOIN routing_failures rf ON rf.workspace_id = da.workspace_id AND rf.agent_id = a.id
+      WHERE da.workspace_id = ${workspaceId}
+        AND da.status = 'active'
+        AND a.status != 'offline'
+      ORDER BY a.name ASC, ds.position ASC
+    `),
+  ]);
+
+  const skillRankMap = new Map(skillFtsMatches.map((m) => [m.skill_id, m.rank]));
+  const agentRankMap = new Map(agentFtsMatches.map((m) => [m.directory_agent_id, m.rank]));
+
+  const rows: CandidateRow[] = baseRows.map((row) => ({
+    ...row,
+    skill_rank: skillRankMap.get(row.skill_id) ?? null,
+    agent_rank: agentRankMap.get(row.directory_agent_id) ?? null,
+  }));
 
   if (rows.length === 0) {
     throw createError(`No active agents found for skill "${skill}"`, 'route_not_found', 404);

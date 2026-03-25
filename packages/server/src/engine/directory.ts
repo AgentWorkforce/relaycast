@@ -531,46 +531,63 @@ export async function searchDirectory(
 
   const effectiveLimit = ftsQuery ? Math.max(limit * 3, limit) : Math.max(limit * 10, 250);
 
-  const rows = ftsQuery
-    ? await db.all<{
-        id: string;
-        workspace_id: string;
-        source_agent_id: string | null;
-        slug: string;
-        name: string;
-        description: string | null;
-        provider: string | null;
-        endpoint_url: string | null;
-        documentation_url: string | null;
-        version: string | null;
-        tags: string;
-        capabilities: string;
-        metadata: string;
-        status: string;
-        rating_sum: number;
-        rating_count: number;
-        created_at: number;
-        updated_at: number;
-        agent_rank: number | null;
-        skill_rank: number | null;
-      }>(sql`
-        WITH agent_matches AS (
-          SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
-          FROM directory_agents_fts
-          JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-          WHERE directory_agents_fts MATCH ${ftsQuery}
-            AND da.workspace_id = ${workspaceId}
-          GROUP BY da.id
-        ),
-        skill_matches AS (
-          SELECT ds.directory_agent_id AS directory_agent_id, MIN(bm25(directory_skills_fts)) AS rank
-          FROM directory_skills_fts
-          JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-          JOIN directory_agents da ON da.id = ds.directory_agent_id
-          WHERE directory_skills_fts MATCH ${ftsQuery}
-            AND da.workspace_id = ${workspaceId}
-          GROUP BY ds.directory_agent_id
-        )
+  // D1 does not support bm25() inside CTEs, so run FTS matches as separate
+  // direct queries (where bm25 works) and merge with the agent rows in JS.
+  type SearchRow = {
+    id: string;
+    workspace_id: string;
+    source_agent_id: string | null;
+    slug: string;
+    name: string;
+    description: string | null;
+    provider: string | null;
+    endpoint_url: string | null;
+    documentation_url: string | null;
+    version: string | null;
+    tags: string;
+    capabilities: string;
+    metadata: string;
+    status: string;
+    rating_sum: number;
+    rating_count: number;
+    created_at: number;
+    updated_at: number;
+    agent_rank: number | null;
+    skill_rank: number | null;
+  };
+
+  let agentRankMap = new Map<string, number>();
+  let skillRankMap = new Map<string, number>();
+
+  if (ftsQuery) {
+    const [agentMatches, skillMatches] = await Promise.all([
+      db.all<{ directory_agent_id: string; rank: number }>(sql`
+        SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
+        FROM directory_agents_fts
+        JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
+        WHERE directory_agents_fts MATCH ${ftsQuery}
+          AND da.workspace_id = ${workspaceId}
+        GROUP BY da.id
+      `),
+      db.all<{ directory_agent_id: string; rank: number }>(sql`
+        SELECT ds.directory_agent_id AS directory_agent_id, MIN(bm25(directory_skills_fts)) AS rank
+        FROM directory_skills_fts
+        JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
+        JOIN directory_agents da ON da.id = ds.directory_agent_id
+        WHERE directory_skills_fts MATCH ${ftsQuery}
+          AND da.workspace_id = ${workspaceId}
+        GROUP BY ds.directory_agent_id
+      `),
+    ]);
+    for (const m of agentMatches) agentRankMap.set(m.directory_agent_id, m.rank);
+    for (const m of skillMatches) skillRankMap.set(m.directory_agent_id, m.rank);
+  }
+
+  const matchedIds = new Set([...agentRankMap.keys(), ...skillRankMap.keys()]);
+
+  const rows: SearchRow[] = ftsQuery && matchedIds.size === 0
+    ? []
+    : (await db.all<Omit<SearchRow, 'agent_rank' | 'skill_rank'>>(sql`
         SELECT
           da.id,
           da.workspace_id,
@@ -589,76 +606,18 @@ export async function searchDirectory(
           da.rating_sum,
           da.rating_count,
           da.created_at,
-          da.updated_at,
-          agent_matches.rank AS agent_rank,
-          skill_matches.rank AS skill_rank
-        FROM directory_agents da
-        LEFT JOIN agent_matches ON agent_matches.directory_agent_id = da.id
-        LEFT JOIN skill_matches ON skill_matches.directory_agent_id = da.id
-        WHERE da.workspace_id = ${workspaceId}
-          AND da.status = ${statusFilter}
-          AND (
-            agent_matches.directory_agent_id IS NOT NULL
-            OR skill_matches.directory_agent_id IS NOT NULL
-          )
-        ORDER BY
-          COALESCE(agent_matches.rank, 999999) ASC,
-          COALESCE(skill_matches.rank, 999999) ASC,
-          da.rating_count DESC,
-          da.slug ASC
-        LIMIT ${effectiveLimit}
-      `)
-    : await db.all<{
-        id: string;
-        workspace_id: string;
-        source_agent_id: string | null;
-        slug: string;
-        name: string;
-        description: string | null;
-        provider: string | null;
-        endpoint_url: string | null;
-        documentation_url: string | null;
-        version: string | null;
-        tags: string;
-        capabilities: string;
-        metadata: string;
-        status: string;
-        rating_sum: number;
-        rating_count: number;
-        created_at: number;
-        updated_at: number;
-        agent_rank: number | null;
-        skill_rank: number | null;
-      }>(sql`
-        SELECT
-          da.id,
-          da.workspace_id,
-          da.source_agent_id,
-          da.slug,
-          da.name,
-          da.description,
-          da.provider,
-          da.endpoint_url,
-          da.documentation_url,
-          da.version,
-          da.tags,
-          da.capabilities,
-          da.metadata,
-          da.status,
-          da.rating_sum,
-          da.rating_count,
-          da.created_at,
-          da.updated_at,
-          NULL AS agent_rank,
-          NULL AS skill_rank
+          da.updated_at
         FROM directory_agents da
         WHERE da.workspace_id = ${workspaceId}
           AND da.status = ${statusFilter}
-        ORDER BY
-          da.rating_count DESC,
-          da.slug ASC
+        ORDER BY da.rating_count DESC, da.slug ASC
         LIMIT ${effectiveLimit}
-      `);
+      `)).filter((row) => !ftsQuery || matchedIds.has(row.id))
+        .map((row) => ({
+          ...row,
+          agent_rank: agentRankMap.get(row.id) ?? null,
+          skill_rank: skillRankMap.get(row.id) ?? null,
+        }));
 
   const hydratedRows: DirectoryAgentRow[] = rows.map((row) => ({
     id: row.id,
