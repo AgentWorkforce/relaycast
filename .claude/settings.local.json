@@ -53,7 +53,8 @@
       "Bash(npx tsx:*)",
       "Bash(npx eslint:*)",
       "Bash(node:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(git add:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
