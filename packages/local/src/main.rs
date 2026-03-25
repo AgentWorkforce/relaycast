@@ -5033,10 +5033,10 @@ async fn ws_session(mut socket: WebSocket, state: AppState, auth: AuthContext) {
 
 async fn a2a_register(State(_state): State<AppState>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
     let store_guard = _state.store.read().await;
-    let _workspace_id = match auth_workspace(&store_guard, &headers) { Ok(id) => id, Err(r) => return r };
+    let workspace_id = match auth_workspace(&store_guard, &headers) { Ok(id) => id, Err(r) => return r };
     drop(store_guard);
     let name = body.get("agent_card").and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or("a2a-agent");
-    created(json!({ "relay_name": name, "relay_token": format!("at_live_{}", Uuid::new_v4()), "webhook_url": format!("/a2a/webhook/{}", name) }))
+    created(json!({ "relay_name": name, "relay_token": format!("at_live_{}", Uuid::new_v4()), "webhook_url": format!("/a2a/webhook/{}/{}", workspace_id, name) }))
 }
 
 async fn a2a_list_agents(State(state): State<AppState>, headers: HeaderMap) -> Response {
