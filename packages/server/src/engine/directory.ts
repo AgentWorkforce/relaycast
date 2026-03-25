@@ -531,8 +531,8 @@ export async function searchDirectory(
 
   const effectiveLimit = ftsQuery ? Math.max(limit * 3, limit) : Math.max(limit * 10, 250);
 
-  // D1 does not support bm25() inside CTEs, so run FTS matches as separate
-  // direct queries (where bm25 works) and merge with the agent rows in JS.
+  // D1 does not support bm25() with GROUP BY / aggregate context, so fetch
+  // individual FTS match rows (no aggregation) and compute min rank in JS.
   type SearchRow = {
     id: string;
     workspace_id: string;
@@ -562,25 +562,29 @@ export async function searchDirectory(
   if (ftsQuery) {
     const [agentMatches, skillMatches] = await Promise.all([
       db.all<{ directory_agent_id: string; rank: number }>(sql`
-        SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
+        SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
         FROM directory_agents_fts
         JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
         WHERE directory_agents_fts MATCH ${ftsQuery}
           AND da.workspace_id = ${workspaceId}
-        GROUP BY da.id
       `),
       db.all<{ directory_agent_id: string; rank: number }>(sql`
-        SELECT ds.directory_agent_id AS directory_agent_id, MIN(bm25(directory_skills_fts)) AS rank
+        SELECT ds.directory_agent_id AS directory_agent_id, bm25(directory_skills_fts) AS rank
         FROM directory_skills_fts
         JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
         JOIN directory_agents da ON da.id = ds.directory_agent_id
         WHERE directory_skills_fts MATCH ${ftsQuery}
           AND da.workspace_id = ${workspaceId}
-        GROUP BY ds.directory_agent_id
       `),
     ]);
-    for (const m of agentMatches) agentRankMap.set(m.directory_agent_id, m.rank);
-    for (const m of skillMatches) skillRankMap.set(m.directory_agent_id, m.rank);
+    for (const m of agentMatches) {
+      const cur = agentRankMap.get(m.directory_agent_id);
+      if (cur === undefined || m.rank < cur) agentRankMap.set(m.directory_agent_id, m.rank);
+    }
+    for (const m of skillMatches) {
+      const cur = skillRankMap.get(m.directory_agent_id);
+      if (cur === undefined || m.rank < cur) skillRankMap.set(m.directory_agent_id, m.rank);
+    }
   }
 
   const matchedIds = new Set([...agentRankMap.keys(), ...skillRankMap.keys()]);

@@ -387,25 +387,23 @@ export async function routeBySkill(
   const config = await getRoutingConfig(db, workspaceId);
   const ftsQuery = buildFtsQuery([skill, message].filter(Boolean).join(' '));
 
-  // D1 does not support bm25() inside CTEs, so run FTS matches as separate
-  // direct queries and attach ranks to the main result set in JS.
-  const [skillFtsMatches, agentFtsMatches, baseRows] = await Promise.all([
+  // D1 does not support bm25() with GROUP BY / aggregate context, so fetch
+  // individual FTS match rows and compute min rank per entity in JS.
+  const [skillFtsRaw, agentFtsRaw, baseRows] = await Promise.all([
     db.all<{ skill_id: string; rank: number }>(sql`
-      SELECT ds.id AS skill_id, MIN(bm25(directory_skills_fts)) AS rank
+      SELECT ds.id AS skill_id, bm25(directory_skills_fts) AS rank
       FROM directory_skills_fts
       JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
       JOIN directory_agents da ON da.id = ds.directory_agent_id
       WHERE directory_skills_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
-      GROUP BY ds.id
     `),
     db.all<{ directory_agent_id: string; rank: number }>(sql`
-      SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
+      SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
       FROM directory_agents_fts
       JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
       WHERE directory_agents_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
-      GROUP BY da.id
     `),
     db.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(sql`
       SELECT
@@ -437,8 +435,16 @@ export async function routeBySkill(
     `),
   ]);
 
-  const skillRankMap = new Map(skillFtsMatches.map((m) => [m.skill_id, m.rank]));
-  const agentRankMap = new Map(agentFtsMatches.map((m) => [m.directory_agent_id, m.rank]));
+  const skillRankMap = new Map<string, number>();
+  for (const m of skillFtsRaw) {
+    const cur = skillRankMap.get(m.skill_id);
+    if (cur === undefined || m.rank < cur) skillRankMap.set(m.skill_id, m.rank);
+  }
+  const agentRankMap = new Map<string, number>();
+  for (const m of agentFtsRaw) {
+    const cur = agentRankMap.get(m.directory_agent_id);
+    if (cur === undefined || m.rank < cur) agentRankMap.set(m.directory_agent_id, m.rank);
+  }
 
   const rows: CandidateRow[] = baseRows.map((row) => ({
     ...row,
