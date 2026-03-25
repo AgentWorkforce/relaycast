@@ -302,6 +302,10 @@ export class AgentDO implements DurableObject {
       return this.handleDeliver(request);
     }
 
+    if (request.method === 'POST' && url.pathname === '/force-disconnect') {
+      return this.handleForceDisconnect();
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -361,6 +365,34 @@ export class AgentDO implements DurableObject {
     this.broadcastToSockets(payload);
 
     return Response.json({ ok: true, agent_seq: seq });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  POST /force-disconnect — close all sockets & disconnect presence   */
+  /* ------------------------------------------------------------------ */
+
+  private async handleForceDisconnect(): Promise<Response> {
+    // Close all WebSockets so no further pings can trigger heartbeats.
+    for (const ws of this.state.getWebSockets()) {
+      try { ws.close(1000, 'force-disconnect'); } catch { /* already closed */ }
+    }
+
+    // Send the authoritative disconnect to PresenceDO. Because the DO
+    // runtime serializes handlers, this runs AFTER any in-flight
+    // webSocketMessage (ping heartbeat), guaranteeing the agent ends
+    // up offline.
+    const meta = await this.state.storage.get<AgentConnectionMeta>('meta');
+    if (meta?.workspaceId && meta?.agentId) {
+      const doId = this.env.PRESENCE_DO.idFromName(meta.workspaceId);
+      const stub = this.env.PRESENCE_DO.get(doId);
+      await stub.fetch(new Request('http://do/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: meta.agentId, workspaceId: meta.workspaceId }),
+      })).catch(() => {});
+    }
+
+    return Response.json({ ok: true });
   }
 
   /* ------------------------------------------------------------------ */

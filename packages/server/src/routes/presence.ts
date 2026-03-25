@@ -49,10 +49,24 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
 });
 
 // POST /agents/disconnect — explicitly mark agent offline
+// Routes through AgentDO so the disconnect serializes after any in-flight
+// WS ping heartbeats, preventing a stale heartbeat from re-creating the
+// agent's presence entry after the disconnect.
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
+
+    // Force-disconnect through AgentDO — closes WS and sends authoritative
+    // disconnect to PresenceDO, serialized after any in-flight ping heartbeat.
+    const agentDoId = c.env.AGENT_DO.idFromName(`${workspace.id}:${agent.id}`);
+    const agentDoStub = c.env.AGENT_DO.get(agentDoId);
+    await agentDoStub.fetch(new Request('http://do/force-disconnect', {
+      method: 'POST',
+    })).catch(() => {});
+
+    // Also send a direct disconnect to PresenceDO as a safety net
+    // (e.g. if the AgentDO has no stored meta yet).
     const doId = c.env.PRESENCE_DO.idFromName(workspace.id);
     const stub = c.env.PRESENCE_DO.get(doId);
     await stub.fetch(new Request('http://do/disconnect', {
@@ -60,6 +74,7 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agent.id, workspaceId: workspace.id, agentName: agent.name }),
     }));
+
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
       agent_id: agent.id,
       agent_name: agent.name,
