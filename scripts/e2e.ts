@@ -871,6 +871,7 @@ ${B}${CYAN}╔══════════════════════
     const result = await relay.publishToDirectory({
       name: 'Routing Test Agent',
       description: 'Agent with skills for routing tests',
+      sourceAgentName: LEAD,
       tags: ['routing-test'],
       skills: [
         { name: 'refund-processing', description: 'Process customer refunds', tags: ['billing', 'refund'] },
