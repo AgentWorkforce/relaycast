@@ -529,17 +529,10 @@ export async function searchDirectory(
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
   const statusFilter = opts.status || 'active';
 
-  const agentMatchWhere = ftsQuery
-    ? sql`directory_agents_fts MATCH ${ftsQuery}`
-    : sql`1 = 0`;
-  const skillMatchWhere = ftsQuery
-    ? sql`directory_skills_fts MATCH ${ftsQuery}`
-    : sql`1 = 0`;
-  const matchFilter = ftsQuery
-    ? sql`agent_matches.directory_agent_id IS NOT NULL OR skill_matches.directory_agent_id IS NOT NULL`
-    : sql`1 = 1`;
-
-  const rows = await db.all<{
+  // Two query branches avoid Drizzle sql`` fragment interpolation bug that
+  // produces duplicate/corrupted CTEs (see commit 4bfb631). Each branch uses
+  // only plain value interpolation — no nested sql`` fragments.
+  type SearchRow = {
     id: string;
     workspace_id: string;
     source_agent_id: string | null;
@@ -560,60 +553,96 @@ export async function searchDirectory(
     updated_at: number;
     agent_rank: number | null;
     skill_rank: number | null;
-  }>(sql`
-    WITH agent_matches AS (
-      SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
-      FROM directory_agents_fts
-      JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-      WHERE ${agentMatchWhere}
-        AND da.workspace_id = ${workspaceId}
-      GROUP BY da.id
-    ),
-    skill_matches AS (
-      SELECT ds.directory_agent_id AS directory_agent_id, MIN(bm25(directory_skills_fts)) AS rank
-      FROM directory_skills_fts
-      JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-      JOIN directory_agents da ON da.id = ds.directory_agent_id
-      WHERE ${skillMatchWhere}
-        AND da.workspace_id = ${workspaceId}
-      GROUP BY ds.directory_agent_id
-    )
-    SELECT
-      da.id,
-      da.workspace_id,
-      da.source_agent_id,
-      da.slug,
-      da.name,
-      da.description,
-      da.provider,
-      da.endpoint_url,
-      da.documentation_url,
-      da.version,
-      da.tags,
-      da.capabilities,
-      da.metadata,
-      da.status,
-      da.rating_sum,
-      da.rating_count,
-      da.created_at,
-      da.updated_at,
-      agent_matches.rank AS agent_rank,
-      skill_matches.rank AS skill_rank
-    FROM directory_agents da
-    LEFT JOIN agent_matches ON agent_matches.directory_agent_id = da.id
-    LEFT JOIN skill_matches ON skill_matches.directory_agent_id = da.id
-    WHERE da.workspace_id = ${workspaceId}
-      AND da.status = ${statusFilter}
-      AND (
-        ${matchFilter}
-      )
-    ORDER BY
-      COALESCE(agent_matches.rank, 999999) ASC,
-      COALESCE(skill_matches.rank, 999999) ASC,
-      da.rating_count DESC,
-      da.slug ASC
-    LIMIT ${ftsQuery ? Math.max(limit * 3, limit) : Math.max(limit * 10, 250)}
-  `);
+  };
+
+  const effectiveLimit = ftsQuery ? Math.max(limit * 3, limit) : Math.max(limit * 10, 250);
+
+  const rows = ftsQuery
+    ? await db.all<SearchRow>(sql`
+        WITH agent_matches AS (
+          SELECT da.id AS directory_agent_id, MIN(bm25(directory_agents_fts)) AS rank
+          FROM directory_agents_fts
+          JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
+          WHERE directory_agents_fts MATCH ${ftsQuery}
+            AND da.workspace_id = ${workspaceId}
+          GROUP BY da.id
+        ),
+        skill_matches AS (
+          SELECT ds.directory_agent_id AS directory_agent_id, MIN(bm25(directory_skills_fts)) AS rank
+          FROM directory_skills_fts
+          JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
+          JOIN directory_agents da ON da.id = ds.directory_agent_id
+          WHERE directory_skills_fts MATCH ${ftsQuery}
+            AND da.workspace_id = ${workspaceId}
+          GROUP BY ds.directory_agent_id
+        )
+        SELECT
+          da.id,
+          da.workspace_id,
+          da.source_agent_id,
+          da.slug,
+          da.name,
+          da.description,
+          da.provider,
+          da.endpoint_url,
+          da.documentation_url,
+          da.version,
+          da.tags,
+          da.capabilities,
+          da.metadata,
+          da.status,
+          da.rating_sum,
+          da.rating_count,
+          da.created_at,
+          da.updated_at,
+          agent_matches.rank AS agent_rank,
+          skill_matches.rank AS skill_rank
+        FROM directory_agents da
+        LEFT JOIN agent_matches ON agent_matches.directory_agent_id = da.id
+        LEFT JOIN skill_matches ON skill_matches.directory_agent_id = da.id
+        WHERE da.workspace_id = ${workspaceId}
+          AND da.status = ${statusFilter}
+          AND (
+            agent_matches.directory_agent_id IS NOT NULL
+            OR skill_matches.directory_agent_id IS NOT NULL
+          )
+        ORDER BY
+          COALESCE(agent_matches.rank, 999999) ASC,
+          COALESCE(skill_matches.rank, 999999) ASC,
+          da.rating_count DESC,
+          da.slug ASC
+        LIMIT ${effectiveLimit}
+      `)
+    : await db.all<SearchRow>(sql`
+        SELECT
+          da.id,
+          da.workspace_id,
+          da.source_agent_id,
+          da.slug,
+          da.name,
+          da.description,
+          da.provider,
+          da.endpoint_url,
+          da.documentation_url,
+          da.version,
+          da.tags,
+          da.capabilities,
+          da.metadata,
+          da.status,
+          da.rating_sum,
+          da.rating_count,
+          da.created_at,
+          da.updated_at,
+          NULL AS agent_rank,
+          NULL AS skill_rank
+        FROM directory_agents da
+        WHERE da.workspace_id = ${workspaceId}
+          AND da.status = ${statusFilter}
+        ORDER BY
+          da.rating_count DESC,
+          da.slug ASC
+        LIMIT ${effectiveLimit}
+      `);
 
   const hydratedRows: DirectoryAgentRow[] = rows.map((row) => ({
     id: row.id,
