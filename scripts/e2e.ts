@@ -1429,15 +1429,17 @@ ${B}${CYAN}╔══════════════════════
   }
 
   await run('Agents show offline after disconnect', async () => {
-    // Poll presence — the DO hibernation close callback is async
-    for (let attempt = 0; attempt < 10; attempt++) {
+    // Poll presence — the DO hibernation close callback is async and
+    // the webSocketClose handler must await the PresenceDO disconnect.
+    const maxAttempts = 15;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await sleep(1000);
       const presence = await relay.agents.presence();
       const statuses = Object.fromEntries(presence.map((p) => [p.agentName, p.status]));
       const allOffline = [LEAD, INFRA, BACKEND].every((name) => statuses[name] === 'offline');
       log('📋', `Presence: ${presence.map((p) => `${p.agentName}=${p.status}`).join(', ')}`);
       if (allOffline) return;
-      if (attempt === 9) {
+      if (attempt === maxAttempts - 1) {
         throw new Error(`Expected all agents offline, got: ${JSON.stringify(statuses)}`);
       }
     }
