@@ -184,14 +184,16 @@ Create ${RELAYCAST}/packages/server/src/middleware/relayauth-scopes.ts:
 
 1. Import { ScopeChecker } from '@relayauth/sdk'
 
-2. Define relaycast scope mapping:
+2. Define relaycast scope mapping using the actual route paths:
    const ROUTE_SCOPES: Record<string, string> = {
      'GET /channels': 'relaycast:channel:read:*',
      'POST /channels': 'relaycast:channel:create:*',
-     'POST /messages': 'relaycast:message:write:*',
+     'POST /channels/:name/messages': 'relaycast:message:write:*',
+     'GET /channels/:name/messages': 'relaycast:message:read:*',
      'POST /dm': 'relaycast:dm:send:*',
-     'GET /dm': 'relaycast:dm:read:*',
-     'POST /commands': 'relaycast:command:invoke:*',
+     'GET /dm/conversations': 'relaycast:dm:read:*',
+     'GET /dm/:conversation_id/messages': 'relaycast:dm:read:*',
+     'POST /commands/:command/invoke': 'relaycast:command:invoke:*',
      'GET /agents': 'relaycast:agent:read:*',
      'POST /agents': 'relaycast:agent:create:*',
    };
@@ -220,7 +222,7 @@ Write to disk.`,
   .step('run-tests', {
     type: 'deterministic',
     dependsOn: ['verify-files'],
-    command: `cd ${RELAYCAST} && npx turbo typecheck 2>&1 | tail -15; echo "EXIT: $?"`,
+    command: `bash -lc 'cd ${RELAYCAST} && set -o pipefail && npx turbo typecheck 2>&1 | tail -15'`,
     captureOutput: true,
     failOnError: false,
   })
