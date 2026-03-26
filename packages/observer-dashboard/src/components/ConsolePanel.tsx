@@ -13,10 +13,10 @@ import { cn } from '../lib/utils';
 type ConsoleTab = 'feed' | 'metrics' | 'costs' | 'activity';
 
 const TAB_OPTIONS: Array<{ id: ConsoleTab; label: string }> = [
+  { id: 'activity', label: 'Activity' },
+  { id: 'costs', label: 'Costs' },
   { id: 'feed', label: 'Feed' },
   { id: 'metrics', label: 'Metrics' },
-  { id: 'costs', label: 'Costs' },
-  { id: 'activity', label: 'Activity' },
 ];
 
 export function ConsolePanel({ className }: { className?: string }) {
