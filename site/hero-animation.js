@@ -439,9 +439,12 @@
   function buildCenters(w, h) {
     var result = [];
     for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i].el;
+      var cardW = el ? el.offsetWidth : CARD_W;
+      var cardH = el ? el.offsetHeight : CARD_H;
       result.push({
-        cx: nodes[i].x * w + CARD_W / 2,
-        cy: nodes[i].y * h + CARD_H / 2,
+        cx: nodes[i].x * w + cardW / 2,
+        cy: nodes[i].y * h + cardH / 2,
         opacity: nodes[i].opacity,
       });
     }

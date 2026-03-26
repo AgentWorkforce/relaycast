@@ -60,6 +60,14 @@ function renderButton(button, theme) {
   button.replaceChildren(createIcon(theme));
 }
 
+const _toggleButtons = [];
+
+function _syncAllButtons(theme) {
+  for (const btn of _toggleButtons) {
+    renderButton(btn, theme);
+  }
+}
+
 function initThemeToggle(containerId) {
   const container = document.getElementById(containerId);
   if (!container) {
@@ -85,11 +93,13 @@ function initThemeToggle(containerId) {
   button.type = 'button';
   button.className = 'theme-toggle';
   renderButton(button, theme);
+  _toggleButtons.push(button);
 
   button.addEventListener('click', () => {
-    theme = theme === 'dark' ? 'light' : 'dark';
-    applyTheme(theme);
-    renderButton(button, theme);
+    const current = readTheme();
+    const next = current === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    _syncAllButtons(next);
   });
 
   container.replaceChildren(button);
