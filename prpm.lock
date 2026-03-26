@@ -37,9 +37,9 @@
       }
     },
     "@agent-relay/agent-relay-snippet#gemini.md:AGENTS.md": {
-      "version": "1.1.6",
-      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
-      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "version": "1.1.7",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.7.tar.gz",
+      "integrity": "sha256-7ef5aaea90ecd65540c9c963cb87a058ea998df29104f53484d36cce8cc0e854",
       "format": "gemini.md",
       "subtype": "snippet",
       "sourceFormat": "generic",
@@ -54,9 +54,9 @@
       }
     },
     "@agent-workforce/trail-snippet#agents.md:AGENTS.md": {
-      "version": "1.0.1",
-      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-workforce%2Ftrail-snippet/1.0.1.tar.gz",
-      "integrity": "sha256-a7b8d388e19158b1dd4644f2786291e7c90e4b56411c41d4ede1a7d45e7568c9",
+      "version": "1.1.0",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-workforce%2Ftrail-snippet/1.1.0.tar.gz",
+      "integrity": "sha256-8d8824b5236660e18c780b3574ee756737401d9a77e843411cdd509ceb9e0668",
       "format": "agents.md",
       "subtype": "snippet",
       "sourceFormat": "generic",
@@ -71,9 +71,9 @@
       }
     },
     "@agent-relay/agent-relay-snippet#agents.md:AGENTS.md": {
-      "version": "1.1.6",
-      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
-      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "version": "1.1.7",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.7.tar.gz",
+      "integrity": "sha256-7ef5aaea90ecd65540c9c963cb87a058ea998df29104f53484d36cce8cc0e854",
       "format": "agents.md",
       "subtype": "snippet",
       "sourceFormat": "generic",
@@ -88,9 +88,9 @@
       }
     },
     "@agent-relay/using-agent-relay#claude": {
-      "version": "1.1.2",
-      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fusing-agent-relay/1.1.2.tar.gz",
-      "integrity": "sha256-88702f8d0d7a7af33f94afc5bcd3777d223509765aa0e1222943703e95e99a9e",
+      "version": "1.2.0",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fusing-agent-relay/1.2.0.tar.gz",
+      "integrity": "sha256-bb68bcd7bf1af535b9e435033ba7e8efccc29210aad53111a0f84838a95667f8",
       "format": "claude",
       "subtype": "skill",
       "sourceFormat": "claude",
@@ -126,7 +126,41 @@
       "sourceFormat": "claude",
       "sourceSubtype": "skill",
       "installedPath": ".claude/skills/prpm-json-best-practices-skill"
+    },
+    "@agent-relay/agent-relay-snippet#claude:AGENTS.md": {
+      "version": "1.1.7",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.7.tar.gz",
+      "integrity": "sha256-7ef5aaea90ecd65540c9c963cb87a058ea998df29104f53484d36cce8cc0e854",
+      "format": "claude",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#claude.md:AGENTS.md": {
+      "version": "1.1.7",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.7.tar.gz",
+      "integrity": "sha256-7ef5aaea90ecd65540c9c963cb87a058ea998df29104f53484d36cce8cc0e854",
+      "format": "claude.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
     }
   },
-  "generated": "2026-02-12T11:00:45.484Z"
+  "generated": "2026-03-26T09:10:12.069Z"
 }

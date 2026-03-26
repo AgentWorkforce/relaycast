@@ -20,7 +20,8 @@
     "local:build": "cargo build --release --manifest-path packages/local/Cargo.toml"
   },
   "devDependencies": {
-    "@agent-relay/sdk": "^3.2.15",
+    "@agent-relay/sdk": "3.2.18",
+    "agent-trajectories": "0.5.2",
     "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
     "eslint": "^9.39.2",
