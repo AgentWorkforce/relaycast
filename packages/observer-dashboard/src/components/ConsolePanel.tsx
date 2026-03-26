@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { BarChart3, Gauge, Radio, Wifi } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { ActivityLog } from './ActivityLog';
 import { AgentMetricsCards } from './AgentMetricsCards';
 import { ConsoleFeed } from './ConsoleFeed';
@@ -12,15 +12,15 @@ import { cn } from '../lib/utils';
 
 type ConsoleTab = 'feed' | 'metrics' | 'costs' | 'activity';
 
-const TAB_OPTIONS: Array<{ id: ConsoleTab; label: string; icon: React.ReactNode }> = [
-  { id: 'feed', label: 'Feed', icon: <Radio className="h-3.5 w-3.5" /> },
-  { id: 'metrics', label: 'Metrics', icon: <Gauge className="h-3.5 w-3.5" /> },
-  { id: 'costs', label: 'Costs', icon: <BarChart3 className="h-3.5 w-3.5" /> },
-  { id: 'activity', label: 'Activity', icon: <Wifi className="h-3.5 w-3.5" /> },
+const TAB_OPTIONS: Array<{ id: ConsoleTab; label: string }> = [
+  { id: 'feed', label: 'Feed' },
+  { id: 'metrics', label: 'Metrics' },
+  { id: 'costs', label: 'Costs' },
+  { id: 'activity', label: 'Activity' },
 ];
 
 export function ConsolePanel() {
-  const [activeTab, setActiveTab] = useState<ConsoleTab>('feed');
+  const [activeTab, setActiveTab] = useState<ConsoleTab>('activity');
   const feed = useConsoleFeed();
   const overview = useConsoleOverview();
   const agentStats = useConsoleAgentStats();
@@ -49,22 +49,26 @@ export function ConsolePanel() {
             <p className="text-xs text-[var(--console-muted)]">Feed, metrics, activity, and spend.</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {TAB_OPTIONS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors',
-                activeTab === tab.id
-                  ? 'border-[color-mix(in_srgb,var(--console-accent)_50%,transparent)] bg-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] text-[var(--console-fg)]'
-                  : 'border-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] bg-[color-mix(in_srgb,var(--console-elevated)_78%,transparent)] text-[var(--console-muted)] hover:text-[var(--console-fg)]',
-              )}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
+        <div className="relative max-w-[220px]">
+          <select
+            value={activeTab}
+            onChange={(event) => setActiveTab(event.target.value as ConsoleTab)}
+            aria-label="Observer console view"
+            className={cn(
+              'h-11 w-full appearance-none rounded-full border px-4 pr-11 text-sm font-medium outline-none transition-colors',
+              'border-[color-mix(in_srgb,var(--console-accent)_18%,transparent)] bg-[color-mix(in_srgb,var(--console-elevated)_84%,transparent)] text-[var(--console-fg)]',
+              'focus:border-[color-mix(in_srgb,var(--console-accent)_42%,transparent)] focus:bg-[color-mix(in_srgb,var(--console-accent)_10%,var(--console-elevated))]',
+            )}
+          >
+            {TAB_OPTIONS.map((tab) => (
+              <option key={tab.id} value={tab.id}>
+                {tab.label}
+              </option>
+            ))}
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-[var(--console-muted)]">
+            <ChevronDown className="h-4 w-4" />
+          </div>
         </div>
       </div>
 
