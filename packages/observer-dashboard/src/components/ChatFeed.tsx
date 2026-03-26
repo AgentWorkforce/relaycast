@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Hash, MessageSquare, UserRound } from 'lucide-react';
 import { useMessages, useRelay, sortMessagesChronologically } from '@relaycast/react';
 import { MessageCard } from './MessageCard';
+import { cn } from '../lib/utils';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
 interface ChatFeedProps {
@@ -14,6 +15,7 @@ interface ChatFeedProps {
   onOpenThread?: (messageId: string) => void;
   mentionNames?: string[];
   onOpenAgent?: (agentName: string | null) => void;
+  className?: string;
 }
 
 export function ChatFeed({
@@ -24,6 +26,7 @@ export function ChatFeed({
   onOpenThread,
   mentionNames,
   onOpenAgent,
+  className,
 }: ChatFeedProps) {
   const isDm = selectedChannel?.startsWith('dm:');
   const channelName = selectedChannel && !isDm ? selectedChannel : null;
@@ -34,7 +37,7 @@ export function ChatFeed({
   const showMemberBadge = !!channelName;
 
   return (
-    <section className="brand-card flex min-w-0 flex-1 flex-col overflow-hidden">
+    <section className={cn('brand-card flex min-w-0 flex-1 flex-col overflow-hidden', className)}>
       <div className="border-b border-[var(--border-default)] px-5 py-4">
         <div className="flex items-center gap-2">
           {selectedChannel && !isDm ? (

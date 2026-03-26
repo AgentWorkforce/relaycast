@@ -275,7 +275,7 @@ export function DashboardLayout() {
           />
         </div>
 
-        <div className="min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1">
           {mobilePane === 'browse' ? (
             <AgentSidebar
               channels={channels}
@@ -295,6 +295,7 @@ export function DashboardLayout() {
               selectedChannelMemberCount={selectedChannelMemberCount}
               selectedChannelArchived={selectedChannelArchived}
               dmLabel={selectedDmLabel}
+              className="h-full"
               onOpenThread={(id) => {
                 setThreadMessageId(id);
                 setMobilePane('details');
