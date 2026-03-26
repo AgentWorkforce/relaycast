@@ -24,59 +24,41 @@ interface MessageCardProps {
   onOpenAgent?: (agentName: string | null) => void;
 }
 
-export function MessageCard({
-  message,
-  compact = false,
-  onOpenThread,
-  mentionNames,
-  onOpenAgent,
-}: MessageCardProps) {
+export function MessageCard({ message, compact = false, onOpenThread, mentionNames, onOpenAgent }: MessageCardProps) {
   return (
-    <div className="flex gap-3 px-4 py-2 hover:bg-[var(--color-bg-hover)] group">
-      {compact ? (
-        <div className="w-8 shrink-0" />
-      ) : (
-        <AgentAvatar name={message.agentName} />
-      )}
-      <div className="min-w-0 flex-1">
-        {!compact && (
-          <div className="flex items-baseline gap-2 mb-0.5">
-            <span className="font-semibold text-sm text-[var(--color-text-primary)]">
-              {message.agentName}
-            </span>
-            <span className="text-xs text-[var(--color-text-dim)] ml-auto shrink-0">
-              {relativeTime(message.createdAt)}
-            </span>
-          </div>
-        )}
-        <MessageMarkdown
-          text={message.text}
-          className="text-sm text-[var(--color-text-secondary)] break-words"
-          showCodeCopyButton
-          mentionNames={mentionNames}
-          onMentionClick={onOpenAgent}
-          mentionClassName="font-semibold text-[var(--color-accent-cyan)] hover:underline cursor-pointer"
-        />
-        {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
-          <div className="flex items-center gap-2 mt-1">
-            {(message.reactions ?? []).map((r) => (
-              <span
-                key={r.emoji}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-[var(--color-bg-tertiary)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
-              >
-                {r.emoji} {r.count}
-              </span>
-            ))}
-            {message.replyCount > 0 && (
-              <button
-                onClick={() => onOpenThread?.(message.id)}
-                className="text-xs text-[var(--color-accent-cyan)] cursor-pointer hover:underline"
-              >
-                {formatReplyCountLabel(message.replyCount)}
-              </button>
-            )}
-          </div>
-        )}
+    <div className="group mx-3 rounded-2xl px-4 py-3 transition-colors hover:bg-[var(--brand-primary-faint)]">
+      <div className="flex gap-3">
+        {compact ? <div className="w-8 shrink-0" /> : <AgentAvatar name={message.agentName} />}
+        <div className="min-w-0 flex-1">
+          {!compact && (
+            <div className="mb-1 flex items-baseline gap-2">
+              <span className="text-sm font-semibold text-[var(--foreground)]">{message.agentName}</span>
+              <span className="ml-auto shrink-0 text-xs text-[var(--text-faint)]">{relativeTime(message.createdAt)}</span>
+            </div>
+          )}
+          <MessageMarkdown
+            text={message.text}
+            className="text-sm leading-6 text-[var(--text-secondary)] break-words"
+            showCodeCopyButton
+            mentionNames={mentionNames}
+            onMentionClick={onOpenAgent}
+            mentionClassName="font-semibold text-[var(--brand-primary-strong)] hover:underline cursor-pointer"
+          />
+          {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {(message.reactions ?? []).map((r) => (
+                <span key={r.emoji} className="rounded-full border border-[var(--border-default)] bg-[var(--surface-soft)] px-2 py-1 text-xs text-[var(--text-secondary)]">
+                  {r.emoji} {r.count}
+                </span>
+              ))}
+              {message.replyCount > 0 && (
+                <button onClick={() => onOpenThread?.(message.id)} className="text-xs font-medium text-[var(--brand-primary-strong)] hover:underline">
+                  {formatReplyCountLabel(message.replyCount)}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

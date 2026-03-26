@@ -100,7 +100,7 @@ export function AgentMetricsCards({
           No agent metrics available yet.
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3">
           {agents.map((agent) => {
             const errorRate = errorRateByAgent.get(agent.agent_id) ?? 0;
             return (

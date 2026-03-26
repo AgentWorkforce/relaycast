@@ -36,7 +36,7 @@ describe('PLAN_LIMITS', () => {
       messages: 10_000,
       agents: 5,
       file_bytes: 100 * 1024 * 1024,
-      rate_per_min: 60,
+      rate_per_min: 300,
     });
   });
 
@@ -45,7 +45,7 @@ describe('PLAN_LIMITS', () => {
       messages: 1_000_000,
       agents: 100,
       file_bytes: 50 * 1024 * 1024 * 1024,
-      rate_per_min: 1200,
+      rate_per_min: 6000,
     });
   });
 
@@ -54,7 +54,7 @@ describe('PLAN_LIMITS', () => {
       messages: Infinity,
       agents: Infinity,
       file_bytes: 500 * 1024 * 1024 * 1024,
-      rate_per_min: 6000,
+      rate_per_min: 30000,
     });
   });
 });

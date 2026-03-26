@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
 import { cn, formatDmLabel } from '../lib/utils';
-
 import { AgentAvatar } from './AgentAvatar';
 import { clearAuth } from '../lib/auth';
 import { useRouter } from 'next/navigation';
@@ -21,6 +20,7 @@ interface AgentSidebarProps {
   wsStatus: ConnectionStatus;
   onSelectChannel: (name: string | null) => void;
   onSelectAgent: (name: string | null) => void;
+  className?: string;
 }
 
 function statusColor(status: string) {
@@ -28,15 +28,32 @@ function statusColor(status: string) {
     case 'online':
       return 'bg-green-500';
     case 'idle':
-      return 'bg-yellow-500';
+      return 'bg-amber-500';
     default:
-      return 'bg-gray-500';
+      return 'bg-stone-400';
   }
 }
 
 function getTheme(): 'dark' | 'light' {
   if (typeof document === 'undefined') return 'dark';
-  return document.documentElement.classList.contains('theme-light') ? 'light' : 'dark';
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === 'dark' || explicit === 'light') {
+    return explicit;
+  }
+  return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'light';
+}
+
+function AgentRelayWordmark() {
+  return (
+    <svg
+      className="h-4.5 w-auto text-[var(--foreground)]"
+      viewBox="64 0 264 54"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M74.7504 42.84C72.6304 42.84 70.7304 42.48 69.0504 41.76C67.4104 41.04 66.0904 39.98 65.0904 38.58C64.1304 37.18 63.6504 35.48 63.6504 33.48C63.6504 31.44 64.1304 29.76 65.0904 28.44C66.0904 27.08 67.4304 26.06 69.1104 25.38C70.8304 24.7 72.7704 24.36 74.9304 24.36H83.9304V22.44C83.9304 20.72 83.4104 19.34 82.3704 18.3C81.3304 17.26 79.7304 16.74 77.5704 16.74C75.4504 16.74 73.8304 17.24 72.7104 18.24C71.5904 19.24 70.8504 20.54 70.4904 22.14L64.7304 20.28C65.2104 18.68 65.9704 17.24 67.0104 15.96C68.0904 14.64 69.5104 13.58 71.2704 12.78C73.0304 11.98 75.1504 11.58 77.6304 11.58C81.4704 11.58 84.4904 12.56 86.6904 14.52C88.8902 16.48 89.9902 19.26 89.9902 22.86V35.04C89.9902 36.24 90.5502 36.84 91.6702 36.84H94.1902V42H89.5702C88.1702 42 87.0304 41.64 86.1504 40.92C85.2704 40.2 84.8304 39.22 84.8304 37.98V37.8H83.9304C83.6104 38.4 83.1304 39.1 82.4904 39.9C81.8504 40.7 80.9104 41.4 79.6704 42C78.4304 42.56 76.7904 42.84 74.7504 42.84ZM75.6504 37.74C78.1304 37.74 80.1304 37.04 81.6504 35.64C83.1704 34.2 83.9304 32.24 83.9304 29.76V29.16H75.2904C73.6504 29.16 72.3304 29.52 71.3304 30.24C70.3304 30.92 69.8304 31.94 69.8304 33.3C69.8304 34.66 70.3504 35.74 71.3904 36.54C72.4304 37.34 73.8504 37.74 75.6504 37.74ZM93.2562 27.36V26.46C93.2562 23.34 93.8762 20.68 95.1162 18.48C96.3962 16.28 98.0762 14.58 100.156 13.38C102.236 12.18 104.516 11.58 106.996 11.58C109.876 11.58 112.076 12.12 113.596 13.2C115.156 14.28 116.296 15.44 117.016 16.68H117.976V12.42H123.976V48.06C123.976 49.86 123.436 51.3 122.356 52.38C121.316 53.46 119.876 54 118.036 54H98.1162V48.6H116.116C117.276 48.6 117.856 48 117.856 46.8V37.38H116.896C116.456 38.1 115.836 38.84 115.036 39.6C114.236 40.36 113.176 40.98 111.856 41.46C110.576 41.94 108.956 42.18 106.996 42.18C104.516 42.18 102.216 41.6 100.096 40.44C98.0162 39.24 96.3562 37.54 95.1162 35.34C93.8762 33.1 93.2562 30.44 93.2562 27.36ZM108.676 36.78C111.356 36.78 113.556 35.94 115.276 34.26C117.036 32.54 117.916 30.18 117.916 27.18V26.64C117.916 23.56 117.056 21.2 115.336 19.56C113.616 17.88 111.396 17.04 108.676 17.04C106.036 17.04 103.836 17.88 102.076 19.56C100.356 21.2 99.4962 23.56 99.4962 26.64V27.18C99.4962 30.18 100.356 32.54 102.076 34.26C103.836 35.94 106.036 36.78 108.676 36.78ZM141.835 42.84C138.835 42.84 136.215 42.22 133.975 40.98C131.735 39.7 129.975 37.92 128.695 35.64C127.455 33.32 126.835 30.64 126.835 27.6V26.88C126.835 23.8 127.455 21.12 128.695 18.84C129.935 16.52 131.655 14.74 133.855 13.5C136.095 12.22 138.675 11.58 141.595 11.58C144.435 11.58 146.915 12.22 149.035 13.5C151.195 14.74 152.875 16.48 154.075 18.72C155.275 20.96 155.875 23.58 155.875 26.58V28.92H133.135C133.215 31.52 134.075 33.6 135.715 35.16C137.395 36.68 139.475 37.44 141.955 37.44C144.275 37.44 146.015 36.92 147.175 35.88C148.375 34.84 149.295 33.64 149.935 32.28L155.035 34.92C154.475 36.04 153.655 37.22 152.575 38.46C151.535 39.7 150.155 40.74 148.435 41.58C146.715 42.42 144.515 42.84 141.835 42.84ZM133.195 24.18H149.575C149.415 21.94 148.615 20.2 147.175 18.96C145.735 17.68 143.855 17.04 141.535 17.04C139.215 17.04 137.315 17.68 135.835 18.96C134.395 20.2 133.515 21.94 133.195 24.18ZM158.514 42V12.42H164.574V16.86H165.534C166.094 15.66 167.094 14.54 168.534 13.5C169.974 12.46 172.114 11.94 174.954 11.94C177.194 11.94 179.174 12.44 180.894 13.44C182.654 14.44 184.034 15.86 185.034 17.7C186.034 19.5 186.534 21.68 186.534 24.24V42H180.354V24.72C180.354 22.16 179.714 20.28 178.434 19.08C177.154 17.84 175.394 17.22 173.154 17.22C170.594 17.22 168.534 18.06 166.974 19.74C165.454 21.42 164.694 23.86 164.694 27.06V42H158.514ZM200.908 42C199.108 42 197.668 41.46 196.588 40.38C195.548 39.3 195.028 37.86 195.028 36.06V17.64H186.868V12.42H195.028V2.64H201.208V12.42H210.028V17.64H201.208V34.98C201.208 36.18 201.768 36.78 202.888 36.78H209.068V42H200.908ZM212.488 42V12.42H218.548V15.9H219.508C219.988 14.66 220.748 13.76 221.788 13.2C222.868 12.6 224.188 12.3 225.748 12.3H229.288V17.88H225.508C223.508 17.88 221.868 18.44 220.588 19.56C219.308 20.64 218.668 22.32 218.668 24.6V42H212.488ZM243.397 42.84C240.397 42.84 237.777 42.22 235.537 40.98C233.297 39.7 231.537 37.92 230.257 35.64C229.017 33.32 228.397 30.64 228.397 27.6V26.88C228.397 23.8 229.017 21.12 230.257 18.84C231.497 16.52 233.217 14.74 235.417 13.5C237.657 12.22 240.237 11.58 243.157 11.58C245.997 11.58 248.477 12.22 250.597 13.5C252.757 14.74 254.437 16.48 255.637 18.72C256.837 20.96 257.437 23.58 257.437 26.58V28.92H234.697C234.777 31.52 235.637 33.6 237.277 35.16C238.957 36.68 241.037 37.44 243.517 37.44C245.837 37.44 247.577 36.92 248.737 35.88C249.937 34.84 250.857 33.64 251.497 32.28L256.597 34.92C256.037 36.04 255.217 37.22 254.137 38.46C253.097 39.7 251.717 40.74 249.997 41.58C248.277 42.42 246.077 42.84 243.397 42.84ZM234.757 24.18H251.137C250.977 21.94 250.177 20.2 248.737 18.96C247.297 17.68 245.417 17.04 243.097 17.04C240.777 17.04 238.877 17.68 237.397 18.96C235.957 20.2 235.077 21.94 234.757 24.18ZM260.076 42V0H266.256V42H260.076ZM279.807 42.84C277.687 42.84 275.787 42.48 274.107 41.76C272.467 41.04 271.147 39.98 270.147 38.58C269.187 37.18 268.707 35.48 268.707 33.48C268.707 31.44 269.187 29.76 270.147 28.44C271.147 27.08 272.487 26.06 274.167 25.38C275.887 24.7 277.827 24.36 279.987 24.36H288.987V22.44C288.987 20.72 288.467 19.34 287.427 18.3C286.387 17.26 284.787 16.74 282.627 16.74C280.507 16.74 278.887 17.24 277.767 18.24C276.647 19.24 275.907 20.54 275.547 22.14L269.787 20.28C270.267 18.68 271.027 17.24 272.067 15.96C273.147 14.64 274.567 13.58 276.327 12.78C278.087 11.98 280.207 11.58 282.687 11.58C286.527 11.58 289.547 12.56 291.747 14.52C293.947 16.48 295.047 19.26 295.047 22.86V35.04C295.047 36.24 295.607 36.84 296.727 36.84H299.247V42H294.627C293.227 42 292.087 41.64 291.207 40.92C290.327 40.2 289.887 39.22 289.887 37.98V37.8H288.987C288.667 38.4 288.187 39.1 287.547 39.9C286.907 40.7 285.967 41.4 284.727 42C283.487 42.56 281.847 42.84 279.807 42.84ZM280.707 37.74C283.187 37.74 285.187 37.04 286.707 35.64C288.227 34.2 288.987 32.24 288.987 29.76V29.16H280.347C278.707 29.16 277.387 29.52 276.387 30.24C275.387 30.92 274.887 31.94 274.887 33.3C274.887 34.66 275.407 35.74 276.447 36.54C277.487 37.34 278.907 37.74 280.707 37.74ZM303.114 54V48.6H319.614C320.734 48.6 321.294 48 321.294 46.8V37.68H320.334C319.974 38.48 319.414 39.26 318.654 40.02C317.934 40.74 316.954 41.34 315.714 41.82C314.474 42.3 312.914 42.54 311.034 42.54C308.794 42.54 306.794 42.04 305.034 41.04C303.274 40.04 301.894 38.62 300.894 36.78C299.894 34.94 299.394 32.76 299.394 30.24V12.42H305.574V29.76C305.574 32.32 306.214 34.22 307.494 35.46C308.774 36.66 310.554 37.26 312.834 37.26C315.354 37.26 317.374 36.42 318.894 34.74C320.454 33.06 321.234 30.62 321.234 27.42V12.42H327.414V48.06C327.414 49.86 326.874 51.3 325.794 52.38C324.754 53.46 323.314 54 321.474 54H303.114Z" fill="currentColor" />
+    </svg>
+  );
 }
 
 export function AgentSidebar({
@@ -49,6 +66,7 @@ export function AgentSidebar({
   wsStatus,
   onSelectChannel,
   onSelectAgent,
+  className,
 }: AgentSidebarProps) {
   const router = useRouter();
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -61,8 +79,13 @@ export function AgentSidebar({
     const next = theme === 'dark' ? 'light' : 'dark';
     const el = document.documentElement;
     el.classList.add('theme-transitioning');
+    el.dataset.theme = next;
+    el.style.colorScheme = next;
     el.classList.remove('theme-dark', 'theme-light', 'dark', 'light');
     el.classList.add(next === 'dark' ? 'theme-dark' : 'theme-light', next);
+    try {
+      localStorage.setItem('agentrelay-theme', next);
+    } catch (error) {}
     setTheme(next);
     setTimeout(() => el.classList.remove('theme-transitioning'), 300);
   }
@@ -73,36 +96,28 @@ export function AgentSidebar({
   }
 
   return (
-    <div className="w-[260px] shrink-0 flex flex-col border-r border-[var(--color-border-default)] bg-[var(--color-sidebar-bg)]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] flex items-center gap-2">
-        <img
-          src={theme === 'dark' ? '/observer/brand/agent-relay-logo-white.svg' : '/observer/brand/agent-relay-logo-black.svg'}
-          alt="Agent Relay"
-          className="h-5 w-auto shrink-0"
-        />
-        <h1 className="text-sm font-black tracking-wide uppercase [font-family:Outfit,sans-serif] truncate">
-          <span className="bg-gradient-to-r from-[var(--color-success)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent">
-            Observer
-          </span>
-        </h1>
-        <span
-          className={cn('h-2 w-2 rounded-full shrink-0', {
-            'bg-green-500': wsStatus === 'connected',
-            'bg-yellow-500 animate-pulse': wsStatus === 'connecting' || wsStatus === 'reconnecting',
-            'bg-red-500': wsStatus === 'disconnected',
-          })}
-          title={`WebSocket: ${wsStatus}`}
-        />
+    <aside className={cn('brand-glass flex w-[290px] shrink-0 flex-col overflow-hidden', className)}>
+      <div className="border-b border-[var(--border-default)] px-5 py-4">
+        <div className="mb-1 flex items-center gap-3">
+          <img
+            src="/observer/brand/agent-relay-mark.svg"
+            alt="Agent Relay"
+            className="h-6 w-auto shrink-0"
+          />
+          <div className="min-w-0 flex-1"><AgentRelayWordmark /></div>
+          <span
+            className={cn('h-2.5 w-2.5 rounded-full shrink-0', {
+              'bg-green-500 shadow-[0_0_0_4px_rgba(57,197,143,0.16)]': wsStatus === 'connected',
+              'bg-amber-500 animate-pulse shadow-[0_0_0_4px_rgba(245,158,11,0.14)]': wsStatus === 'connecting' || wsStatus === 'reconnecting',
+              'bg-rose-500 shadow-[0_0_0_4px_rgba(244,63,94,0.14)]': wsStatus === 'disconnected',
+            })}
+            title={`WebSocket: ${wsStatus}`}
+          />
+        </div>
       </div>
 
-      {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Channels */}
-        <div className="px-3 pt-4 pb-2">
-          <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Channels
-          </h2>
+      <div className="flex-1 overflow-y-auto px-3 py-4">
+        <SidebarSection title="Channels">
           {channels.map((ch) => (
             <button
               key={ch.id}
@@ -111,73 +126,58 @@ export function AgentSidebar({
                 onSelectChannel(selectedChannel === ch.name ? null : ch.name);
               }}
               className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
+                'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
                 selectedChannel === ch.name
-                  ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]',
-                ch.isArchived && 'opacity-70'
+                  ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
+                ch.isArchived && 'opacity-70',
               )}
             >
-              <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate flex-1 text-left">{ch.name}</span>
+              <Hash className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              <span className="flex-1 truncate text-left">{ch.name}</span>
               {(unreadChannelCounts[ch.name] ?? 0) > 0 && (
-                <span className="text-[10px] font-semibold text-white bg-red-500 px-1.5 py-0.5 rounded-full shrink-0">
+                <span className="rounded-full bg-[var(--brand-warm)] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                   {unreadChannelCounts[ch.name]}
                 </span>
               )}
             </button>
           ))}
-          {channels.length === 0 && (
-            <p className="px-2 text-xs text-[var(--color-text-dim)]">No channels</p>
-          )}
-        </div>
+          {channels.length === 0 && <EmptyLine>No channels</EmptyLine>}
+        </SidebarSection>
 
-        {/* Direct Messages */}
         {conversations.length > 0 && (
-          <>
-            <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
-            <div className="px-3 pt-3 pb-2">
-              <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-                Direct Messages
-              </h2>
-              {conversations.map((dm) => {
-                const dmKey = `dm:${dm.id}`;
-                const dmLabel = formatDmLabel(dm.participants, dm.name);
-                return (
-                  <button
-                    key={dm.id}
-                    onClick={() => {
-                      onSelectAgent(null);
-                      onSelectChannel(selectedChannel === dmKey ? null : dmKey);
-                    }}
-                    className={cn(
-                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
-                      selectedChannel === dmKey
-                        ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
-                    )}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                    <span className="truncate flex-1 text-left">{dmLabel}</span>
-                    {dm.unreadCount > 0 && (
-                      <span className="text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded-full shrink-0">
-                        {dm.unreadCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </>
+          <SidebarSection title="Direct Messages">
+            {conversations.map((dm) => {
+              const dmKey = `dm:${dm.id}`;
+              const dmLabel = formatDmLabel(dm.participants, dm.name);
+              return (
+                <button
+                  key={dm.id}
+                  onClick={() => {
+                    onSelectAgent(null);
+                    onSelectChannel(selectedChannel === dmKey ? null : dmKey);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
+                    selectedChannel === dmKey
+                      ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                  <span className="flex-1 truncate text-left">{dmLabel}</span>
+                  {dm.unreadCount > 0 && (
+                    <span className="rounded-full bg-[var(--surface-soft)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                      {dm.unreadCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </SidebarSection>
         )}
 
-        <div className="mx-3 border-t border-[var(--color-border-subtle)]" />
-
-        {/* Agents */}
-        <div className="px-3 pt-3 pb-2">
-          <h2 className="px-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Agents
-          </h2>
+        <SidebarSection title="Agents">
           {agents.map((agent) => (
             <button
               key={agent.name}
@@ -185,43 +185,50 @@ export function AgentSidebar({
                 onSelectAgent(selectedAgent === agent.name ? null : agent.name);
               }}
               className={cn(
-                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors',
+                'flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm transition-all',
                 selectedAgent === agent.name
-                  ? 'bg-[var(--color-bg-active)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]'
+                  ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
               )}
             >
               <AgentAvatar name={agent.name} size="sm" />
-              <span className="truncate flex-1 text-left">{agent.name}</span>
+              <span className="flex-1 truncate text-left">{agent.name}</span>
               <span className={cn('h-2 w-2 rounded-full shrink-0', statusColor(agent.status))} />
-              <span className="text-[10px] text-[var(--color-text-dim)] shrink-0">
-                {(agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || agent.type}
-              </span>
             </button>
           ))}
-          {agents.length === 0 && (
-            <p className="px-2 text-xs text-[var(--color-text-dim)]">No agents</p>
-          )}
-        </div>
+          {agents.length === 0 && <EmptyLine>No agents</EmptyLine>}
+        </SidebarSection>
       </div>
 
-      {/* Footer */}
-      <div className="px-3 py-3 border-t border-[var(--color-border-default)] flex flex-col gap-1">
+      <div className="border-t border-[var(--border-default)] px-3 py-3">
         <button
           onClick={toggleTheme}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-sidebar-hover)] transition-colors"
+          className="flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]"
         >
           {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </button>
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-sidebar-hover)] transition-colors"
+          className="mt-1 flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]"
         >
           <LogOut className="h-3.5 w-3.5" />
           Sign out
         </button>
       </div>
-    </div>
+    </aside>
   );
+}
+
+function SidebarSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-5">
+      <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">{title}</div>
+      <div className="space-y-1">{children}</div>
+    </section>
+  );
+}
+
+function EmptyLine({ children }: { children: React.ReactNode }) {
+  return <p className="px-3 text-xs text-[var(--text-faint)]">{children}</p>;
 }

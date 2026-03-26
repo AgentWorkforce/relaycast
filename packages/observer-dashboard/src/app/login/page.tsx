@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { setAuth } from '../../lib/auth';
 
@@ -9,23 +9,6 @@ export default function LoginPage() {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [logoSrc, setLogoSrc] = useState('/observer/brand/agent-relay-logo-white.svg');
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const updateLogo = () => {
-      setLogoSrc(
-        root.classList.contains('theme-light')
-          ? '/observer/brand/agent-relay-logo-black.svg'
-          : '/observer/brand/agent-relay-logo-white.svg',
-      );
-    };
-
-    updateLogo();
-    const observer = new MutationObserver(updateLogo);
-    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,52 +32,41 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[var(--color-bg-deep)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(65rem_32rem_at_15%_-5%,var(--color-success-light),transparent_60%),radial-gradient(48rem_28rem_at_100%_100%,var(--color-accent-light),transparent_62%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,var(--color-bg-hover),transparent_28%)]" />
-      <div className="relative min-h-screen flex items-center justify-center px-4 py-8">
-        <div className="w-full max-w-lg rounded-2xl border border-[var(--color-accent-cyan)] bg-[var(--color-bg-secondary)] shadow-[0_24px_70px_rgba(0,0,0,0.25)] backdrop-blur-xl">
-          <div className="h-px w-full bg-gradient-to-r from-transparent via-[#059661] to-transparent" />
-          <div className="p-8 md:p-10">
-            <div className="mb-8">
-              <div className="flex items-end gap-3">
-                <img
-                  src={logoSrc}
-                  alt="Agent Relay"
-                  className="h-9 w-auto shrink-0"
-                />
-                <h1 className="text-4xl font-black uppercase leading-none tracking-[0.06em] [font-family:Outfit,sans-serif]">
-                  <span className="bg-gradient-to-r from-[#5BBAA7] to-[#04D1F6] bg-clip-text text-transparent">
-                    Observer
-                  </span>
-                </h1>
-              </div>
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
-                  Secure Workspace Access
-                </p>
-                <p className="text-sm text-[var(--color-text-secondary)]">Enter your workspace API key to continue</p>
+    <div className="brand-grid relative min-h-screen overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(52rem_28rem_at_12%_0%,rgba(74,144,194,0.22),transparent_54%),radial-gradient(30rem_22rem_at_84%_16%,rgba(4,209,246,0.12),transparent_48%),radial-gradient(36rem_24rem_at_100%_100%,rgba(193,103,75,0.12),transparent_50%)]" />
+      <div className="pointer-events-none absolute inset-y-0 left-[12%] w-px bg-[linear-gradient(to_bottom,transparent,rgba(74,144,194,0.18),transparent)]" />
+      <div className="relative mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-12 sm:px-6">
+        <section className="brand-glass w-full max-w-lg rounded-[2rem] p-8 sm:p-10">
+          <div className="flex items-center gap-3">
+            <img src="/observer/brand/agent-relay-mark.svg" alt="Agent Relay" className="h-10 w-auto shrink-0" />
+            <div className="min-w-0">
+              <div className="brand-title text-[1.35rem] font-semibold tracking-tight text-[var(--foreground)]">
+                Agent Relay
               </div>
             </div>
+          </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label htmlFor="apiKey" className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">
-                  API Key
-                </label>
+          <div className="mt-10">
+            <p className="mt-3 text-sm text-[var(--text-secondary)]">
+              Workspace key
+            </p>
+
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+              <div className="space-y-2">
                 <input
                   id="apiKey"
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-primary)] px-4 py-3 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] shadow-[inset_0_0_0_1px_var(--color-border-subtle)] focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[var(--focus-color)]"
+                  className="w-full rounded-[1.35rem] border border-[color-mix(in_srgb,var(--brand-primary)_18%,rgba(122,122,114,0.22))] bg-[color-mix(in_srgb,var(--surface-strong)_94%,rgba(255,255,255,0.55))] px-4 py-3.5 text-sm text-[var(--foreground)] placeholder:text-[var(--text-faint)] shadow-[inset_0_1px_0_rgba(255,255,255,0.42)] focus:border-[var(--brand-primary)] focus:outline-none focus:ring-2 focus:ring-[rgba(74,144,194,0.16)]"
                   placeholder="rk_live_..."
                   autoFocus
                 />
+                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code></p>
               </div>
 
               {error && (
-                <p className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                <p className="rounded-2xl border border-[var(--status-danger)]/25 bg-[var(--status-danger-soft)] px-4 py-3 text-sm text-[var(--status-danger)]">
                   {error}
                 </p>
               )}
@@ -102,13 +74,13 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || !apiKey}
-                className="w-full cursor-pointer rounded-xl bg-[var(--focus-color)] px-4 py-3 text-sm font-semibold text-[var(--color-text-inverse)] transition-colors hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full cursor-pointer rounded-[1.35rem] bg-[var(--brand-primary)] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_18px_30px_-18px_rgba(74,144,194,0.9)] transition-all hover:-translate-y-0.5 hover:bg-[var(--brand-primary-strong)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
               >
-                {loading ? 'Validating...' : 'Sign in'}
+                {loading ? 'Validating…' : 'Enter'}
               </button>
             </form>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

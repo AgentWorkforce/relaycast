@@ -25,69 +25,45 @@ export function ActivityLog({ className }: ActivityLogProps) {
   const { status, events: wsEvents, latestEventAt } = useWebSocketFeed();
 
   const statusClasses = {
-    connected: 'bg-green-500/15 text-green-400 border-green-500/30',
-    connecting: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-    reconnecting: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-    disconnected: 'bg-red-500/15 text-red-400 border-red-500/30',
+    connected: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
+    connecting: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
+    reconnecting: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
+    disconnected: 'bg-rose-500/12 text-rose-300 border-rose-500/25',
   } as const;
 
   return (
-    <div className={cn(
-      'w-[260px] shrink-0 flex flex-col border-l border-[var(--color-border-default)] bg-[var(--color-bg-primary)]',
-      className,
-    )}>
-      <div className="px-4 py-3 border-b border-[var(--color-border-default)] shrink-0 space-y-2">
+    <div className={cn('console-subtle flex h-full min-h-[420px] flex-col overflow-hidden', className)}>
+      <div className="space-y-2 border-b border-[color-mix(in_srgb,var(--console-accent)_14%,transparent)] px-4 py-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Activity</h2>
-          <span
-            className={cn(
-              'inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-              statusClasses[status]
-            )}
-            title="Current WebSocket connection status"
-          >
+          <h2 className="text-sm font-semibold text-[var(--console-fg)]">Activity</h2>
+          <span className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide', statusClasses[status])}>
             WS {status}
           </span>
         </div>
-        <div className="text-[10px] text-[var(--color-text-dim)]">
+        <div className="text-[10px] text-[var(--console-muted)]">
           {latestEventAt ? `Last WS event ${relativeTime(latestEventAt)}` : 'No WS events yet'}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        <WebSocketFeed events={wsEvents} />
-      </div>
+      <div className="flex-1 overflow-y-auto">{wsEvents.length === 0 ? <Empty /> : <WebSocketFeed events={wsEvents} />}</div>
     </div>
   );
 }
 
-function WebSocketFeed({ events }: { events: WebSocketFeedEvent[] }) {
-  if (events.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-[var(--color-text-dim)]">
-        <p className="text-sm">No websocket events yet</p>
-      </div>
-    );
-  }
+function Empty() {
+  return <div className="flex h-full items-center justify-center text-sm text-[var(--console-muted)]">No websocket events yet</div>;
+}
 
+function WebSocketFeed({ events }: { events: WebSocketFeedEvent[] }) {
   return (
-    <div className="py-1">
-      {events.map((event: WebSocketFeedEvent) => (
-        <div
-          key={event.id}
-          className="flex items-start gap-2.5 px-4 py-2 text-sm"
-        >
-          <Wifi className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
-          <div className="flex-1 min-w-0">
-            <div className="font-mono text-[10px] text-[var(--color-text-muted)] break-all">
-              {event.eventType}
-            </div>
-            <div className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
-              {event.summary}
-            </div>
+    <div className="py-2">
+      {events.map((event) => (
+        <div key={event.id} className="flex items-start gap-2.5 px-4 py-3 text-sm hover:bg-white/2">
+          <Wifi className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--console-accent)]" />
+          <div className="min-w-0 flex-1">
+            <div className="break-all font-mono text-[10px] text-[var(--console-muted)]">{event.eventType}</div>
+            <div className="text-xs leading-relaxed text-[var(--console-fg)]/82">{event.summary}</div>
           </div>
-          <span className="text-[10px] text-[var(--color-text-dim)] shrink-0 mt-0.5">
-            {relativeTime(event.timestamp)}
-          </span>
+          <span className="mt-0.5 shrink-0 text-[10px] text-[var(--console-muted)]">{relativeTime(event.timestamp)}</span>
         </div>
       ))}
     </div>

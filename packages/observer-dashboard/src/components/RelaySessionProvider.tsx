@@ -25,7 +25,6 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
 
     async function initSession() {
       try {
-        // If a key is in the URL, authenticate with it before checking the session.
         if (keyParam?.startsWith('rk_live_')) {
           const success = await setAuth(keyParam);
           if (seq !== requestSeq.current) return;
@@ -53,8 +52,6 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
             wsToken: data.wsToken ?? data.apiKey,
             baseUrl: data.baseUrl,
           });
-          // Strip the key from the URL only after the session is established,
-          // so the URL change doesn't race with the session fetch.
           if (keyParam) router.replace('/');
         } else {
           router.replace('/login');
@@ -73,8 +70,11 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
 
   if (checking || !session) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin h-8 w-8 border-2 border-[var(--color-success)] border-t-transparent rounded-full" />
+      <div className="brand-grid min-h-screen flex items-center justify-center px-4">
+        <div className="brand-glass flex items-center gap-3 px-5 py-4 text-sm text-[var(--text-secondary)]">
+          <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--brand-primary)] border-t-transparent" />
+          Syncing your workspace session…
+        </div>
       </div>
     );
   }
