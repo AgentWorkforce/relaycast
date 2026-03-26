@@ -34,7 +34,11 @@ function statusColor(status: string) {
 }
 
 function getTheme(): 'dark' | 'light' {
-  if (typeof document === 'undefined') return 'light';
+  if (typeof document === 'undefined') return 'dark';
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === 'dark' || explicit === 'light') {
+    return explicit;
+  }
   return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'light';
 }
 
@@ -50,7 +54,7 @@ export function AgentSidebar({
   onSelectAgent,
 }: AgentSidebarProps) {
   const router = useRouter();
-  const [theme, setTheme] = useState<'dark' | 'light'>('light');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
     setTheme(getTheme());
@@ -60,8 +64,13 @@ export function AgentSidebar({
     const next = theme === 'dark' ? 'light' : 'dark';
     const el = document.documentElement;
     el.classList.add('theme-transitioning');
+    el.dataset.theme = next;
+    el.style.colorScheme = next;
     el.classList.remove('theme-dark', 'theme-light', 'dark', 'light');
     el.classList.add(next === 'dark' ? 'theme-dark' : 'theme-light', next);
+    try {
+      localStorage.setItem('agentrelay-theme', next);
+    } catch (error) {}
     setTheme(next);
     setTimeout(() => el.classList.remove('theme-transitioning'), 300);
   }
