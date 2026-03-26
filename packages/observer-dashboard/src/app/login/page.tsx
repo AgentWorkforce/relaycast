@@ -43,16 +43,10 @@ export default function LoginPage() {
               <div className="brand-title text-[1.35rem] font-semibold tracking-tight text-[var(--foreground)]">
                 Agent Relay
               </div>
-              <div className="mt-2">
-                <span className="brand-pill brand-kicker text-[0.62rem] text-[var(--brand-primary-strong)]">Observer</span>
-              </div>
             </div>
           </div>
 
           <div className="mt-10">
-            <h1 className="brand-title text-3xl font-semibold tracking-tight text-[var(--foreground)] sm:text-[2.4rem]">
-              Enter observer
-            </h1>
             <p className="mt-3 text-sm text-[var(--text-secondary)]">
               Workspace key
             </p>
