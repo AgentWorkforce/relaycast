@@ -2,6 +2,7 @@
 
 import { X, Bot, User, Clock, Cpu, CircleDot, Sparkles } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
+import { cn } from '../lib/utils';
 import type { Agent } from '@relaycast/sdk';
 
 function relativeTime(timestamp: string): string {
@@ -38,9 +39,10 @@ function statusLabel(status: string) {
 interface AgentPanelProps {
   agent: Agent;
   onClose: () => void;
+  className?: string;
 }
 
-export function AgentPanel({ agent, onClose }: AgentPanelProps) {
+export function AgentPanel({ agent, onClose, className }: AgentPanelProps) {
   const status = statusLabel(agent.status);
   const cli = (agent.metadata?.cli as string) || (agent.metadata?.spawn as Record<string, unknown>)?.cli as string || 'unknown';
   const model = (agent.metadata?.model as string) || '';
@@ -50,7 +52,7 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
   const extraMeta = Object.entries(agent.metadata || {}).filter(([key]) => !['cli', 'current_task', 'model'].includes(key));
 
   return (
-    <aside className="brand-card flex w-[380px] shrink-0 flex-col overflow-hidden">
+    <aside className={cn('brand-card flex w-[380px] shrink-0 flex-col overflow-hidden', className)}>
       <div className="flex items-center justify-between border-b border-[var(--border-default)] px-5 py-4">
         <h2 className="brand-title text-base font-semibold text-[var(--foreground)]">Agent profile</h2>
         <button onClick={onClose} className="rounded-xl p-2 text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-soft)] hover:text-[var(--foreground)]">

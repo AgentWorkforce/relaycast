@@ -20,6 +20,7 @@ interface AgentSidebarProps {
   wsStatus: ConnectionStatus;
   onSelectChannel: (name: string | null) => void;
   onSelectAgent: (name: string | null) => void;
+  className?: string;
 }
 
 function statusColor(status: string) {
@@ -65,6 +66,7 @@ export function AgentSidebar({
   wsStatus,
   onSelectChannel,
   onSelectAgent,
+  className,
 }: AgentSidebarProps) {
   const router = useRouter();
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -94,7 +96,7 @@ export function AgentSidebar({
   }
 
   return (
-    <aside className="brand-glass m-3 mr-0 flex w-[290px] shrink-0 flex-col overflow-hidden">
+    <aside className={cn('brand-glass flex w-[290px] shrink-0 flex-col overflow-hidden', className)}>
       <div className="border-b border-[var(--border-default)] px-5 py-4">
         <div className="mb-1 flex items-center gap-3">
           <img

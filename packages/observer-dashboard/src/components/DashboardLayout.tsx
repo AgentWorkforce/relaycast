@@ -1,14 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, MessageSquareText, PanelLeft, PanelRight } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket, useRelay } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ConsolePanel } from './ConsolePanel';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
-import { formatDmLabel } from '../lib/utils';
+import { cn, formatDmLabel } from '../lib/utils';
 import type { Agent as ApiAgent, MessageCreatedEvent, DmConversationSummary, WorkspaceDmConversation } from '@relaycast/sdk';
 
 function toSummary(wdc: WorkspaceDmConversation): DmConversationSummary {
@@ -29,6 +29,7 @@ export function DashboardLayout() {
   const relay = useRelay();
   const { agents: rawAgents } = usePresence();
   const { channels } = useChannels({ includeArchived: true });
+  const [mobilePane, setMobilePane] = useState<'browse' | 'chat' | 'details'>('chat');
   const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
@@ -122,13 +123,17 @@ export function DashboardLayout() {
 
   function handleSelectAgent(name: string | null) {
     setSelectedAgent(name);
-    if (name) setThreadMessageId(null);
+    if (name) {
+      setThreadMessageId(null);
+      setMobilePane('details');
+    }
   }
 
   function handleSelectChannel(name: string | null) {
     setSelectedChannel(name);
     setSelectedAgent(null);
     setThreadMessageId(null);
+    if (name) setMobilePane('chat');
     if (name && !name.startsWith('dm:')) {
       setUnreadChannelCounts((prev) => (prev[name] && prev[name] > 0 ? { ...prev, [name]: 0 } : prev));
     }
@@ -154,22 +159,67 @@ export function DashboardLayout() {
         })()
       : undefined;
 
-  const rightPanel = selectedAgentData ? (
-    <AgentPanel agent={selectedAgentData} onClose={() => setSelectedAgent(null)} />
-  ) : threadMessageId ? (
-    <ThreadPanel
-      messageId={threadMessageId}
-      onClose={() => setThreadMessageId(null)}
-      mentionNames={mentionNames}
-      onOpenAgent={handleSelectAgent}
-    />
-  ) : (
-    <ConsolePanel />
-  );
+  useEffect(() => {
+    if (selectedAgentData || threadMessageId) {
+      setMobilePane('details');
+    }
+  }, [selectedAgentData, threadMessageId]);
+
+  function renderRightPanel(className?: string) {
+    if (selectedAgentData) {
+      return (
+        <AgentPanel
+          agent={selectedAgentData}
+          onClose={() => setSelectedAgent(null)}
+          className={className}
+        />
+      );
+    }
+
+    if (threadMessageId) {
+      return (
+        <ThreadPanel
+          messageId={threadMessageId}
+          onClose={() => setThreadMessageId(null)}
+          mentionNames={mentionNames}
+          onOpenAgent={handleSelectAgent}
+          className={className}
+        />
+      );
+    }
+
+    return <ConsolePanel className={className} />;
+  }
+
+  const rightPanel = renderRightPanel();
+  const mobileDetailsLabel = selectedAgentData ? 'Agent' : threadMessageId ? 'Thread' : 'Console';
+
+  function StreamBanner({ className }: { className?: string }) {
+    return (
+      <div className={cn('brand-card flex items-start justify-between gap-3 px-4 py-3', className)}>
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--status-warning)]" />
+          <div>
+            <div className="text-sm font-medium text-[var(--foreground)]">Workspace stream is disabled</div>
+            <div className="text-sm text-[var(--text-secondary)]">
+              {streamMessage || 'Enable stream to restore full realtime dashboard updates.'}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={handleEnableStream}
+          disabled={streamPending}
+          className="shrink-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-soft)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {streamPending ? 'Enabling…' : 'Enable stream'}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="brand-grid min-h-screen">
-      <div className="flex min-h-screen gap-3">
+      <div className="hidden min-h-screen lg:flex lg:gap-3">
         <AgentSidebar
           channels={channels}
           agents={agents}
@@ -180,29 +230,11 @@ export function DashboardLayout() {
           wsStatus={wsStatus}
           onSelectChannel={handleSelectChannel}
           onSelectAgent={handleSelectAgent}
+          className="m-3 mr-0"
         />
 
         <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">
-          {streamEnabled === false && (
-            <div className="brand-card mb-3 flex items-start justify-between gap-3 px-4 py-3">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--status-warning)]" />
-                <div>
-                  <div className="text-sm font-medium text-[var(--foreground)]">Workspace stream is disabled</div>
-                  <div className="text-sm text-[var(--text-secondary)]">
-                    {streamMessage || 'Enable stream to restore full realtime dashboard updates.'}
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={handleEnableStream}
-                disabled={streamPending}
-                className="shrink-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-soft)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {streamPending ? 'Enabling…' : 'Enable stream'}
-              </button>
-            </div>
-          )}
+          {streamEnabled === false && <StreamBanner className="mb-3" />}
 
           <div className="flex min-h-0 flex-1 gap-3">
             <ChatFeed
@@ -218,6 +250,90 @@ export function DashboardLayout() {
           </div>
         </main>
       </div>
+
+      <div className="flex min-h-screen flex-col gap-3 p-3 lg:hidden">
+        {streamEnabled === false && <StreamBanner />}
+
+        <div className="brand-glass flex items-center gap-2 p-2">
+          <MobilePaneButton
+            label="Browse"
+            icon={<PanelLeft className="h-4 w-4" />}
+            active={mobilePane === 'browse'}
+            onClick={() => setMobilePane('browse')}
+          />
+          <MobilePaneButton
+            label="Chat"
+            icon={<MessageSquareText className="h-4 w-4" />}
+            active={mobilePane === 'chat'}
+            onClick={() => setMobilePane('chat')}
+          />
+          <MobilePaneButton
+            label={mobileDetailsLabel}
+            icon={<PanelRight className="h-4 w-4" />}
+            active={mobilePane === 'details'}
+            onClick={() => setMobilePane('details')}
+          />
+        </div>
+
+        <div className="min-h-0 flex-1">
+          {mobilePane === 'browse' ? (
+            <AgentSidebar
+              channels={channels}
+              agents={agents}
+              conversations={conversations}
+              selectedChannel={selectedChannel}
+              selectedAgent={selectedAgent}
+              unreadChannelCounts={unreadChannelCounts}
+              wsStatus={wsStatus}
+              onSelectChannel={handleSelectChannel}
+              onSelectAgent={handleSelectAgent}
+              className="h-full w-full"
+            />
+          ) : mobilePane === 'chat' ? (
+            <ChatFeed
+              selectedChannel={selectedChannel}
+              selectedChannelMemberCount={selectedChannelMemberCount}
+              selectedChannelArchived={selectedChannelArchived}
+              dmLabel={selectedDmLabel}
+              onOpenThread={(id) => {
+                setThreadMessageId(id);
+                setMobilePane('details');
+              }}
+              mentionNames={mentionNames}
+              onOpenAgent={handleSelectAgent}
+            />
+          ) : (
+            renderRightPanel('h-full w-full')
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function MobilePaneButton({
+  label,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex h-11 flex-1 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-medium transition-colors',
+        active
+          ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-soft)] hover:text-[var(--foreground)]',
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }

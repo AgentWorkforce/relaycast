@@ -3,6 +3,7 @@
 import { X, MessageSquare } from 'lucide-react';
 import { MessageMarkdown, useThread } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
+import { cn } from '../lib/utils';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
 function relativeTime(timestamp: string): string {
@@ -44,13 +45,14 @@ interface ThreadPanelProps {
   onClose: () => void;
   mentionNames?: string[];
   onOpenAgent?: (agentName: string | null) => void;
+  className?: string;
 }
 
-export function ThreadPanel({ messageId, onClose, mentionNames, onOpenAgent }: ThreadPanelProps) {
+export function ThreadPanel({ messageId, onClose, mentionNames, onOpenAgent, className }: ThreadPanelProps) {
   const { parent, replies, loading } = useThread(messageId);
 
   return (
-    <aside className="brand-card flex w-[380px] shrink-0 flex-col overflow-hidden">
+    <aside className={cn('brand-card flex w-[380px] shrink-0 flex-col overflow-hidden', className)}>
       <div className="flex items-center justify-between border-b border-[var(--border-default)] px-5 py-4">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-[var(--brand-primary)]" />

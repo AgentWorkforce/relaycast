@@ -19,7 +19,7 @@ const TAB_OPTIONS: Array<{ id: ConsoleTab; label: string }> = [
   { id: 'activity', label: 'Activity' },
 ];
 
-export function ConsolePanel() {
+export function ConsolePanel({ className }: { className?: string }) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>('activity');
   const feed = useConsoleFeed();
   const overview = useConsoleOverview();
@@ -40,9 +40,9 @@ export function ConsolePanel() {
   }
 
   return (
-    <aside className="console-surface flex w-[440px] shrink-0 flex-col overflow-hidden">
+    <aside className={cn('console-surface flex w-[440px] shrink-0 flex-col overflow-hidden', className)}>
       <div className="border-b border-[color-mix(in_srgb,var(--console-accent)_16%,transparent)] px-5 py-4">
-        <div className="relative max-w-[220px]">
+        <div className="relative w-full">
           <select
             value={activeTab}
             onChange={(event) => setActiveTab(event.target.value as ConsoleTab)}
