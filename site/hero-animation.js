@@ -232,6 +232,19 @@
     landingToasts.push({ x: x, y: y - 30, text: text, kind: kind, age: 0, maxAge: 100, alpha: 0 });
   }
 
+  var cachedCardW = CARD_W;
+  var cachedCardH = CARD_H;
+
+  function updateCachedCardSize() {
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].el) {
+        cachedCardW = nodes[i].el.offsetWidth || CARD_W;
+        cachedCardH = nodes[i].el.offsetHeight || CARD_H;
+        return;
+      }
+    }
+  }
+
   function resize() {
     if (!container || !canvas) return;
     var rect = container.getBoundingClientRect();
@@ -241,6 +254,7 @@
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    updateCachedCardSize();
   }
 
   /* ── State machine (250ms tick) ────────────────────────────────── */
@@ -439,12 +453,9 @@
   function buildCenters(w, h) {
     var result = [];
     for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i].el;
-      var cardW = el ? el.offsetWidth : CARD_W;
-      var cardH = el ? el.offsetHeight : CARD_H;
       result.push({
-        cx: nodes[i].x * w + cardW / 2,
-        cy: nodes[i].y * h + cardH / 2,
+        cx: nodes[i].x * w + cachedCardW / 2,
+        cy: nodes[i].y * h + cachedCardH / 2,
         opacity: nodes[i].opacity,
       });
     }
