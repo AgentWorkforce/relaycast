@@ -70,15 +70,15 @@ html[data-theme='light'],
   --surface-strong: #ffffff;
   --surface-sidebar: rgba(245, 248, 251, 0.9);
 
-  --console-bg: #1a1c22;
-  --console-panel: #15171c;
-  --console-elevated: #20252d;
-  --console-line: #2a2d35;
-  --console-fg: #c9d1d9;
-  --console-muted: #7f8a97;
-  --console-accent: #7eb8da;
-  --console-warm: #ce9178;
-  --console-green: #4ec9b0;
+  --console-bg: #f3f7fb;
+  --console-panel: #ffffff;
+  --console-elevated: #eef4fb;
+  --console-line: rgba(74, 144, 194, 0.14);
+  --console-fg: #111827;
+  --console-muted: #6b7280;
+  --console-accent: #4a90c2;
+  --console-warm: #c1674b;
+  --console-green: #2e9f92;
   --console-observer: #04d1f6;
 
   --border-default: rgba(74, 144, 194, 0.12);

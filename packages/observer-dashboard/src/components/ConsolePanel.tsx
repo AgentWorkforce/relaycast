@@ -46,7 +46,7 @@ export function ConsolePanel() {
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--console-accent)]">Observer console</div>
             <h2 className="brand-title text-base font-semibold text-[var(--console-fg)]">Realtime operations</h2>
-            <p className="text-xs text-[var(--console-muted)]">Feed, metrics, activity, and spend on dark console surfaces.</p>
+            <p className="text-xs text-[var(--console-muted)]">Feed, metrics, activity, and spend.</p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
