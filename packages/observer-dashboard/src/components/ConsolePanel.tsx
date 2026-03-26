@@ -42,13 +42,6 @@ export function ConsolePanel() {
   return (
     <aside className="console-surface flex w-[440px] shrink-0 flex-col overflow-hidden">
       <div className="border-b border-[color-mix(in_srgb,var(--console-accent)_16%,transparent)] px-5 py-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--console-accent)]">Observer console</div>
-            <h2 className="brand-title text-base font-semibold text-[var(--console-fg)]">Realtime operations</h2>
-            <p className="text-xs text-[var(--console-muted)]">Feed, metrics, activity, and spend.</p>
-          </div>
-        </div>
         <div className="relative max-w-[220px]">
           <select
             value={activeTab}
