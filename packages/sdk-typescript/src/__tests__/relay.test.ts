@@ -1139,3 +1139,39 @@ describe('RelayCast', () => {
     });
   });
 });
+
+
+describe('workspace.stream.ensureEnabled', () => {
+  it('returns current config without PUT when already enabled', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      data: { enabled: true, default_enabled: true, override: true },
+    }), { status: 200 }));
+
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test' });
+    const result = await relay.workspace.stream.ensureEnabled();
+
+    expect(result.enabled).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('enables stream when disabled', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        data: { enabled: false, default_enabled: false, override: null },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        data: { enabled: true, default_enabled: false, override: true },
+      }), { status: 200 }));
+
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test' });
+    const result = await relay.workspace.stream.ensureEnabled();
+
+    expect(result.enabled).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+});

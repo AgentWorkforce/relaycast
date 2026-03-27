@@ -75,7 +75,7 @@ pub mod types;
 pub mod ws;
 
 // Re-export main types
-pub use agent::AgentClient;
+pub use agent::{AgentClient, EnsureChannelJoinedOutcome};
 pub use client::{ClientOptions, HttpClient, RequestOptions};
 pub use error::{RelayError, Result};
 pub use registration::{

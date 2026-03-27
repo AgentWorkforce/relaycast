@@ -435,6 +435,38 @@ export class AgentClient {
     join: (name: string): Promise<JoinChannelResponse> =>
       this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`),
 
+    ensureJoined: async (
+      name: string,
+      options?: { topic?: string; metadata?: CreateChannelRequest['metadata'] },
+    ): Promise<{ created: boolean; joined: boolean }> => {
+      let created = false;
+      let joined = false;
+
+      try {
+        await this.client.post('/v1/channels', {
+          name,
+          topic: options?.topic,
+          metadata: options?.metadata,
+        });
+        created = true;
+      } catch (error) {
+        if (!(error instanceof Error) || !("statusCode" in error) || (error as { statusCode?: number }).statusCode !== 409) {
+          throw error;
+        }
+      }
+
+      try {
+        await this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`);
+        joined = true;
+      } catch (error) {
+        if (!(error instanceof Error) || !("statusCode" in error) || (error as { statusCode?: number }).statusCode !== 409) {
+          throw error;
+        }
+      }
+
+      return { created, joined };
+    },
+
     leave: async (name: string): Promise<void> => {
       await this.client.post(`/v1/channels/${encodeURIComponent(name)}/leave`);
     },

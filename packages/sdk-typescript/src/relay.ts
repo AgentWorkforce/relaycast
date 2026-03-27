@@ -377,6 +377,13 @@ export class RelayCast {
         this.client.put('/v1/workspace/stream', { enabled }),
       inherit: (): Promise<WorkspaceStreamConfig> =>
         this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
+      ensureEnabled: async (): Promise<WorkspaceStreamConfig> => {
+        const config = await this.client.get<WorkspaceStreamConfig>('/v1/workspace/stream');
+        if (config.enabled) {
+          return config;
+        }
+        return this.client.put('/v1/workspace/stream', { enabled: true });
+      },
     },
   };
 

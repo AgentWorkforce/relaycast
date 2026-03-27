@@ -243,3 +243,24 @@ class TestAsyncRelay:
         async with AsyncRelay(KEY, base_url=BASE) as r:
             ac = r.as_agent("at_xxx")
             assert isinstance(ac, AsyncAgentClient)
+
+
+    
+
+class TestRelayWorkspaceStream:
+    @respx.mock
+    def test_workspace_stream_ensure_enabled_is_noop_when_enabled(self):
+        route = respx.get(f"{BASE}/v1/workspace/stream").mock(return_value=ok({"enabled": True, "default_enabled": True, "override": True}))
+        r = Relay(KEY, base_url=BASE)
+        cfg = r.workspace.stream.ensure_enabled()
+        assert cfg.enabled is True
+        assert route.called
+
+    @respx.mock
+    def test_workspace_stream_ensure_enabled_sets_when_disabled(self):
+        respx.get(f"{BASE}/v1/workspace/stream").mock(return_value=ok({"enabled": False, "default_enabled": False, "override": None}))
+        put = respx.put(f"{BASE}/v1/workspace/stream").mock(return_value=ok({"enabled": True, "default_enabled": False, "override": True}))
+        r = Relay(KEY, base_url=BASE)
+        cfg = r.workspace.stream.ensure_enabled()
+        assert cfg.enabled is True
+        assert put.called

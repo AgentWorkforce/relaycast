@@ -9,7 +9,7 @@ from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
 from .errors import RelayError
 from .local_runtime import ensure_local_runtime
-from .models import Agent, CreateAgentRequest, CreateAgentResponse, TokenRotateResponse, Workspace
+from .models import Agent, CreateAgentRequest, CreateAgentResponse, TokenRotateResponse, Workspace, WorkspaceStreamConfig
 
 
 def _enc(value: str) -> str:
@@ -20,11 +20,35 @@ def _is_duplicate_agent_error(err: RelayError) -> bool:
     return err.status == 409 and err.code in {"agent_already_exists", "name_conflict"}
 
 
+class _WorkspaceStreamNamespace:
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def get(self) -> WorkspaceStreamConfig:
+        result = self._client.get("/v1/workspace/stream")
+        return WorkspaceStreamConfig.model_validate(result)
+
+    def set(self, enabled: bool) -> WorkspaceStreamConfig:
+        result = self._client.put("/v1/workspace/stream", {"enabled": enabled})
+        return WorkspaceStreamConfig.model_validate(result)
+
+    def inherit(self) -> WorkspaceStreamConfig:
+        result = self._client.put("/v1/workspace/stream", {"mode": "inherit"})
+        return WorkspaceStreamConfig.model_validate(result)
+
+    def ensure_enabled(self) -> WorkspaceStreamConfig:
+        config = self.get()
+        if config.enabled:
+            return config
+        return self.set(True)
+
+
 class _WorkspaceNamespace:
     """Sync workspace operations."""
 
     def __init__(self, client: HttpClient) -> None:
         self._client = client
+        self.stream = _WorkspaceStreamNamespace(client)
 
     def info(self) -> Workspace:
         result = self._client.get("/v1/workspace")
@@ -172,11 +196,35 @@ class Relay:
 # ── Async variants ────────────────────────────────────────────────
 
 
+class _AsyncWorkspaceStreamNamespace:
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def get(self) -> WorkspaceStreamConfig:
+        result = await self._client.get("/v1/workspace/stream")
+        return WorkspaceStreamConfig.model_validate(result)
+
+    async def set(self, enabled: bool) -> WorkspaceStreamConfig:
+        result = await self._client.put("/v1/workspace/stream", {"enabled": enabled})
+        return WorkspaceStreamConfig.model_validate(result)
+
+    async def inherit(self) -> WorkspaceStreamConfig:
+        result = await self._client.put("/v1/workspace/stream", {"mode": "inherit"})
+        return WorkspaceStreamConfig.model_validate(result)
+
+    async def ensure_enabled(self) -> WorkspaceStreamConfig:
+        config = await self.get()
+        if config.enabled:
+            return config
+        return await self.set(True)
+
+
 class _AsyncWorkspaceNamespace:
     """Async workspace operations."""
 
     def __init__(self, client: AsyncHttpClient) -> None:
         self._client = client
+        self.stream = _AsyncWorkspaceStreamNamespace(client)
 
     async def info(self) -> Workspace:
         result = await self._client.get("/v1/workspace")

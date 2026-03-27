@@ -87,6 +87,12 @@ class CreateWorkspaceResponse(BaseModel):
     created_at: str
 
 
+class WorkspaceStreamConfig(BaseModel):
+    enabled: bool
+    default_enabled: bool
+    override: bool | None = Field(default=None, alias='override')
+
+
 # ── Channel ───────────────────────────────────────────────────────
 
 class Channel(BaseModel):

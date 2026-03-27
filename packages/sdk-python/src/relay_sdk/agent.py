@@ -120,6 +120,23 @@ class _ChannelsNamespace:
     def join(self, name: str) -> Any:
         return self._client.post(f"/v1/channels/{_enc(name)}/join")
 
+    def ensure_joined(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, bool]:
+        created = False
+        joined = False
+        try:
+            self._client.post("/v1/channels", CreateChannelRequest(name=name, topic=topic, metadata=metadata).model_dump(exclude_none=True))
+            created = True
+        except Exception as err:
+            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+                raise
+        try:
+            self._client.post(f"/v1/channels/{_enc(name)}/join")
+            joined = True
+        except Exception as err:
+            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+                raise
+        return {"created": created, "joined": joined}
+
     def leave(self, name: str) -> None:
         self._client.post(f"/v1/channels/{_enc(name)}/leave")
 
@@ -436,6 +453,23 @@ class _AsyncChannelsNamespace:
 
     async def join(self, name: str) -> Any:
         return await self._client.post(f"/v1/channels/{_enc(name)}/join")
+
+    async def ensure_joined(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, bool]:
+        created = False
+        joined = False
+        try:
+            await self._client.post("/v1/channels", CreateChannelRequest(name=name, topic=topic, metadata=metadata).model_dump(exclude_none=True))
+            created = True
+        except Exception as err:
+            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+                raise
+        try:
+            await self._client.post(f"/v1/channels/{_enc(name)}/join")
+            joined = True
+        except Exception as err:
+            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+                raise
+        return {"created": created, "joined": joined}
 
     async def leave(self, name: str) -> None:
         await self._client.post(f"/v1/channels/{_enc(name)}/leave")

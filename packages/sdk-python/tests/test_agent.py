@@ -612,3 +612,21 @@ class TestAsyncAgentPresence:
         await c.disconnect()
         assert route.called
         await c.client.close()
+
+
+    
+
+class TestAgentChannelEnsureJoined:
+    @respx.mock
+    def test_channels_ensure_joined_creates_and_joins(self):
+        respx.post(f"{BASE}/v1/channels").mock(return_value=ok(CHANNEL))
+        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=ok({"joined": True}))
+        client = AgentClient(HttpClient(TOKEN, BASE))
+        assert client.channels.ensure_joined("general", topic="General discussion") == {"created": True, "joined": True}
+
+    @respx.mock
+    def test_channels_ensure_joined_treats_conflicts_as_success(self):
+        respx.post(f"{BASE}/v1/channels").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "channel_exists", "message": "exists"}}))
+        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "already_joined", "message": "joined"}}))
+        client = AgentClient(HttpClient(TOKEN, BASE))
+        assert client.channels.ensure_joined("general") == {"created": False, "joined": False}

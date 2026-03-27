@@ -10,6 +10,13 @@ fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
 }
 
+/// Outcome from idempotently ensuring a channel exists and is joined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnsureChannelJoinedOutcome {
+    pub created: bool,
+    pub joined: bool,
+}
+
 /// Client for agent-level operations.
 pub struct AgentClient {
     client: HttpClient,
@@ -576,6 +583,32 @@ impl AgentClient {
             .await
     }
 
+
+    /// Ensure a channel exists and that the current agent is joined to it.
+    ///
+    /// Conflict responses for both create and join are treated as successful
+    /// no-ops so callers can use this for idempotent startup/bootstrap flows.
+    pub async fn ensure_channel_joined(
+        &self,
+        request: CreateChannelRequest,
+    ) -> Result<EnsureChannelJoinedOutcome> {
+        let channel_name = request.name.clone();
+
+        let created = match self.create_channel(request).await {
+            Ok(_) => true,
+            Err(error) if error.is_conflict() => false,
+            Err(error) => return Err(error),
+        };
+
+        let joined = match self.join_channel(&channel_name).await {
+            Ok(_) => true,
+            Err(error) if error.is_conflict() => false,
+            Err(error) => return Err(error),
+        };
+
+        Ok(EnsureChannelJoinedOutcome { created, joined })
+    }
+
     /// Leave a channel.
     pub async fn leave_channel(&self, name: &str) -> Result<()> {
         self.client
@@ -843,5 +876,84 @@ impl AgentClient {
         };
 
         self.client.get("/v1/files", query_ref, None).await
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::AgentClient;
+    use crate::{ClientOptions, CreateChannelRequest, EnsureChannelJoinedOutcome, RelayError};
+    use httpmock::{Method::POST, MockServer};
+
+    fn client(base_url: &str) -> AgentClient {
+        AgentClient::new("at_live_test", Some(base_url.to_string())).expect("agent client")
+    }
+
+    #[tokio::test]
+    async fn ensure_channel_joined_creates_and_joins_when_missing() {
+        let server = MockServer::start();
+        let create = server.mock(|when, then| {
+            when.method(POST).path("/v1/channels");
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {
+                    "id": "ch_1",
+                    "workspace_id": "w_1",
+                    "name": "general",
+                    "channel_type": 0,
+                    "topic": "General discussion",
+                    "metadata": {},
+                    "created_by": "agent_1",
+                    "created_at": "2026-03-26T00:00:00Z",
+                    "is_archived": false
+                }
+            }));
+        });
+        let join = server.mock(|when, then| {
+            when.method(POST).path("/v1/channels/general/join");
+            then.status(200).json_body_obj(&serde_json::json!({ "ok": true, "data": {"joined": true} }));
+        });
+
+        let agent = client(&server.base_url());
+        let outcome = agent.ensure_channel_joined(CreateChannelRequest {
+            name: "general".into(),
+            topic: Some("General discussion".into()),
+            metadata: None,
+        }).await.expect("ensure joined succeeds");
+
+        assert_eq!(outcome, EnsureChannelJoinedOutcome { created: true, joined: true });
+        create.assert();
+        join.assert();
+    }
+
+    #[tokio::test]
+    async fn ensure_channel_joined_treats_conflicts_as_success() {
+        let server = MockServer::start();
+        let create = server.mock(|when, then| {
+            when.method(POST).path("/v1/channels");
+            then.status(409).json_body_obj(&serde_json::json!({
+                "ok": false,
+                "error": {"code": "channel_exists", "message": "exists"}
+            }));
+        });
+        let join = server.mock(|when, then| {
+            when.method(POST).path("/v1/channels/general/join");
+            then.status(409).json_body_obj(&serde_json::json!({
+                "ok": false,
+                "error": {"code": "already_joined", "message": "joined"}
+            }));
+        });
+
+        let agent = client(&server.base_url());
+        let outcome = agent.ensure_channel_joined(CreateChannelRequest {
+            name: "general".into(),
+            topic: None,
+            metadata: None,
+        }).await.expect("ensure joined succeeds");
+
+        assert_eq!(outcome, EnsureChannelJoinedOutcome { created: false, joined: false });
+        create.assert();
+        join.assert();
     }
 }

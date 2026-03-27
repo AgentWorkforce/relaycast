@@ -307,6 +307,18 @@ impl RelayCast {
             .await
     }
 
+    /// Ensure workspace-wide WebSocket fanout is enabled.
+    ///
+    /// Returns the effective configuration after ensuring it is enabled. If the
+    /// stream is already enabled, this is a read-only no-op.
+    pub async fn ensure_workspace_stream_enabled(&self) -> Result<WorkspaceStreamConfig> {
+        let config = self.workspace_stream_get().await?;
+        if config.enabled {
+            return Ok(config);
+        }
+        self.workspace_stream_set(true).await
+    }
+
     /// Clear workspace stream override and inherit default behavior.
     pub async fn workspace_stream_inherit(&self) -> Result<WorkspaceStreamConfig> {
         self.client
@@ -756,5 +768,64 @@ impl RelayCast {
                 None,
             )
             .await
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::RelayCast;
+    use crate::RelayCastOptions;
+    use httpmock::{Method::{GET, PUT}, MockServer};
+
+    fn relay(base_url: &str) -> RelayCast {
+        RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(base_url)).expect("relay")
+    }
+
+    #[tokio::test]
+    async fn ensure_workspace_stream_enabled_is_noop_when_already_enabled() {
+        let server = MockServer::start();
+        let get = server.mock(|when, then| {
+            when.method(GET).path("/v1/workspace/stream");
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {"enabled": true, "default_enabled": true, "override": true}
+            }));
+        });
+        let put = server.mock(|when, then| {
+            when.method(PUT).path("/v1/workspace/stream");
+            then.status(200);
+        });
+
+        let relay = relay(&server.base_url());
+        let config = relay.ensure_workspace_stream_enabled().await.expect("stream enabled");
+        assert!(config.enabled);
+        get.assert();
+        assert_eq!(put.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn ensure_workspace_stream_enabled_sets_override_when_disabled() {
+        let server = MockServer::start();
+        let get = server.mock(|when, then| {
+            when.method(GET).path("/v1/workspace/stream");
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {"enabled": false, "default_enabled": false, "override": null}
+            }));
+        });
+        let put = server.mock(|when, then| {
+            when.method(PUT).path("/v1/workspace/stream").json_body_obj(&serde_json::json!({"enabled": true}));
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {"enabled": true, "default_enabled": false, "override": true}
+            }));
+        });
+
+        let relay = relay(&server.base_url());
+        let config = relay.ensure_workspace_stream_enabled().await.expect("stream enabled");
+        assert!(config.enabled);
+        get.assert();
+        put.assert();
     }
 }
