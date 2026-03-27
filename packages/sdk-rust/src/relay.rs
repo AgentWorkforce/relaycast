@@ -776,7 +776,7 @@ impl RelayCast {
 mod tests {
     use super::RelayCast;
     use crate::RelayCastOptions;
-    use httpmock::{Method::{GET, PUT}, MockServer};
+    use httpmock::{Method::{GET, PUT}, MockServer, Then, When};
 
     fn relay(base_url: &str) -> RelayCast {
         RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(base_url)).expect("relay")
@@ -785,14 +785,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_workspace_stream_enabled_is_noop_when_already_enabled() {
         let server = MockServer::start();
-        let get = server.mock(|when, then| {
+        let get = server.mock(|when: When, then: Then| {
             when.method(GET).path("/v1/workspace/stream");
             then.status(200).json_body_obj(&serde_json::json!({
                 "ok": true,
                 "data": {"enabled": true, "default_enabled": true, "override": true}
             }));
         });
-        let put = server.mock(|when, then| {
+        let put = server.mock(|when: When, then: Then| {
             when.method(PUT).path("/v1/workspace/stream");
             then.status(200);
         });
@@ -807,14 +807,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_workspace_stream_enabled_sets_override_when_disabled() {
         let server = MockServer::start();
-        let get = server.mock(|when, then| {
+        let get = server.mock(|when: When, then: Then| {
             when.method(GET).path("/v1/workspace/stream");
             then.status(200).json_body_obj(&serde_json::json!({
                 "ok": true,
                 "data": {"enabled": false, "default_enabled": false, "override": null}
             }));
         });
-        let put = server.mock(|when, then| {
+        let put = server.mock(|when: When, then: Then| {
             when.method(PUT).path("/v1/workspace/stream").json_body_obj(&serde_json::json!({"enabled": true}));
             then.status(200).json_body_obj(&serde_json::json!({
                 "ok": true,

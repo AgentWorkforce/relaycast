@@ -883,8 +883,8 @@ impl AgentClient {
 #[cfg(test)]
 mod tests {
     use super::AgentClient;
-    use crate::{ClientOptions, CreateChannelRequest, EnsureChannelJoinedOutcome, RelayError};
-    use httpmock::{Method::POST, MockServer};
+    use crate::{CreateChannelRequest, EnsureChannelJoinedOutcome};
+    use httpmock::{Method::POST, MockServer, Then, When};
 
     fn client(base_url: &str) -> AgentClient {
         AgentClient::new("at_live_test", Some(base_url.to_string())).expect("agent client")
@@ -893,7 +893,7 @@ mod tests {
     #[tokio::test]
     async fn ensure_channel_joined_creates_and_joins_when_missing() {
         let server = MockServer::start();
-        let create = server.mock(|when, then| {
+        let create = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels");
             then.status(200).json_body_obj(&serde_json::json!({
                 "ok": true,
@@ -910,7 +910,7 @@ mod tests {
                 }
             }));
         });
-        let join = server.mock(|when, then| {
+        let join = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels/general/join");
             then.status(200).json_body_obj(&serde_json::json!({ "ok": true, "data": {"joined": true} }));
         });
@@ -930,14 +930,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_channel_joined_treats_conflicts_as_success() {
         let server = MockServer::start();
-        let create = server.mock(|when, then| {
+        let create = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels");
             then.status(409).json_body_obj(&serde_json::json!({
                 "ok": false,
                 "error": {"code": "channel_exists", "message": "exists"}
             }));
         });
-        let join = server.mock(|when, then| {
+        let join = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels/general/join");
             then.status(409).json_body_obj(&serde_json::json!({
                 "ok": false,
