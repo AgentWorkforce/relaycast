@@ -10,7 +10,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE workspaces (
   id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
   api_key_hash TEXT NOT NULL UNIQUE,
   system_prompt TEXT,
   plan TEXT NOT NULL DEFAULT 'free',
