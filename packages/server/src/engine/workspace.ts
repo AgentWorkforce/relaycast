@@ -7,17 +7,6 @@ import { generateId } from './snowflake.js';
 type Db = ReturnType<typeof getDb>;
 
 export async function createWorkspace(db: Db, name: string) {
-  // Check for duplicate name
-  const [existing] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.name, name));
-  if (existing) {
-    const err = new Error(`Workspace "${name}" already exists`);
-    Object.assign(err, { code: 'workspace_already_exists', status: 409 });
-    throw err;
-  }
-
   const workspaceId = generateId();
   const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
   const apiKeyHash = crypto
