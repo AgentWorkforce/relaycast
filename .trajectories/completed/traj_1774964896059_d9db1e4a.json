@@ -8,7 +8,7 @@
       "id": "21e5baa5c867fea5dccc3e54"
     }
   },
-  "status": "active",
+  "status": "completed",
   "startedAt": "2026-03-31T13:48:16.059Z",
   "agents": [
     {
@@ -690,7 +690,31 @@
           "content": "\"apply-fixes\" completed → **Result**\n\nThe review was not fully correct. I found and fixed a real hosted/API regression in the idempotent workspace",
           "significance": "medium"
         }
-      ]
+      ],
+      "endedAt": "2026-03-31T14:42:16.638Z"
+    },
+    {
+      "id": "ch_be4b7c1c",
+      "title": "Retrospective",
+      "agentName": "orchestrator",
+      "startedAt": "2026-03-31T14:42:16.638Z",
+      "events": [
+        {
+          "ts": 1774968136638,
+          "type": "reflection",
+          "content": "All 17 steps completed in 54min. (completed in 54 minutes)",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-03-31T14:42:16.638Z"
     }
-  ]
+  ],
+  "completedAt": "2026-03-31T14:42:16.638Z",
+  "retrospective": {
+    "summary": "All 17 steps completed in 54min.",
+    "approach": "dag workflow (4 agents)",
+    "confidence": 0.8970588235294118,
+    "learnings": [],
+    "challenges": []
+  }
 }
