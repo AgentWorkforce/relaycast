@@ -38,3 +38,5 @@ Cargo.lock
 # Staged local binary artifacts for npm packaging
 packages/sdk-typescript/bin/*
 !packages/sdk-typescript/bin/.gitkeep
+.claude/
+.mcp.json
