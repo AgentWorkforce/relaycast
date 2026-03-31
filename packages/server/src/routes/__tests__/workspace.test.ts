@@ -5,6 +5,7 @@ vi.mock('../../engine/activity.js', () => ({
 }));
 
 vi.mock('../../engine/workspace.js', () => ({
+  createWorkspace: vi.fn(),
   getWorkspaceByName: vi.fn(),
 }));
 
@@ -25,6 +26,10 @@ vi.mock('../../db/index.js', () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock('../../lib/serverTelemetry.js', () => ({
+  emitServerEvent: vi.fn(),
+}));
+
 import { Hono } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { dbMiddleware } from '../../middleware/db.js';
@@ -34,6 +39,7 @@ import * as workspaceEngine from '../../engine/workspace.js';
 import * as dmAllEngine from '../../engine/dmAll.js';
 import * as tokenRotateEngine from '../../engine/tokenRotate.js';
 import { getDb } from '../../db/index.js';
+import { emitServerEvent } from '../../lib/serverTelemetry.js';
 import {
   mockDbForWorkspaceAuth,
   wsAuthHeaders,
@@ -57,6 +63,87 @@ describe('Dashboard routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (bindings as any).RATE_LIMIT_DO = createMockBindings().RATE_LIMIT_DO;
+  });
+
+  describe('POST /v1/workspaces', () => {
+    it('creates a new workspace without auth and returns 201', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(workspaceEngine.createWorkspace).mockResolvedValue({
+        workspace: {
+          workspace_id: 'ws_new',
+          api_key: 'rk_live_new',
+          created_at: '2026-03-31T00:00:00.000Z',
+        },
+        created: true,
+        workspace_id: 'ws_new',
+        api_key: 'rk_live_new',
+        created_at: '2026-03-31T00:00:00.000Z',
+      });
+
+      const res = await app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'my-project' }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({
+        ok: true,
+        data: {
+          workspace_id: 'ws_new',
+          api_key: 'rk_live_new',
+          created_at: '2026-03-31T00:00:00.000Z',
+        },
+      });
+      expect(workspaceEngine.createWorkspace).toHaveBeenCalledWith(
+        expect.anything(),
+        'my-project',
+        undefined,
+      );
+      expect(emitServerEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        'ws_new',
+        'relaycast_server_workspace_created',
+        { created_via: 'api' },
+      );
+    });
+
+    it('returns an existing workspace for the same owner key and skips telemetry', async () => {
+      vi.mocked(getDb).mockReturnValue(mockDbForWorkspaceAuth());
+      vi.mocked(workspaceEngine.createWorkspace).mockResolvedValue({
+        workspace: {
+          workspace_id: 'ws_existing',
+          api_key: 'rk_live_existing',
+          created_at: '2026-03-30T00:00:00.000Z',
+        },
+        created: false,
+        workspace_id: 'ws_existing',
+        api_key: 'rk_live_existing',
+        created_at: '2026-03-30T00:00:00.000Z',
+      });
+
+      const res = await app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: wsAuthHeaders(),
+        body: JSON.stringify({ name: 'test-workspace' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        ok: true,
+        data: {
+          workspace_id: 'ws_existing',
+          api_key: 'rk_live_existing',
+          created_at: '2026-03-30T00:00:00.000Z',
+        },
+      });
+      expect(workspaceEngine.createWorkspace).toHaveBeenCalledWith(
+        expect.anything(),
+        'test-workspace',
+        { ownerApiKey: expect.stringMatching(/^rk_/) },
+      );
+      expect(emitServerEvent).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /v1/workspaces/by-name/:name', () => {
