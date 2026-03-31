@@ -691,7 +691,7 @@ describe('RelayCast', () => {
       mockFetch.mockImplementation(() =>
         Promise.resolve({
           ok: true,
-          status: 200,
+          status: 201,
           json: () =>
             Promise.resolve({
               ok: true,
@@ -734,23 +734,31 @@ describe('RelayCast', () => {
       expect(url).toBe('http://localhost:3000/v1/workspaces');
     });
 
-    it('throws RelayError on failure', async () => {
+    it('returns an existing workspace on idempotent duplicate create', async () => {
       const { RelayCast } = await import('../relay.js');
-      const { RelayError } = await import('../client.js');
 
       mockFetch.mockImplementation(() =>
         Promise.resolve({
-          ok: false,
-          status: 409,
+          ok: true,
+          status: 200,
           json: () =>
             Promise.resolve({
-              ok: false,
-              error: { code: 'workspace_exists', message: 'Already exists' },
+              ok: true,
+              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
             }),
         }),
       );
 
-      await expect(RelayCast.createWorkspace('Dup')).rejects.toBeInstanceOf(RelayError);
+      await expect(
+        RelayCast.createWorkspace('Dup', { apiKey: 'rk_live_existing', baseUrl: 'http://localhost:3000' }),
+      ).resolves.toEqual({
+        workspaceId: 'ws_existing',
+        createdAt: '2024-01-02',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('http://localhost:3000/v1/workspaces');
+      expect(init.headers.Authorization).toBe('Bearer rk_live_existing');
     });
   });
 
@@ -805,7 +813,7 @@ describe('RelayCast', () => {
       mockFetch.mockImplementation(() =>
         Promise.resolve({
           ok: true,
-          status: 200,
+          status: 201,
           json: () =>
             Promise.resolve({
               ok: true,
@@ -825,41 +833,33 @@ describe('RelayCast', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('looks up existing workspace metadata after a create conflict', async () => {
+    it('returns the existing workspace when create is idempotent', async () => {
       const { RelayCast } = await import('../relay.js');
 
-      mockFetch
-        .mockImplementationOnce(() =>
-          Promise.resolve({
-            ok: false,
-            status: 409,
-            json: () =>
-              Promise.resolve({
-                ok: false,
-                error: { code: 'workspace_already_exists', message: 'Already exists' },
-              }),
-          }),
-        )
-        .mockImplementationOnce(() =>
-          Promise.resolve({
-            ok: true,
-            status: 200,
-            json: () =>
-              Promise.resolve({
-                ok: true,
-                data: { id: 'ws_existing', name: 'Taken Workspace', created_at: '2024-01-02' },
-              }),
-          }),
-        );
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_existing', created_at: '2024-01-02' },
+            }),
+        }),
+      );
 
-      const result = await RelayCast.ensureWorkspace('Taken Workspace');
+      const result = await RelayCast.ensureWorkspace('Taken Workspace', {
+        apiKey: 'rk_live_existing',
+        baseUrl: 'http://localhost:3000',
+      });
       expect(result).toEqual({
         existed: true,
-        id: 'ws_existing',
         name: 'Taken Workspace',
+        workspaceId: 'ws_existing',
         createdAt: '2024-01-02',
       });
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0]?.[1]?.headers.Authorization).toBe('Bearer rk_live_existing');
     });
   });
 

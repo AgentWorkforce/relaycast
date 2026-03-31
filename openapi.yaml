@@ -50,6 +50,22 @@ components:
           type: string
           format: date-time
 
+    CreateWorkspaceResponse:
+      type: object
+      required:
+        - workspace_id
+        - created_at
+      properties:
+        workspace_id:
+          type: string
+          description: Snowflake ID of the workspace
+        api_key:
+          type: string
+          description: Workspace API key (only returned on first creation)
+        created_at:
+          type: string
+          format: date-time
+
     WorkspaceLookup:
       type: object
       required:
@@ -345,9 +361,12 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a new workspace and get an API key. Workspace names must be unique.
+      description: Create a workspace and get an API key when a new workspace is created. This operation is idempotent by workspace name for the same bearer workspace key: if you repeat the call with the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is returned with a `200` response; otherwise a new workspace is created and returned with a `201` response.
       tags:
         - Workspaces
+      security:
+        - {}
+        - workspaceKey: []
       requestBody:
         required: true
         content:
@@ -360,6 +379,17 @@ paths:
                 name:
                   type: string
       responses:
+        '200':
+          description: Existing workspace returned (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/CreateWorkspaceResponse'
         '201':
           description: Workspace created
           content:
@@ -370,15 +400,9 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    $ref: '#/components/schemas/Workspace'
+                    $ref: '#/components/schemas/CreateWorkspaceResponse'
         '400':
           description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Workspace name already exists
           content:
             application/json:
               schema:

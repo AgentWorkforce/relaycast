@@ -77,9 +77,12 @@ export interface WorkspaceStreamConfig {
   override: boolean | null;
 }
 
-export type EnsureWorkspaceResponse =
-  | ({ existed: false; name: string } & CreateWorkspaceResponse)
-  | ({ existed: true } & WorkspaceLookup);
+export interface WorkspaceBootstrapOptions {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+export type EnsureWorkspaceResponse = { existed: boolean; name: string } & CreateWorkspaceResponse;
 
 interface ChannelListOptions {
   includeArchived?: boolean;
@@ -94,6 +97,15 @@ interface CommandRegisterInput {
 
 type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
 type RegisterIdentityType = NonNullable<CreateAgentRequest['type']>;
+
+function resolveWorkspaceBootstrapOptions(
+  options?: string | WorkspaceBootstrapOptions,
+): WorkspaceBootstrapOptions {
+  if (typeof options === 'string') {
+    return { baseUrl: options };
+  }
+  return options ?? {};
+}
 
 export class RelayCast {
   private client: HttpClient;
@@ -112,8 +124,17 @@ export class RelayCast {
 
   static async createWorkspace(
     name: string,
-    baseUrl?: string,
+    options?: string | WorkspaceBootstrapOptions,
   ): Promise<CreateWorkspaceResponse> {
+    const { data } = await RelayCast.createWorkspaceWithStatus(name, options);
+    return data;
+  }
+
+  private static async createWorkspaceWithStatus(
+    name: string,
+    options?: string | WorkspaceBootstrapOptions,
+  ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
+    const { apiKey, baseUrl } = resolveWorkspaceBootstrapOptions(options);
     const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
@@ -121,6 +142,7 @@ export class RelayCast {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         'X-SDK-Version': SDK_VERSION,
         'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
@@ -153,7 +175,10 @@ export class RelayCast {
       throw relayErrorFromApi(envelope.data.error.code, envelope.data.error.message, res.status);
     }
 
-    return camelizeKeys(envelope.data.data);
+    return {
+      data: camelizeKeys(envelope.data.data),
+      statusCode: res.status,
+    };
   }
 
   static async lookupWorkspace(name: string, baseUrl?: string): Promise<WorkspaceLookup | null> {
@@ -201,23 +226,12 @@ export class RelayCast {
     return camelizeKeys(envelope.data.data);
   }
 
-  static async ensureWorkspace(name: string, baseUrl?: string): Promise<EnsureWorkspaceResponse> {
-    try {
-      const created = await RelayCast.createWorkspace(name, baseUrl);
-      return { ...created, existed: false, name };
-    } catch (err) {
-      const statusCode = err instanceof RelayError ? err.statusCode : undefined;
-      if (statusCode !== 409) {
-        throw err;
-      }
-
-      const existing = await RelayCast.lookupWorkspace(name, baseUrl);
-      if (!existing) {
-        throw err;
-      }
-
-      return { ...existing, existed: true };
-    }
+  static async ensureWorkspace(
+    name: string,
+    options?: string | WorkspaceBootstrapOptions,
+  ): Promise<EnsureWorkspaceResponse> {
+    const { data, statusCode } = await RelayCast.createWorkspaceWithStatus(name, options);
+    return { ...data, existed: statusCode === 200, name };
   }
 
   private rememberIdentity(agentId: string, name: string): void {

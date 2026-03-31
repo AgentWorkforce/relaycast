@@ -88,13 +88,17 @@ npx tsx quickstart.ts
 
 That is the canonical onboarding loop: create workspace, register agents, connect realtime streams, and watch messages flow live.
 
-If you want idempotent setup by workspace name, use `ensureWorkspace()`:
+Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
+
+If you want an explicit SDK helper that tells you whether setup returned an existing workspace or created a new one, use `ensureWorkspace()`:
 
 ```ts
-const ensured = await RelayCast.ensureWorkspace('my-project');
+const ensured = await RelayCast.ensureWorkspace('my-project', {
+  apiKey: knownWorkspaceKey,
+});
 
 if (ensured.existed) {
-  console.log(`Workspace already exists as ${ensured.id}`);
+  console.log(`Workspace already exists as ${ensured.workspaceId}`);
   // Existing workspace keys are not recoverable from the API.
   // Reuse the known rk_live_* key you already have for this workspace.
 } else {
@@ -248,7 +252,9 @@ Remote Streamable HTTP config:
 ## REST Quick Start
 
 ```bash
-# Create workspace (names must be unique)
+# Create workspace
+# Workspace names are not globally unique.
+# Reusing the same name with the same Authorization bearer workspace key returns the existing workspace.
 curl -X POST https://api.relaycast.dev/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'

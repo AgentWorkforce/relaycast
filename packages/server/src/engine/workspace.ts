@@ -1,31 +1,71 @@
 import crypto from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
 
-export async function createWorkspace(db: Db, name: string) {
-  // Check for duplicate name
-  const [existing] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.name, name));
-  if (existing) {
-    const err = new Error(`Workspace "${name}" already exists`);
-    Object.assign(err, { code: 'workspace_already_exists', status: 409 });
+type CreateWorkspaceOptions =
+  | string
+  | {
+      ownerApiKey?: string;
+      ownerApiKeyHash?: string;
+    };
+
+function hashApiKey(apiKey: string) {
+  return crypto.createHash('sha256').update(apiKey).digest('hex');
+}
+
+function buildWorkspaceResponse(
+  workspace: typeof workspaces.$inferSelect,
+  apiKey?: string,
+) {
+  return {
+    workspace_id: workspace.id,
+    ...(apiKey ? { api_key: apiKey } : {}),
+    created_at: workspace.createdAt.toISOString(),
+  };
+}
+
+export async function createWorkspace(
+  db: Db,
+  name: string,
+  options?: CreateWorkspaceOptions,
+) {
+  const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
+  const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
+  const derivedOwnerApiKeyHash = providedOwnerApiKey ? hashApiKey(providedOwnerApiKey) : undefined;
+
+  if (providedOwnerApiKeyHash && derivedOwnerApiKeyHash && providedOwnerApiKeyHash !== derivedOwnerApiKeyHash) {
+    const err = new Error('ownerApiKeyHash must match the provided ownerApiKey');
+    Object.assign(err, { code: 'invalid_owner_api_key_hash', status: 400 });
     throw err;
+  }
+
+  const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;
+
+  // Repeated creates from the same owner/key should reuse the existing workspace.
+  if (ownerApiKeyHash) {
+    const [existing] = await db
+      .select()
+      .from(workspaces)
+      .where(and(eq(workspaces.name, name), eq(workspaces.apiKeyHash, ownerApiKeyHash)));
+    if (existing) {
+      const workspace = buildWorkspaceResponse(existing, providedOwnerApiKey);
+      return {
+        workspace,
+        created: false,
+        ...workspace,
+      };
+    }
   }
 
   const workspaceId = generateId();
   const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-  const apiKeyHash = crypto
-    .createHash('sha256')
-    .update(apiKey)
-    .digest('hex');
+  const apiKeyHash = hashApiKey(apiKey);
 
-  const [workspace] = await db
+  const [createdWorkspace] = await db
     .insert(workspaces)
     .values({
       id: workspaceId,
@@ -43,10 +83,11 @@ export async function createWorkspace(db: Db, name: string) {
     topic: 'General discussion',
   });
 
+  const workspace = buildWorkspaceResponse(createdWorkspace, apiKey);
   return {
-    workspace_id: workspaceId,
-    api_key: apiKey,
-    created_at: workspace.createdAt.toISOString(),
+    workspace,
+    created: true,
+    ...workspace,
   };
 }
 
