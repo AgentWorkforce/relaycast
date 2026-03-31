@@ -70,6 +70,12 @@ function inMemoryPublicLookupRateCheck(clientId: string, limit: number) {
   };
 }
 
+function extractOwnerApiKey(authHeader: string | undefined) {
+  if (!authHeader?.startsWith('Bearer ')) return undefined;
+  const token = authHeader.slice(7);
+  return token.startsWith('rk_') ? token : undefined;
+}
+
 const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const clientId = getPublicLookupClientId(c);
   const limit = PUBLIC_WORKSPACE_LOOKUP_LIMIT;
@@ -137,7 +143,7 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
   await next();
 });
 
-// POST /workspaces - create workspace (no auth required)
+// POST /workspaces - create workspace (no auth required, workspace key optional)
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
     const parsed = createWorkspaceSchema.safeParse(await c.req.json());
@@ -146,11 +152,18 @@ workspaceRoutes.post('/workspaces', async (c) => {
     }
     const { name } = parsed.data;
     const db = c.get('db');
-    const result = await workspaceEngine.createWorkspace(db, name);
-    emitServerEvent(c, result.workspace_id, 'relaycast_server_workspace_created', {
-      created_via: 'api',
-    });
-    return c.json({ ok: true, data: result }, 201);
+    const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
+    const result = await workspaceEngine.createWorkspace(
+      db,
+      name,
+      ownerApiKey ? { ownerApiKey } : undefined,
+    );
+    if (result.created) {
+      emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
+        created_via: 'api',
+      });
+    }
+    return c.json({ ok: true, data: result.workspace }, result.created ? 201 : 200);
   } catch (err: unknown) {
     const error = err as Error & { code?: string; status?: number };
     return c.json({ ok: false, error: { code: error.code || 'internal_error', message: error.message } }, (error.status || 500) as ContentfulStatusCode);
