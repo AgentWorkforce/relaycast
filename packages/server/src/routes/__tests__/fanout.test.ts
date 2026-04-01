@@ -45,6 +45,7 @@ describe('fanout helpers', () => {
       id: 'msg_1',
       channel_name: 'general',
       agent_id: 'agent_1',
+      agent_type: 'system',
       from_name: 'Bot',
       text: 'hi',
       attachments: [],
@@ -62,6 +63,7 @@ describe('fanout helpers', () => {
         id: 'msg_1',
         agent_id: 'agent_1',
         agent_name: 'Bot',
+        agent_type: 'system',
         text: 'hi',
         attachments: [],
       },
@@ -81,6 +83,7 @@ describe('fanout helpers', () => {
       id: 'msg_2',
       conversation_id: 'dm_1',
       from_agent_id: 'a1',
+      agent_type: 'human',
       from_name: 'Bot',
       text: 'hello',
     });
@@ -91,6 +94,7 @@ describe('fanout helpers', () => {
     expect(body.type).toBe('dm.received');
     expect(body.workspaceId).toBe(FAKE_WORKSPACE.id);
     expect(['a1', 'a2']).toContain(body.agentId);
+    expect(body.message.agent_type).toBe('human');
   });
 
   it('fanoutToWorkspace queries PresenceDO then delivers to agents', async () => {

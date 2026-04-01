@@ -45,8 +45,8 @@ export async function postReply(
     })
     .returning();
 
-  // Resolve agent name
-  const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
+  // Resolve sender identity
+  const [agent] = await db.select({ name: agents.name, type: agents.type }).from(agents).where(eq(agents.id, agentId));
 
   return {
     id: reply.id,
@@ -54,6 +54,7 @@ export async function postReply(
     channel_name: ch?.name,
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
+    agent_type: agent?.type || undefined,
     thread_id: reply.threadId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
@@ -71,13 +72,14 @@ export async function getThread(
 ) {
   const limit = Math.min(Math.max(opts.limit || 50, 1), 100);
 
-  // Get the parent message with agent name
+  // Get the parent message with sender identity
   const [parent] = await db
     .select({
       id: messages.id,
       channelId: messages.channelId,
       agentId: messages.agentId,
       agentName: agents.name,
+      agentType: agents.type,
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
@@ -101,7 +103,6 @@ export async function getThread(
     .from(messages)
     .where(eq(messages.threadId, parentId));
 
-  // Get replies with pagination
   const conditions = [
     eq(messages.threadId, parentId),
     eq(messages.workspaceId, workspaceId),
@@ -120,6 +121,7 @@ export async function getThread(
       channelId: messages.channelId,
       agentId: messages.agentId,
       agentName: agents.name,
+      agentType: agents.type,
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
@@ -139,6 +141,7 @@ export async function getThread(
       channel_id: parent.channelId,
       agent_id: parent.agentId,
       agent_name: parent.agentName || 'unknown',
+      agent_type: parent.agentType || undefined,
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
       metadata: (parent.metadata as Record<string, unknown>) || {},
@@ -152,6 +155,7 @@ export async function getThread(
       channel_id: r.channelId,
       agent_id: r.agentId,
       agent_name: r.agentName || 'unknown',
+      agent_type: r.agentType || undefined,
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,

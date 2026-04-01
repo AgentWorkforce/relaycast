@@ -178,7 +178,7 @@ export class AgentDO implements DurableObject {
     // Channel messages (including thread replies) after `since`.
     const channelRows = await db.all<Record<string, unknown>>(sql`
       SELECT m.id, m.channel_id, m.agent_id, m.body, m.thread_id,
-             m.created_at, c.name AS channel_name, a.name AS agent_name
+             m.created_at, c.name AS channel_name, a.name AS agent_name, a.type AS agent_type
       FROM messages m
       JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.agent_id = ${agentId}
       JOIN channels c ON c.id = m.channel_id
@@ -196,6 +196,7 @@ export class AgentDO implements DurableObject {
         channel_name: row.channel_name,
         agent_id: row.agent_id,
         from_name: row.agent_name,
+        agent_type: row.agent_type,
         text: row.body,
         thread_id: row.thread_id,
         created_at: new Date((row.created_at as number) * 1000).toISOString(),
@@ -211,7 +212,7 @@ export class AgentDO implements DurableObject {
     // DM + group DM messages after `since`.
     const dmRows = await db.all<Record<string, unknown>>(sql`
       SELECT m.id, m.channel_id, m.agent_id, m.body, m.created_at,
-             a.name AS agent_name, dc.id AS conversation_id, dc.dm_type
+             a.name AS agent_name, a.type AS agent_type, dc.id AS conversation_id, dc.dm_type
       FROM dm_conversations dc
       JOIN dm_participants dp ON dp.conversation_id = dc.id AND dp.agent_id = ${agentId} AND dp.left_at IS NULL
       JOIN messages m ON m.channel_id = dc.channel_id
@@ -230,6 +231,7 @@ export class AgentDO implements DurableObject {
         agent_id: row.agent_id,
         from_agent_id: row.agent_id,
         from_name: row.agent_name,
+        agent_type: row.agent_type,
         text: row.body,
         created_at: new Date((row.created_at as number) * 1000).toISOString(),
       } as Record<string, unknown>;

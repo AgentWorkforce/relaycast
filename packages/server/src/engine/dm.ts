@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { eq, and, sql, lt, gt, isNull, inArray, asc } from 'drizzle-orm';
-import type { DmMessage } from '@relaycast/types';
+import type { AgentType, DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
   messages,
@@ -18,6 +18,7 @@ import { logMessage } from './console.js';
 type Db = ReturnType<typeof getDb>;
 
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+type SenderType = AgentType | undefined;
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
@@ -233,7 +234,7 @@ export async function sendDm(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name })
+    .select({ name: agents.name, type: agents.type })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
 
@@ -306,6 +307,7 @@ export async function sendDm(
       id: message.id,
       agent_id: message.agentId,
       agent_name: fromAgent.name,
+      agent_type: fromAgent.type as SenderType,
       text: message.body,
       injection_mode: injectionMode,
       attachments,
@@ -377,10 +379,12 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
         id: messages.id,
         channelId: messages.channelId,
         agentId: messages.agentId,
+        agentType: agents.type,
         body: messages.body,
         createdAt: messages.createdAt,
       })
       .from(messages)
+      .leftJoin(agents, eq(messages.agentId, agents.id))
       .where(inArray(messages.id, lastIds))
     : [];
 
@@ -411,6 +415,7 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
           id: lastMessage.id,
           text: lastMessage.body,
           agent_id: lastMessage.agentId,
+          agent_type: (lastMessage.agentType as SenderType) || undefined,
           created_at: lastMessage.createdAt.toISOString(),
         }
         : null,
@@ -478,6 +483,7 @@ export async function getDmMessages(
       id: messages.id,
       agentId: messages.agentId,
       agentName: agents.name,
+      agentType: agents.type,
       body: messages.body,
       metadata: messages.metadata,
       createdAt: messages.createdAt,
@@ -494,6 +500,7 @@ export async function getDmMessages(
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
+    agent_type: (r.agentType as SenderType) || undefined,
     text: r.body,
     injection_mode: (r.metadata as Record<string, unknown> | null)?.injection_mode as 'wait' | 'steer' | undefined,
     attachments: attachmentMap.get(r.id) || [],

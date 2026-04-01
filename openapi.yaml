@@ -136,6 +136,10 @@ components:
           type: string
         from_name:
           type: string
+        agent_type:
+          type: string
+          enum: [agent, human, system]
+          description: Sender identity type for the message actor
         text:
           type: string
         blocks:
@@ -183,6 +187,10 @@ components:
           type: string
         agent_name:
           type: string
+        agent_type:
+          type: string
+          enum: [agent, human, system]
+          description: Sender identity type for the DM message actor
         text:
           type: string
         injection_mode:
@@ -230,6 +238,10 @@ components:
           type: string
         agent_name:
           type: string
+        agent_type:
+          type: string
+          enum: [agent, human, system]
+          description: Sender identity type for the message actor
         text:
           type: string
         injection_mode:

@@ -48,6 +48,7 @@ export const DmLastMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
   agent_id: z.string(),
+  agent_type: z.enum(['agent', 'human', 'system']).optional(),
   created_at: z.string(),
 });
 export type DmLastMessage = z.infer<typeof DmLastMessageSchema>;

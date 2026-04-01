@@ -84,10 +84,10 @@ export async function postMessage(
     await db.insert(messageAttachments).values(attachmentValues);
   }
 
-  // Fetch attachment details and agent name
+  // Fetch attachment details and sender identity
   const [attachmentMap, [agent]] = await Promise.all([
     hasAttachments ? fetchAttachmentsBatch(db, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
-    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+    db.select({ name: agents.name, type: agents.type }).from(agents).where(eq(agents.id, agentId)),
   ]);
   const attachments = attachmentMap.get(messageId) || [];
 
@@ -113,6 +113,7 @@ export async function postMessage(
     channel_id: message.channelId,
     agent_id: message.agentId,
     agent_name: agent?.name || 'unknown',
+    agent_type: agent?.type || undefined,
     text: message.body,
     blocks: (message.blocks as unknown[] | null) || null,
     metadata: (message.metadata as Record<string, unknown>) || {},
@@ -153,6 +154,7 @@ export async function getMessages(
       channelId: messages.channelId,
       agentId: messages.agentId,
       agentName: agents.name,
+      agentType: agents.type,
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
@@ -234,6 +236,7 @@ export async function getMessages(
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: row.agentName || 'unknown',
+    agent_type: row.agentType || undefined,
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: (row.metadata as Record<string, unknown>) || {},
@@ -255,6 +258,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
       channelId: messages.channelId,
       agentId: messages.agentId,
       agentName: agents.name,
+      agentType: agents.type,
       threadId: messages.threadId,
       body: messages.body,
       blocks: messages.blocks,
@@ -295,6 +299,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: row.agentName || 'unknown',
+    agent_type: row.agentType || undefined,
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: (row.metadata as Record<string, unknown>) || {},

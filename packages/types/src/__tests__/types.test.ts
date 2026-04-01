@@ -232,6 +232,7 @@ describe('Type definitions', () => {
   it('DmMessage includes sender identity fields', () => {
     expectTypeOf<DmMessage>().toHaveProperty('agent_id');
     expectTypeOf<DmMessage>().toHaveProperty('agent_name');
+    expectTypeOf<DmMessage>().toHaveProperty('agent_type');
   });
 
   // ============================================
