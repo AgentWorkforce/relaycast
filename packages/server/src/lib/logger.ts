@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import type { AppEnv, CloudflareBindings } from '../env.js';
+import { getPostHogClient } from './posthog.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 type LogFields = Record<string, unknown>;
@@ -321,10 +322,10 @@ export interface CaptureExceptionOptions {
 }
 
 /**
- * Sends a `$exception` event to PostHog Error Tracking.
+ * Sends a `$exception` event to PostHog Error Tracking via the PostHog SDK.
  *
- * Returns a promise that resolves once the HTTP request completes (best-effort).
- * Safe to fire-and-forget or pass to `waitUntil`.
+ * The SDK handles serialization correctly, avoiding schema mismatches like the
+ * `timestamp` top-level field bug that raw fetch calls cause.
  */
 export async function captureException(
   env: CloudflareBindings,
@@ -335,30 +336,20 @@ export async function captureException(
   if (!apiKey) return;
 
   const exceptionList = buildExceptionList(error);
-  const payload = {
-    api_key: apiKey,
-    event: '$exception',
-    distinct_id: options.distinctId ?? SERVICE_NAME,
-    properties: {
-      $exception_list: exceptionList,
-      $exception_type: exceptionList[0]?.type,
-      $exception_message: exceptionList[0]?.value,
-      $exception_level: 'error',
-      service_name: SERVICE_NAME,
-      environment: env.ENVIRONMENT,
-      app_version: getAppVersion(env),
-      ...(options.properties ?? {}),
-    },
-    timestamp: new Date().toISOString(),
+  const client = getPostHogClient(env, apiKey);
+
+  // Build a flat properties object for the SDK's captureException.
+  // The SDK handles setting event: '$exception' and proper serialization.
+  const additionalProperties: Record<string, unknown> = {
+    $exception_list: exceptionList,
+    $exception_type: exceptionList[0]?.type,
+    $exception_message: exceptionList[0]?.value,
+    $exception_level: 'error',
+    service_name: SERVICE_NAME,
+    environment: env.ENVIRONMENT,
+    app_version: getAppVersion(env),
+    ...(options.properties ?? {}),
   };
 
-  try {
-    await fetch(`${getPostHogHost(env)}/capture/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // Best effort — never break request handling for telemetry.
-  }
+  client.captureException(error, options.distinctId ?? SERVICE_NAME, additionalProperties);
 }
