@@ -3,9 +3,7 @@ name: writing-agent-relay-workflows
 description: Use when building multi-agent workflows with the relay broker-sdk - covers the WorkflowBuilder API, DAG step dependencies, agent definitions, step output chaining via {{steps.X.output}}, verification gates, evidence-based completion, owner decisions, dedicated channels, dynamic channel management (subscribe/unsubscribe/mute/unmute), swarm patterns, error handling, event listeners, step sizing rules, authoring best practices, and the lead+workers team pattern for complex steps
 ---
 
-# Writing Agent Relay Workflows
-
-## Overview
+### Overview
 
 The relay broker-sdk workflow system orchestrates multiple AI agents (Claude, Codex, Gemini, Aider, Goose) through typed DAG-based workflows. Workflows can be written in **TypeScript** (preferred), **Python**, or **YAML**.
 
@@ -13,7 +11,7 @@ The relay broker-sdk workflow system orchestrates multiple AI agents (Claude, Co
 
 **Pattern selection:** Do not default to `dag` blindly. If the job needs a different swarm/workflow type, consult the `choosing-swarm-patterns` skill when available and select the pattern that best matches the coordination problem.
 
-## When to Use
+### When to Use
 
 - Building multi-agent workflows with step dependencies
 - Orchestrating different AI CLIs (claude, codex, gemini, aider, goose)
@@ -21,7 +19,9 @@ The relay broker-sdk workflow system orchestrates multiple AI agents (Claude, Co
 - Needing verification gates, retries, or step output chaining
 - Dynamic channel management: agents joining/leaving/muting channels mid-workflow
 
-## Quick Reference
+### Quick Reference
+
+#### ```typescript
 
 ```typescript
 import { workflow } from '@agent-relay/sdk/workflows';
@@ -55,19 +55,10 @@ const result = await workflow('my-workflow')
   console.log('Result:', result.status);
 ```
 
-**Critical TypeScript rules:**
-1. Check the project's `package.json` for `"type": "module"` — if ESM, use `import` and top-level `await`. If CJS, use `require()` and wrap in `async function main()`.
-2. `agent-relay run <file.ts>` executes the file as a standalone subprocess — it does NOT inspect exports. The file MUST call `.run()`.
-3. Use `.run({ cwd: process.cwd() })` — `createWorkflowRenderer` does not exist
-4. Validate with `--dry-run` before running: `agent-relay run --dry-run workflow.ts`
 
-## ⚡ Parallelism — Design for Speed
+### ⚡ Parallelism — Design for Speed
 
-**This is the most important design consideration.** Sequential workflows waste hours. Always design for maximum parallelism.
-
-### Cross-Workflow Parallelism: Wave Planning
-
-When a project has multiple workflows, group independent ones into parallel waves:
+#### Cross-Workflow Parallelism: Wave Planning
 
 ```bash
 # BAD — sequential (14 hours for 27 workflows at ~30 min each)
@@ -93,21 +84,7 @@ wait
 git add -A && git commit -m "Wave 2"
 ```
 
-### Wave Planning Heuristics
-
-Two workflows can run in parallel if they don't have write-write or write-read file conflicts:
-
-| Touch Zone | Can Parallelize? |
-|---|---|
-| Different `packages/*/src/` dirs | ✅ Yes |
-| Different `app/` routes | ✅ Yes |
-| Same package, different subdirs | ⚠️ Usually yes |
-| Same files (shared config, root package.json) | ❌ No — sequential or same wave with merge |
-| Explicit dependency | ❌ No — ordered waves |
-
-### Declare File Scope for Planning
-
-Help wave planners (human or automated) understand what each workflow touches:
+#### Declare File Scope for Planning
 
 ```typescript
 workflow('48-comparison-mode')
@@ -116,9 +93,7 @@ workflow('48-comparison-mode')
   .requiresBefore(['46-admin-dashboard'])    // explicit ordering constraint
 ```
 
-### Within-Workflow Parallelism
-
-Use shared `dependsOn` to fan out independent sub-tasks:
+#### Within-Workflow Parallelism
 
 ```typescript
 // BAD — unnecessary sequential chain
@@ -131,25 +106,10 @@ Use shared `dependsOn` to fan out independent sub-tasks:
 .step('verify-all', { agent: 'reviewer', dependsOn: ['fix-component-a', 'fix-component-b'] })
 ```
 
-### Impact
 
-Real-world example (Relayed — 60 workflows):
-- **Sequential**: ~30 min × 60 = **30 hours**
-- **Parallel waves (4-6 per wave)**: ~12 waves × 35 min = **~7 hours** (4x faster)
-- **Aggressive parallelism (8-way)**: **~4 hours** (7.5x faster)
+### Failure Prevention
 
----
-## Failure Prevention
-
-These workflow files are easy to break in ways that only appear mid-run. Follow these rules when authoring or editing workflow `.ts` files.
-
-### 1. Do not use raw top-level `await`
-
-Executor-driven workflow files may be run through a `tsx`/`esbuild` path that behaves like CJS. Raw top-level `await` can fail with:
-
-- `Top-level await is currently not supported with the "cjs" output format`
-
-Always wrap execution like this:
+#### 1. Do not use raw top-level `await`
 
 ```ts
 async function runWorkflow() {
@@ -166,149 +126,51 @@ runWorkflow().catch((error) => {
 });
 ```
 
-Do not end workflow files with bare top-level `await workflow(...).run(...)`.
-
-### 2. Avoid raw fenced code blocks inside workflow task template literals
-
-Raw triple-backtick code fences inside large inline `task: \`...\`` template strings are fragile and can break outer TypeScript parsing, especially when they contain language tags like `swift` or `diff`.
-
-Preferred options, in order:
-
-1. Avoid inline fenced examples entirely
-2. Move larger examples to referenced files
-3. Use plain indented examples instead of fenced blocks
-4. If fenced blocks must exist inside generated inner code, escape them consistently and syntax-check the outer workflow file afterward
-
-### 3. Keep final verification boring and deterministic
-
-Final verification should validate real outputs with simple, portable shell commands. If checking for multiple symbols, use extended regex explicitly:
+#### 3. Keep final verification boring and deterministic
 
 ```bash
 grep -Eq "foo|bar|baz" file.ts
 ```
 
-Do **not** rely on basic `grep` alternation like:
-
-```bash
-grep -c "foo\|bar\|baz" file.ts
-```
-
-That can silently misbehave and create fake failures even when the generated code is correct.
-
-### 4. Separate durable outputs from execution exhaust
-
-Commit:
-
-- generated product code
-- migrations
-- tests
-- docs
-- workflow-definition fixes
-
-Do not commit by default:
-
-- `.logs/`
-- transient executor output
-- retry artifacts
-- temporary step-output files
-
-### 5. Prefer Codex for implementation-heavy roles and Claude for review
-
-Default team split for workflow-authored agent roles:
-
-- **lead / implementer / writer / fixer** → `codex`
-- **reviewer** → `claude`
-
-Use Claude as the primary implementer only when there is a specific reason.
-
-### 6. Be explicit about shell requirements
-
-If executor scripts use Bash-only features such as associative arrays, require modern Bash explicitly. On macOS, prefer a known-good Bash path when needed, for example:
+#### 6. Be explicit about shell requirements
 
 ```bash
 /opt/homebrew/bin/bash workflows/your-workflow/execute.sh --wave 2
 ```
 
-### 7. Make resume semantics explicit
 
-Document clearly whether the executor supports:
+### End-to-End Bug Fix Workflows
 
-- full-run continuation
-- `--wave`
-- `--workflow`
-- `--resume`
-
-Do not assume users will infer the behavior. In particular, `--wave N` should be understood as "run only this wave" unless the executor explicitly chains onward.
-
-### 8. Syntax-check workflow files after editing
-
-After editing workflow `.ts` files, run a lightweight syntax check before launching a large batch run. This is especially important if the workflow contains:
-
-- large inline `task` template literals
-- embedded code examples
-- escaped backticks
-- wrapper changes around workflow execution
-
----
-
-## End-to-End Bug Fix Workflows
-
-For bug-fix or reliability workflows, do **not** stop at unit or integration tests. The workflow should explicitly prove that the original user-visible problem is fixed.
-
-### Required phases for fix workflows
-
-1. **Capture the original failure**
-   - Reproduce the bug first in a deterministic or evidence-capturing step
-   - Save exact commands, logs, status codes, or screenshots/artifacts
-2. **State the acceptance contract**
-   - Define the exact end-to-end success criteria before implementation
-   - Include the real entrypoint a user would run
-3. **Implement the fix**
-4. **Rebuild / reinstall from scratch**
-   - Do not trust dirty local state
-   - Prefer a clean environment when install/bootstrap behavior is involved
-5. **Run targeted regression checks**
-   - Unit/integration tests are helpful but not sufficient by themselves
-6. **Run a full end-to-end validation**
-   - Use the real CLI / API / install path
-   - Prefer a clean environment (Docker, sandbox, cloud workspace, Daytona, etc.) for install/runtime issues
-7. **Compare before vs after evidence**
-   - Show that the original failure no longer occurs
-8. **Record residual risks**
-   - Call out what was not covered
-
-### Clean-environment validation guidance
-
-When the bug involves install, bootstrap, PATH/shims, auth, brokers, background services, OS-specific packaging, or first-run UX, add a second workflow (or second phase) that validates the fix in a **fresh environment**.
-
-Preferred order of proving environments:
-1. disposable sandbox / cloud workspace
-2. Docker / containerized environment
-3. fresh local shell with isolated paths
-
-### Meta-workflow guidance
-
-If the right proving environment is unclear, first write a **meta-workflow** that:
+- **Capture the original failure**
+- Reproduce the bug first in a deterministic or evidence-capturing step
+- Save exact commands, logs, status codes, or screenshots/artifacts
+- **State the acceptance contract**
+- Define the exact end-to-end success criteria before implementation
+- Include the real entrypoint a user would run
+- **Implement the fix**
+- **Rebuild / reinstall from scratch**
+- Do not trust dirty local state
+- Prefer a clean environment when install/bootstrap behavior is involved
+- **Run targeted regression checks**
+- Unit/integration tests are helpful but not sufficient by themselves
+- **Run a full end-to-end validation**
+- Use the real CLI / API / install path
+- Prefer a clean environment (Docker, sandbox, cloud workspace, Daytona, etc.) for install/runtime issues
+- **Compare before vs after evidence**
+- Show that the original failure no longer occurs
+- **Record residual risks**
+- Call out what was not covered
+- disposable sandbox / cloud workspace
+- Docker / containerized environment
+- fresh local shell with isolated paths
 - compares candidate validation environments
 - defines the acceptance contract
 - chooses the best swarm pattern
 - then authors the final fix/validation workflow
 
-This is often better than jumping straight to implementation.
+### Key Concepts
 
-## Key Concepts
-
-### Step Output Chaining
-
-Use `{{steps.STEP_NAME.output}}` in a downstream step's task to inject the prior step's terminal output.
-
-**Only chain output from clean sources:**
-- Deterministic steps (shell commands — always clean)
-- Non-interactive agents (`preset: 'worker'` — clean stdout)
-
-**Never chain from interactive agents** (`cli: 'claude'` without preset) — PTY output includes spinners, ANSI codes, and TUI chrome. Instead, have the agent write to a file, then read it in a deterministic step.
-
-### Verification Gates
+#### Verification Gates
 
 ```typescript
 verification: { type: 'exit_code' }                        // preferred for code-editing steps
@@ -316,39 +178,13 @@ verification: { type: 'output_contains', value: 'DONE' }   // optional accelerat
 verification: { type: 'file_exists', value: 'src/out.ts' } // deterministic file check
 ```
 
-Only these four types are valid: `exit_code`, `output_contains`, `file_exists`, `custom`. Invalid types are silently ignored and fall through to process-exit auto-pass.
-
-**Verification token gotcha:** If the token appears in the task text, the runner requires it **twice** in output (once from task echo, once from agent). Prefer `exit_code` for code-editing steps to avoid this.
-
-### DAG Dependencies
-
-Steps with `dependsOn` wait for all listed steps. Steps with no dependencies start immediately. Steps sharing the same `dependsOn` run in parallel:
+#### DAG Dependencies
 
 ```typescript
 .step('fix-types',  { agent: 'worker', dependsOn: ['review'], ... })
 .step('fix-tests',  { agent: 'worker', dependsOn: ['review'], ... })
 .step('final',      { agent: 'lead',   dependsOn: ['fix-types', 'fix-tests'], ... })
 ```
-
-### Self-Termination
-
-Do NOT add exit instructions to task strings. The runner handles this automatically.
-
-### Step Completion Model
-
-Steps complete through a multi-signal pipeline (highest priority first):
-
-1. **Deterministic verification** — `exit_code`, `file_exists`, `output_contains` pass → immediate completion
-2. **Owner decision** — `OWNER_DECISION: COMPLETE|INCOMPLETE_RETRY|INCOMPLETE_FAIL`
-3. **Evidence-based** — channel signals, file artifacts, clean exit code
-4. **Marker fast-path** — `STEP_COMPLETE:<step-name>` (optional accelerator)
-5. **Process-exit fallback** — agent exits 0 with no signals → completes after grace period
-
-**Key principle:** No single signal is mandatory. Describe the deliverable, not what to print.
-
-### Dynamic Channel Management
-
-Agents can dynamically subscribe, unsubscribe, mute, and unmute channels **after spawn**. This eliminates the need for client-side channel filtering and manual peer fanout.
 
 #### SDK API
 
@@ -366,27 +202,6 @@ relay.mute({ agent: 'security-auditor', channel: 'review-pr-123' });
 relay.unmute({ agent: 'security-auditor', channel: 'review-pr-123' });
 ```
 
-Agent-level methods are also available:
-
-```typescript
-const agent = await relay.claude.spawn({ name: 'auditor', channels: ['ch-a'] });
-await agent.subscribe(['ch-b']);       // now subscribed to ch-a and ch-b
-await agent.mute('ch-a');              // ch-a messages silenced (still in history)
-await agent.unmute('ch-a');            // ch-a messages resume
-await agent.unsubscribe(['ch-b']);     // leaves ch-b
-console.log(agent.channels);          // ['ch-a']
-console.log(agent.mutedChannels);     // []
-```
-
-#### Semantics
-
-| Operation     | Channel membership | PTY injection | History access |
-|---------------|-------------------|---------------|----------------|
-| `subscribe`   | Yes               | Yes           | Yes            |
-| `unsubscribe` | No                | No            | No (leaves)    |
-| `mute`        | Yes (stays)       | No (silenced) | Yes (can query)|
-| `unmute`      | Yes               | Yes (resumes) | Yes            |
-
 #### Events
 
 ```typescript
@@ -396,22 +211,10 @@ relay.onChannelMuted = (agent, channel) => { /* ... */ };
 relay.onChannelUnmuted = (agent, channel) => { /* ... */ };
 ```
 
-#### When to Use in Workflows
 
-- **Multi-PR chat sessions**: Agents focused on one PR can mute other PR channels to reduce noise
-- **Phase transitions**: Subscribe agents to new channels as work progresses between phases
-- **Team isolation**: Workers mute the main coordination channel during focused work, unmute for review
-- **Dynamic fanout**: A lead subscribes workers to sub-channels at runtime based on task decomposition
+### Agent Definition
 
-#### What This Eliminates
-
-With broker-managed subscriptions, you no longer need:
-1. Client-side persona filtering (`personaNames.has(from)` checks)
-2. Channel prefix regex for message routing
-3. Manual peer fanout (iterating agents to forward messages)
-4. Dedup caches for dual-path delivery
-
-## Agent Definition
+#### ```typescript
 
 ```typescript
 .agent('name', {
@@ -424,9 +227,7 @@ With broker-managed subscriptions, you no longer need:
 })
 ```
 
-### Model Constants
-
-**Always use model constants from `@agent-relay/config` instead of string literals.** Each CLI has a typed constants object with its available models:
+#### Model Constants
 
 ```typescript
 import { ClaudeModels, CodexModels, GeminiModels } from '@agent-relay/config';
@@ -436,38 +237,10 @@ import { ClaudeModels, CodexModels, GeminiModels } from '@agent-relay/config';
 .agent('coder',   { cli: 'codex',  model: CodexModels.GPT_5_4 })  // not 'gpt-5.4'
 ```
 
-**Post-spawn channel operations** (available on Agent instances and AgentRelay facade):
 
-```typescript
-// Agent instance methods
-agent.subscribe(channels: string[]): Promise<void>
-agent.unsubscribe(channels: string[]): Promise<void>
-agent.mute(channel: string): Promise<void>
-agent.unmute(channel: string): Promise<void>
-agent.channels: string[]          // current subscribed channels
-agent.mutedChannels: string[]     // currently muted channels
+### Step Definition
 
-// AgentRelay facade methods (by agent name)
-relay.subscribe({ agent: string, channels: string[] }): Promise<void>
-relay.unsubscribe({ agent: string, channels: string[] }): Promise<void>
-relay.mute({ agent: string, channel: string }): Promise<void>
-relay.unmute({ agent: string, channel: string }): Promise<void>
-```
-
-| Preset     | Interactive   | Relay access | Use for                                              |
-| ---------- | ------------- | ------------ | ---------------------------------------------------- |
-| `lead`     | yes (PTY)     | yes          | Coordination, monitoring channels                    |
-| `worker`   | no (subprocess) | no         | Bounded tasks, structured stdout                     |
-| `reviewer` | no (subprocess) | no         | Reading artifacts, producing verdicts                |
-| `analyst`  | no (subprocess) | no         | Reading code/files, writing findings                 |
-
-Non-interactive presets run via one-shot mode (`claude -p`, `codex exec`). Output is clean and available via `{{steps.X.output}}`.
-
-**Critical rule:** Pre-inject content into non-interactive agents. Don't ask them to read large files — pre-read in a deterministic step and inject via `{{steps.X.output}}`.
-
-## Step Definition
-
-### Agent Steps
+#### Agent Steps
 
 ```typescript
 .step('name', {
@@ -479,7 +252,7 @@ Non-interactive presets run via one-shot mode (`claude -p`, `codex exec`). Outpu
 })
 ```
 
-### Deterministic Steps (Shell Commands)
+#### Deterministic Steps (Shell Commands)
 
 ```typescript
 .step('verify-files', {
@@ -491,13 +264,10 @@ Non-interactive presets run via one-shot mode (`claude -p`, `codex exec`). Outpu
 })
 ```
 
-Use for: file checks, reading files for injection, build/test gates, git operations.
 
-## Common Patterns
+### Common Patterns
 
-### Interactive Team (lead + workers on shared channel)
-
-When a task involves creating/modifying multiple files with review feedback, use **interactive agents on a shared channel** instead of non-interactive one-shot workers. The lead coordinates, reviews, and posts feedback; workers implement and iterate.
+#### Interactive Team (lead + workers on shared channel)
 
 ```typescript
 .agent('lead', {
@@ -547,24 +317,7 @@ Edit files as assigned. Report completion. Fix issues from feedback.`,
 .step('verify', { type: 'deterministic', dependsOn: ['lead-coordinate'], ... })
 ```
 
-**Key behaviors observed in production:**
-
-- **Workers self-organize from channel context.** Workers read each other's completion messages and start dependent work without waiting for the lead to relay. The shared channel gives them ambient awareness.
-- **Lead-as-reviewer is more efficient than a separate reviewer agent.** The lead reads actual files and runs typecheck between rounds — one agent doing coordination + review eliminates a step.
-- **Codex interactive mode works well with PTY channel injection.** Don't default to `preset: 'worker'` — interactive Codex agents receive and act on channel messages reliably.
-- **Workers may outpace the lead.** If the lead is reviewing while workers are fast, the lead's "proceed" message may arrive after the worker already started from channel context. This is harmless but worth knowing.
-- **No feedback loop needed = fast path.** If workers get it right first try, the interactive pattern completes just as fast as one-shot. The feedback loop is insurance, not overhead.
-
-**When to use interactive team vs one-shot DAG:**
-
-| Scenario | Pattern |
-|----------|---------|
-| 4+ files, likely needs iteration | Interactive team |
-| Simple edits, well-specified | One-shot DAG with `preset: 'worker'` |
-| Cross-agent review feedback loop | Interactive team |
-| Independent tasks, no coordination | Fan-out with non-interactive workers |
-
-### Pipeline (sequential handoff)
+#### Pipeline (sequential handoff)
 
 ```typescript
 .pattern('pipeline')
@@ -573,7 +326,7 @@ Edit files as assigned. Report completion. Fix issues from feedback.`,
 .step('test', { agent: 'tester', task: '{{steps.implement.output}}', dependsOn: ['implement'] })
 ```
 
-### Error Handling
+#### Error Handling
 
 ```typescript
 .onError('fail-fast')   // stop on first failure (default)
@@ -581,9 +334,10 @@ Edit files as assigned. Report completion. Fix issues from feedback.`,
 .onError('retry', { maxRetries: 3, retryDelayMs: 5000 })
 ```
 
-## Multi-File Edit Pattern
 
-When a workflow needs to modify multiple existing files, **use one agent step per file** with a deterministic verify gate after each. Agents reliably edit 1-2 files per step but fail on 4+.
+### Multi-File Edit Pattern
+
+#### When a workflow needs to modify multiple existing files, **use one agent step per file** with a deterministic verify gate after each. Agents reliably edit 1-2 files per step but fail on 4+.
 
 ```yaml
 steps:
@@ -640,15 +394,10 @@ steps:
     failOnError: true
 ```
 
-**Key rules:**
-- Read the file in a deterministic step right before the edit (not all files upfront)
-- Tell the agent "Only edit this one file" to prevent it touching other files
-- Verify with `git diff --quiet` after each edit — fail fast if the agent didn't write
-- Always commit with a deterministic step, never an agent step
 
-## File Materialization: Verify Before Proceeding
+### File Materialization: Verify Before Proceeding
 
-After any step that creates files, add a deterministic `file_exists` check before proceeding. Non-interactive agents may exit 0 without writing anything (wrong cwd, stdout instead of disk).
+#### After any step that creates files, add a deterministic `file_exists` check before proceeding. Non-interactive agents may exit 0 without writing anything (wrong cwd, stdout instead of disk).
 
 ```yaml
 - name: verify-files
@@ -664,13 +413,10 @@ After any step that creates files, add a deterministic `file_exists` check befor
   failOnError: true
 ```
 
-**Rules for file-writing tasks:**
-1. Use full paths from project root — say `src/auth/credentials.ts`, not `credentials.ts`
-2. Add `IMPORTANT: Write the file to disk. Do NOT output to stdout.`
-3. Use `file_exists` verification for creation steps (not just `exit_code`)
-4. Gate all downstream steps on the verify step
 
-## DAG Deadlock Anti-Pattern
+### DAG Deadlock Anti-Pattern
+
+#### ```yaml
 
 ```yaml
 # WRONG — deadlock: coordinate depends on context, work-a depends on coordinate
@@ -692,16 +438,10 @@ steps:
     dependsOn: [work-a, coordinate]
 ```
 
-**Rule:** if a lead step's task mentions downstream step names alongside waiting keywords, that's a deadlock.
 
-## Step Sizing
+### Step Sizing
 
-**One agent, one deliverable.** A step's task prompt should be 10-20 lines max.
-
-Split into a **lead + workers team** when:
-- The task requires a 50+ line prompt
-- The deliverable is multiple files that must be consistent
-- You need one agent to verify another's output
+#### **One agent, one deliverable.** A step's task prompt should be 10-20 lines max.
 
 ```yaml
 # Team pattern: lead + workers on a shared channel
@@ -726,7 +466,8 @@ steps:
     dependsOn: [track-lead-coord]  # downstream depends on lead, not workers
 ```
 
-## Supervisor Pattern
+
+### Supervisor Pattern
 
 When you set `.pattern('supervisor')` (or `hub-spoke`, `fan-out`), the runner auto-assigns a supervisor agent as owner for worker steps. The supervisor monitors progress, nudges idle workers, and issues `OWNER_DECISION`.
 
@@ -739,7 +480,7 @@ When you set `.pattern('supervisor')` (or `hub-spoke`, `fan-out`), the runner au
 | Local/small models | `supervisor` | Supervisor catches stuck workers |
 | All non-interactive | `pipeline` or `dag` | No PTY = no supervision needed |
 
-## Concurrency
+### Concurrency
 
 **Cap `maxConcurrency` at 4-6.** Spawning 10+ agents simultaneously causes broker timeouts.
 
@@ -749,7 +490,7 @@ When you set `.pattern('supervisor')` (or `hub-spoke`, `fan-out`), the runner au
 | 5-10            | 5                 |
 | 10+             | 6-8 max           |
 
-## Common Mistakes
+### Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
@@ -794,7 +535,9 @@ When you set `.pattern('supervisor')` (or `hub-spoke`, `fan-out`), the runner au
 | Not printing PR URL after `gh pr create` | Add a final deterministic step: `echo "PR: $(cat pr-url.txt)"` or capture in the `gh pr create` command |
 | Workflow ending without worktree + PR for cross-repo changes | Add `setup-worktree` at start and `push-and-pr` + `cleanup-worktree` at end |
 
-## YAML Alternative
+### YAML Alternative
+
+#### ```yaml
 
 ```yaml
 version: '1.0'
@@ -823,9 +566,8 @@ workflows:
           type: exit_code
 ```
 
-Run with: `agent-relay run path/to/workflow.yaml`
 
-## Available Swarm Patterns
+### Available Swarm Patterns
 
 `dag` (default), `fan-out`, `pipeline`, `hub-spoke`, `consensus`, `mesh`, `handoff`, `cascade`, `debate`, `hierarchical`, `map-reduce`, `scatter-gather`, `supervisor`, `reflection`, `red-team`, `verifier`, `auction`, `escalation`, `saga`, `circuit-breaker`, `blackboard`, `swarm`
 
