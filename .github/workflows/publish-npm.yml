@@ -314,7 +314,7 @@ jobs:
             ### Install
             ```bash
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
-            npm install @relaycast/cli@${{ needs.build.outputs.new_version }}
+            npm install relaycast@${{ needs.build.outputs.new_version }}
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
             npm install @relaycast/openclaw@${{ needs.build.outputs.new_version }}
@@ -326,7 +326,7 @@ jobs:
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
             | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
-            | @relaycast/cli | ${{ needs.build.outputs.new_version }} |
+            | relaycast | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
             | @relaycast/react | ${{ needs.build.outputs.new_version }} |
             | @relaycast/openclaw | ${{ needs.build.outputs.new_version }} |

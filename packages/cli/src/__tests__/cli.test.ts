@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createRelayMcpServer } from '@relaycast/mcp';
 import { listCliTools, runCli } from '../index.js';
 
-describe('@relaycast/cli', () => {
+describe('relaycast', () => {
   it('exposes the same command names as the MCP tool list', async () => {
     const mcpServer = createRelayMcpServer({});
     const client = new Client({ name: 'cli-parity-test', version: '0.1.0' });

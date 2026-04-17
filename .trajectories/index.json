@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-04-17T09:31:22.420Z",
+  "lastUpdated": "2026-04-17T09:59:35.979Z",
   "trajectories": {
     "traj_o8g8ahqth5fx": {
       "title": "Wave 0: add repo infrastructure files (docker, turbo, tsconfig, env)",
@@ -1050,6 +1050,13 @@
       "startedAt": "2026-04-17T09:19:06.767Z",
       "completedAt": "2026-04-17T09:31:22.324Z",
       "path": "/Users/khaliqgant/Projects/AgentWorkforce/relaycast/.trajectories/completed/2026-04/traj_e3imqupgb81i.json"
+    },
+    "traj_l3sqbg3nztl2": {
+      "title": "Fix Relaycast package publish name",
+      "status": "completed",
+      "startedAt": "2026-04-17T09:54:06.365Z",
+      "completedAt": "2026-04-17T09:59:35.883Z",
+      "path": "/Users/khaliqgant/Projects/AgentWorkforce/relaycast/.trajectories/completed/2026-04/traj_l3sqbg3nztl2.json"
     }
   }
 }

@@ -63,13 +63,13 @@ const TOOL_JSON_FLAG_NAMES = new Set(['json-args', 'args-json']);
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   try {
     if (argv.length === 1 && (argv[0] === 'version' || argv[0] === '--version' || argv[0] === '-v')) {
-      io.stdout.write(`@relaycast/cli ${CLI_VERSION}\n`);
+      io.stdout.write(`relaycast ${CLI_VERSION}\n`);
       return 0;
     }
 
     const parsed = parseCliArgs(argv, io.env ?? process.env);
     if (parsed.command === 'version') {
-      io.stdout.write(`@relaycast/cli ${CLI_VERSION}\n`);
+      io.stdout.write(`relaycast ${CLI_VERSION}\n`);
       return 0;
     }
 
@@ -196,7 +196,7 @@ async function createCliMcpSession(config: CliConfig) {
     telemetryTransport: 'stdio',
   };
   const server = createRelayMcpServer(options);
-  const client = new Client({ name: '@relaycast/cli', version: CLI_VERSION });
+  const client = new Client({ name: 'relaycast', version: CLI_VERSION });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([
     client.connect(clientTransport),

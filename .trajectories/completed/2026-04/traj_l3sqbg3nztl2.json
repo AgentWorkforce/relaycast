@@ -1,0 +1,53 @@
+{
+  "id": "traj_l3sqbg3nztl2",
+  "version": 1,
+  "task": {
+    "title": "Fix Relaycast package publish name"
+  },
+  "status": "completed",
+  "startedAt": "2026-04-17T09:54:06.365Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-04-17T09:56:24.841Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_sepk6ht7jd16",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-04-17T09:56:24.841Z",
+      "events": [
+        {
+          "ts": 1776419784842,
+          "type": "decision",
+          "content": "Publish CLI as unscoped relaycast package: Publish CLI as unscoped relaycast package",
+          "raw": {
+            "question": "Publish CLI as unscoped relaycast package",
+            "chosen": "Publish CLI as unscoped relaycast package",
+            "alternatives": [],
+            "reasoning": "The npm failure targeted @relaycast/cli, while packages/cli/package.json and the intended public package name should be relaycast; updating the manifest, lockfile, docs, release notes, and CLI identity keeps npm publish and user-facing output aligned."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-04-17T09:59:35.883Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "9886a8e1a789264715ecf06143f9c6a400937378",
+    "endRef": "9886a8e1a789264715ecf06143f9c6a400937378"
+  },
+  "completedAt": "2026-04-17T09:59:35.883Z",
+  "retrospective": {
+    "summary": "Aligned the CLI package with the unscoped relaycast npm name, updated docs/release metadata, regenerated the workspace lockfile link, normalized package repository URLs, and verified CLI tests plus npm dry-run publish.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  }
+}
