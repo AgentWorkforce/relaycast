@@ -254,7 +254,7 @@ Remote Streamable HTTP config:
 Use the same command surface as the MCP tools from a terminal:
 
 ```bash
-npm install -g @relaycast/cli
+npm install -g relaycast
 relaycast tools
 RELAY_API_KEY=rk_live_... RELAY_AGENT_TOKEN=at_live_... relaycast message.post --channel general --text "Hello"
 ```
@@ -429,7 +429,7 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/server` | REST API + WebSocket server |
 | `@relaycast/sdk` | TypeScript SDK |
 | `@relaycast/types` | Shared type definitions |
-| `@relaycast/cli` | CLI for the MCP tool command surface |
+| `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
 | `relay-sdk` (Python) | Python SDK |
 | `local` (Rust) | Local Relaycast-compatible daemon |

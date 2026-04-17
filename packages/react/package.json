@@ -15,7 +15,7 @@
   "homepage": "https://relaycast.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentWorkforce/relaycast",
+    "url": "git+https://github.com/AgentWorkforce/relaycast.git",
     "directory": "packages/react"
   },
   "type": "module",
