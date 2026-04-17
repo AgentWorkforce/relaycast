@@ -12,6 +12,7 @@ on:
           - types
           - server
           - sdk-typescript
+          - cli
           - mcp
           - react
           - openclaw
@@ -137,10 +138,15 @@ jobs:
               }
             }
 
-            // Sync SDK_VERSION constant with package version
+            // Sync package version constants
             const sdkVersionPath = path.join(packagesDir, 'sdk-typescript', 'src', 'version.ts');
             fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
             console.log('SDK_VERSION -> ' + version);
+            const cliVersionPath = path.join(packagesDir, 'cli', 'src', 'version.ts');
+            if (fs.existsSync(cliVersionPath)) {
+              fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+              console.log('CLI_VERSION -> ' + version);
+            }
           "
 
       - name: Clean reinstall after version bump
@@ -181,6 +187,7 @@ jobs:
           - types
           - server
           - sdk-typescript
+          - cli
           - mcp
           - react
           - openclaw
@@ -307,6 +314,7 @@ jobs:
             ### Install
             ```bash
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/cli@${{ needs.build.outputs.new_version }}
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
             npm install @relaycast/openclaw@${{ needs.build.outputs.new_version }}
@@ -318,6 +326,7 @@ jobs:
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
             | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/cli | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
             | @relaycast/react | ${{ needs.build.outputs.new_version }} |
             | @relaycast/openclaw | ${{ needs.build.outputs.new_version }} |
