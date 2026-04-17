@@ -1,7 +1,6 @@
-import { DatabaseSync } from 'node:sqlite';
-import { drizzle } from 'drizzle-orm/d1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as schema from '../db/schema.js';
+import { createD1TestDb } from './fake-d1.js';
 import {
   createDirectoryAgent,
   listDirectoryAgents,
@@ -9,7 +8,6 @@ import {
   searchDirectory,
   upsertDirectoryRating,
 } from '../engine/directory.js';
-import { buildFtsQuery } from '../engine/searchQuery.js';
 
 const TEST_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -168,71 +166,8 @@ AFTER DELETE ON directory_skills BEGIN
 END;
 `;
 
-class FakeD1PreparedStatement {
-  private readonly sqlite: DatabaseSync;
-  private readonly query: string;
-  private readonly params: unknown[];
-
-  constructor(sqlite: DatabaseSync, query: string, params: unknown[] = []) {
-    this.sqlite = sqlite;
-    this.query = query;
-    this.params = params;
-  }
-
-  bind(...params: unknown[]) {
-    return new FakeD1PreparedStatement(this.sqlite, this.query, params);
-  }
-
-  async run() {
-    this.sqlite.prepare(this.query).run(...this.params);
-    return { success: true, meta: {}, results: [] };
-  }
-
-  async all() {
-    return {
-      success: true,
-      meta: {},
-      results: this.sqlite.prepare(this.query).all(...this.params),
-    };
-  }
-
-  async raw() {
-    const statement = this.sqlite.prepare(this.query);
-    statement.setReturnArrays(true);
-    return statement.all(...this.params);
-  }
-
-  async first() {
-    return this.sqlite.prepare(this.query).get(...this.params);
-  }
-}
-
-class FakeD1Database {
-  readonly sqlite = new DatabaseSync(':memory:');
-
-  constructor() {
-    this.sqlite.exec(TEST_SCHEMA_SQL);
-  }
-
-  prepare(query: string) {
-    return new FakeD1PreparedStatement(this.sqlite, query);
-  }
-
-  async batch(statements: Array<FakeD1PreparedStatement>) {
-    return Promise.all(statements.map((statement) => statement.all()));
-  }
-
-  async exec(query: string) {
-    this.sqlite.exec(query);
-  }
-}
-
 function createTestDb() {
-  const d1 = new FakeD1Database();
-  return {
-    db: drizzle(d1 as unknown as D1Database, { schema }),
-    sqlite: d1.sqlite,
-  };
+  return createD1TestDb(TEST_SCHEMA_SQL);
 }
 
 async function seedWorkspace(db: ReturnType<typeof createTestDb>['db']) {
@@ -343,8 +278,8 @@ describe('directory engine', () => {
     expect(ratedEntries[0]?.rating_avg).toBe(4);
   });
 
-  it('matches FTS5 queries across skills and agent descriptions', async () => {
-    const { db, sqlite } = createTestDb();
+  it('matches search queries across skills and agent descriptions', async () => {
+    const { db } = createTestDb();
     await seedWorkspace(db);
     await seedAgent(db, { id: 'agent_research', name: 'ResearchBot' });
     await seedAgent(db, { id: 'agent_support', name: 'SupportBot' });
@@ -381,25 +316,14 @@ describe('directory engine', () => {
       ],
     });
 
-    const skillQuery = buildFtsQuery('entity extraction pipelines');
-    const skillMatchRows = sqlite.prepare(`
-      SELECT da.slug
-      FROM directory_skills_fts
-      JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-      JOIN directory_agents da ON da.id = ds.directory_agent_id
-      WHERE directory_skills_fts MATCH ?
-      ORDER BY da.slug ASC
-    `).all(skillQuery) as Array<{ slug: string }>;
-    expect(skillMatchRows.map((row) => row.slug)).toContain('researchbot');
+    const skillResults = await searchDirectory(db, 'ws_test', {
+      q: 'entity extraction pipelines',
+    });
+    expect(skillResults.map((row) => row.slug)).toContain('researchbot');
 
-    const descriptionQuery = buildFtsQuery('subscription billing specialist');
-    const descriptionMatchRows = sqlite.prepare(`
-      SELECT da.slug
-      FROM directory_agents_fts
-      JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-      WHERE directory_agents_fts MATCH ?
-      ORDER BY da.slug ASC
-    `).all(descriptionQuery) as Array<{ slug: string }>;
-    expect(descriptionMatchRows.map((row) => row.slug)).toContain('supportbot');
+    const descriptionResults = await searchDirectory(db, 'ws_test', {
+      q: 'subscription billing specialist',
+    });
+    expect(descriptionResults.map((row) => row.slug)).toContain('supportbot');
   });
 });

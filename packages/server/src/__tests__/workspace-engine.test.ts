@@ -1,9 +1,7 @@
-import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
-import { drizzle } from 'drizzle-orm/d1';
 import { beforeEach, describe, expect, it } from 'vitest';
-import * as schema from '../db/schema.js';
 import { createWorkspace, getWorkspaceByName } from '../engine/workspace.js';
+import { createD1TestDb, FakeD1Database } from './fake-d1.js';
 
 const TEST_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -38,70 +36,18 @@ CREATE TABLE channels (
 CREATE UNIQUE INDEX channels_workspace_name_unique ON channels(workspace_id, name);
 `;
 
-class FakeD1PreparedStatement {
-  private readonly sqlite: DatabaseSync;
-  private readonly query: string;
-  private readonly params: unknown[];
-
-  constructor(sqlite: DatabaseSync, query: string, params: unknown[] = []) {
-    this.sqlite = sqlite;
-    this.query = query;
-    this.params = params;
-  }
-
-  bind(...params: unknown[]) {
-    return new FakeD1PreparedStatement(this.sqlite, this.query, params);
-  }
-
-  async run() {
-    this.sqlite.prepare(this.query).run(...this.params);
-    return { success: true, meta: {}, results: [] };
-  }
-
-  async all() {
-    const rows = this.sqlite.prepare(this.query).all(...this.params) as Record<string, unknown>[];
-    return { success: true, meta: {}, results: rows };
-  }
-
-  async first() {
-    const rows = this.sqlite.prepare(this.query).all(...this.params) as Record<string, unknown>[];
-    return rows[0] ?? null;
-  }
-
-  async raw() {
-    const statement = this.sqlite.prepare(this.query);
-    statement.setReturnArrays(true);
-    return statement.all(...this.params);
-  }
-}
-
-class FakeD1Database {
-  readonly sqlite = new DatabaseSync(':memory:');
-
-  constructor() {
-    this.sqlite.exec(TEST_SCHEMA_SQL);
-  }
-
-  prepare(query: string) {
-    return new FakeD1PreparedStatement(this.sqlite, query);
-  }
-
-  async batch(statements: Array<FakeD1PreparedStatement>) {
-    return Promise.all(statements.map((statement) => statement.all()));
-  }
-}
-
 function hashApiKey(apiKey: string) {
   return crypto.createHash('sha256').update(apiKey).digest('hex');
 }
 
 describe('createWorkspace (engine integration)', () => {
-  let db: ReturnType<typeof drizzle>;
+  let db: ReturnType<typeof createD1TestDb>['db'];
   let fakeD1: FakeD1Database;
 
   beforeEach(() => {
-    fakeD1 = new FakeD1Database();
-    db = drizzle(fakeD1 as any, { schema });
+    const testDb = createD1TestDb(TEST_SCHEMA_SQL);
+    db = testDb.db;
+    fakeD1 = testDb.d1;
   });
 
   it('creates a new workspace and returns created: true', async () => {
@@ -179,11 +125,10 @@ describe('createWorkspace (engine integration)', () => {
 });
 
 describe('getWorkspaceByName', () => {
-  let db: ReturnType<typeof drizzle>;
+  let db: ReturnType<typeof createD1TestDb>['db'];
 
   beforeEach(() => {
-    const fakeD1 = new FakeD1Database();
-    db = drizzle(fakeD1 as any, { schema });
+    db = createD1TestDb(TEST_SCHEMA_SQL).db;
   });
 
   it('returns workspace by name', async () => {
