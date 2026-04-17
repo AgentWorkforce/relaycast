@@ -1,9 +1,8 @@
-import { DatabaseSync } from 'node:sqlite';
-import { drizzle } from 'drizzle-orm/d1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as schema from '../db/schema.js';
 import { createDirectoryAgent, upsertDirectoryRating } from '../engine/directory.js';
 import { routeBySkill, setRoutingConfig } from '../engine/routing.js';
+import { createD1TestDb } from './fake-d1.js';
 
 const TEST_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -193,71 +192,8 @@ CREATE INDEX idx_routing_failures_circuit
   ON routing_failures(workspace_id, circuit_open_until);
 `;
 
-class FakeD1PreparedStatement {
-  private readonly sqlite: DatabaseSync;
-  private readonly query: string;
-  private readonly params: unknown[];
-
-  constructor(sqlite: DatabaseSync, query: string, params: unknown[] = []) {
-    this.sqlite = sqlite;
-    this.query = query;
-    this.params = params;
-  }
-
-  bind(...params: unknown[]) {
-    return new FakeD1PreparedStatement(this.sqlite, this.query, params);
-  }
-
-  async run() {
-    this.sqlite.prepare(this.query).run(...this.params);
-    return { success: true, meta: {}, results: [] };
-  }
-
-  async all() {
-    return {
-      success: true,
-      meta: {},
-      results: this.sqlite.prepare(this.query).all(...this.params),
-    };
-  }
-
-  async raw() {
-    const statement = this.sqlite.prepare(this.query);
-    statement.setReturnArrays(true);
-    return statement.all(...this.params);
-  }
-
-  async first() {
-    return this.sqlite.prepare(this.query).get(...this.params);
-  }
-}
-
-class FakeD1Database {
-  readonly sqlite = new DatabaseSync(':memory:');
-
-  constructor() {
-    this.sqlite.exec(TEST_SCHEMA_SQL);
-  }
-
-  prepare(query: string) {
-    return new FakeD1PreparedStatement(this.sqlite, query);
-  }
-
-  async batch(statements: Array<FakeD1PreparedStatement>) {
-    return Promise.all(statements.map((statement) => statement.all()));
-  }
-
-  async exec(query: string) {
-    this.sqlite.exec(query);
-  }
-}
-
 function createTestDb() {
-  const d1 = new FakeD1Database();
-  return {
-    db: drizzle(d1 as unknown as D1Database, { schema }),
-    sqlite: d1.sqlite,
-  };
+  return createD1TestDb(TEST_SCHEMA_SQL);
 }
 
 async function seedWorkspace(db: ReturnType<typeof createTestDb>['db']) {
