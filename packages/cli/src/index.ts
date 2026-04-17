@@ -101,7 +101,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       const toolArgs = parseToolArgs(parsed.commandArgs, tool?.inputSchema);
       const result = await session.callTool(parsed.command, toolArgs);
       writeToolResult(io.stdout, result, parsed.outputJson);
-      return 0;
+      return isToolErrorResult(result) ? 1 : 0;
     } finally {
       await session.close();
     }
@@ -153,9 +153,9 @@ function parseCliArgs(argv: string[], env: EnvLike): ParsedArgs {
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!command && isFlag(token)) {
-      const { name, inlineValue } = splitFlag(token);
-      if (!GLOBAL_FLAG_NAMES.has(name)) {
-        throw new Error(`Unknown global option "--${name}". Put tool arguments after the tool name.`);
+      const { name, inlineValue, negated } = splitFlag(token);
+      if (negated || !GLOBAL_FLAG_NAMES.has(name)) {
+        throw new Error(`Unknown global option "${token}". Put tool arguments after the tool name.`);
       }
       const value = readGlobalFlagValue(argv, i, name, inlineValue);
       if (value.consumed) i += 1;
@@ -169,8 +169,8 @@ function parseCliArgs(argv: string[], env: EnvLike): ParsedArgs {
     }
 
     if (isFlag(token)) {
-      const { name, inlineValue } = splitFlag(token);
-      if (GLOBAL_FLAG_NAMES.has(name)) {
+      const { name, inlineValue, negated } = splitFlag(token);
+      if (!negated && GLOBAL_FLAG_NAMES.has(name)) {
         const value = readGlobalFlagValue(argv, i, name, inlineValue);
         if (value.consumed) i += 1;
         applyGlobalFlag(config, name, value.value, () => { outputJson = true; }, () => { help = true; });
@@ -248,7 +248,8 @@ function parseToolArgs(argv: string[], inputSchema?: JsonSchema): JsonObject {
     } else if (inlineValue != null) {
       rawValue = inlineValue;
     } else {
-      const value = readFlagValue(argv, i, name);
+      const isBoolean = schemaHasType(schema, 'boolean');
+      const value = readFlagValue(argv, i, name, isBoolean);
       rawValue = value.value;
       if (value.consumed) i += 1;
     }
@@ -340,6 +341,11 @@ function writeToolResult(stdout: WritableStreamLike, result: unknown, rawJson: b
   stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+function isToolErrorResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  return (result as { isError?: unknown }).isError === true;
+}
+
 function getStructuredContent(result: unknown): unknown {
   if (!result || typeof result !== 'object') return undefined;
   return (result as { structuredContent?: unknown }).structuredContent;
@@ -375,10 +381,18 @@ function isFlag(token: string): boolean {
   return token.startsWith('-') && token.length > 1;
 }
 
-function readFlagValue(argv: string[], index: number, _flagName: string): { value: string | boolean; consumed: boolean } {
+function readFlagValue(
+  argv: string[],
+  index: number,
+  flagName: string,
+  allowBooleanDefault = false,
+): { value: string | boolean; consumed: boolean } {
   const next = argv[index + 1];
   if (!next || isFlag(next)) {
-    return { value: true, consumed: false };
+    if (allowBooleanDefault) {
+      return { value: true, consumed: false };
+    }
+    throw new Error(`Missing value for --${flagName}`);
   }
   return { value: next, consumed: true };
 }
@@ -395,7 +409,7 @@ function readGlobalFlagValue(
   if (flagName === 'json' || flagName === 'help' || flagName === 'h' || flagName === 'relay-strict-agent-name') {
     return { value: true, consumed: false };
   }
-  return readFlagValue(argv, index, flagName);
+  return readFlagValue(argv, index, flagName, false);
 }
 
 function applyGlobalFlag(
