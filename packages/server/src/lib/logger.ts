@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import type { AppEnv, CloudflareBindings } from '../env.js';
-import { getPostHogClient } from './posthog.js';
+import { getPostHogClient, telemetryEnabled } from './posthog.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 type LogFields = Record<string, unknown>;
@@ -324,22 +324,21 @@ export interface CaptureExceptionOptions {
 /**
  * Sends a `$exception` event to PostHog Error Tracking via the PostHog SDK.
  *
- * The SDK handles serialization correctly, avoiding schema mismatches like the
- * `timestamp` top-level field bug that raw fetch calls cause.
+ * The returned promise resolves after the SDK has flushed the event, so call
+ * sites can pass it to `waitUntil` to keep the isolate alive until delivery.
  */
 export async function captureException(
   env: CloudflareBindings,
   error: unknown,
   options: CaptureExceptionOptions = {},
 ): Promise<void> {
+  if (!telemetryEnabled(env)) return;
   const apiKey = env.POSTHOG_API_KEY;
   if (!apiKey) return;
 
   const exceptionList = buildExceptionList(error);
   const client = getPostHogClient(env, apiKey);
 
-  // Build a flat properties object for the SDK's captureException.
-  // The SDK handles setting event: '$exception' and proper serialization.
   const additionalProperties: Record<string, unknown> = {
     $exception_list: exceptionList,
     $exception_type: exceptionList[0]?.type,
@@ -352,4 +351,9 @@ export async function captureException(
   };
 
   client.captureException(error, options.distinctId ?? SERVICE_NAME, additionalProperties);
+  try {
+    await client.flush();
+  } catch {
+    // Best effort — never break request handling for telemetry.
+  }
 }

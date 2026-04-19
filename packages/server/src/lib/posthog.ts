@@ -42,6 +42,9 @@ export function getPostHogClient(env: CloudflareBindings, apiKey: string): PostH
 export { telemetryEnabled };
 
 export async function flushAllPostHogClients(): Promise<void> {
-  await Promise.all([...clients.values()].map(({ client }) => client.shutdown()));
-  clients.clear();
+  try {
+    await Promise.all([...clients.values()].map(({ client }) => client.shutdown()));
+  } finally {
+    clients.clear();
+  }
 }
