@@ -5,7 +5,7 @@ import {
   type InternalTelemetryEvent,
   type TelemetryOrigin,
 } from '@relaycast/types';
-import { getPostHogClient, telemetryEnabled } from './posthog.js';
+import { flushAllPostHogClients, getPostHogClient, telemetryEnabled } from './posthog.js';
 import type { CloudflareBindings } from '../env.js';
 
 export interface InternalTelemetryCaptureInput {
@@ -62,7 +62,5 @@ export async function captureInternalTelemetryBatched(
 }
 
 export async function flushInternalTelemetryBatchesForTests(): Promise<void> {
-  // Import and call directly to avoid any re-export edge cases
-  const { flushAllPostHogClients } = await import('./posthog.js');
   await flushAllPostHogClients();
 }
