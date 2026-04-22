@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - all
+          - a2a
           - types
           - server
           - sdk-typescript
@@ -184,6 +185,7 @@ jobs:
       max-parallel: 5
       matrix:
         package:
+          - a2a
           - types
           - server
           - sdk-typescript
@@ -313,6 +315,7 @@ jobs:
 
             ### Install
             ```bash
+            npm install @relaycast/a2a@${{ needs.build.outputs.new_version }}
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
             npm install relaycast@${{ needs.build.outputs.new_version }}
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
@@ -323,6 +326,7 @@ jobs:
             ### Packages
             | Package | Version |
             |---------|---------|
+            | @relaycast/a2a | ${{ needs.build.outputs.new_version }} |
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
             | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
