@@ -55,7 +55,7 @@ import type {
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
 } from './types.js';
-import { HttpClient, type RequestOptions } from './client.js';
+import { HttpClient, RelayError, type RequestOptions } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 
 function stripHash(channel: string): string {
@@ -440,7 +440,6 @@ export class AgentClient {
       options?: { topic?: string; metadata?: CreateChannelRequest['metadata'] },
     ): Promise<{ created: boolean; joined: boolean }> => {
       let created = false;
-      let joined = false;
 
       try {
         await this.client.post('/v1/channels', {
@@ -450,19 +449,17 @@ export class AgentClient {
         });
         created = true;
       } catch (error) {
-        if (!(error instanceof Error) || !("statusCode" in error) || (error as { statusCode?: number }).statusCode !== 409) {
+        if (
+          !(error instanceof RelayError)
+          || error.statusCode !== 409
+          || error.rawCode !== 'channel_already_exists'
+        ) {
           throw error;
         }
       }
 
-      try {
-        await this.client.post(`/v1/channels/${encodeURIComponent(name)}/join`);
-        joined = true;
-      } catch (error) {
-        if (!(error instanceof Error) || !("statusCode" in error) || (error as { statusCode?: number }).statusCode !== 409) {
-          throw error;
-        }
-      }
+      const joinResult = await this.channels.join(name);
+      const joined = !joinResult.alreadyMember;
 
       return { created, joined };
     },

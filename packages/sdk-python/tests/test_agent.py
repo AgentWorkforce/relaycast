@@ -8,6 +8,7 @@ import respx
 
 from relay_sdk.agent import AgentClient, AsyncAgentClient
 from relay_sdk.client import AsyncHttpClient, HttpClient
+from relay_sdk.errors import RelayError
 from relay_sdk.models import (
     Channel,
     ChannelMemberInfo,
@@ -613,20 +614,29 @@ class TestAsyncAgentPresence:
         assert route.called
         await c.client.close()
 
-
-    
-
 class TestAgentChannelEnsureJoined:
     @respx.mock
     def test_channels_ensure_joined_creates_and_joins(self):
-        respx.post(f"{BASE}/v1/channels").mock(return_value=ok(CHANNEL))
-        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=ok({"joined": True}))
+        respx.post(f"{BASE}/v1/channels").mock(return_value=httpx.Response(201, json={"ok": True, "data": CHANNEL}))
+        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=ok({"channel": "general", "agent_id": "agent_1", "already_member": False}))
         client = AgentClient(HttpClient(TOKEN, BASE))
         assert client.channels.ensure_joined("general", topic="General discussion") == {"created": True, "joined": True}
 
     @respx.mock
-    def test_channels_ensure_joined_treats_conflicts_as_success(self):
-        respx.post(f"{BASE}/v1/channels").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "channel_exists", "message": "exists"}}))
-        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "already_joined", "message": "joined"}}))
+    def test_channels_ensure_joined_treats_duplicate_create_and_already_member_as_success(self):
+        respx.post(f"{BASE}/v1/channels").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "channel_already_exists", "message": "exists"}}))
+        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=ok({"channel": "general", "agent_id": "agent_1", "already_member": True}))
         client = AgentClient(HttpClient(TOKEN, BASE))
         assert client.channels.ensure_joined("general") == {"created": False, "joined": False}
+
+    @respx.mock
+    def test_channels_ensure_joined_does_not_swallow_join_conflicts(self):
+        respx.post(f"{BASE}/v1/channels").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "channel_already_exists", "message": "exists"}}))
+        respx.post(f"{BASE}/v1/channels/general/join").mock(return_value=httpx.Response(409, json={"ok": False, "error": {"code": "already_joined", "message": "joined"}}))
+        client = AgentClient(HttpClient(TOKEN, BASE))
+
+        with pytest.raises(RelayError) as excinfo:
+            client.channels.ensure_joined("general")
+
+        assert excinfo.value.status == 409
+        assert excinfo.value.code == "already_joined"

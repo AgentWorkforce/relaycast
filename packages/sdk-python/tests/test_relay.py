@@ -245,8 +245,6 @@ class TestAsyncRelay:
             assert isinstance(ac, AsyncAgentClient)
 
 
-    
-
 class TestRelayWorkspaceStream:
     @respx.mock
     def test_workspace_stream_ensure_enabled_is_noop_when_enabled(self):

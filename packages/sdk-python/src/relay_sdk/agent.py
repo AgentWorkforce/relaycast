@@ -6,6 +6,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from .client import AsyncHttpClient, HttpClient
+from .errors import RelayError
 from .models import (
     Channel,
     ChannelMemberInfo,
@@ -122,19 +123,14 @@ class _ChannelsNamespace:
 
     def ensure_joined(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, bool]:
         created = False
-        joined = False
         try:
             self._client.post("/v1/channels", CreateChannelRequest(name=name, topic=topic, metadata=metadata).model_dump(exclude_none=True))
             created = True
-        except Exception as err:
-            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+        except RelayError as err:
+            if err.status != 409 or err.code != "channel_already_exists":
                 raise
-        try:
-            self._client.post(f"/v1/channels/{_enc(name)}/join")
-            joined = True
-        except Exception as err:
-            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
-                raise
+        join_result = self.join(name)
+        joined = not bool(join_result.get("already_member"))
         return {"created": created, "joined": joined}
 
     def leave(self, name: str) -> None:
@@ -456,19 +452,14 @@ class _AsyncChannelsNamespace:
 
     async def ensure_joined(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, bool]:
         created = False
-        joined = False
         try:
             await self._client.post("/v1/channels", CreateChannelRequest(name=name, topic=topic, metadata=metadata).model_dump(exclude_none=True))
             created = True
-        except Exception as err:
-            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
+        except RelayError as err:
+            if err.status != 409 or err.code != "channel_already_exists":
                 raise
-        try:
-            await self._client.post(f"/v1/channels/{_enc(name)}/join")
-            joined = True
-        except Exception as err:
-            if not isinstance(err, Exception) or not getattr(err, 'status', None) == 409:
-                raise
+        join_result = await self.join(name)
+        joined = not bool(join_result.get("already_member"))
         return {"created": created, "joined": joined}
 
     async def leave(self, name: str) -> None:

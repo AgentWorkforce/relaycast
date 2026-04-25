@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock global fetch once for this file.
+const originalFetch = global.fetch;
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+afterAll(() => {
+  global.fetch = originalFetch;
+});
 
 function mockResponse(data: unknown, apiOk = true, status = 200) {
   return Promise.resolve({
@@ -15,6 +20,7 @@ function mockResponse(data: unknown, apiOk = true, status = 200) {
 
 describe('RelayCast', () => {
   beforeEach(() => {
+    global.fetch = mockFetch as typeof fetch;
     mockFetch.mockReset();
     vi.useRealTimers();
   });
@@ -1140,10 +1146,9 @@ describe('RelayCast', () => {
   });
 });
 
-
 describe('workspace.stream.ensureEnabled', () => {
   it('returns current config without PUT when already enabled', async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
       ok: true,
       data: { enabled: true, default_enabled: true, override: true },
     }), { status: 200 }));
@@ -1157,7 +1162,7 @@ describe('workspace.stream.ensureEnabled', () => {
   });
 
   it('enables stream when disabled', async () => {
-    global.fetch = vi.fn()
+    mockFetch
       .mockResolvedValueOnce(new Response(JSON.stringify({
         ok: true,
         data: { enabled: false, default_enabled: false, override: null },

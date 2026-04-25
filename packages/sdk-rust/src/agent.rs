@@ -1,7 +1,7 @@
 //! Agent client for message and channel operations.
 
 use crate::client::{ClientOptions, HttpClient, RequestOptions};
-use crate::error::Result;
+use crate::error::{RelayError, Result};
 use crate::types::*;
 use crate::ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions};
 
@@ -583,11 +583,10 @@ impl AgentClient {
             .await
     }
 
-
     /// Ensure a channel exists and that the current agent is joined to it.
     ///
-    /// Conflict responses for both create and join are treated as successful
-    /// no-ops so callers can use this for idempotent startup/bootstrap flows.
+    /// Duplicate channel creation is treated as a successful no-op, and join
+    /// idempotence is derived from the join response's `already_member` field.
     pub async fn ensure_channel_joined(
         &self,
         request: CreateChannelRequest,
@@ -596,15 +595,24 @@ impl AgentClient {
 
         let created = match self.create_channel(request).await {
             Ok(_) => true,
-            Err(error) if error.is_conflict() => false,
+            Err(error)
+                if error.is_conflict() && error.code() == Some("channel_already_exists") =>
+            {
+                false
+            }
             Err(error) => return Err(error),
         };
 
-        let joined = match self.join_channel(&channel_name).await {
-            Ok(_) => true,
-            Err(error) if error.is_conflict() => false,
-            Err(error) => return Err(error),
-        };
+        let join_response = self.join_channel(&channel_name).await?;
+        let joined = join_response
+            .get("already_member")
+            .and_then(serde_json::Value::as_bool)
+            .map(|already_member| !already_member)
+            .ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "channel join response missing already_member".into(),
+                )
+            })?;
 
         Ok(EnsureChannelJoinedOutcome { created, joined })
     }
@@ -895,7 +903,7 @@ mod tests {
         let server = MockServer::start();
         let create = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels");
-            then.status(200).json_body_obj(&serde_json::json!({
+            then.status(201).json_body_obj(&serde_json::json!({
                 "ok": true,
                 "data": {
                     "id": "ch_1",
@@ -912,7 +920,14 @@ mod tests {
         });
         let join = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels/general/join");
-            then.status(200).json_body_obj(&serde_json::json!({ "ok": true, "data": {"joined": true} }));
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {
+                    "channel": "general",
+                    "agent_id": "agent_1",
+                    "already_member": false
+                }
+            }));
         });
 
         let agent = client(&server.base_url());
@@ -928,20 +943,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_channel_joined_treats_conflicts_as_success() {
+    async fn ensure_channel_joined_treats_duplicate_create_and_already_member_as_success() {
         let server = MockServer::start();
         let create = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels");
             then.status(409).json_body_obj(&serde_json::json!({
                 "ok": false,
-                "error": {"code": "channel_exists", "message": "exists"}
+                "error": {"code": "channel_already_exists", "message": "exists"}
             }));
         });
         let join = server.mock(|when: When, then: Then| {
             when.method(POST).path("/v1/channels/general/join");
-            then.status(409).json_body_obj(&serde_json::json!({
-                "ok": false,
-                "error": {"code": "already_joined", "message": "joined"}
+            then.status(200).json_body_obj(&serde_json::json!({
+                "ok": true,
+                "data": {
+                    "channel": "general",
+                    "agent_id": "agent_1",
+                    "already_member": true
+                }
             }));
         });
 
@@ -953,6 +972,37 @@ mod tests {
         }).await.expect("ensure joined succeeds");
 
         assert_eq!(outcome, EnsureChannelJoinedOutcome { created: false, joined: false });
+        create.assert();
+        join.assert();
+    }
+
+    #[tokio::test]
+    async fn ensure_channel_joined_does_not_swallow_join_conflicts() {
+        let server = MockServer::start();
+        let create = server.mock(|when: When, then: Then| {
+            when.method(POST).path("/v1/channels");
+            then.status(409).json_body_obj(&serde_json::json!({
+                "ok": false,
+                "error": {"code": "channel_already_exists", "message": "exists"}
+            }));
+        });
+        let join = server.mock(|when: When, then: Then| {
+            when.method(POST).path("/v1/channels/general/join");
+            then.status(409).json_body_obj(&serde_json::json!({
+                "ok": false,
+                "error": {"code": "already_joined", "message": "joined"}
+            }));
+        });
+
+        let agent = client(&server.base_url());
+        let error = agent.ensure_channel_joined(CreateChannelRequest {
+            name: "general".into(),
+            topic: None,
+            metadata: None,
+        }).await.expect_err("ensure joined should fail");
+
+        assert!(error.is_conflict());
+        assert_eq!(error.code(), Some("already_joined"));
         create.assert();
         join.assert();
     }
