@@ -156,7 +156,7 @@ function normalizeBaseUrl(options?: RelaycastSetupOptions): string {
 }
 
 function normalizeStatus(status: string): AgentRecord['status'] {
-  return status === 'online' ? 'online' : 'offline';
+  return status === 'online' || status === 'away' ? status : 'offline';
 }
 
 export class WorkspaceHandle {
@@ -262,12 +262,12 @@ export class RelaycastSetup {
     };
   }
 
-  async createWorkspace(options: CreateWorkspaceOptions = {}): Promise<WorkspaceHandle> {
+  async createWorkspace(options: CreateWorkspaceOptions): Promise<WorkspaceHandle> {
     const workspace = await this.requestWorkspace<CreateWorkspaceResult>({
       method: 'POST',
       path: '/v1/workspaces',
       schema: CreateWorkspaceResponseSchema,
-      body: options.name ? { name: options.name } : {},
+      body: { name: options.name },
       requireApiKey: true,
     });
 

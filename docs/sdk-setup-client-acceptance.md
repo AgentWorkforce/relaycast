@@ -13,8 +13,8 @@ These are deviations from `docs/sdk-setup-client.md`. Workers implement the reso
 | # | Spec text | Resolution |
 |---|---|---|
 | C1 | "`@relay/sdk` communicate module wraps Relaycast" / `relay.ts ← Simple Relay class (moved/adapted from communicate)` | **No prior `communicate` module exists.** `Relay` in `src/index.ts:2` is currently an alias for `RelayCast`. Build `communicate/relay.ts` net-new. The legacy `RelayCast as Relay` re-export is **removed** to free the name. |
-| C2 | Example uses `aliceClient.post('#general', …)` | `AgentClient` exposes `send(channel, text)`, not `post`. The contract uses `send` for `AgentClient` and `post` for `Relay` (communicate-style wrapper). Spec example on line 43 is a typo; line 453 is correct. |
-| C3 | `createWorkspace` returns `{ workspaceId, apiKey, createdAt, name? }` | API wire body is **snake_case** (`workspace_id`, `api_key`, `created_at`). Setup client validates with `CreateWorkspaceResponseSchema` from `@relaycast/types` and camelizes via existing `camelizeKeys` helper. Do not introduce mixed-case fallbacks. |
+| C2 | AgentClient and communicate Relay both send messages | `AgentClient` exposes `send(channel, text)`, not `post`. The contract uses `send` for `AgentClient` and `post` for `Relay` (communicate-style wrapper). |
+| C3 | `createWorkspace` returns workspace metadata | API success response is enveloped and **snake_case**: `{ ok: true, data: { workspace_id, api_key, created_at } }`. Setup client validates with `CreateWorkspaceResponseSchema` from `@relaycast/types` and camelizes via existing `camelizeKeys` helper. Do not introduce mixed-case fallbacks. |
 | C4 | Scope item #4: "Token TTL and auto-refresh logic" | Auto-refresh is **out** (also confirmed by Future Work #1). Tokens are surfaced to the caller; no rotation in setup-client. The `setInterval` rejoin sample stays as documentation only. |
 | C5 | `lookupWorkspace(name): Promise<WorkspaceHandle \| null>` AND test bullet "lookupWorkspace() — not found: throws WorkspaceNotFoundError" | Signature wins. Returns `null` on miss. **`WorkspaceNotFoundError` is reserved for `joinWorkspace` against a non-existent workspace** (404 from any subsequent call). Drop the throw-on-miss test bullet for lookup. |
 | C6 | `lookupWorkspace` returns a `WorkspaceHandle` | Lookup endpoint `GET /v1/workspaces/by-name/{name}` does **not** return an apiKey, so a full handle cannot be constructed. **Change return type to `Promise<WorkspaceLookup \| null>`** (re-exported from `@relaycast/types`). To get an operational handle, callers chain `joinWorkspace(lookup.id, apiKey)`. Update `index.ts` exports accordingly. |
@@ -25,8 +25,9 @@ These are deviations from `docs/sdk-setup-client.md`. Workers implement the reso
 | C11 | `X-SDK-Version` "injected at build time" | Read at runtime from `SDK_VERSION` constant (`src/version.ts`). No build-time injection. Same source as existing client. |
 | C12 | Spec omits origin headers | All direct `fetch` calls in setup-client emit `X-Relaycast-Origin-Surface/Client/Version` from `SDK_ORIGIN` (`src/origin.ts`). Required for parity with existing static methods. |
 | C13 | `createWorkspace` idempotency on existing workspace | Detect by inspecting HTTP status code (200 = existed, 201 = created). Reuse the pattern from `RelayCast.createWorkspaceWithStatus`. Surface as `WorkspaceHandle` either way; no special return shape. |
-| C14 | "`registerAgent()` — duplicate name: handles gracefully" test bullet | Replace with: **duplicate name surfaces as `RelaycastApiError` with `httpStatus: 409`**. For graceful rotation, callers use the existing `RelayCast.registerOrRotate` via `workspace.relayCast()`. |
+| C14 | "`registerAgent()` — duplicate name: handles gracefully" test bullet | Replace with: duplicate name surfaces through the existing `RelayCast.agents.register` error path as `RelayError` / `name_conflict` with status 409. For graceful rotation, callers use the existing `RelayCast.registerOrRotate` via `workspace.relayCast()`. |
 | C15 | `Relay` constructor exposes `agents` accessor | Spec under-defines `agents`. Drop from v1. `Relay` v1 surface = `send`, `post`, `reply`, `inbox`, `onMessage` only. |
+| C16 | `CreateWorkspaceOptions.name` is optional | Current `POST /v1/workspaces` requires a non-empty `name`. `createWorkspace` requires `{ name }` and does not send empty workspace creation bodies. |
 
 ---
 
@@ -62,7 +63,7 @@ packages/sdk-typescript/src/
 **`RelaycastSetup`**
 ```ts
 constructor(options?: RelaycastSetupOptions)
-createWorkspace(options?: { name?: string }): Promise<WorkspaceHandle>
+createWorkspace(options: { name: string }): Promise<WorkspaceHandle>
 joinWorkspace(workspaceId: string, apiKey: string, options?: {}): Promise<WorkspaceHandle>
 lookupWorkspace(name: string): Promise<WorkspaceLookup | null>   // C6
 ```
@@ -88,7 +89,7 @@ getApiKey(): string
 
 **`AgentRecord`**
 ```ts
-{ id: string; name: string; type: 'agent' | 'human' | 'system'; token: string; status: 'online' | 'offline'; createdAt: string }
+{ id: string; name: string; type: 'agent' | 'human' | 'system'; token: string; status: 'online' | 'offline' | 'away'; createdAt: string }
 ```
 `type` is filled from the request (default `'agent'`); other fields come from the server response.
 
@@ -114,7 +115,7 @@ onMessage(cb: MessageCallback): () => void          // calls connect() lazily; r
 
 - Workspace responses validated with `CreateWorkspaceResponseSchema` and `WorkspaceLookupSchema` from `@relaycast/types`. Validation failure ⇒ `MalformedApiResponseError`.
 - Agent registration goes through the existing `RelayCast.agents.register` (already validated by the envelope path); no new schema work.
-- All HTTP errors map to `RelaycastApiError(httpStatus, httpBody)`. 401 ⇒ `MissingApiKeyError` only when `apiKey` is empty/missing pre-flight; otherwise stays `RelaycastApiError`.
+- Direct setup HTTP errors map to `RelaycastApiError(httpStatus, httpBody)`. Agent registration reuses the existing `RelayCast.agents.register` error path, including `RelayError` / `name_conflict` for duplicate names. 401 ⇒ `MissingApiKeyError` only when `apiKey` is empty/missing pre-flight; otherwise stays `RelaycastApiError`.
 
 ### HTTP details (locked)
 
@@ -170,7 +171,7 @@ Each bullet is a single test case. **All must pass before this step is COMPLETE.
 9. `lookupWorkspace()` found — returns `WorkspaceLookup` (id, name, createdAt).
 10. `lookupWorkspace()` not found (404) — returns `null` (no throw).
 11. `registerAgent()` happy path — calls `POST /v1/agents`, stores `AgentRecord` with caller-supplied `type`.
-12. `registerAgent()` duplicate (409) — throws `RelaycastApiError` with `httpStatus === 409`.
+12. `registerAgent()` duplicate (409) — throws the existing SDK `RelayError` / `name_conflict` with `statusCode === 409`.
 13. `relay('Alice')` after registration — returns `Relay` instance; second call returns same instance.
 14. `relay('Unknown')` — throws `AgentNotRegisteredError` with `agentName === 'Unknown'`.
 15. `as(token)` — returns new `AgentClient`; subsequent `.send` uses bearer `${token}`.

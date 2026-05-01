@@ -40,8 +40,8 @@ const aliceClient = workspace.as(alice.token)
 const bobClient = workspace.as(bob.token)
 
 // Send messages
-await aliceClient.post('#general', 'Hey team, standup in 5 minutes')
-await bobClient.post('#general', 'On my way!')
+await aliceClient.send('#general', 'Hey team, standup in 5 minutes')
+await bobClient.send('#general', 'On my way!')
 
 // Or use the simpler communicate-style interface
 const relay = workspace.relay('Alice')
@@ -57,7 +57,7 @@ This spec covers:
 1. A new `RelaycastSetup` class added to `@relaycast/sdk` that wraps workspace creation and agent registration
 2. A `WorkspaceHandle` class returned from setup that provides workspace state, agent management, and multiple client types
 3. Error types and error handling
-4. Token TTL and auto-refresh logic
+4. Token handling, with auto-refresh explicitly deferred
 5. Support for both the full RelayCast API and the simpler communicate-style interface
 6. What is explicitly out of scope
 
@@ -152,7 +152,7 @@ export class RelaycastSetup {
    * If apiKey is provided in options and a workspace with that name
    * already exists, returns the existing workspace (idempotent).
    */
-  createWorkspace(options?: CreateWorkspaceOptions): Promise<WorkspaceHandle>
+  createWorkspace(options: CreateWorkspaceOptions): Promise<WorkspaceHandle>
 
   /**
    * Rejoin an existing workspace. Use this when you already have
@@ -168,7 +168,7 @@ export class RelaycastSetup {
    * Look up a workspace by name without creating one.
    * Returns null if the workspace does not exist.
    */
-  lookupWorkspace(name: string): Promise<WorkspaceHandle | null>
+  lookupWorkspace(name: string): Promise<WorkspaceLookup | null>
 }
 ```
 
@@ -180,15 +180,9 @@ export class RelaycastSetup {
 export interface CreateWorkspaceOptions {
   /**
    * Human-readable name for the workspace.
-   * If omitted, the server assigns a generated name.
+   * Required by POST /v1/workspaces.
    */
-  name?: string
-
-  /**
-   * Agent name to use when registering the first agent immediately after creation.
-   * @default "sdk-agent"
-   */
-  defaultAgentName?: string
+  name: string
 }
 ```
 
@@ -197,20 +191,14 @@ export interface CreateWorkspaceOptions {
 ### `JoinWorkspaceOptions`
 
 ```ts
-export interface JoinWorkspaceOptions {
-  /**
-   * Agent name for this join session.
-   * @default "sdk-agent"
-   */
-  agentName?: string
-}
+export interface JoinWorkspaceOptions {}
 ```
 
 ---
 
 ### `WorkspaceHandle`
 
-Returned by `createWorkspace`, `joinWorkspace`, and `lookupWorkspace`. Holds workspace state and exposes all operations.
+Returned by `createWorkspace` and `joinWorkspace`. Holds workspace state and exposes all operations.
 
 ```ts
 export interface WorkspaceInfo {
@@ -301,7 +289,7 @@ export interface AgentRecord {
   name: string
   type: 'agent' | 'human' | 'system'
   token: string
-  status: 'online' | 'offline'
+  status: 'online' | 'offline' | 'away'
   createdAt: string
 }
 ```
@@ -329,7 +317,7 @@ export class RelaycastApiError extends RelaycastSetupError {
 
 /**
  * Workspace creation or join succeeded but the response was missing
- * a required field (workspaceId, apiKey, etc.).
+ * a required field (workspace_id, api_key, etc.).
  * Should not happen in production — indicates an API contract violation.
  */
 export class MalformedApiResponseError extends RelaycastSetupError {
@@ -371,9 +359,9 @@ export class MissingApiKeyError extends RelaycastSetupError {
 
 Sequence:
 
-1. `POST {baseUrl}/v1/workspaces` with body `{ name? }`
+1. `POST {baseUrl}/v1/workspaces` with body `{ name }`
    — Auth header: `Authorization: Bearer {apiKey}` if provided, else anonymous
-   — Returns: `{ workspaceId, apiKey, createdAt, name? }`
+   — Returns: `{ ok: true, data: { workspace_id, api_key, created_at } }`
 
 2. Construct and return a `WorkspaceHandle` with:
    - `info`: from step 1
@@ -447,7 +435,7 @@ const bob = await workspace.registerAgent({ name: 'Bob', type: 'agent' })
 const aliceClient = workspace.as(alice.token)
 await aliceClient.channels.create({ name: 'general', topic: 'Team chat' })
 await aliceClient.channels.join('general')
-await bobClient = workspace.as(bob.token)
+const bobClient = workspace.as(bob.token)
 await bobClient.channels.join('general')
 
 await aliceClient.send('#general', 'Hey team!')
@@ -568,12 +556,13 @@ packages/sdk-typescript/src/
 ## Exports Added to `index.ts`
 
 ```ts
-export { RelaycastSetup } from './setup.js'
+export { RelaycastSetup, WorkspaceHandle } from './setup.js'
 export type {
   RelaycastSetupOptions,
   CreateWorkspaceOptions,
   JoinWorkspaceOptions,
   RegisterAgentOptions,
+  AgentRecord,
   WorkspaceInfo,
 } from './setup-types.js'
 export {
@@ -590,6 +579,7 @@ export type {
   MessageCallback,
   RelayConfig,
 } from './communicate/types.js'
+export type { WorkspaceLookup } from '@relaycast/types'
 ```
 
 ---
@@ -598,16 +588,16 @@ export type {
 
 ### Unit tests (`setup.test.ts`)
 
-Use `msw` (or inline `fetch` mocking with `vi.stubGlobal`) to mock the API. Test cases:
+Use inline `fetch` mocking with `vi.stubGlobal` to mock the API. Test cases:
 
 - `createWorkspace()` — happy path: calls POST workspaces; returns WorkspaceHandle with correct info
 - `createWorkspace()` — API 500: throws `RelaycastApiError` with httpStatus 500
-- `createWorkspace()` — malformed response (missing workspaceId): throws `MalformedApiResponseError`
+- `createWorkspace()` — malformed response (missing `workspace_id`): throws `MalformedApiResponseError`
 - `joinWorkspace()` — happy path: uses provided workspaceId and apiKey
-- `lookupWorkspace()` — found: returns WorkspaceHandle
-- `lookupWorkspace()` — not found: throws `WorkspaceNotFoundError`
+- `lookupWorkspace()` — found: returns WorkspaceLookup
+- `lookupWorkspace()` — not found: returns `null`
 - `registerAgent()` — happy path: calls POST /v1/agents; stores token
-- `registerAgent()` — duplicate name: handles gracefully
+- `registerAgent()` — duplicate name: surfaces existing `RelayError` / `name_conflict` with status 409
 - `relay()` — registered agent: returns Relay instance
 - `relay()` — unregistered agent: throws `AgentNotRegisteredError`
 - `as()` — returns AgentClient with correct token

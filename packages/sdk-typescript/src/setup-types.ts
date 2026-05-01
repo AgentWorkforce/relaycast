@@ -40,24 +40,11 @@ export interface RelaycastSetupOptions {
 export interface CreateWorkspaceOptions {
   /**
    * Human-readable name for the workspace.
-   * If omitted, the server assigns a generated name.
    */
-  name?: string;
-
-  /**
-   * Agent name to use when registering the first agent immediately after creation.
-   * @default "sdk-agent"
-   */
-  defaultAgentName?: string;
+  name: string;
 }
 
-export interface JoinWorkspaceOptions {
-  /**
-   * Agent name for this join session.
-   * @default "sdk-agent"
-   */
-  agentName?: string;
-}
+export interface JoinWorkspaceOptions {}
 
 export interface WorkspaceInfo {
   workspaceId: string;
@@ -72,5 +59,5 @@ export interface RegisterAgentOptions extends CreateAgentRequest {}
 
 export interface AgentRecord extends Omit<CreateAgentResponse, 'status'> {
   type: NonNullable<CreateAgentRequest['type']>;
-  status: 'online' | 'offline';
+  status: CreateAgentResponse['status'];
 }

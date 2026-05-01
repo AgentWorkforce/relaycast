@@ -428,7 +428,7 @@ describe('WorkspaceHandle', () => {
       name: 'Alice',
       token: 'at_live_alice',
       type: 'human',
-      status: 'offline',
+      status: 'away',
       createdAt: '2026-04-30T12:06:00.000Z',
     });
     expect(workspace.getAgentToken('Alice')).toBe('at_live_alice');
