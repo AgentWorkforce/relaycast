@@ -10,6 +10,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./communicate": {
+      "types": "./dist/communicate/index.d.ts",
+      "import": "./dist/communicate/index.js",
+      "default": "./dist/communicate/index.js"
+    },
     "./internal": {
       "types": "./dist/internal.d.ts",
       "import": "./dist/internal.js",
