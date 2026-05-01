@@ -44,7 +44,7 @@ export interface CreateWorkspaceOptions {
   name: string;
 }
 
-export interface JoinWorkspaceOptions {}
+export type JoinWorkspaceOptions = Record<string, never>;
 
 export interface WorkspaceInfo {
   workspaceId: string;
@@ -55,7 +55,7 @@ export interface WorkspaceInfo {
   name?: string;
 }
 
-export interface RegisterAgentOptions extends CreateAgentRequest {}
+export type RegisterAgentOptions = CreateAgentRequest;
 
 export interface AgentRecord extends Omit<CreateAgentResponse, 'status'> {
   type: NonNullable<CreateAgentRequest['type']>;

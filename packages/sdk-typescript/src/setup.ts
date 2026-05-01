@@ -61,7 +61,7 @@ interface CreateWorkspaceResult {
   createdAt: string;
 }
 
-interface RequestConfig<TOutput> {
+interface RequestConfig {
   method: 'GET' | 'POST';
   path: string;
   schema: ZodType;
@@ -386,7 +386,7 @@ export class RelaycastSetup {
     body,
     allowNotFound = false,
     requireApiKey = false,
-  }: RequestConfig<TOutput>): Promise<TOutput | null> {
+  }: RequestConfig): Promise<TOutput | null> {
     const response = await this.fetchWithRetry(method, path, body);
 
     if (allowNotFound && response.status === 404) {
