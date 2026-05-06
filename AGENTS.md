@@ -36,6 +36,28 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 
 
 
+## Cursor Cloud specific instructions
+
+### Services overview
+
+| Service | Command | Port | Notes |
+|---------|---------|------|-------|
+| API Server (`@relaycast/server`) | `npx wrangler dev --port 8787` | 8787 | Core REST + WebSocket server. Uses D1 (local SQLite) via wrangler. |
+| Observer Dashboard | `RELAY_SERVER_URL=http://localhost:7528 npm run -w @relaycast/observer-dashboard dev` | 3100 | Optional Next.js dashboard. |
+
+### Running the dev server
+
+1. Apply D1 migrations before first run: `npx wrangler d1 migrations apply relaycast --local`
+2. Start with `npx wrangler dev --port 8787` or `npm run dev` (starts server + dashboard via turbo).
+3. Health check: `curl http://localhost:8787/health` should return `{"ok":true,...}`.
+
+### Gotchas
+
+- The `wrangler.toml` at repo root has placeholder IDs for production resources. Local dev uses `--local` mode which creates an in-process D1 SQLite database — no external Postgres/Redis needed.
+- The `.env.example` references PostgreSQL and Redis from an earlier architecture; these are **not required** for local development via wrangler.
+- D1 local mode has eventual consistency quirks: deleting then immediately re-creating a resource (e.g., an A2A agent) may fail with "already exists." Add a small delay or use `--continue-on-failure` in E2E tests.
+- `npm run e2e -- http://localhost:8787 --ci` runs the full E2E smoke test in non-interactive mode. Use `--continue-on-failure` to see all results despite D1 consistency issues.
+- Standard commands for build/test/lint are in the **Core Commands** section above and in root `package.json` scripts.
 
 <!-- prpm:snippet:start @agent-workforce/trail-snippet@1.1.2 -->
 # Trail
