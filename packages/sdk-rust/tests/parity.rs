@@ -1,6 +1,6 @@
 use relaycast::{
-    AgentClient, DmConversationSummary, MessageInjectionMode, MessageListQuery, RelayCast,
-    RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
+    AgentClient, CreateAgentRequest, DmConversationSummary, MessageInjectionMode, MessageListQuery,
+    RelayCast, RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -16,6 +16,82 @@ fn local_options_builder_sets_expected_defaults() {
 
 fn ok(data: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
+}
+
+fn api_error(status: u16, code: &str, message: &str) -> ResponseTemplate {
+    ResponseTemplate::new(status).set_body_json(json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    }))
+}
+
+#[tokio::test]
+async fn register_or_get_agent_reclaims_public_agent_payload() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/agents"))
+        .and(body_json(json!({
+            "name": "Lead",
+            "type": "agent"
+        })))
+        .respond_with(api_error(409, "agent_already_exists", "name_taken"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/agents/Lead"))
+        .respond_with(ok(json!({
+            "id": "a_existing",
+            "name": "Lead",
+            "type": "agent",
+            "status": "offline",
+            "persona": null,
+            "last_seen": "2026-01-01T00:00:00.000Z",
+            "channels": [
+                {
+                    "id": "ch_1",
+                    "name": "general",
+                    "role": "member",
+                    "joined_at": "2026-01-01T00:00:00.000Z"
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/Lead/rotate-token"))
+        .respond_with(ok(json!({
+            "name": "Lead",
+            "token": "at_live_rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let reclaimed = relay
+        .register_or_get_agent(CreateAgentRequest {
+            name: "Lead".to_string(),
+            agent_type: Some("agent".to_string()),
+            persona: None,
+            metadata: None,
+        })
+        .await
+        .expect("register_or_get_agent should tolerate public get-agent payload");
+
+    assert_eq!(reclaimed.id, "a_existing");
+    assert_eq!(reclaimed.name, "Lead");
+    assert_eq!(reclaimed.token, "at_live_rotated");
+    assert_eq!(reclaimed.status, "offline");
+    assert_eq!(reclaimed.created_at, "2026-01-01T00:00:00.000Z");
 }
 
 #[tokio::test]
@@ -216,7 +292,10 @@ async fn send_defaults_mode_wait() {
         .send("#general", "Hello", None, None, None)
         .await
         .expect("send failed");
-    assert!(matches!(sent.injection_mode, Some(MessageInjectionMode::Wait)));
+    assert!(matches!(
+        sent.injection_mode,
+        Some(MessageInjectionMode::Wait)
+    ));
 }
 
 #[tokio::test]
@@ -258,7 +337,10 @@ async fn send_with_mode_forwards_steer() {
         )
         .await
         .expect("send_with_mode failed");
-    assert!(matches!(sent.injection_mode, Some(MessageInjectionMode::Steer)));
+    assert!(matches!(
+        sent.injection_mode,
+        Some(MessageInjectionMode::Steer)
+    ));
 }
 
 #[tokio::test]
@@ -323,7 +405,10 @@ fn ws_message_created_deserializes_optional_agent_id() {
         WsEvent::MessageCreated(msg) => {
             assert_eq!(msg.message.agent_id.as_deref(), Some("a_123"));
             assert_eq!(msg.message.agent_name, "alice");
-            assert!(matches!(msg.message.injection_mode, Some(MessageInjectionMode::Steer)));
+            assert!(matches!(
+                msg.message.injection_mode,
+                Some(MessageInjectionMode::Steer)
+            ));
         }
         other => panic!("unexpected event variant: {other:?}"),
     }

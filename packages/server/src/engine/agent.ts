@@ -114,6 +114,7 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
     type: a.type,
     status: a.status,
     persona: a.persona,
+    created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
   }));
@@ -145,6 +146,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     type: agent.type,
     status: agent.status,
     persona: agent.persona,
+    created_at: agent.createdAt.toISOString(),
     last_seen: agent.lastSeen.toISOString(),
     metadata: agent.metadata,
     channels: memberships.map((m) => ({
@@ -194,6 +196,7 @@ export async function updateAgent(
     type: updated.type,
     status: updated.status,
     persona: updated.persona,
+    created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
     metadata: updated.metadata,
   };

@@ -95,13 +95,14 @@ describe('Type definitions', () => {
   // ============================================
   it('Agent has required fields', () => {
     expectTypeOf<Agent>().toHaveProperty('id');
-    expectTypeOf<Agent>().toHaveProperty('workspace_id');
     expectTypeOf<Agent>().toHaveProperty('name');
     expectTypeOf<Agent>().toHaveProperty('type');
-    expectTypeOf<Agent>().toHaveProperty('token_hash');
     expectTypeOf<Agent>().toHaveProperty('status');
     expectTypeOf<Agent>().toHaveProperty('persona');
+    expectTypeOf<Agent>().toHaveProperty('metadata');
     expectTypeOf<Agent>().toHaveProperty('last_seen');
+    expectTypeOf<Agent>().toHaveProperty('created_at');
+    expectTypeOf<Agent>().toHaveProperty('channels');
   });
 
   it('AgentType union', () => {

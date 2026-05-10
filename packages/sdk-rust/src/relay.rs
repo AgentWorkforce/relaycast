@@ -539,15 +539,18 @@ impl RelayCast {
     ) -> Result<CreateAgentResponse> {
         match self.register_agent(request.clone()).await {
             Ok(response) => Ok(response),
-            Err(RelayError::Api { code, .. }) if code == "agent_already_exists" => {
+            Err(RelayError::Api { code, status, .. })
+                if code == "agent_already_exists" || status == 409 =>
+            {
                 let agent = self.get_agent(&request.name).await?;
                 let token_response = self.rotate_agent_token(&agent.name).await?;
+                let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
                 Ok(CreateAgentResponse {
                     id: agent.id,
                     name: agent.name,
                     token: token_response.token,
                     status: agent.status,
-                    created_at: agent.created_at,
+                    created_at,
                 })
             }
             Err(e) => Err(e),
