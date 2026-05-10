@@ -147,16 +147,27 @@ pub struct TokenRotateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
-    pub workspace_id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub agent_type: String,
-    pub token_hash: String,
     pub status: String,
     pub persona: Option<String>,
+    #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,
-    pub created_at: String,
-    pub last_seen: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default)]
+    pub channels: Vec<AgentChannelMembership>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChannelMembership {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub joined_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

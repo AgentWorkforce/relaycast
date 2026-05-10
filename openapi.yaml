@@ -105,6 +105,30 @@ components:
         created_at:
           type: string
           format: date-time
+          description: Agent creation timestamp when available.
+        last_seen:
+          type: string
+          format: date-time
+          description: Last presence update timestamp.
+        channels:
+          type: array
+          description: Channels this agent belongs to. Present on agent detail responses.
+          items:
+            $ref: '#/components/schemas/AgentChannelMembership'
+
+    AgentChannelMembership:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [owner, member]
+        joined_at:
+          type: string
+          format: date-time
 
     Channel:
       type: object

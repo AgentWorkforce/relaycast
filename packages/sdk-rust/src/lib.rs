@@ -90,6 +90,7 @@ pub use ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions, WsLife
 pub use types::{
     // Agents
     Agent,
+    AgentChannelMembership,
     // Commands
     AgentCommand,
     AgentListQuery,
