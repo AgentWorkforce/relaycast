@@ -104,6 +104,20 @@ describe('AgentClient', () => {
     });
   });
 
+  describe('post()', () => {
+    it('aliases send() for channel messages', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
+
+      await me.post('#general', 'hello');
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
+    });
+  });
+
   describe('messages()', () => {
     it('gets from /v1/channels/:name/messages', async () => {
       mockFetch.mockImplementation(() => mockResponse([{ id: 'm_1' }]));

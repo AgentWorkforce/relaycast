@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentClient, type AgentClientOptions } from '../agent.js';
+import { stableRelaycastEventId } from '../event-id.js';
 import { HttpClient } from '../client.js';
 
 class MockWebSocket {
@@ -248,6 +249,8 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
+    agent.subscribe(['dev']);
+    ws.send.mockClear();
 
     agent.unsubscribe(['dev']);
 
@@ -266,6 +269,69 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     // Should not throw
     agent.unsubscribe(['general']);
+  });
+
+  it('subscribe(channels, handler) multiplexes channel and self DM events on one socket', async () => {
+    const agent = createAgent();
+    const handler = vi.fn();
+
+    const subscription = agent.subscribe(['#general', '@self'], handler);
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribe', channels: ['general'] }),
+    );
+
+    ws.simulateMessage({
+      id: stableRelaycastEventId('m_1'),
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+    ws.simulateMessage({
+      id: stableRelaycastEventId('dm_1'),
+      type: 'dm.received',
+      conversation_id: 'conv_1',
+      message: { id: 'dm_1', agent_name: 'Alice', text: 'hello' },
+    });
+    ws.simulateMessage({
+      id: stableRelaycastEventId('m_2'),
+      type: 'message.created',
+      channel: 'random',
+      message: { id: 'm_2', agent_name: 'Bot', text: 'skip', attachments: [] },
+    });
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[0]![0]).toMatchObject({ id: stableRelaycastEventId('m_1'), type: 'message.created' });
+    expect(handler.mock.calls[1]![0]).toMatchObject({ id: stableRelaycastEventId('dm_1'), type: 'dm.received' });
+
+    subscription.unsubscribe();
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'unsubscribe', channels: ['general'] }),
+    );
+  });
+
+  it('resubscribes managed channels after reconnect', () => {
+    const agent = createAgent();
+    const subscription = agent.subscribe(['general'], vi.fn());
+
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    ws1.simulateClose();
+
+    vi.advanceTimersByTime(1000);
+
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateOpen();
+    expect(ws2.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribe', channels: ['general'] }),
+    );
+
+    subscription.unsubscribe();
   });
 
   // --- lifecycle events ---

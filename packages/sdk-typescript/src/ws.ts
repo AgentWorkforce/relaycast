@@ -264,6 +264,10 @@ export class WsClient {
     this.handlers.get(event)?.delete(handler);
   }
 
+  get connected(): boolean {
+    return this.isOpen;
+  }
+
   private emit(event: string, data: WsClientEvent): void {
     this.handlers.get(event)?.forEach((h) => h(data));
     this.handlers.get('*')?.forEach((h) => h(data));

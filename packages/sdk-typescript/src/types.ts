@@ -226,6 +226,7 @@ export type ReactionGroup = Camelize<Raw.ReactionGroup>;
 export type ReactionRemovedEvent = Camelize<Raw.ReactionRemovedEvent>;
 export type ReadReceipt = Camelize<Raw.ReadReceipt>;
 export type ReaderInfo = Camelize<Raw.ReaderInfo>;
+export type RelaycastMessageEvent = Camelize<Raw.RelaycastMessageEvent>;
 export type ReleaseAgentRequest = Camelize<Raw.ReleaseAgentRequest>;
 export type ReleaseAgentResponse = Camelize<Raw.ReleaseAgentResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;

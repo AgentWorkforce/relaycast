@@ -1,6 +1,8 @@
 export type RelayErrorCode =
   | 'name_conflict'
   | 'not_found'
+  | 'rate_limited'
+  | 'backpressure'
   | 'unauthorized'
   | 'workspace_mismatch'
   | 'transport_error';
@@ -17,6 +19,10 @@ const RAW_CODE_MAP: Record<string, RelayErrorCode> = {
   agent_already_exists: 'name_conflict',
   not_found: 'not_found',
   agent_not_found: 'not_found',
+  rate_limit_exceeded: 'rate_limited',
+  backpressure: 'backpressure',
+  queue_overloaded: 'backpressure',
+  workspace_stream_backpressure: 'backpressure',
   unauthorized: 'unauthorized',
   workspace_mismatch: 'workspace_mismatch',
   workspace_not_found: 'workspace_mismatch',
@@ -36,6 +42,10 @@ export function normalizeRelayErrorCode(rawCode: string | undefined, statusCode?
     return 'not_found';
   }
 
+  if (statusCode === 429) {
+    return 'rate_limited';
+  }
+
   if (statusCode === 409) {
     return 'name_conflict';
   }
@@ -44,6 +54,10 @@ export function normalizeRelayErrorCode(rawCode: string | undefined, statusCode?
 }
 
 export function relayErrorRetryable(code: RelayErrorCode, statusCode?: number): boolean {
+  if (code === 'rate_limited' || code === 'backpressure') {
+    return true;
+  }
+
   if (code !== 'transport_error') {
     return false;
   }

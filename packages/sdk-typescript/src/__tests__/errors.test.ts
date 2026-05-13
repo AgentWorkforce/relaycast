@@ -64,6 +64,14 @@ describe('normalizeRelayErrorCode', () => {
     expect(normalizeRelayErrorCode('agent_not_found')).toBe('not_found');
   });
 
+  it('maps rate_limit_exceeded to rate_limited', () => {
+    expect(normalizeRelayErrorCode('rate_limit_exceeded')).toBe('rate_limited');
+  });
+
+  it('maps backpressure to backpressure', () => {
+    expect(normalizeRelayErrorCode('backpressure')).toBe('backpressure');
+  });
+
   it('maps not_found to not_found', () => {
     expect(normalizeRelayErrorCode('not_found')).toBe('not_found');
   });
@@ -90,6 +98,10 @@ describe('normalizeRelayErrorCode', () => {
 
   it('falls back to statusCode-based mapping for 404', () => {
     expect(normalizeRelayErrorCode('unknown_code', 404)).toBe('not_found');
+  });
+
+  it('falls back to statusCode-based mapping for 429', () => {
+    expect(normalizeRelayErrorCode('unknown_code', 429)).toBe('rate_limited');
   });
 
   it('falls back to statusCode-based mapping for 409', () => {
@@ -124,6 +136,14 @@ describe('relayErrorRetryable', () => {
 
   it('returns false for unauthorized', () => {
     expect(relayErrorRetryable('unauthorized', 401)).toBe(false);
+  });
+
+  it('returns true for rate_limited', () => {
+    expect(relayErrorRetryable('rate_limited', 429)).toBe(true);
+  });
+
+  it('returns true for backpressure', () => {
+    expect(relayErrorRetryable('backpressure', 429)).toBe(true);
   });
 
   it('returns false for workspace_mismatch', () => {
@@ -165,6 +185,12 @@ describe('relayErrorFromApi', () => {
   it('normalizes unknown codes based on statusCode', () => {
     const err = relayErrorFromApi('custom_error', 'not found', 404);
     expect(err.code).toBe('not_found');
+  });
+
+  it('maps 429 api errors to rate_limited', () => {
+    const err = relayErrorFromApi('rate_limit_exceeded', 'slow down', 429);
+    expect(err.code).toBe('rate_limited');
+    expect(err.retryable).toBe(true);
   });
 
   it('defaults to transport_error for completely unknown', () => {

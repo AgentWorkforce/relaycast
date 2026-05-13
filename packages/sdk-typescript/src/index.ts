@@ -41,4 +41,5 @@ export {
 export type { RegisterAgentInput, RegisterOrRotateInput, ResolvedIdentity } from './identity.js';
 export { WsClient } from './ws.js';
 export type { WsClientOptions, EventHandler } from './ws.js';
+export type { Subscription } from './subscription.js';
 export type * from './types.js';

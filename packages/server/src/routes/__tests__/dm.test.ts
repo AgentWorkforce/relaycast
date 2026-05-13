@@ -117,6 +117,32 @@ describe('POST /v1/dm', () => {
     }));
   });
 
+  it('passes @self through to the DM engine for server-side resolution', async () => {
+    vi.mocked(dmEngine.sendDm).mockResolvedValue({
+      id: 'msg_003',
+      conversation_id: 'conv_self',
+      from_agent_id: 'agent_123',
+      to: '@self',
+      text: 'note to self',
+      created_at: '2025-01-01T00:00:00.000Z',
+      injection_mode: 'wait',
+    });
+
+    const res = await app.request('/v1/dm', {
+      method: 'POST',
+      headers: agentAuthHeaders(),
+      body: JSON.stringify({ to: '@self', text: 'note to self' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(dmEngine.sendDm)).toHaveBeenCalledWith(
+      expect.anything(),
+      FAKE_WORKSPACE.id,
+      'agent_123',
+      expect.objectContaining({ to: '@self', text: 'note to self' }),
+    );
+  });
+
   it('returns 400 when text is missing', async () => {
     const res = await app.request('/v1/dm', {
       method: 'POST',
