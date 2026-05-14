@@ -260,14 +260,15 @@ pub struct AgentListQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub id: String,
-    pub workspace_id: String,
+    pub workspace_id: Option<String>,
     pub name: String,
-    pub channel_type: i64,
+    pub channel_type: Option<i64>,
     pub topic: Option<String>,
     #[serde(default)]
     pub metadata: serde_json::Map<String, serde_json::Value>,
     pub created_by: Option<String>,
     pub created_at: String,
+    #[serde(default)]
     pub is_archived: bool,
     pub member_count: Option<i64>,
 }
