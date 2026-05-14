@@ -1,3 +1,4 @@
+import { stableRelaycastEventId } from '../event-id.js';
 import { describe, it, expect } from 'vitest';
 import { transformForClient, type WsEvent } from '../wsTransform.js';
 
@@ -23,6 +24,7 @@ describe('transformForClient', () => {
     }, 'ch_1');
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_1'),
       type: 'message.created',
       channel: 'general',
       message: {
@@ -67,6 +69,7 @@ describe('transformForClient', () => {
     }, 'ch_1');
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_3'),
       type: 'thread.reply',
       channel: 'general',
       parent_id: 'msg_root',
@@ -119,6 +122,7 @@ describe('transformForClient', () => {
     });
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_6'),
       type: 'dm.received',
       conversation_id: 'dm_1',
       message: {
@@ -146,6 +150,7 @@ describe('transformForClient', () => {
     });
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_6b'),
       type: 'dm.received',
       conversation_id: 'dm_1',
       message: {
@@ -171,6 +176,7 @@ describe('transformForClient', () => {
     });
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_7'),
       type: 'group_dm.received',
       conversation_id: 'gdm_1',
       message: {
@@ -197,6 +203,7 @@ describe('transformForClient', () => {
     });
 
     expect(transformForClient(event)).toEqual({
+      id: stableRelaycastEventId('msg_7b'),
       type: 'group_dm.received',
       conversation_id: 'gdm_1',
       message: {

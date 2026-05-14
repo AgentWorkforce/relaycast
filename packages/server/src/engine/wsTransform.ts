@@ -1,3 +1,5 @@
+import { stableRelaycastEventId } from './event-id.js';
+
 export type WsEvent = {
   type: string;
   workspace_id: string;
@@ -17,6 +19,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
   switch (event.type) {
     case 'message.created':
       return {
+        id: stableRelaycastEventId(d.id as string),
         type: 'message.created',
         channel: d.channel_name as string,
         message: {
@@ -43,6 +46,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
 
     case 'thread.reply':
       return {
+        id: stableRelaycastEventId(d.id as string),
         type: 'thread.reply',
         channel: d.channel_name as string,
         parent_id: d.thread_id as string,
@@ -75,6 +79,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       const injectionMode = (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined;
       const attachments = (msg.attachments ?? d.attachments ?? []) as unknown[];
       return {
+        id: stableRelaycastEventId((msg.id ?? d.id) as string),
         type: 'dm.received',
         conversation_id: d.conversation_id as string,
         message: {
@@ -93,6 +98,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       const injectionMode = (msg.injection_mode ?? d.injection_mode) as 'wait' | 'steer' | undefined;
       const attachments = (msg.attachments ?? d.attachments ?? []) as unknown[];
       return {
+        id: stableRelaycastEventId((msg.id ?? d.id) as string),
         type: 'group_dm.received',
         conversation_id: d.conversation_id as string,
         message: {

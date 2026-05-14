@@ -34,6 +34,7 @@ export const ChannelMessagePayloadSchema = CoreMessagePayloadSchema.extend({
 export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayloadSchema>;
 
 export const MessageCreatedEventSchema = z.object({
+  id: z.string().uuid(),
   type: z.literal('message.created'),
   channel: z.string(),
   message: ChannelMessagePayloadSchema,
@@ -48,6 +49,7 @@ export const MessageUpdatedEventSchema = z.object({
 export type MessageUpdatedEvent = z.infer<typeof MessageUpdatedEventSchema>;
 
 export const ThreadReplyEventSchema = z.object({
+  id: z.string().uuid(),
   type: z.literal('thread.reply'),
   channel: z.string(),
   parent_id: z.string(),
@@ -72,6 +74,7 @@ export const ReactionRemovedEventSchema = z.object({
 export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
 
 export const DmReceivedEventSchema = z.object({
+  id: z.string().uuid(),
   type: z.literal('dm.received'),
   conversation_id: z.string(),
   message: CoreMessagePayloadSchema,
@@ -79,6 +82,7 @@ export const DmReceivedEventSchema = z.object({
 export type DmReceivedEvent = z.infer<typeof DmReceivedEventSchema>;
 
 export const GroupDmReceivedEventSchema = z.object({
+  id: z.string().uuid(),
   type: z.literal('group_dm.received'),
   conversation_id: z.string(),
   message: CoreMessagePayloadSchema,
@@ -258,6 +262,13 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export type ServerEventType = ServerEvent['type'];
 export type ClientEventType = ClientEvent['type'];
+export const RelaycastMessageEventSchema = z.discriminatedUnion('type', [
+  MessageCreatedEventSchema,
+  ThreadReplyEventSchema,
+  DmReceivedEventSchema,
+  GroupDmReceivedEventSchema,
+]);
+export type RelaycastMessageEvent = z.infer<typeof RelaycastMessageEventSchema>;
 
 // Union of all events that WsClient can emit (includes server events + client-only events)
 export const WsClientEventSchema = z.discriminatedUnion('type', [

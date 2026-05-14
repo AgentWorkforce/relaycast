@@ -40,6 +40,7 @@ import type {
   ReactionRemovedEvent,
   DmReceivedEvent,
   GroupDmReceivedEvent,
+  RelaycastMessageEvent,
   AgentOnlineEvent,
   AgentOfflineEvent,
   ChannelCreatedEvent,
@@ -57,6 +58,8 @@ import type {
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
+import type { Subscription } from './subscription.js';
+import { stableRelaycastEventId } from './event-id.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -106,6 +109,29 @@ export interface AgentClientOptions {
   ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
 }
 
+type RelaycastMessageHandler = (event: RelaycastMessageEvent) => void | Promise<void>;
+type ManagedSubscription = {
+  channels: Set<string>;
+  handler: RelaycastMessageHandler;
+  stops: Array<() => void>;
+};
+
+function normalizeSubscriptionChannel(channel: string): string {
+  const trimmed = channel.trim();
+  if (trimmed === '@self') return trimmed;
+  return stripHash(trimmed);
+}
+
+function ensureRelaycastMessageEventId(event: RelaycastMessageEvent): RelaycastMessageEvent {
+  if (typeof event.id === 'string' && event.id.length > 0) {
+    return event;
+  }
+  return {
+    ...event,
+    id: stableRelaycastEventId(event.message.id),
+  } as RelaycastMessageEvent;
+}
+
 export class AgentClient {
   public readonly client: HttpClient;
   private ws: WsClient | null = null;
@@ -113,6 +139,9 @@ export class AgentClient {
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  private manualSubscriptions = new Set<string>();
+  private managedSubscriptions = new Map<symbol, ManagedSubscription>();
+  private activeWsChannels = new Set<string>();
 
   constructor(client: HttpClient, options: AgentClientOptions = {}) {
     this.client = client;
@@ -175,12 +204,15 @@ export class AgentClient {
     this.ws.on('open', () => {
       void this.presence.markOnline().catch(() => {});
       this.startAutoHeartbeat();
+      this.syncDesiredSubscriptions({ resetRemoteState: true });
     });
     this.ws.on('close', () => {
       this.stopAutoHeartbeat();
+      this.activeWsChannels.clear();
     });
     this.ws.on('permanently_disconnected', () => {
       this.stopAutoHeartbeat();
+      this.activeWsChannels.clear();
     });
     this.ws.connect();
   }
@@ -198,21 +230,90 @@ export class AgentClient {
       await this.pendingHeartbeat;
       this.pendingHeartbeat = null;
     }
+    for (const subscription of this.managedSubscriptions.values()) {
+      for (const stop of subscription.stops) {
+        stop();
+      }
+    }
+    this.managedSubscriptions.clear();
+    this.manualSubscriptions.clear();
     if (this.ws) {
       this.ws.disconnect();
       this.ws = null;
     }
+    this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
     await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
   }
 
-  subscribe(channels: string[]): void {
-    this.ws?.subscribe(channels);
+  subscribe(channels: string[]): void;
+  subscribe(channels: string[], onMessage: RelaycastMessageHandler): Subscription;
+  subscribe(channels: string[], onMessage?: RelaycastMessageHandler): void | Subscription {
+    const normalized = [...new Set(channels.map(normalizeSubscriptionChannel).filter(Boolean))];
+    if (normalized.length === 0) {
+      if (onMessage) {
+        return { channels: [], unsubscribe() {} };
+      }
+      return;
+    }
+
+    if (!onMessage) {
+      for (const channel of normalized) {
+        this.manualSubscriptions.add(channel);
+      }
+      this.syncDesiredSubscriptions();
+      return;
+    }
+
+    this.connect();
+    const key = Symbol('relaycast.subscription');
+    const channelSet = new Set(normalized);
+    const invoke = (event: RelaycastMessageEvent): void => {
+      if (!this.matchesSubscription(channelSet, event)) {
+        return;
+      }
+      void Promise.resolve()
+        .then(() => onMessage(ensureRelaycastMessageEventId(event)))
+        .catch((err) => {
+          console.error('[relaycast] Subscription handler failed', err);
+        });
+    };
+
+    const stops = [
+      this.on.messageCreated((event) => invoke(event)),
+      this.on.threadReply((event) => invoke(event)),
+      this.on.dmReceived((event) => invoke(event)),
+      this.on.groupDmReceived((event) => invoke(event)),
+    ];
+
+    this.managedSubscriptions.set(key, {
+      channels: channelSet,
+      handler: onMessage,
+      stops,
+    });
+    this.syncDesiredSubscriptions();
+
+    return {
+      channels: Object.freeze([...normalized]),
+      unsubscribe: () => {
+        const current = this.managedSubscriptions.get(key);
+        if (!current) return;
+        this.managedSubscriptions.delete(key);
+        for (const stop of current.stops) {
+          stop();
+        }
+        this.syncDesiredSubscriptions();
+      },
+    };
   }
 
   unsubscribe(channels: string[]): void {
-    this.ws?.unsubscribe(channels);
+    const normalized = [...new Set(channels.map(normalizeSubscriptionChannel).filter(Boolean))];
+    for (const channel of normalized) {
+      this.manualSubscriptions.delete(channel);
+    }
+    this.syncDesiredSubscriptions();
   }
 
   private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
@@ -293,6 +394,19 @@ export class AgentClient {
       body,
       idempotencyHeaders(opts),
     );
+  }
+
+  post(
+    channel: string,
+    text: string,
+    opts?: {
+      attachments?: string[];
+      blocks?: MessageBlock[];
+      mode?: 'wait' | 'steer';
+      idempotencyKey?: string;
+    },
+  ): Promise<MessageWithMeta> {
+    return this.send(channel, text, opts);
   }
 
   async messages(
@@ -416,6 +530,66 @@ export class AgentClient {
         `/v1/dm/${encodeURIComponent(conversationId)}/participants/${encodeURIComponent(agent)}`,
       ),
   };
+
+  private matchesSubscription(channels: Set<string>, event: RelaycastMessageEvent): boolean {
+    switch (event.type) {
+      case 'dm.received':
+      case 'group_dm.received':
+        return channels.has('@self');
+      case 'message.created':
+      case 'thread.reply':
+        return channels.has(stripHash(event.channel));
+      default:
+        return false;
+    }
+  }
+
+  private desiredWsChannels(): Set<string> {
+    const desired = new Set<string>();
+    for (const channel of this.manualSubscriptions) {
+      if (channel !== '@self') {
+        desired.add(channel);
+      }
+    }
+    for (const subscription of this.managedSubscriptions.values()) {
+      for (const channel of subscription.channels) {
+        if (channel !== '@self') {
+          desired.add(channel);
+        }
+      }
+    }
+    return desired;
+  }
+
+  private syncDesiredSubscriptions(options: { resetRemoteState?: boolean } = {}): void {
+    if (!this.ws) {
+      return;
+    }
+
+    const desired = this.desiredWsChannels();
+    if (!this.ws.connected) {
+      if (options.resetRemoteState) {
+        this.activeWsChannels.clear();
+      }
+      return;
+    }
+
+    if (options.resetRemoteState) {
+      this.activeWsChannels.clear();
+    }
+
+    const toSubscribe = [...desired].filter((channel) => !this.activeWsChannels.has(channel));
+    const toUnsubscribe = [...this.activeWsChannels].filter((channel) => !desired.has(channel));
+
+    if (toSubscribe.length > 0) {
+      this.ws.subscribe(toSubscribe);
+    }
+    if (toUnsubscribe.length > 0) {
+      this.ws.unsubscribe(toUnsubscribe);
+    }
+
+    this.activeWsChannels = desired;
+  }
 
   // === Channels ===
 

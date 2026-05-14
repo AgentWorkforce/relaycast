@@ -220,11 +220,15 @@ export async function sendDm(
   options: SendDmOptions = {},
 ) {
   const startedAtMs = Date.now();
-  // Resolve the target agent by name
-  const [toAgent] = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
+  const [toAgent] = data.to === '@self'
+    ? await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)))
+    : await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
 
   if (!toAgent) {
     const err = new Error(`Agent "${data.to}" not found`);

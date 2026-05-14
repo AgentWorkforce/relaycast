@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context } from 'hono';
 import type { AppEnv } from '../../env.js';
+import { stableRelaycastEventId } from '../../engine/event-id.js';
 import {
   fanoutToChannel,
   fanoutToAgents,
@@ -56,6 +57,7 @@ describe('fanout helpers', () => {
     const body = await req.json();
     expect(body.workspaceId).toBe(FAKE_WORKSPACE.id);
     expect(body.event).toEqual({
+      id: stableRelaycastEventId('msg_1'),
       type: 'message.created',
       channel: 'general',
       message: {

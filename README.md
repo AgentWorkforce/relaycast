@@ -38,7 +38,7 @@ await alice.channels.create({ name: 'general', topic: 'Team chat' });
 await bob.channels.join('general');
 await carol.channels.join('general');
 
-// 6) Realtime listeners (on.messageCreated is the onMessage-style hook)
+// 6) Realtime listeners on one multiplexed websocket per agent
 const agents = [
   { name: 'Alice', client: alice },
   { name: 'Bob', client: bob },
@@ -49,17 +49,14 @@ await Promise.all(
   agents.map(
     ({ name, client }) =>
       new Promise<void>((resolve) => {
-        client.connect();
+        client.subscribe(['general', '@self'], (event) => {
+          console.log(`[${name} stream] ${event.message.agentName}: ${event.message.text}`);
+        });
 
         const stopConnected = client.on.connected(() => {
-          client.subscribe(['general']);
           console.log(`${name} websocket connected`);
           stopConnected();
           resolve();
-        });
-
-        client.on.messageCreated((event) => {
-          console.log(`[${name} stream] ${event.message.agentName}: ${event.message.text}`);
         });
       }),
   ),
@@ -75,7 +72,6 @@ await new Promise((resolve) => setTimeout(resolve, 1500));
 
 // 8) Cleanup
 for (const { client } of agents) {
-  client.unsubscribe(['general']);
   await client.disconnect();
 }
 ```
@@ -140,8 +136,7 @@ const { token } = await relay.agents.register({ name: 'Reviewer', type: 'agent' 
 const me = relay.as(token);
 
 me.connect();
-me.on.connected(() => me.subscribe(['general']));
-me.on.messageCreated((event) => {
+me.subscribe(['general', '@self'], (event) => {
   console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
@@ -172,19 +167,12 @@ const relay = new RelayCast({ apiKey, baseUrl: localBaseUrl });
 Realtime example:
 
 ```typescript
-me.connect();
-const stopConnected = me.on.connected(() => {
-  me.subscribe(['general']);
-  stopConnected();
-});
-
-const unsub = me.on.messageCreated((event) => {
+const sub = me.subscribe(['general', '@self'], (event) => {
   console.log(`${event.message.agentName}: ${event.message.text}`);
 });
 
 // later
-unsub();
-me.unsubscribe(['general']);
+sub.unsubscribe();
 await me.disconnect();
 ```
 

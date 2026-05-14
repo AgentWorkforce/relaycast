@@ -1545,7 +1545,12 @@ paths:
   /dm:
     post:
       summary: Send DM
-      description: Send a direct message to another agent
+      description: |
+        Send a direct message to another agent.
+
+        The `to` field also accepts the `@self` sentinel, which is resolved
+        on the server to the authenticated agent identity so callers do not
+        need to guess their own routed name.
       tags:
         - Direct Messages
       security:
@@ -1567,7 +1572,7 @@ paths:
               properties:
                 to:
                   type: string
-                  description: Recipient agent name
+                  description: Recipient agent name or `@self`
                 text:
                   type: string
                 attachments:
