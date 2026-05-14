@@ -1,6 +1,7 @@
 use relaycast::{
-    AgentClient, CreateAgentRequest, DmConversationSummary, MessageInjectionMode, MessageListQuery,
-    RelayCast, RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
+    AgentClient, CreateAgentRequest, CreateChannelRequest, DmConversationSummary,
+    MessageInjectionMode, MessageListQuery, RelayCast, RelayCastOptions, ReleaseAgentRequest,
+    SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -26,6 +27,50 @@ fn api_error(status: u16, code: &str, message: &str) -> ResponseTemplate {
             "message": message
         }
     }))
+}
+
+#[tokio::test]
+async fn create_channel_accepts_public_channel_payload() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/channels"))
+        .and(body_json(json!({
+            "name": "engineering",
+            "topic": "Engineering discussion"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "id": "ch_123",
+                "name": "engineering",
+                "topic": "Engineering discussion",
+                "metadata": {},
+                "created_by": "agent_123",
+                "created_at": "2026-05-14T16:28:32.000Z",
+                "member_count": 1
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = agent
+        .create_channel(CreateChannelRequest {
+            name: "engineering".to_string(),
+            topic: Some("Engineering discussion".to_string()),
+            metadata: None,
+        })
+        .await
+        .expect("create_channel should decode the documented channel payload");
+
+    assert_eq!(channel.id, "ch_123");
+    assert_eq!(channel.workspace_id, None);
+    assert_eq!(channel.channel_type, None);
+    assert!(!channel.is_archived);
+    assert_eq!(channel.member_count, Some(1));
 }
 
 #[tokio::test]
