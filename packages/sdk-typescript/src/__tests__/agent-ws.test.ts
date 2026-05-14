@@ -143,6 +143,30 @@ describe('AgentClient WebSocket integration', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  it('disconnect() clears manual and managed subscriptions before future reconnect', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.simulateOpen();
+    agent.subscribe(['general']);
+    agent.subscribe(['dev'], vi.fn());
+
+    const p = agent.disconnect();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
+
+    agent.subscribe(['random'], vi.fn());
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateOpen();
+
+    const subscribePayloads = ws2.send.mock.calls
+      .map(([payload]) => JSON.parse(String(payload)))
+      .filter((payload) => payload.type === 'subscribe');
+    expect(subscribePayloads).toEqual([
+      { type: 'subscribe', channels: ['random'] },
+    ]);
+  });
+
   // --- typed on.* handlers ---
 
   it('on.messageCreated fires with message.created event', () => {
@@ -313,6 +337,30 @@ describe('AgentClient WebSocket integration', () => {
     expect(ws.send).toHaveBeenCalledWith(
       JSON.stringify({ type: 'unsubscribe', channels: ['general'] }),
     );
+  });
+
+  it('subscribe(channels, handler) logs rejected handler promises', async () => {
+    const agent = createAgent();
+    const err = new Error('handler failed');
+    const handler = vi.fn().mockRejectedValue(err);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    agent.subscribe(['general'], handler);
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith('[relaycast] Subscription handler failed', err);
+    errorSpy.mockRestore();
   });
 
   it('resubscribes managed channels after reconnect', () => {

@@ -1,5 +1,5 @@
 function hashStringParts(parts: string[]): [number, number, number, number] {
-  const input = parts.join(':');
+  const input = JSON.stringify(parts);
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   let h3 = 0xc0decafe;
@@ -50,6 +50,10 @@ export function stableRelaycastEventId(...parts: Array<string | null | undefined
   const normalized = parts
     .map((part) => part?.trim())
     .filter((part): part is string => typeof part === 'string' && part.length > 0);
+
+  if (normalized.length === 0) {
+    return formatUuidFromWords(hashStringParts(['relaycast', 'empty-event']));
+  }
 
   return formatUuidFromWords(hashStringParts(['relaycast', ...normalized]));
 }

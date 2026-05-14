@@ -72,6 +72,14 @@ describe('normalizeRelayErrorCode', () => {
     expect(normalizeRelayErrorCode('backpressure')).toBe('backpressure');
   });
 
+  it('maps queue_overloaded to backpressure', () => {
+    expect(normalizeRelayErrorCode('queue_overloaded')).toBe('backpressure');
+  });
+
+  it('maps workspace_stream_backpressure to backpressure', () => {
+    expect(normalizeRelayErrorCode('workspace_stream_backpressure')).toBe('backpressure');
+  });
+
   it('maps not_found to not_found', () => {
     expect(normalizeRelayErrorCode('not_found')).toBe('not_found');
   });

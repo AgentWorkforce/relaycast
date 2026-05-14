@@ -1,4 +1,4 @@
 export interface Subscription {
-  readonly channels: string[];
+  readonly channels: readonly string[];
   unsubscribe(): void;
 }

@@ -230,6 +230,13 @@ export class AgentClient {
       await this.pendingHeartbeat;
       this.pendingHeartbeat = null;
     }
+    for (const subscription of this.managedSubscriptions.values()) {
+      for (const stop of subscription.stops) {
+        stop();
+      }
+    }
+    this.managedSubscriptions.clear();
+    this.manualSubscriptions.clear();
     if (this.ws) {
       this.ws.disconnect();
       this.ws = null;
@@ -266,7 +273,11 @@ export class AgentClient {
       if (!this.matchesSubscription(channelSet, event)) {
         return;
       }
-      void onMessage(ensureRelaycastMessageEventId(event));
+      void Promise.resolve()
+        .then(() => onMessage(ensureRelaycastMessageEventId(event)))
+        .catch((err) => {
+          console.error('[relaycast] Subscription handler failed', err);
+        });
     };
 
     const stops = [
@@ -284,7 +295,7 @@ export class AgentClient {
     this.syncDesiredSubscriptions();
 
     return {
-      channels: normalized,
+      channels: Object.freeze([...normalized]),
       unsubscribe: () => {
         const current = this.managedSubscriptions.get(key);
         if (!current) return;

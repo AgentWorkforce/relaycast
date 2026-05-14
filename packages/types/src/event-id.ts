@@ -1,5 +1,5 @@
 function hashStringParts(parts: string[]): [number, number, number, number] {
-  const input = parts.join(':');
+  const input = JSON.stringify(parts);
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   let h3 = 0xc0decafe;
