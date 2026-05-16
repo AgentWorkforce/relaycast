@@ -142,6 +142,116 @@ describe('cloud tools', () => {
     });
   });
 
+  it('rejects mixed-case fallback fields in cloud.json (no cloud_token / workspace_id / user_id)', async () => {
+    // Schema accepts only the canonical camelCase shape. AGENTS.md prohibits
+    // mixed-case fallbacks, so a config that only carries `cloud_token` or
+    // `workspace_id` must fail closed as NEEDS_CLOUD_LOGIN rather than silently
+    // bridging the legacy field names.
+    await writeConfig('cloud.json', {
+      cloud_token: 'legacy_tok',
+      user_id: 'user_legacy',
+      workspaces: [{ workspace_id: 'ws_legacy' }],
+    });
+    await writeConfig('connections.json', { connections: { claude: { command: 'claude' } } });
+
+    const result = await client.callTool({
+      name: 'cloud.agent.spawn',
+      arguments: { cli: 'claude', prompt: 'do work' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      code: 'NEEDS_CLOUD_LOGIN',
+    });
+  });
+
+  it('returns CLOUD_REQUEST_FAILED when cloud.json contains malformed JSON', async () => {
+    await writeFile(path.join(configDir, 'cloud.json'), '{ this is not json', 'utf8');
+
+    const result = await client.callTool({
+      name: 'cloud.agent.spawn',
+      arguments: { cli: 'claude', prompt: 'do work' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      code: 'CLOUD_REQUEST_FAILED',
+    });
+  });
+
+  it('returns CLOUD_REQUEST_FAILED when fetch throws (network failure)', async () => {
+    await writeConfig('cloud.json', {
+      cloudToken: 'cloud_tok',
+      workspaces: [{ id: 'ws_1' }],
+    });
+    await writeConfig('connections.json', { connections: { claude: { command: 'claude' } } });
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const result = await client.callTool({
+      name: 'cloud.agent.spawn',
+      arguments: { cli: 'claude', prompt: 'do work' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      code: 'CLOUD_REQUEST_FAILED',
+      message: 'ECONNREFUSED',
+    });
+  });
+
+  it('cloud.agent.list works for multi-workspace logins when workspace_id is omitted', async () => {
+    // Previously this returned WORKSPACE_REQUIRED, contradicting the tool's
+    // own description ("optionally scoped to a workspace"). The list tool now
+    // opts out of workspace gating when no workspace_id is supplied so
+    // account-wide listing works.
+    await writeConfig('cloud.json', {
+      cloudToken: 'cloud_tok',
+      workspaces: [{ id: 'ws_1' }, { id: 'ws_2' }],
+    });
+    await writeConfig('connections.json', { connections: {} });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, data: { agents: [] } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const result = await client.callTool({
+      name: 'cloud.agent.list',
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://cloud.test/api/v1/agents',
+      expect.any(Object),
+    );
+  });
+
+  it('cloud.agent.list still scopes by workspace when one is supplied', async () => {
+    await writeConfig('cloud.json', {
+      cloudToken: 'cloud_tok',
+      workspaces: [{ id: 'ws_1' }, { id: 'ws_2' }],
+    });
+    await writeConfig('connections.json', { connections: {} });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, data: { agents: [] } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await client.callTool({
+      name: 'cloud.agent.list',
+      arguments: { workspace_id: 'ws_2' },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://cloud.test/api/v1/agents?workspaceId=ws_2',
+      expect.any(Object),
+    );
+  });
+
   it('propagates structured Cloud remediation errors verbatim', async () => {
     await writeConfig('cloud.json', {
       cloudToken: 'cloud_tok',

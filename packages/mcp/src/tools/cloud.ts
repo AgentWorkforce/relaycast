@@ -27,26 +27,57 @@ type CloudToolError = {
   remediation: string;
 };
 
-type CloudWorkspace = {
-  id?: string;
-  workspaceId?: string;
-  name?: string;
-  label?: string;
-};
+// Single canonical config shape — AGENTS.md prohibits mixed-case field
+// fallbacks (e.g. `cloud_token`, `workspace_id`, `user_id`), and the zod
+// schemas below enforce that boundary instead of the previous ad-hoc
+// typeof/`??` chain.
+const cloudWorkspaceSchema = z.object({
+  id: z.string().optional(),
+  workspaceId: z.string().optional(),
+  name: z.string().optional(),
+  label: z.string().optional(),
+});
 
-type CloudConfig = {
-  cloudToken: string;
-  userId?: string;
-  workspaces: CloudWorkspace[];
-};
+const cloudConfigSchema = z.object({
+  cloudToken: z.string().min(1),
+  userId: z.string().optional(),
+  workspaces: z.array(cloudWorkspaceSchema).default([]),
+});
 
-type ConnectionConfig = {
-  connections: Record<string, unknown>;
-};
+// connections.json may be written either as `{ connections: { … } }` or as a
+// flat record of CLI → entry. Both shapes are documented in the existing
+// fixtures; this is a single-canonical-shape on disk choice, not a mixed-case
+// fallback. The schema accepts either and normalizes to `{ connections }`.
+const connectionsRecordSchema = z.record(z.string(), z.unknown());
+const connectionsConfigSchema = z
+  .object({
+    connections: connectionsRecordSchema.optional(),
+  })
+  .passthrough()
+  .transform((value): { connections: Record<string, unknown> } => {
+    if (value.connections && typeof value.connections === 'object') {
+      return { connections: value.connections as Record<string, unknown> };
+    }
+    const { connections: _drop, ...rest } = value as Record<string, unknown> & {
+      connections?: unknown;
+    };
+    return { connections: rest as Record<string, unknown> };
+  });
+
+type CloudWorkspace = z.infer<typeof cloudWorkspaceSchema>;
+type CloudConfig = z.infer<typeof cloudConfigSchema>;
+type ConnectionConfig = z.infer<typeof connectionsConfigSchema>;
 
 type PreflightOptions = {
   cli?: string;
   workspaceId?: string;
+  /**
+   * When false, callers explicitly opt out of workspace resolution — the
+   * preflight will not return WORKSPACE_REQUIRED for multi-workspace logins
+   * unless a workspaceId was supplied. Defaults to true to keep existing
+   * tools (spawn / kill / slack.bridge) working.
+   */
+  requireWorkspace?: boolean;
 };
 
 type PreflightContext = {
@@ -74,15 +105,36 @@ function configPath(filename: string): string {
   return path.join(configDir(), filename);
 }
 
-async function readJsonFile(filePath: string): Promise<unknown | null> {
+type JsonReadResult =
+  | { kind: 'ok'; value: unknown }
+  | { kind: 'missing' }
+  | { kind: 'malformed'; error: Error };
+
+async function readJsonFile(filePath: string): Promise<JsonReadResult> {
+  let raw: string;
   try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as unknown;
+    raw = await readFile(filePath, 'utf8');
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      return null;
+      return { kind: 'missing' };
     }
     throw error;
   }
+  try {
+    return { kind: 'ok', value: JSON.parse(raw) as unknown };
+  } catch (error) {
+    // Malformed JSON gets surfaced as a structured tool error by callers
+    // rather than escaping as an uncaught SyntaxError.
+    return { kind: 'malformed', error: error instanceof Error ? error : new Error(String(error)) };
+  }
+}
+
+function malformedConfigError(filePath: string, error: Error): CallToolResult {
+  return cloudToolError({
+    code: 'CLOUD_REQUEST_FAILED',
+    message: `Failed to parse ${filePath}: ${error.message}`,
+    remediation: `Fix the JSON in ${filePath} or re-run agent-relay cloud login to regenerate it.`,
+  });
 }
 
 function cloudToolError(error: CloudToolError): CallToolResult {
@@ -123,43 +175,13 @@ function workspaceRequiredError(workspaces: CloudWorkspace[]): CallToolResult {
 }
 
 function parseCloudConfig(value: unknown): CloudConfig | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Record<string, unknown>;
-  const token = record.cloudToken ?? record.cloud_token ?? record.token;
-  if (typeof token !== 'string' || token.trim().length === 0) return null;
-  const rawWorkspaces = Array.isArray(record.workspaces) ? record.workspaces : [];
-  const workspaces = rawWorkspaces
-    .filter((workspace): workspace is Record<string, unknown> => !!workspace && typeof workspace === 'object')
-    .map((workspace) => ({
-      id: typeof workspace.id === 'string' ? workspace.id : undefined,
-      workspaceId: typeof workspace.workspaceId === 'string'
-        ? workspace.workspaceId
-        : typeof workspace.workspace_id === 'string'
-          ? workspace.workspace_id
-          : undefined,
-      name: typeof workspace.name === 'string' ? workspace.name : undefined,
-      label: typeof workspace.label === 'string' ? workspace.label : undefined,
-    }));
-
-  return {
-    cloudToken: token,
-    userId: typeof record.userId === 'string'
-      ? record.userId
-      : typeof record.user_id === 'string'
-        ? record.user_id
-        : undefined,
-    workspaces,
-  };
+  const parsed = cloudConfigSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function parseConnections(value: unknown): ConnectionConfig {
-  if (!value || typeof value !== 'object') return { connections: {} };
-  const record = value as Record<string, unknown>;
-  const nested = record.connections;
-  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-    return { connections: nested as Record<string, unknown> };
-  }
-  return { connections: record };
+  const parsed = connectionsConfigSchema.safeParse(value);
+  return parsed.success ? parsed.data : { connections: {} };
 }
 
 function isConnected(connections: ConnectionConfig, cli: string): boolean {
@@ -179,15 +201,34 @@ function resolveWorkspaceId(cloud: CloudConfig, requested?: string): string | un
 }
 
 async function loadPreflight(options: PreflightOptions = {}): Promise<PreflightContext | CallToolResult> {
-  const cloud = parseCloudConfig(await readJsonFile(configPath('cloud.json')));
+  const cloudJsonPath = configPath('cloud.json');
+  const cloudRead = await readJsonFile(cloudJsonPath);
+  if (cloudRead.kind === 'malformed') {
+    return malformedConfigError(cloudJsonPath, cloudRead.error);
+  }
+  const cloud = cloudRead.kind === 'ok' ? parseCloudConfig(cloudRead.value) : null;
   if (!cloud) return cloudLoginError();
 
-  const connections = parseConnections(await readJsonFile(configPath('connections.json')));
+  const connectionsJsonPath = configPath('connections.json');
+  const connectionsRead = await readJsonFile(connectionsJsonPath);
+  if (connectionsRead.kind === 'malformed') {
+    return malformedConfigError(connectionsJsonPath, connectionsRead.error);
+  }
+  const connections = connectionsRead.kind === 'ok'
+    ? parseConnections(connectionsRead.value)
+    : { connections: {} };
   if (options.cli && !isConnected(connections, options.cli)) {
     return cliConnectionError(options.cli);
   }
 
-  const workspaceId = resolveWorkspaceId(cloud, options.workspaceId);
+  // Only resolve a workspace when one was requested or the login is single-
+  // workspace. When the caller passes `requireWorkspace: false` and omits
+  // `workspaceId`, skip multi-workspace gating so account-wide listing is
+  // possible (cloud.agent.list use case).
+  const requireWorkspace = options.requireWorkspace ?? true;
+  const workspaceId = requireWorkspace || options.workspaceId
+    ? resolveWorkspaceId(cloud, options.workspaceId)
+    : options.workspaceId?.trim() || undefined;
   if (workspaceId && typeof workspaceId === 'object') return workspaceId;
 
   return { cloud, connections, workspaceId };
@@ -256,15 +297,29 @@ async function cloudRequest(
   pathName: string,
   init: RequestInit = {},
 ): Promise<CallToolResult> {
-  const response = await fetch(`${baseUrl}${pathName}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${pathName}`, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    // Network errors (DNS, refused, timeout, abort) bypass the HTTP-status
+    // branch below. Normalize them through cloudToolError so callers always
+    // receive the structured remediation envelope.
+    return cloudToolError({
+      code: 'CLOUD_REQUEST_FAILED',
+      message: error instanceof Error
+        ? error.message
+        : 'Cloud request failed before a response was received.',
+      remediation: 'Retry after checking Cloud status.',
+    });
+  }
   const body = await parseResponseBody(response);
   if (!response.ok) {
     return cloudToolError(extractCloudError(response, body));
@@ -309,8 +364,20 @@ export function registerCloudTools(
     outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async () => {
-    const cloud = parseCloudConfig(await readJsonFile(configPath('cloud.json')));
-    const connections = parseConnections(await readJsonFile(configPath('connections.json')));
+    const cloudJsonPath = configPath('cloud.json');
+    const cloudRead = await readJsonFile(cloudJsonPath);
+    if (cloudRead.kind === 'malformed') {
+      return malformedConfigError(cloudJsonPath, cloudRead.error);
+    }
+    const cloud = cloudRead.kind === 'ok' ? parseCloudConfig(cloudRead.value) : null;
+    const connectionsJsonPath = configPath('connections.json');
+    const connectionsRead = await readJsonFile(connectionsJsonPath);
+    if (connectionsRead.kind === 'malformed') {
+      return malformedConfigError(connectionsJsonPath, connectionsRead.error);
+    }
+    const connections = connectionsRead.kind === 'ok'
+      ? parseConnections(connectionsRead.value)
+      : { connections: {} };
     const status = {
       cloud_base_url: baseUrl,
       config_dir: configDir(),
@@ -369,7 +436,13 @@ export function registerCloudTools(
     outputSchema: jsonResult,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ workspace_id }) => {
-    const preflight = await loadPreflight({ workspaceId: workspace_id });
+    // cloud.agent.list advertises workspace scoping as optional, so opt out
+    // of WORKSPACE_REQUIRED gating when the caller didn't supply one. This
+    // keeps "list across all workspaces" working for multi-workspace logins.
+    const preflight = await loadPreflight({
+      workspaceId: workspace_id,
+      requireWorkspace: false,
+    });
     if (isToolError(preflight)) return preflight;
     return await cloudRequest(
       baseUrl,
