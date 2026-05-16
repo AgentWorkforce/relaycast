@@ -166,6 +166,12 @@ describe('cloud tools', () => {
   });
 
   it('returns CLOUD_REQUEST_FAILED when cloud.json contains malformed JSON', async () => {
+    // Spy on fetch first so we can prove the failure surfaced in config
+    // parsing preflight, not via a downstream network-error path that would
+    // also map to CLOUD_REQUEST_FAILED. Without this guard the assertion
+    // would still pass even if a regression made the tool issue a network
+    // request with a corrupt token, which is what we want to prevent.
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
     await writeFile(path.join(configDir, 'cloud.json'), '{ this is not json', 'utf8');
 
     const result = await client.callTool({
@@ -177,6 +183,7 @@ describe('cloud tools', () => {
     expect(result.structuredContent).toMatchObject({
       code: 'CLOUD_REQUEST_FAILED',
     });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns CLOUD_REQUEST_FAILED when fetch throws (network failure)', async () => {
@@ -241,11 +248,15 @@ describe('cloud tools', () => {
       }),
     );
 
-    await client.callTool({
+    const result = await client.callTool({
       name: 'cloud.agent.list',
       arguments: { workspace_id: 'ws_2' },
     });
 
+    // Assert success in addition to the URL shape so a regression in
+    // response parsing (or any path that errors after fetch is constructed
+    // correctly) is caught by this test, not silently passed.
+    expect(result.isError).toBeFalsy();
     expect(fetchMock).toHaveBeenCalledWith(
       'https://cloud.test/api/v1/agents?workspaceId=ws_2',
       expect.any(Object),
