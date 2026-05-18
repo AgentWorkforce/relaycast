@@ -2,6 +2,44 @@ import { normalizeTelemetryOrigin, type TelemetryOrigin } from '@relaycast/types
 
 export type OriginInfo = Partial<TelemetryOrigin>;
 
+/**
+ * HTTP header used by orchestrators (Claude Code, Cursor, etc.) to identify
+ * themselves to the relaycast server. See relay#881.
+ */
+export const ORCHESTRATOR_HARNESS_HEADER = 'X-Relaycast-Harness';
+
+/** Fallback value when the header is missing or invalid. */
+export const UNKNOWN_ORCHESTRATOR_HARNESS = 'unknown';
+
+/** Sanity-cap on the header value — long enough for any reasonable identifier. */
+const ORCHESTRATOR_HARNESS_MAX_LENGTH = 40;
+
+/**
+ * Read and sanitize the `X-Relaycast-Harness` header from a request.
+ *
+ * Returns a lowercase identifier (kebab-case by convention, e.g. `claude-code`,
+ * `cursor`, `codex`). We intentionally do NOT enforce an enum here — accepting
+ * any well-formed value lets us discover new harnesses without shipping a
+ * relaycast release first. Segmentation/normalization happens downstream in
+ * the analytics layer.
+ *
+ * Drops empty, oversized, or non-ASCII values to `'unknown'`.
+ */
+export function extractOrchestratorHarness(headers: Headers): string {
+  const raw = headers.get(ORCHESTRATOR_HARNESS_HEADER);
+  if (!raw) return UNKNOWN_ORCHESTRATOR_HARNESS;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return UNKNOWN_ORCHESTRATOR_HARNESS;
+  if (trimmed.length > ORCHESTRATOR_HARNESS_MAX_LENGTH) return UNKNOWN_ORCHESTRATOR_HARNESS;
+  // Restrict to printable ASCII to keep PostHog property values clean. Allow
+  // letters, digits, and the small set of separators harness names tend to
+  // use. Anything else falls back to `unknown`.
+  if (!/^[a-zA-Z0-9._-]+$/.test(trimmed)) return UNKNOWN_ORCHESTRATOR_HARNESS;
+
+  return trimmed.toLowerCase();
+}
+
 function sanitizeOriginPart(value: string | null | undefined, maxLen: number): string | undefined {
   if (!value) return undefined;
   const normalized = value.trim();

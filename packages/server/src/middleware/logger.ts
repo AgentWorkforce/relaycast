@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
 import { createRequestLogger } from '../lib/logger.js';
-import { deriveClientName, extractOriginInfo } from '../lib/origin.js';
+import { deriveClientName, extractOrchestratorHarness, extractOriginInfo } from '../lib/origin.js';
 
 type WaitUntilContext = {
   executionCtx?: {
@@ -110,11 +110,14 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestHeaders = c.req.raw.headers;
   const clientName = deriveClientName(requestHeaders);
   const originInfo = extractOriginInfo(c.req.raw, clientName);
+  const orchestratorHarness = extractOrchestratorHarness(requestHeaders);
+  c.set('orchestratorHarness', orchestratorHarness);
 
   const logger = createRequestLogger(c, 'request', {
     request_id: requestId,
     ...(clientName ? { client_name: clientName } : {}),
     ...originInfo,
+    orchestrator_harness: orchestratorHarness,
   });
   c.set('logger', logger);
 
@@ -147,6 +150,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     ...(connectingIp ? { ip_hash: hashIdentifier(connectingIp) } : {}),
     ...(userAgent ? { ua_hash: hashIdentifier(userAgent) } : {}),
     ...originInfo,
+    orchestrator_harness: orchestratorHarness,
     ...errorInfo,
   };
 

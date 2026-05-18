@@ -9,6 +9,7 @@ type WorkspaceConnectionMeta = {
   origin_surface?: string;
   origin_client?: string;
   origin_version?: string;
+  orchestrator_harness?: string;
 };
 
 /**
@@ -46,6 +47,7 @@ export class WorkspaceStreamDO implements DurableObject {
       workspaceId: url.searchParams.get('workspace_id') ?? undefined,
       connectedAtMs: Date.now(),
       sessionScope: url.searchParams.get('session_scope') ?? 'workspace',
+      orchestrator_harness: url.searchParams.get('orchestrator_harness') ?? 'unknown',
       ...normalizeTelemetryOrigin({
         origin_surface: url.searchParams.get('origin_surface') ?? undefined,
         origin_client: url.searchParams.get('origin_client') ?? undefined,
@@ -110,6 +112,7 @@ export class WorkspaceStreamDO implements DurableObject {
       }),
       properties: {
         workspace_id: workspaceId,
+        orchestrator_harness: meta?.orchestrator_harness ?? 'unknown',
         session_scope: meta?.sessionScope ?? 'workspace',
         duration_ms: durationMs,
         close_code: code,

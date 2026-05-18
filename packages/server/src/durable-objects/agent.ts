@@ -17,6 +17,7 @@ type AgentConnectionMeta = {
   origin_surface?: string;
   origin_client?: string;
   origin_version?: string;
+  orchestrator_harness?: string;
 };
 
 /**
@@ -320,6 +321,7 @@ export class AgentDO implements DurableObject {
       agentId: url.searchParams.get('agent_id') ?? undefined,
       connectedAtMs: Date.now(),
       sessionScope: url.searchParams.get('session_scope') ?? 'agent',
+      orchestrator_harness: url.searchParams.get('orchestrator_harness') ?? 'unknown',
       ...normalizeTelemetryOrigin({
         origin_surface: url.searchParams.get('origin_surface') ?? undefined,
         origin_client: url.searchParams.get('origin_client') ?? undefined,
@@ -502,6 +504,7 @@ export class AgentDO implements DurableObject {
           origin,
           properties: {
             workspace_id: resolvedWorkspaceId,
+            orchestrator_harness: meta.orchestrator_harness ?? 'unknown',
             session_scope: meta.sessionScope ?? 'agent',
             duration_ms: durationMs,
             close_code: _code,

@@ -2,7 +2,7 @@ import type { InternalTelemetryEvent } from '@relaycast/types';
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { runInBackground } from '../routes/background.js';
-import { requiredOriginInfo } from './origin.js';
+import { extractOrchestratorHarness, requiredOriginInfo, UNKNOWN_ORCHESTRATOR_HARNESS } from './origin.js';
 import { captureInternalTelemetryBatched, workspaceDistinctId } from './telemetry.js';
 
 type ServerEvent = `relaycast_server_${string}`;
@@ -31,6 +31,13 @@ export function emitServerEvent(
     normalizedProperties.route_path = normalizeRoutePathForTelemetry(normalizedProperties.route_path);
   }
 
+  // Prefer the value stashed by the logger middleware. Fall back to reading
+  // the header directly so emitters that bypass middleware (e.g. test harnesses
+  // or routes mounted before loggerMiddleware) still get a sane value.
+  const orchestratorHarness = c.get('orchestratorHarness')
+    ?? extractOrchestratorHarness(c.req.raw.headers)
+    ?? UNKNOWN_ORCHESTRATOR_HARNESS;
+
   runInBackground(
     c,
     captureInternalTelemetryBatched(c.env, {
@@ -39,6 +46,7 @@ export function emitServerEvent(
       origin: requiredOriginInfo(c.req.raw),
       properties: {
         workspace_id: workspaceId,
+        orchestrator_harness: orchestratorHarness,
         ...normalizedProperties,
       },
     }),
