@@ -3,7 +3,7 @@
  *
  * Verifies that a caller-supplied harness slug:
  *   - lands as the `X-Relaycast-Harness` HTTP header
- *   - lands as the `orchestrator_harness` WS query param
+ *   - lands as the `harness` WS query param
  *   - gets sanitised (lowercased, ASCII-only, length-capped)
  *   - is omitted entirely when absent / invalid
  */
@@ -112,6 +112,76 @@ describe('InternalOrigin.harness — HTTP', () => {
     const internalClient = new HttpClient({ apiKey: 'rk_live_test' });
     expect(internalClient.originHarness).toBeUndefined();
     void relay; // referenced for typing only
+  });
+});
+
+describe('InternalOrigin.harness — WS', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('forwards the harness as a `harness` query param on connect', async () => {
+    const constructed: string[] = [];
+    class MockWs {
+      static readonly OPEN = 1;
+      url: string;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+      constructor(url: string) {
+        this.url = url;
+        constructed.push(url);
+      }
+    }
+    vi.stubGlobal('WebSocket', MockWs);
+
+    const { createInternalWsClient } = await import('../internal.js');
+    const ws = createInternalWsClient(
+      { token: 'at_live_test' },
+      { surface: 'mcp', client: '@agent-relay/relaycast-mcp', version: '6.0.0', harness: 'claude-code' },
+    );
+    ws.connect();
+    ws.disconnect();
+
+    expect(constructed).toHaveLength(1);
+    const url = new URL(constructed[0]!);
+    expect(url.searchParams.get('harness')).toBe('claude-code');
+  });
+
+  it('omits the harness query param when origin has none', async () => {
+    const constructed: string[] = [];
+    class MockWs {
+      static readonly OPEN = 1;
+      url: string;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+      constructor(url: string) {
+        this.url = url;
+        constructed.push(url);
+      }
+    }
+    vi.stubGlobal('WebSocket', MockWs);
+
+    const { createInternalWsClient } = await import('../internal.js');
+    const ws = createInternalWsClient(
+      { token: 'at_live_test' },
+      { surface: 'mcp', client: '@agent-relay/relaycast-mcp', version: '6.0.0' },
+    );
+    ws.connect();
+    ws.disconnect();
+
+    expect(constructed).toHaveLength(1);
+    const url = new URL(constructed[0]!);
+    expect(url.searchParams.has('harness')).toBe(false);
   });
 });
 

@@ -5,11 +5,10 @@ export interface InternalOrigin {
   client: string;
   version: string;
   /**
-   * Optional parent orchestrator harness slug (e.g. `claude-code`, `cursor`,
-   * `codex`). When set, the HTTP client stamps `X-Relaycast-Harness` on every
-   * request and the WS client forwards it via the `harness` query param. The
-   * server side reads either and tags `orchestrator_harness` on telemetry
-   * events.
+   * Optional parent harness slug (e.g. `claude-code`, `cursor`, `codex`).
+   * When set, the HTTP client stamps `X-Relaycast-Harness` on every request
+   * and the WS client forwards it via the `harness` query param. The server
+   * side reads either and tags `harness` on telemetry events.
    *
    * Set by callers that wrap the SDK from a host (e.g. `@agent-relay/relaycast-mcp`)
    * via `createInternalRelayCast(opts, origin)`. Plain `new RelayCast(...)`

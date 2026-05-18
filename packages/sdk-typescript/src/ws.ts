@@ -108,11 +108,10 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
     // Mirrors the HTTP `X-Relaycast-Harness` header. The server-side WS
-    // handler reads `orchestrator_harness` from query params (matches
-    // the durable-object stream-start shape introduced in relaycast#132);
-    // only forward when an upstream caller actually populated it.
+    // handler reads `harness` from query params; only forward when an
+    // upstream caller actually populated it.
     if (this.originHarness) {
-      wsUrl.searchParams.set('orchestrator_harness', this.originHarness);
+      wsUrl.searchParams.set('harness', this.originHarness);
     }
 
     const ws = new WebSocket(wsUrl.toString());
