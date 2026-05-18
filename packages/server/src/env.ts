@@ -35,11 +35,11 @@ export interface AppVariables {
   logger: Logger;
   requestId: string;
   /**
-   * Orchestrator harness identifier derived from the X-Relaycast-Harness
-   * request header. Always set (defaults to `'unknown'`). Stamped on every
-   * server-side telemetry event for the request via `emitServerEvent`.
+   * Harness identifier derived from the X-Relaycast-Harness request header.
+   * Always set (defaults to `'unknown'`). Stamped on every server-side
+   * telemetry event for the request via `emitServerEvent`.
    */
-  orchestratorHarness: string;
+  harness: string;
 }
 
 /** The Hono Env type used throughout the app */

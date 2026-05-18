@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'hono';
 import type { AppEnv } from '../../env.js';
 import { emitServerEvent, normalizeRoutePathForTelemetry } from '../serverTelemetry.js';
-import { ORCHESTRATOR_HARNESS_HEADER } from '../origin.js';
+import { HARNESS_HEADER } from '../origin.js';
 
 vi.mock('../posthog.js', () => {
   const mockCapture = vi.fn();
@@ -69,7 +69,7 @@ async function lastCaptureCall(): Promise<CapturedCall> {
   return call[0] as CapturedCall;
 }
 
-describe('emitServerEvent — orchestrator_harness stamping', () => {
+describe('emitServerEvent — harness stamping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -79,24 +79,24 @@ describe('emitServerEvent — orchestrator_harness stamping', () => {
   });
 
   it('stamps the harness from the request context variable', async () => {
-    const c = fakeContext({ vars: { orchestratorHarness: 'claude-code' } });
+    const c = fakeContext({ vars: { harness: 'claude-code' } });
     emitServerEvent(c, 'ws_123', 'relaycast_server_search_executed', {
       query_length: 4,
       result_count: 1,
     });
     const call = await lastCaptureCall();
-    expect(call.properties.orchestrator_harness).toBe('claude-code');
+    expect(call.properties.harness).toBe('claude-code');
     expect(call.properties.workspace_id).toBe('ws_123');
   });
 
   it('falls back to reading the header when the context variable is missing', async () => {
-    const c = fakeContext({ headers: { [ORCHESTRATOR_HARNESS_HEADER]: 'cursor' } });
+    const c = fakeContext({ headers: { [HARNESS_HEADER]: 'cursor' } });
     emitServerEvent(c, 'ws_123', 'relaycast_server_search_executed', {
       query_length: 4,
       result_count: 1,
     });
     const call = await lastCaptureCall();
-    expect(call.properties.orchestrator_harness).toBe('cursor');
+    expect(call.properties.harness).toBe('cursor');
   });
 
   it('defaults to "unknown" when neither context nor header is present', async () => {
@@ -106,6 +106,6 @@ describe('emitServerEvent — orchestrator_harness stamping', () => {
       result_count: 1,
     });
     const call = await lastCaptureCall();
-    expect(call.properties.orchestrator_harness).toBe('unknown');
+    expect(call.properties.harness).toBe('unknown');
   });
 });

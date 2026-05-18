@@ -188,7 +188,7 @@ app.get('/v1/ws', async (c) => {
     const workspaceId = agent.workspaceId;
     const agentId = agent.id;
     const origin = requiredOriginInfo(c.req.raw);
-    const orchestratorHarness = c.get('orchestratorHarness') ?? 'unknown';
+    const harness = c.get('harness') ?? 'unknown';
 
     // Register the agent as online in PresenceDO (fire-and-forget)
     const presenceDoId = c.env.PRESENCE_DO.idFromName(workspaceId);
@@ -207,7 +207,7 @@ app.get('/v1/ws', async (c) => {
     url.searchParams.set('origin_surface', origin.origin_surface);
     url.searchParams.set('origin_client', origin.origin_client);
     url.searchParams.set('origin_version', origin.origin_version);
-    url.searchParams.set('orchestrator_harness', orchestratorHarness);
+    url.searchParams.set('harness', harness);
 
     const response = await stub.fetch(new Request(url.toString(), c.req.raw));
     if (response.status === 101) {
@@ -234,13 +234,13 @@ app.get('/v1/ws', async (c) => {
     const doId = c.env.WORKSPACE_STREAM_DO.idFromName(workspace.id);
     const stub = c.env.WORKSPACE_STREAM_DO.get(doId);
     const origin = requiredOriginInfo(c.req.raw);
-    const orchestratorHarness = c.get('orchestratorHarness') ?? 'unknown';
+    const harness = c.get('harness') ?? 'unknown';
     url.searchParams.set('workspace_id', workspace.id);
     url.searchParams.set('session_scope', 'workspace');
     url.searchParams.set('origin_surface', origin.origin_surface);
     url.searchParams.set('origin_client', origin.origin_client);
     url.searchParams.set('origin_version', origin.origin_version);
-    url.searchParams.set('orchestrator_harness', orchestratorHarness);
+    url.searchParams.set('harness', harness);
 
     const response = await stub.fetch(new Request(url.toString(), c.req.raw));
     if (response.status === 101) {
