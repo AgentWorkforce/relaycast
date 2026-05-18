@@ -54,7 +54,11 @@ export class McpSessionDO implements DurableObject {
         ? 'https://api.relaycast.dev'
         : undefined,
       telemetryTransport: 'http',
+      // Cloudflare Workers expose `wrangler secret put` values through the
+      // env bindings, not process.env, so forward them explicitly. Both are
+      // optional; when unset the MCP telemetry layer silently no-ops.
       posthogApiKey: this.env.POSTHOG_API_KEY,
+      posthogHost: this.env.POSTHOG_HOST,
     });
 
     this.transport.onclose = () => {

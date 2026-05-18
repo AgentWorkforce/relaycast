@@ -158,6 +158,28 @@ describe('createMcpTelemetry', () => {
     }
   });
 
+  it('uses options.posthogApiKey when process.env is unset (Cloudflare Worker path)', async () => {
+    // Regression: in CF Workers, wrangler secrets only flow through the env
+    // bindings, not process.env. McpSessionDO threads them into createMcpTelemetry
+    // via the options object. Verify that path actually captures events.
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-cf' }));
+
+    expect(process.env.RELAYCAST_POSTHOG_API_KEY).toBeUndefined();
+    expect(process.env.POSTHOG_API_KEY).toBeUndefined();
+
+    const telemetry = createMcpTelemetry('1.0.0', {
+      posthogHost: 'https://cf-host.example/',
+      posthogApiKey: 'phc_cf_worker',
+    });
+
+    telemetry.capture('relaycast_mcp_server_started', { transport: 'http' });
+    await telemetry.flush();
+
+    expect(nodeRequestMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(capturedBodies[0] ?? '{}') as { api_key: string };
+    expect(body.api_key).toBe('phc_cf_worker');
+  });
+
   it('silently no-ops when no PostHog API key is configured', async () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
 
