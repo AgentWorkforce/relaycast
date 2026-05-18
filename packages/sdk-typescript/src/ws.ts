@@ -7,7 +7,7 @@ import type {
   WsCloseEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { SDK_ORIGIN, sanitizeHarness, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
@@ -70,6 +70,7 @@ export class WsClient {
   private originSurface: string;
   private originClient: string;
   private originVersion: string;
+  private originHarness: string | undefined;
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -93,6 +94,7 @@ export class WsClient {
     this.originSurface = origin.surface;
     this.originClient = origin.client;
     this.originVersion = origin.version;
+    this.originHarness = sanitizeHarness(origin.harness);
   }
 
   connect(): void {
@@ -105,6 +107,13 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
+    // Mirrors the HTTP `X-Relaycast-Harness` header. The server-side WS
+    // handler reads `orchestrator_harness` from query params (matches
+    // the durable-object stream-start shape introduced in relaycast#132);
+    // only forward when an upstream caller actually populated it.
+    if (this.originHarness) {
+      wsUrl.searchParams.set('orchestrator_harness', this.originHarness);
+    }
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;

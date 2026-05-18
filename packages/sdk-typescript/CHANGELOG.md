@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Optional `harness` field on `InternalOrigin` (and the underlying `withInternalOrigin` plumbing). When a wrapping host (e.g. `@agent-relay/relaycast-mcp`) supplies one through `createInternalRelayCast(opts, origin)`, the HTTP client stamps `X-Relaycast-Harness` on every request and the WS client forwards it as the `orchestrator_harness` query param. The server side (relaycast#132) tags `orchestrator_harness` on every PostHog event from either signal.
+- `sanitizeHarness` exported from `./origin.js` — lowercases, restricts to `[a-z0-9-]`, caps at 40 chars; invalid inputs drop the header entirely rather than sending garbage.
+
 ### Breaking
 - Removed snake_case input aliases from the SDK surface; camelCase is now the only supported input style.
 

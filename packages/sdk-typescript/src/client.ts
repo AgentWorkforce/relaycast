@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { SDK_ORIGIN, sanitizeHarness, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 
@@ -125,6 +125,7 @@ export class HttpClient {
   private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
+  private _originHarness: string | undefined;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -134,6 +135,7 @@ export class HttpClient {
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
+    this._originHarness = sanitizeHarness(origin.harness);
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -157,6 +159,10 @@ export class HttpClient {
     return this._originVersion;
   }
 
+  get originHarness(): string | undefined {
+    return this._originHarness;
+  }
+
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
   }
@@ -168,6 +174,7 @@ export class HttpClient {
         surface: this._originSurface,
         client: this._originClient,
         version: this._originVersion,
+        harness: this._originHarness,
       },
     ));
   }
@@ -192,6 +199,9 @@ export class HttpClient {
       'X-Relaycast-Origin-Surface': this._originSurface,
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
+      // Only stamp when an upstream caller actually set it — keeps the
+      // header out of plain SDK usage that doesn't know about harnesses.
+      ...(this._originHarness ? { 'X-Relaycast-Harness': this._originHarness } : {}),
       ...(options?.headers || {}),
     };
 
