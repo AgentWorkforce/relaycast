@@ -54,6 +54,7 @@ export class McpSessionDO implements DurableObject {
         ? 'https://api.relaycast.dev'
         : undefined,
       telemetryTransport: 'http',
+      posthogApiKey: this.env.POSTHOG_API_KEY,
     });
 
     this.transport.onclose = () => {

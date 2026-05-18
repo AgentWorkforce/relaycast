@@ -46,6 +46,8 @@ export interface McpServerOptions {
   strictAgentName?: boolean;
   telemetryTransport?: 'stdio' | 'http';
   telemetry?: McpTelemetry;
+  /** PostHog API key for MCP telemetry. Used in runtimes where process.env is unavailable (e.g. Cloudflare Workers). */
+  posthogApiKey?: string;
   /** Multi-workspace configs parsed from RELAY_WORKSPACES_JSON. */
   workspaces?: McpWorkspaceConfig[];
   /** Default workspace ID or alias to use as the active workspace. */
@@ -84,6 +86,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     originSurface: mcpOrigin.surface,
     originClient: mcpOrigin.client,
     originVersion: mcpOrigin.version,
+    posthogApiKey: options.posthogApiKey,
   });
 
   const mcpServer = new McpServer(
