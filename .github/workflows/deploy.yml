@@ -173,14 +173,19 @@ jobs:
       - name: Inject PostHog API key into marketing site
         shell: bash
         env:
-          RELAYCAST_POSTHOG_API_KEY: ${{ secrets.RELAYCAST_POSTHOG_API_KEY }}
+          # POSTHOG_PROJECT_KEY is a GitHub Actions repo *variable* (not a secret).
+          # PostHog `phc_*` project keys are ingestion-only and public by design —
+          # same category as a Sentry DSN or Stripe publishable key. We still gate
+          # on its presence so forks (which inherit neither vars nor secrets in
+          # fork PRs) and local previews silently ship without telemetry.
+          RELAYCAST_POSTHOG_API_KEY: ${{ vars.POSTHOG_PROJECT_KEY }}
         run: |
           # The committed site/index.html contains a __RELAYCAST_POSTHOG_API_KEY__
           # placeholder so that forks and local previews never accidentally send
           # telemetry to our production PostHog project. Substitute the real key
-          # here when (and only when) the GitHub Actions secret is present.
+          # here when (and only when) the GitHub Actions variable is present.
           if [ -z "${RELAYCAST_POSTHOG_API_KEY:-}" ]; then
-            echo "RELAYCAST_POSTHOG_API_KEY secret is not set; marketing site will ship without telemetry."
+            echo "POSTHOG_PROJECT_KEY variable is not set; marketing site will ship without telemetry."
           else
             # Use a Node script to do a literal replacement (avoids shell escaping
             # surprises and works even if the key ever contains regex-special chars).
