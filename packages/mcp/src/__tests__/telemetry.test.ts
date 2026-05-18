@@ -139,7 +139,10 @@ describe('createMcpTelemetry', () => {
       vi.mocked(fs.mkdirSync).mockImplementation(() => undefined);
       vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
 
-      const telemetry = createMcpTelemetry('1.0.0', { posthogHost: 'https://api.example.com' });
+      const telemetry = createMcpTelemetry('1.0.0', {
+        posthogHost: 'https://api.example.com',
+        posthogApiKey: 'phc_example',
+      });
       telemetry.capture('relaycast_mcp_server_started', {});
       await telemetry.flush();
 
@@ -153,6 +156,20 @@ describe('createMcpTelemetry', () => {
         (globalThis as { WebSocketPair?: unknown }).WebSocketPair = originalWebSocketPair;
       }
     }
+  });
+
+  it('silently no-ops when no PostHog API key is configured', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
+
+    // No env vars, no options.posthogApiKey — should not make any HTTP calls.
+    const telemetry = createMcpTelemetry('1.0.0', {
+      posthogHost: 'https://app.posthog.example/',
+    });
+
+    telemetry.capture('relaycast_mcp_server_started', { transport: 'stdio' });
+    await telemetry.flush();
+
+    expect(nodeRequestMock).not.toHaveBeenCalled();
   });
 
   it('flush resolves when no events are pending', async () => {

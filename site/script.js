@@ -1,5 +1,4 @@
 const POSTHOG_DEFAULT_HOST = 'https://us.i.posthog.com';
-const POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
 const POSTHOG_DISTINCT_ID_KEY = 'relaycast_posthog_distinct_id';
 const POSTHOG_SESSION_ID = window.crypto?.randomUUID?.() ?? String(Date.now());
 
@@ -33,11 +32,24 @@ const telemetry = (() => {
     };
   }
 
-  const posthogKey =
+  const metaKey = getMetaContent('relaycast-posthog-key');
+  // The meta tag ships with a `__RELAYCAST_POSTHOG_API_KEY__` placeholder that
+  // CI substitutes at deploy time. Treat the unsubstituted placeholder (and any
+  // other non-phc value) as "no key configured" so forks / local previews
+  // silently no-op instead of POSTing to an unknown PostHog project.
+  const candidateKey =
     window.POSTHOG_API_KEY ||
     window.RELAYCAST_POSTHOG_KEY ||
-    getMetaContent('relaycast-posthog-key') ||
-    POSTHOG_PUBLIC_KEY;
+    metaKey ||
+    '';
+  const posthogKey = candidateKey.startsWith('phc_') ? candidateKey : '';
+
+  if (!posthogKey) {
+    return {
+      enabled: false,
+      capture: () => {},
+    };
+  }
 
   const rawHost =
     window.POSTHOG_HOST || window.RELAYCAST_POSTHOG_HOST || getMetaContent('relaycast-posthog-host');

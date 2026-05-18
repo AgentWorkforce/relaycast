@@ -30,7 +30,6 @@ export interface McpTelemetry {
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-const DEFAULT_POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
@@ -38,11 +37,14 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
-function telemetryEnabled(state: TelemetryState): boolean {
+function telemetryEnabled(state: TelemetryState, apiKey: string): boolean {
   if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
     return false;
   }
   if (state.telemetryDisabled === true) return false;
+  // No API key configured -> silently no-op. This is the default for forks
+  // and local development; production builds inject the key via env.
+  if (!apiKey) return false;
   return true;
 }
 
@@ -65,7 +67,7 @@ function getPosthogApiKey(options: McpTelemetryOptions): string {
     process.env.RELAYCAST_POSTHOG_API_KEY
     ?? process.env.POSTHOG_API_KEY
     ?? options.posthogApiKey
-    ?? DEFAULT_POSTHOG_PUBLIC_KEY
+    ?? ''
   );
 }
 
@@ -211,7 +213,7 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   const originVersion = options.originVersion ?? version;
 
   const capture = (event: ClientTelemetryEventName, properties: Record<string, unknown> = {}) => {
-    if (!telemetryEnabled(state)) return;
+    if (!telemetryEnabled(state, posthogApiKey)) return;
 
     const parsed = parseTelemetryIngestionEvent({
       event,
