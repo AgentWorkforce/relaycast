@@ -74,6 +74,44 @@ async fn create_channel_accepts_public_channel_payload() {
 }
 
 #[tokio::test]
+async fn ensure_joined_channel_treats_conflicts_as_success() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/channels"))
+        .and(body_json(json!({
+            "name": "general",
+            "topic": "General discussion"
+        })))
+        .respond_with(api_error(409, "channel_already_exists", "Channel exists"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/channels/general/join"))
+        .respond_with(api_error(409, "already_member", "Already joined"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let outcome = agent
+        .ensure_joined_channel(CreateChannelRequest {
+            name: "general".to_string(),
+            topic: Some("General discussion".to_string()),
+            metadata: None,
+        })
+        .await
+        .expect("ensure_joined_channel should treat 409 as success");
+
+    assert_eq!(outcome.name, "general");
+    assert!(!outcome.created);
+    assert!(!outcome.joined);
+}
+
+#[tokio::test]
 async fn register_or_get_agent_reclaims_public_agent_payload() {
     let server = MockServer::start().await;
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))

@@ -68,23 +68,38 @@
 pub mod agent;
 pub mod client;
 pub mod credentials;
+pub mod dm_participants;
 pub mod error;
+pub mod events;
+pub mod identity;
 pub mod registration;
 pub mod relay;
 pub mod types;
 pub mod ws;
 
 // Re-export main types
-pub use agent::AgentClient;
+pub use agent::{AgentClient, DmOptions, EnsureChannelOutcome};
 pub use client::{ClientOptions, HttpClient, RequestOptions};
+pub use dm_participants::{
+    DmParticipantsCache, DmParticipantsCacheEntry, DM_PARTICIPANT_CACHE_TTL,
+    DM_PARTICIPANT_FAILURE_TTL,
+};
 pub use error::{RelayError, Result};
+pub use events::{
+    normalize_command_invocation, normalize_inbound_event, normalize_sender_identity,
+    NormalizedCommandInvocation, NormalizedEventKind, NormalizedInboundEvent, RelayPriority,
+    SenderKind,
+};
+pub use identity::{agent_name_eq, is_self_name};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
     retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
     AgentRegistrationRetryOutcome,
 };
 pub use relay::{RelayCast, RelayCastOptions};
-pub use ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions, WsLifecycleEvent};
+pub use ws::{
+    EventReceiver, LifecycleReceiver, RawEventReceiver, WsClient, WsClientOptions, WsLifecycleEvent,
+};
 
 // Re-export commonly used types
 pub use types::{
