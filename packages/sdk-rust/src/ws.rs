@@ -344,14 +344,14 @@ impl WsClient {
                                                 }
                                                 Err(err) => {
                                                     if debug {
-                                                        warn!("[relaycast] Dropped typed WebSocket event: {}: {}", err, &text[..text.len().min(200)]);
+                                                        warn!("[relaycast] Dropped typed WebSocket event: {}: {}", err, truncate_str(&text, 200));
                                                     }
                                                 }
                                             }
                                         }
                                         Err(err) => {
                                             if debug {
-                                                warn!("[relaycast] Dropped non-JSON WebSocket message: {}: {}", err, &text[..text.len().min(200)]);
+                                                warn!("[relaycast] Dropped non-JSON WebSocket message: {}: {}", err, truncate_str(&text, 200));
                                             }
                                         }
                                     }
@@ -505,4 +505,30 @@ fn reconnect_delay_ms(attempt: u32, max_delay_ms: u64) -> u64 {
     let exp = attempt.saturating_sub(1);
     let delay = 1_000u64.saturating_mul(2u64.saturating_pow(exp));
     delay.min(max_delay_ms.max(1_000))
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_str;
+
+    #[test]
+    fn truncate_str_respects_utf8_boundaries() {
+        let text = "😀".repeat(201);
+        let truncated = truncate_str(&text, 200);
+
+        assert_eq!(truncated.chars().count(), 200);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn truncate_str_returns_short_strings_unchanged() {
+        assert_eq!(truncate_str("hello", 200), "hello");
+    }
 }

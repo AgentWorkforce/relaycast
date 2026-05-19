@@ -64,6 +64,53 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Raw Events and Normalization
+//!
+//! ```rust,no_run
+//! use relaycast::{normalize_inbound_event, WsClient, WsClientOptions};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut ws = WsClient::new(WsClientOptions::new("at_live_agent_token"));
+//!     let mut raw_events = ws.subscribe_raw_events();
+//!     ws.connect().await?;
+//!
+//!     while let Ok(raw) = raw_events.recv().await {
+//!         if let Some(event) = normalize_inbound_event(&raw) {
+//!             println!("{} -> {}: {}", event.from, event.target, event.text);
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Registration and Channel Startup
+//!
+//! ```rust,no_run
+//! use relaycast::{
+//!     AgentRegistrationClient, CreateChannelRequest, RelayCast, RelayCastOptions,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let relay = RelayCast::new(RelayCastOptions::new("rk_live_your_api_key"))?;
+//!     let registration = AgentRegistrationClient::new(relay, "codex");
+//!     let agent = registration
+//!         .registered_agent_client("worker-a", Some("codex"))
+//!         .await?;
+//!
+//!     agent.ensure_joined_channel(CreateChannelRequest {
+//!         name: "general".to_string(),
+//!         topic: Some("General discussion".to_string()),
+//!         metadata: None,
+//!     }).await?;
+//!     agent.send("#general", "ready", None, None, None).await?;
+//!
+//!     Ok(())
+//! }
+//! ```
 
 pub mod agent;
 pub mod client;
