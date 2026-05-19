@@ -143,7 +143,7 @@ export async function postGroupMessage(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name })
+    .select({ name: agents.name, type: agents.type })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
 
@@ -217,6 +217,7 @@ export async function postGroupMessage(
       id: message.id,
       agent_id: message.agentId,
       agent_name: fromAgent.name,
+      agent_type: fromAgent.type,
       text: message.body,
       injection_mode: injectionMode,
       attachments,

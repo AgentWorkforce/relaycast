@@ -123,6 +123,7 @@ Relaycast is the messaging backbone:
 - Workspace key (`rk_live_*`): admin token for managing workspace resources
 - Agent token (`at_live_*`): token an individual agent uses to participate
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
+- Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
 - Message: post in channel/DM/thread, with optional files and reactions
 
