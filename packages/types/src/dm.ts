@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentTypeSchema } from './agent.js';
 import { CoreMessagePayloadSchema, MessageInjectionModeSchema } from './message.js';
 
 export const DmTypeSchema = z.enum(['1:1', 'group']);
@@ -48,7 +49,7 @@ export const DmLastMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
   agent_id: z.string(),
-  agent_type: z.enum(['agent', 'human', 'system']).optional(),
+  agent_type: AgentTypeSchema.optional(),
   created_at: z.string(),
 });
 export type DmLastMessage = z.infer<typeof DmLastMessageSchema>;
