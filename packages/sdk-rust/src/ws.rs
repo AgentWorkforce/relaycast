@@ -96,6 +96,8 @@ impl WsClientOptions {
 
 /// A handle for subscribing to WebSocket events.
 pub type EventReceiver = broadcast::Receiver<WsEvent>;
+/// A handle for subscribing to raw WebSocket JSON events.
+pub type RawEventReceiver = broadcast::Receiver<serde_json::Value>;
 /// A handle for subscribing to WebSocket lifecycle events.
 pub type LifecycleReceiver = broadcast::Receiver<WsLifecycleEvent>;
 
@@ -119,6 +121,7 @@ pub struct WsClient {
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
     event_tx: broadcast::Sender<WsEvent>,
+    raw_event_tx: broadcast::Sender<serde_json::Value>,
     lifecycle_tx: broadcast::Sender<WsLifecycleEvent>,
     command_tx: Option<mpsc::Sender<WsCommand>>,
     is_connected: Arc<Mutex<bool>>,
@@ -140,6 +143,7 @@ impl WsClient {
             .replace("http://", "ws://");
 
         let (event_tx, _) = broadcast::channel(1024);
+        let (raw_event_tx, _) = broadcast::channel(1024);
         let (lifecycle_tx, _) = broadcast::channel(128);
 
         Self {
@@ -162,6 +166,7 @@ impl WsClient {
                 .max_reconnect_delay_ms
                 .unwrap_or(DEFAULT_MAX_RECONNECT_DELAY_MS),
             event_tx,
+            raw_event_tx,
             lifecycle_tx,
             command_tx: None,
             is_connected: Arc::new(Mutex::new(false)),
@@ -176,6 +181,11 @@ impl WsClient {
     /// Subscribe to receive events.
     pub fn subscribe_events(&self) -> EventReceiver {
         self.event_tx.subscribe()
+    }
+
+    /// Subscribe to receive raw WebSocket JSON events.
+    pub fn subscribe_raw_events(&self) -> RawEventReceiver {
+        self.raw_event_tx.subscribe()
     }
 
     /// Subscribe to lifecycle events.
@@ -211,6 +221,7 @@ impl WsClient {
 
         let token = self.token.clone();
         let event_tx = self.event_tx.clone();
+        let raw_event_tx = self.raw_event_tx.clone();
         let lifecycle_tx = self.lifecycle_tx.clone();
         let is_connected = self.is_connected.clone();
         let debug = self.debug;
@@ -324,13 +335,23 @@ impl WsClient {
                         msg = read.next() => {
                             match msg {
                                 Some(Ok(Message::Text(text))) => {
-                                    match serde_json::from_str::<WsEvent>(&text) {
-                                        Ok(event) => {
-                                            let _ = event_tx.send(event);
+                                    match serde_json::from_str::<serde_json::Value>(&text) {
+                                        Ok(value) => {
+                                            let _ = raw_event_tx.send(value.clone());
+                                            match serde_json::from_value::<WsEvent>(value) {
+                                                Ok(event) => {
+                                                    let _ = event_tx.send(event);
+                                                }
+                                                Err(err) => {
+                                                    if debug {
+                                                        warn!("[relaycast] Dropped typed WebSocket event: {}: {}", err, truncate_str(&text, 200));
+                                                    }
+                                                }
+                                            }
                                         }
                                         Err(err) => {
                                             if debug {
-                                                warn!("[relaycast] Dropped WebSocket message: {}: {}", err, &text[..text.len().min(200)]);
+                                                warn!("[relaycast] Dropped non-JSON WebSocket message: {}: {}", err, truncate_str(&text, 200));
                                             }
                                         }
                                     }
@@ -484,4 +505,30 @@ fn reconnect_delay_ms(attempt: u32, max_delay_ms: u64) -> u64 {
     let exp = attempt.saturating_sub(1);
     let delay = 1_000u64.saturating_mul(2u64.saturating_pow(exp));
     delay.min(max_delay_ms.max(1_000))
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_str;
+
+    #[test]
+    fn truncate_str_respects_utf8_boundaries() {
+        let text = "😀".repeat(201);
+        let truncated = truncate_str(&text, 200);
+
+        assert_eq!(truncated.chars().count(), 200);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn truncate_str_returns_short_strings_unchanged() {
+        assert_eq!(truncate_str("hello", 200), "hello");
+    }
 }

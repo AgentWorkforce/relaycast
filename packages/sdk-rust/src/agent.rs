@@ -1,7 +1,7 @@
 //! Agent client for message and channel operations.
 
 use crate::client::{ClientOptions, HttpClient, RequestOptions};
-use crate::error::Result;
+use crate::error::{RelayError, Result};
 use crate::types::*;
 use crate::ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions};
 
@@ -32,6 +32,17 @@ impl Default for DmOptions {
             idempotency_key: None,
         }
     }
+}
+
+/// Result of ensuring a channel exists and is joined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnsureChannelOutcome {
+    /// Channel name that was ensured.
+    pub name: String,
+    /// Whether the channel was created by this call.
+    pub created: bool,
+    /// Whether the agent joined the channel during this call.
+    pub joined: bool,
 }
 
 impl AgentClient {
@@ -314,7 +325,12 @@ impl AgentClient {
     // === DMs ===
 
     /// Send a direct message to another agent.
-    pub async fn dm(&self, agent: &str, text: &str, opts: Option<DmOptions>) -> Result<serde_json::Value> {
+    pub async fn dm(
+        &self,
+        agent: &str,
+        text: &str,
+        opts: Option<DmOptions>,
+    ) -> Result<serde_json::Value> {
         let opts = opts.unwrap_or_default();
         let body = SendDmRequest {
             to: agent.to_string(),
@@ -322,12 +338,19 @@ impl AgentClient {
             attachments: opts.attachments,
             mode: Some(opts.mode),
         };
-        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts
+            .idempotency_key
+            .map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await
     }
 
     /// Send a direct message to another agent (typed response).
-    pub async fn dm_typed(&self, agent: &str, text: &str, opts: Option<DmOptions>) -> Result<DmSendResponse> {
+    pub async fn dm_typed(
+        &self,
+        agent: &str,
+        text: &str,
+        opts: Option<DmOptions>,
+    ) -> Result<DmSendResponse> {
         let opts = opts.unwrap_or_default();
         let body = SendDmRequest {
             to: agent.to_string(),
@@ -335,7 +358,9 @@ impl AgentClient {
             attachments: opts.attachments,
             mode: Some(opts.mode),
         };
-        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts
+            .idempotency_key
+            .map(RequestOptions::with_idempotency_key);
         self.client.post("/v1/dm", Some(body), options).await
     }
 
@@ -434,7 +459,10 @@ impl AgentClient {
     ) -> Result<serde_json::Value> {
         let opts = opts.unwrap_or_default();
         let mut body = serde_json::Map::new();
-        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "text".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
         body.insert(
             "mode".to_string(),
             serde_json::Value::String(match opts.mode {
@@ -443,9 +471,14 @@ impl AgentClient {
             }),
         );
         if let Some(attachments) = opts.attachments {
-            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+            body.insert(
+                "attachments".to_string(),
+                serde_json::to_value(attachments)?,
+            );
         }
-        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts
+            .idempotency_key
+            .map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
@@ -464,7 +497,10 @@ impl AgentClient {
     ) -> Result<GroupDmMessageResponse> {
         let opts = opts.unwrap_or_default();
         let mut body = serde_json::Map::new();
-        body.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        body.insert(
+            "text".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
         body.insert(
             "mode".to_string(),
             serde_json::Value::String(match opts.mode {
@@ -473,9 +509,14 @@ impl AgentClient {
             }),
         );
         if let Some(attachments) = opts.attachments {
-            body.insert("attachments".to_string(), serde_json::to_value(attachments)?);
+            body.insert(
+                "attachments".to_string(),
+                serde_json::to_value(attachments)?,
+            );
         }
-        let options = opts.idempotency_key.map(RequestOptions::with_idempotency_key);
+        let options = opts
+            .idempotency_key
+            .map(RequestOptions::with_idempotency_key);
         self.client
             .post(
                 &format!("/v1/dm/{}/messages", urlencoding::encode(conversation_id)),
@@ -542,6 +583,46 @@ impl AgentClient {
     /// Create a new channel.
     pub async fn create_channel(&self, request: CreateChannelRequest) -> Result<Channel> {
         self.client.post("/v1/channels", Some(request), None).await
+    }
+
+    /// Ensure a channel exists and this agent is a member.
+    ///
+    /// `409 Conflict` from either create or join is treated as success, which
+    /// makes this safe to call during startup.
+    pub async fn ensure_joined_channel(
+        &self,
+        request: CreateChannelRequest,
+    ) -> Result<EnsureChannelOutcome> {
+        let name = request.name.clone();
+        let created = match self.create_channel(request).await {
+            Ok(_) => true,
+            Err(RelayError::Api { status: 409, .. }) => false,
+            Err(error) => return Err(error),
+        };
+
+        let joined = match self.join_channel(&name).await {
+            Ok(_) => true,
+            Err(RelayError::Api { status: 409, .. }) => false,
+            Err(error) => return Err(error),
+        };
+
+        Ok(EnsureChannelOutcome {
+            name,
+            created,
+            joined,
+        })
+    }
+
+    /// Ensure several channels exist and this agent is a member of each.
+    pub async fn ensure_joined_channels<I>(&self, requests: I) -> Result<Vec<EnsureChannelOutcome>>
+    where
+        I: IntoIterator<Item = CreateChannelRequest>,
+    {
+        let mut outcomes = Vec::new();
+        for request in requests {
+            outcomes.push(self.ensure_joined_channel(request).await?);
+        }
+        Ok(outcomes)
     }
 
     /// List channels.

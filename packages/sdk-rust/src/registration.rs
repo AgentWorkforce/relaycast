@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::error::RelayError;
-use crate::{RelayCast, SpawnAgentRequest};
+use crate::{AgentClient, RelayCast, SpawnAgentRequest};
 
 const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
 
@@ -233,6 +233,22 @@ impl AgentRegistrationClient {
             }),
         }
     }
+
+    /// Register an agent token if needed and return an [`AgentClient`] using it.
+    pub async fn registered_agent_client(
+        &self,
+        agent_name: &str,
+        cli_hint: Option<&str>,
+    ) -> std::result::Result<AgentClient, AgentRegistrationError> {
+        let trimmed_name = agent_name.trim();
+        let token = self.register_agent_token(trimmed_name, cli_hint).await?;
+        self.relay
+            .as_agent(token)
+            .map_err(|error| AgentRegistrationError::Transport {
+                agent_name: trimmed_name.to_string(),
+                detail: error.to_string(),
+            })
+    }
 }
 
 /// Return retry delay seconds for rate-limited registration errors.
@@ -340,6 +356,24 @@ mod tests {
             .await
             .expect("cache hit should succeed");
         assert_eq!(token, "at_live_cached");
+    }
+
+    #[tokio::test]
+    async fn registered_agent_client_uses_cached_token() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        client.seed_agent_token("worker-a", "at_live_cached");
+
+        let agent = client
+            .registered_agent_client("worker-a", Some("codex"))
+            .await
+            .expect("registered agent client should use cached token");
+
+        assert_eq!(agent.http_client().api_key(), "at_live_cached");
+        assert_eq!(agent.http_client().base_url(), server.uri());
     }
 
     #[tokio::test]
