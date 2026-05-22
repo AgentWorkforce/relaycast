@@ -4,6 +4,7 @@ export type RelayErrorCode =
   | 'rate_limited'
   | 'backpressure'
   | 'unauthorized'
+  | 'agent_token_invalid'
   | 'workspace_mismatch'
   | 'transport_error';
 
@@ -24,6 +25,7 @@ const RAW_CODE_MAP: Record<string, RelayErrorCode> = {
   queue_overloaded: 'backpressure',
   workspace_stream_backpressure: 'backpressure',
   unauthorized: 'unauthorized',
+  agent_token_invalid: 'agent_token_invalid',
   workspace_mismatch: 'workspace_mismatch',
   workspace_not_found: 'workspace_mismatch',
 };

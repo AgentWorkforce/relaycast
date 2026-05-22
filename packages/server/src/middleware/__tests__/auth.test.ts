@@ -166,7 +166,7 @@ describe('requireAuth', () => {
     });
     expect(res.status).toBe(401);
     const body = await res.json();
-    expect(body.error.code).toBe('unauthorized');
+    expect(body.error.code).toBe('agent_token_invalid');
   });
 
   it('returns 401 when agent workspace not found', async () => {
@@ -224,6 +224,7 @@ describe('requireAgentToken', () => {
     });
     expect(res.status).toBe(401);
     const body = await res.json();
+    expect(body.error.code).toBe('agent_token_invalid');
     expect(body.error.message).toBe('Invalid agent token');
   });
 

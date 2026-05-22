@@ -117,6 +117,10 @@ Relaycast is the messaging backbone:
 - Search across history
 - Realtime events over WebSocket
 
+## Error Handling
+
+API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
+
 ## Core Concepts
 
 - Workspace: isolated environment for one project/team
