@@ -120,9 +120,21 @@ function isInvalidAgentTokenToolResult(result: unknown): boolean {
   ));
 }
 
+function extractToolCallRouting(request: CallToolRequest): AgentRouting {
+  const args = request.params.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return {};
+
+  const values = args as Record<string, unknown>;
+  return {
+    workspace_id: typeof values.workspace_id === 'string' ? values.workspace_id : undefined,
+    workspace_alias: typeof values.workspace_alias === 'string' ? values.workspace_alias : undefined,
+    as: typeof values.as === 'string' ? values.as : undefined,
+  };
+}
+
 function agentTokenRecoveryMessage(): string {
   return [
-    'agent_token_invalid: The active Relaycast agent token is no longer valid.',
+    'agent_token_invalid: The selected Relaycast agent token is no longer valid.',
     'The stale token was cleared from this MCP session.',
     'Call the "agent.register" tool with the configured agent name to obtain a fresh token, then retry the failed operation.',
   ].join(' ');
@@ -289,15 +301,30 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     return agents.get(agentName)?.agentToken ?? null;
   };
 
-  const invalidateActiveAgentToken = (asAgent?: string) => {
-    const invalidAgentName = asAgent ?? session.agentName ?? undefined;
-    const nextAgents = new Map(session.agents);
+  const invalidateActiveAgentToken = (
+    routing?: { workspace_id?: string; workspace_alias?: string },
+    asAgent?: string,
+  ) => {
+    const routedContext = routing && (routing.workspace_id || routing.workspace_alias)
+      ? findWorkspaceContext(session, routing, options.workspaces)
+      : undefined;
+    const targetWorkspaceKey = routedContext?.workspaceKey ?? session.workspaceKey;
+    if (!targetWorkspaceKey) return;
+
+    const isActiveWorkspace = targetWorkspaceKey === session.workspaceKey;
+    const targetContext = routedContext ?? session.workspaces.get(targetWorkspaceKey);
+    const currentAgentName = isActiveWorkspace
+      ? session.agentName
+      : targetContext?.agentName ?? null;
+    const invalidAgentName = asAgent ?? currentAgentName ?? undefined;
+    const sourceAgents = isActiveWorkspace ? session.agents : (targetContext?.agents ?? []);
+    const nextAgents = new Map(sourceAgents);
     if (invalidAgentName) {
       nextAgents.delete(invalidAgentName);
     }
 
-    const invalidatesCurrentAgent = !asAgent || asAgent === session.agentName;
-    if (invalidatesCurrentAgent) {
+    const invalidatesDefaultAgent = !asAgent || asAgent === currentAgentName;
+    if (isActiveWorkspace && invalidatesDefaultAgent) {
       session.wsBridge?.stop();
       session.subscriptions?.clear();
       setSession({
@@ -307,21 +334,20 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
         subscriptions: null,
         wsInitAttempted: false,
       });
-    } else {
+    } else if (isActiveWorkspace) {
       setSession({ agents: nextAgents });
     }
 
-    if (!session.workspaceKey) return;
-    const existing = session.workspaces.get(session.workspaceKey);
+    const existing = targetContext ?? session.workspaces.get(targetWorkspaceKey);
     if (!existing) return;
 
-    session.workspaces.set(session.workspaceKey, {
+    session.workspaces.set(targetWorkspaceKey, {
       ...existing,
-      agentToken: invalidatesCurrentAgent ? '' : existing.agentToken,
+      agentToken: invalidatesDefaultAgent ? '' : existing.agentToken,
       agents: nextAgents,
-      wsBridge: invalidatesCurrentAgent ? null : existing.wsBridge,
-      subscriptions: invalidatesCurrentAgent ? null : existing.subscriptions,
-      wsInitAttempted: invalidatesCurrentAgent ? false : existing.wsInitAttempted,
+      wsBridge: isActiveWorkspace && invalidatesDefaultAgent ? null : existing.wsBridge,
+      subscriptions: isActiveWorkspace && invalidatesDefaultAgent ? null : existing.subscriptions,
+      wsInitAttempted: isActiveWorkspace && invalidatesDefaultAgent ? false : existing.wsInitAttempted,
     });
   };
 
@@ -466,30 +492,24 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
       try {
         const result = await origCallToolHandler(request, extra);
         if (isInvalidAgentTokenToolResult(result)) {
-          const args = request.params.arguments;
-          const asAgent = args
-            && typeof args === 'object'
-            && 'as' in args
-            && typeof args.as === 'string'
-            ? args.as
-            : undefined;
-          invalidateActiveAgentToken(asAgent);
+          const routing = extractToolCallRouting(request);
+          invalidateActiveAgentToken(routing, routing.as);
+          const errorResult = result as typeof result & {
+            content?: Array<{ type: 'text'; text: string }>;
+          };
           return {
             ...result,
-            content: [{ type: 'text' as const, text: agentTokenRecoveryMessage() }],
+            content: [
+              ...(Array.isArray(errorResult.content) ? errorResult.content : []),
+              { type: 'text' as const, text: agentTokenRecoveryMessage() },
+            ],
           };
         }
         return result;
       } catch (error) {
         if (isInvalidAgentTokenError(error)) {
-          const args = request.params.arguments;
-          const asAgent = args
-            && typeof args === 'object'
-            && 'as' in args
-            && typeof args.as === 'string'
-            ? args.as
-            : undefined;
-          invalidateActiveAgentToken(asAgent);
+          const routing = extractToolCallRouting(request);
+          invalidateActiveAgentToken(routing, routing.as);
           throw new Error(agentTokenRecoveryMessage());
         }
         throw error;

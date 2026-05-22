@@ -213,7 +213,10 @@ describe('MCP → SDK → HTTP integration', () => {
       arguments: { channel: 'general', text: 'Hello' },
     });
     expect(failedPost.isError).toBe(true);
-    const errorText = ((failedPost.content ?? []) as Array<{ text?: string }>)[0]?.text ?? '';
+    const errorText = ((failedPost.content ?? []) as Array<{ text?: string }>)
+      .map((entry) => entry.text ?? '')
+      .join('\n');
+    expect(errorText).toContain('Invalid agent token');
     expect(errorText).toContain('agent_token_invalid');
     expect(errorText).toContain('agent.register');
 
@@ -228,6 +231,61 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(registerReq).toBeDefined();
     expect(registerReq!.headers.authorization).toBe('Bearer rk_live_int1');
     expect(registerReq!.body).toMatchObject({ name: 'IntegrationBot' });
+  });
+
+  it('clears a routed invalid token without clearing the active workspace token', async () => {
+    invalidAgentTokens.add('at_live_stale_routed');
+
+    const mcpServer = createRelayMcpServer({
+      apiKey: 'rk_live_int1',
+      agentToken: 'at_live_active',
+      agentName: 'ActiveBot',
+      baseUrl: 'https://api.test.dev',
+      workspaces: [
+        {
+          workspace_id: 'ws_beta',
+          workspace_alias: 'beta',
+          api_key: 'rk_live_ws2',
+          agent_token: 'at_live_stale_routed',
+          agent_name: 'BetaBot',
+        },
+      ],
+    });
+    const routedClient = new Client({ name: 'routed-token-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([routedClient.connect(ct), mcpServer.connect(st)]);
+
+    captured = [];
+    const failedPost = await routedClient.callTool({
+      name: 'message.post',
+      arguments: {
+        channel: 'general',
+        text: 'Hello beta',
+        workspace_id: 'ws_beta',
+      },
+    });
+    expect(failedPost.isError).toBe(true);
+    const failedReq = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'POST');
+    expect(failedReq?.headers.authorization).toBe('Bearer at_live_stale_routed');
+
+    captured = [];
+    const activePost = await routedClient.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'Hello active' },
+    });
+    expect(activePost.isError).toBeFalsy();
+    const activeReq = findReq((r) => r.url.includes('/channels/general/messages') && r.method === 'POST');
+    expect(activeReq?.headers.authorization).toBe('Bearer at_live_active');
+
+    captured = [];
+    const registerResult = await routedClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'RecoveryBot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+    const registerReq = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'POST');
+    expect(registerReq).toBeDefined();
+    expect(registerReq!.headers.authorization).toBe('Bearer rk_live_int1');
   });
 
   it('sends mcp origin headers on relay API requests', async () => {
