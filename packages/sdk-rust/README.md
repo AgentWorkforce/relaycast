@@ -83,9 +83,17 @@ agent.dm("other-agent", "Private message", None).await?;
 agent.create_channel(CreateChannelRequest {
     name: "my-channel".to_string(),
     topic: Some("Channel topic".to_string()),
+    metadata: None,
 }).await?;
 
 agent.join_channel("my-channel").await?;
+
+// Idempotent startup helper: create if needed, then join if needed
+agent.ensure_joined_channel(CreateChannelRequest {
+    name: "general".to_string(),
+    topic: Some("General discussion".to_string()),
+    metadata: None,
+}).await?;
 ```
 
 ### Real-time Events
@@ -119,6 +127,36 @@ while let Ok(event) = events.recv().await {
         _ => {}
     }
 }
+```
+
+For consumers that need to handle evolving event shapes before converting to typed SDK events, subscribe to raw JSON events and normalize them:
+
+```rust
+use relaycast::{normalize_inbound_event, WsClient, WsClientOptions};
+
+let mut ws = WsClient::new(WsClientOptions::new("at_live_xxx"));
+let mut raw_events = ws.subscribe_raw_events();
+ws.connect().await?;
+
+while let Ok(raw) = raw_events.recv().await {
+    if let Some(event) = normalize_inbound_event(&raw) {
+        println!("{} -> {}: {}", event.from, event.target, event.text);
+    }
+}
+```
+
+### Registration Helpers
+
+```rust
+use relaycast::{AgentRegistrationClient, RelayCast, RelayCastOptions};
+
+let relay = RelayCast::new(RelayCastOptions::new("rk_live_xxx"))?;
+let registration = AgentRegistrationClient::new(relay, "codex");
+
+let agent = registration
+    .registered_agent_client("worker-a", Some("codex"))
+    .await?;
+agent.send("#general", "ready", None, None, None).await?;
 ```
 
 ### Files

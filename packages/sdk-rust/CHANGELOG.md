@@ -6,6 +6,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+- Added raw WebSocket event subscriptions with `WsClient::subscribe_raw_events()` and `RawEventReceiver`.
+- Added SDK-owned raw event normalization helpers:
+  - `normalize_inbound_event(...)`
+  - `normalize_command_invocation(...)`
+  - `normalize_sender_identity(...)`
+  - `NormalizedInboundEvent`, `NormalizedCommandInvocation`, `NormalizedEventKind`, `SenderKind`, and `RelayPriority`
+- Added identity helpers `agent_name_eq(...)` and `is_self_name(...)`.
+- Added `AgentRegistrationClient::registered_agent_client(...)` for cached/spawned token registration followed by agent-client construction.
+- Added idempotent channel startup helpers `AgentClient::ensure_joined_channel(...)` and `AgentClient::ensure_joined_channels(...)`.
+- Added `DmParticipantsCache` for bounded workspace DM participant lookup caching.
+
 ### Changed
 - Made `agent.spawn_requested` websocket parsing tolerant of missing or `null` `task`, `channel`, and `already_existed` fields.
 - Kept `AgentSpawnRequestedPayload.task` as a `String` for API compatibility by deserializing missing or `null` values to an empty string.

@@ -70,6 +70,29 @@ describe('POST /v1/agents', () => {
     expect(body.data.token).toContain('at_live_');
   });
 
+  it('passes through first-class system identity registration', async () => {
+    vi.mocked(agentEngine.registerAgent).mockResolvedValue({
+      id: 'agent_system',
+      name: 'System',
+      token: 'at_live_systemtoken123',
+      status: 'online',
+      created_at: '2025-01-01T00:00:00.000Z',
+    });
+
+    const res = await app.request('/v1/agents', {
+      method: 'POST',
+      headers: wsAuthHeaders(),
+      body: JSON.stringify({ name: 'System', type: 'system' }),
+    }, bindings);
+
+    expect(res.status).toBe(201);
+    expect(agentEngine.registerAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      'ws_123',
+      expect.objectContaining({ name: 'System', type: 'system' }),
+    );
+  });
+
   it('returns 400 when name is missing', async () => {
     const res = await app.request('/v1/agents', {
       method: 'POST',

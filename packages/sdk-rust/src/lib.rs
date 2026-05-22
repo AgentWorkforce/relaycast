@@ -64,27 +64,89 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Raw Events and Normalization
+//!
+//! ```rust,no_run
+//! use relaycast::{normalize_inbound_event, WsClient, WsClientOptions};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut ws = WsClient::new(WsClientOptions::new("at_live_agent_token"));
+//!     let mut raw_events = ws.subscribe_raw_events();
+//!     ws.connect().await?;
+//!
+//!     while let Ok(raw) = raw_events.recv().await {
+//!         if let Some(event) = normalize_inbound_event(&raw) {
+//!             println!("{} -> {}: {}", event.from, event.target, event.text);
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Registration and Channel Startup
+//!
+//! ```rust,no_run
+//! use relaycast::{
+//!     AgentRegistrationClient, CreateChannelRequest, RelayCast, RelayCastOptions,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let relay = RelayCast::new(RelayCastOptions::new("rk_live_your_api_key"))?;
+//!     let registration = AgentRegistrationClient::new(relay, "codex");
+//!     let agent = registration
+//!         .registered_agent_client("worker-a", Some("codex"))
+//!         .await?;
+//!
+//!     agent.ensure_joined_channel(CreateChannelRequest {
+//!         name: "general".to_string(),
+//!         topic: Some("General discussion".to_string()),
+//!         metadata: None,
+//!     }).await?;
+//!     agent.send("#general", "ready", None, None, None).await?;
+//!
+//!     Ok(())
+//! }
+//! ```
 
 pub mod agent;
 pub mod client;
 pub mod credentials;
+pub mod dm_participants;
 pub mod error;
+pub mod events;
+pub mod identity;
 pub mod registration;
 pub mod relay;
 pub mod types;
 pub mod ws;
 
 // Re-export main types
-pub use agent::AgentClient;
+pub use agent::{AgentClient, DmOptions, EnsureChannelOutcome};
 pub use client::{ClientOptions, HttpClient, RequestOptions};
+pub use dm_participants::{
+    DmParticipantsCache, DmParticipantsCacheEntry, DM_PARTICIPANT_CACHE_TTL,
+    DM_PARTICIPANT_FAILURE_TTL,
+};
 pub use error::{RelayError, Result};
+pub use events::{
+    normalize_command_invocation, normalize_inbound_event, normalize_sender_identity,
+    NormalizedCommandInvocation, NormalizedEventKind, NormalizedInboundEvent, RelayPriority,
+    SenderKind,
+};
+pub use identity::{agent_name_eq, is_self_name};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
     retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
     AgentRegistrationRetryOutcome,
 };
 pub use relay::{RelayCast, RelayCastOptions};
-pub use ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions, WsLifecycleEvent};
+pub use ws::{
+    EventReceiver, LifecycleReceiver, RawEventReceiver, WsClient, WsClientOptions, WsLifecycleEvent,
+};
 
 // Re-export commonly used types
 pub use types::{

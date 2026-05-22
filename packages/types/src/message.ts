@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { FileAttachmentSchema } from './file.js';
 import { ReactionGroupSchema } from './reaction.js';
+import { AgentTypeSchema } from './agent.js';
 
 // Rich Message Blocks
 
@@ -73,6 +74,7 @@ export const CoreMessagePayloadSchema = z.object({
   id: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),
+  agent_type: AgentTypeSchema.optional(),
   text: z.string(),
   injection_mode: MessageInjectionModeSchema.optional(),
   attachments: z.array(FileAttachmentSchema).optional(),
@@ -84,6 +86,7 @@ export const MessageWithMetaSchema = z.object({
   channel_id: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),
+  agent_type: AgentTypeSchema.optional(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
