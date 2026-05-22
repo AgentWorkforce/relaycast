@@ -6,6 +6,10 @@ import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 
 const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
+const INVALID_AGENT_TOKEN_ERROR = {
+  ok: false,
+  error: { code: 'agent_token_invalid', message: 'Invalid agent token' },
+} as const;
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -74,10 +78,7 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   } else if (token.startsWith('at_live_')) {
     const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
     if (!agent) {
-      return c.json(
-        { ok: false, error: { code: 'unauthorized', message: 'Invalid agent token' } },
-        401,
-      );
+      return c.json(INVALID_AGENT_TOKEN_ERROR, 401);
     }
     c.set('agent', agent);
 
@@ -128,10 +129,7 @@ export const requireAgentToken = createMiddleware<AppEnv>(async (c, next) => {
   const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
 
   if (!agent) {
-    return c.json(
-      { ok: false, error: { code: 'unauthorized', message: 'Invalid agent token' } },
-      401,
-    );
+    return c.json(INVALID_AGENT_TOKEN_ERROR, 401);
   }
 
   c.set('agent', agent);

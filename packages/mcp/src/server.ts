@@ -64,10 +64,69 @@ type ResolvedAgentIdentity = {
   agentName: string;
 };
 
+type RelayErrorLike = {
+  code?: unknown;
+  rawCode?: unknown;
+  status?: unknown;
+  statusCode?: unknown;
+  message?: unknown;
+};
+
 type ServerRequestHandler<TRequest, TResult extends ServerResult = ServerResult> = (
   request: TRequest,
   extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
 ) => TResult | Promise<TResult>;
+
+function normalizeErrorField(value: unknown): string | undefined {
+  return typeof value === 'string' ? value.trim().toLowerCase() : undefined;
+}
+
+function isInvalidAgentTokenError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const err = error as RelayErrorLike;
+  const code = normalizeErrorField(err.code);
+  const rawCode = normalizeErrorField(err.rawCode);
+  const message = typeof err.message === 'string' ? err.message.trim() : '';
+  const status = typeof err.status === 'number'
+    ? err.status
+    : typeof err.statusCode === 'number'
+      ? err.statusCode
+      : undefined;
+
+  if (code === 'agent_token_invalid' || rawCode === 'agent_token_invalid') {
+    return true;
+  }
+
+  return message === 'Invalid agent token'
+    && status === 401
+    && (code === 'unauthorized' || rawCode === 'unauthorized');
+}
+
+function isInvalidAgentTokenToolResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const toolResult = result as {
+    isError?: unknown;
+    content?: Array<{ type?: unknown; text?: unknown }>;
+  };
+  if (toolResult.isError !== true || !Array.isArray(toolResult.content)) {
+    return false;
+  }
+
+  return toolResult.content.some((entry) => (
+    entry.type === 'text'
+    && typeof entry.text === 'string'
+    && entry.text.trim() === 'Invalid agent token'
+  ));
+}
+
+function agentTokenRecoveryMessage(): string {
+  return [
+    'agent_token_invalid: The active Relaycast agent token is no longer valid.',
+    'The stale token was cleared from this MCP session.',
+    'Call the "agent.register" tool with the configured agent name to obtain a fresh token, then retry the failed operation.',
+  ].join(' ');
+}
 
 export function createRelayMcpServer(options: McpServerOptions): McpServer {
   const session: SessionState = createInitialSession({
@@ -230,6 +289,42 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     return agents.get(agentName)?.agentToken ?? null;
   };
 
+  const invalidateActiveAgentToken = (asAgent?: string) => {
+    const invalidAgentName = asAgent ?? session.agentName ?? undefined;
+    const nextAgents = new Map(session.agents);
+    if (invalidAgentName) {
+      nextAgents.delete(invalidAgentName);
+    }
+
+    const invalidatesCurrentAgent = !asAgent || asAgent === session.agentName;
+    if (invalidatesCurrentAgent) {
+      session.wsBridge?.stop();
+      session.subscriptions?.clear();
+      setSession({
+        agentToken: null,
+        agents: nextAgents,
+        wsBridge: null,
+        subscriptions: null,
+        wsInitAttempted: false,
+      });
+    } else {
+      setSession({ agents: nextAgents });
+    }
+
+    if (!session.workspaceKey) return;
+    const existing = session.workspaces.get(session.workspaceKey);
+    if (!existing) return;
+
+    session.workspaces.set(session.workspaceKey, {
+      ...existing,
+      agentToken: invalidatesCurrentAgent ? '' : existing.agentToken,
+      agents: nextAgents,
+      wsBridge: invalidatesCurrentAgent ? null : existing.wsBridge,
+      subscriptions: invalidatesCurrentAgent ? null : existing.subscriptions,
+      wsInitAttempted: invalidatesCurrentAgent ? false : existing.wsInitAttempted,
+    });
+  };
+
   const resolveAgentIdentity = (
     wsRouting?: { workspace_id?: string; workspace_alias?: string },
     asAgent?: string,
@@ -368,7 +463,37 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
               name: resolvedName,
             },
           };
-      return await origCallToolHandler(request, extra);
+      try {
+        const result = await origCallToolHandler(request, extra);
+        if (isInvalidAgentTokenToolResult(result)) {
+          const args = request.params.arguments;
+          const asAgent = args
+            && typeof args === 'object'
+            && 'as' in args
+            && typeof args.as === 'string'
+            ? args.as
+            : undefined;
+          invalidateActiveAgentToken(asAgent);
+          return {
+            ...result,
+            content: [{ type: 'text' as const, text: agentTokenRecoveryMessage() }],
+          };
+        }
+        return result;
+      } catch (error) {
+        if (isInvalidAgentTokenError(error)) {
+          const args = request.params.arguments;
+          const asAgent = args
+            && typeof args === 'object'
+            && 'as' in args
+            && typeof args.as === 'string'
+            ? args.as
+            : undefined;
+          invalidateActiveAgentToken(asAgent);
+          throw new Error(agentTokenRecoveryMessage());
+        }
+        throw error;
+      }
     });
   }
 

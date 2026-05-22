@@ -17,6 +17,7 @@ interface CapturedRequest {
 describe('MCP → SDK → HTTP integration', () => {
   let client: Client;
   let captured: CapturedRequest[];
+  let invalidAgentTokens: Set<string>;
   let originalFetch: typeof global.fetch;
 
   function lastReq(): CapturedRequest {
@@ -29,6 +30,7 @@ describe('MCP → SDK → HTTP integration', () => {
 
   beforeEach(async () => {
     captured = [];
+    invalidAgentTokens = new Set();
     originalFetch = global.fetch;
 
     global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -43,6 +45,17 @@ describe('MCP → SDK → HTTP integration', () => {
       captured.push(req);
 
       const path = new URL(url.toString()).pathname;
+      const bearer = req.headers.authorization?.replace(/^Bearer /, '');
+      if (bearer && invalidAgentTokens.has(bearer)) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: { code: 'agent_token_invalid', message: 'Invalid agent token' },
+        }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
       let data: unknown = {};
 
       // Registration → return token so getAgentClient works
@@ -178,6 +191,43 @@ describe('MCP → SDK → HTTP integration', () => {
   it('uses agent token for authenticated requests after register', async () => {
     await client.callTool({ name: 'channel.list', arguments: {} });
     expect(captured[0].headers['authorization']).toBe('Bearer at_test_integration');
+  });
+
+  it('clears an invalid pre-registered token so strict registration can recover', async () => {
+    invalidAgentTokens.add('at_live_stale');
+
+    const mcpServer = createRelayMcpServer({
+      apiKey: 'rk_live_int1',
+      agentToken: 'at_live_stale',
+      agentName: 'IntegrationBot',
+      strictAgentName: true,
+      baseUrl: 'https://api.test.dev',
+    });
+    const staleClient = new Client({ name: 'stale-token-client', version: '0.1.0' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([staleClient.connect(ct), mcpServer.connect(st)]);
+
+    captured = [];
+    const failedPost = await staleClient.callTool({
+      name: 'message.post',
+      arguments: { channel: 'general', text: 'Hello' },
+    });
+    expect(failedPost.isError).toBe(true);
+    const errorText = ((failedPost.content ?? []) as Array<{ text?: string }>)[0]?.text ?? '';
+    expect(errorText).toContain('agent_token_invalid');
+    expect(errorText).toContain('agent.register');
+
+    captured = [];
+    const registerResult = await staleClient.callTool({
+      name: 'agent.register',
+      arguments: { name: 'OtherBot' },
+    });
+    expect(registerResult.isError).toBeFalsy();
+
+    const registerReq = findReq((r) => r.url.endsWith('/v1/agents') && r.method === 'POST');
+    expect(registerReq).toBeDefined();
+    expect(registerReq!.headers.authorization).toBe('Bearer rk_live_int1');
+    expect(registerReq!.body).toMatchObject({ name: 'IntegrationBot' });
   });
 
   it('sends mcp origin headers on relay API requests', async () => {

@@ -339,6 +339,7 @@ components:
       properties:
         code:
           type: string
+          description: Machine-readable error code. Invalid agent tokens are reported as `agent_token_invalid` so clients can re-register or rotate the agent identity.
         message:
           type: string
 

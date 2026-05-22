@@ -88,6 +88,10 @@ describe('normalizeRelayErrorCode', () => {
     expect(normalizeRelayErrorCode('unauthorized')).toBe('unauthorized');
   });
 
+  it('maps agent_token_invalid to agent_token_invalid', () => {
+    expect(normalizeRelayErrorCode('agent_token_invalid')).toBe('agent_token_invalid');
+  });
+
   it('maps workspace_mismatch to workspace_mismatch', () => {
     expect(normalizeRelayErrorCode('workspace_mismatch')).toBe('workspace_mismatch');
   });
@@ -144,6 +148,10 @@ describe('relayErrorRetryable', () => {
 
   it('returns false for unauthorized', () => {
     expect(relayErrorRetryable('unauthorized', 401)).toBe(false);
+  });
+
+  it('returns false for agent_token_invalid', () => {
+    expect(relayErrorRetryable('agent_token_invalid', 401)).toBe(false);
   });
 
   it('returns true for rate_limited', () => {
