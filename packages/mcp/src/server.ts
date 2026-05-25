@@ -19,6 +19,7 @@ import { registerChannelTools } from './tools/channels.js';
 import { registerMessagingTools } from './tools/messaging.js';
 import { registerFeatureTools } from './tools/features.js';
 import { registerProgrammabilityTools } from './tools/programmability.js';
+import { registerCloudTools } from './tools/cloud.js';
 import { registerSystemPrompt } from './prompts.js';
 import { createInitialSession, type SessionState } from './types.js';
 import { enablePiggyback } from './piggyback.js';
@@ -50,6 +51,10 @@ export interface McpServerOptions {
   workspaces?: McpWorkspaceConfig[];
   /** Default workspace ID or alias to use as the active workspace. */
   defaultWorkspace?: string;
+  /** Cloud API base URL used by cloud.* tools. Defaults to CLOUD_BASE_URL or production. */
+  cloudBaseUrl?: string;
+  /** Project path cloud.agent.spawn should mount by default. Defaults to process.cwd(). */
+  cloudDefaultRelayfilePath?: string;
 }
 
 type AgentRouting = {
@@ -440,6 +445,10 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   registerMessagingTools(mcpServer, getAgentClient);
   registerFeatureTools(mcpServer, getAgentClient);
   registerProgrammabilityTools(mcpServer, getRelay, getAgentClient);
+  registerCloudTools(mcpServer, {
+    cloudBaseUrl: options.cloudBaseUrl,
+    cwd: options.cloudDefaultRelayfilePath,
+  });
 
   // Register system prompt
   registerSystemPrompt(mcpServer);
