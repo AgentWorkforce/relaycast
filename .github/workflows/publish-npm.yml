@@ -119,16 +119,22 @@ jobs:
             const version = '$NEW_VERSION';
 
             const packagesDir = 'packages';
+            // @relaycast/engine is versioned + published independently
+            // (see publish-engine.yml); never touch it in the lockstep sweep,
+            // and don't rewrite other packages' dependency on it.
+            const SKIP = new Set(['engine']);
             for (const dir of fs.readdirSync(packagesDir)) {
+              if (SKIP.has(dir)) { console.log('skip (independent): ' + dir); continue; }
               const pkgPath = path.join(packagesDir, dir, 'package.json');
               if (fs.existsSync(pkgPath)) {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
                 pkg.version = version;
 
                 // Update @relaycast/* dependencies to exact version
+                // (except @relaycast/engine, which is independently versioned).
                 for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
                   for (const dep of Object.keys(pkg[depType] || {})) {
-                    if (dep.startsWith('@relaycast/')) {
+                    if (dep.startsWith('@relaycast/') && dep !== '@relaycast/engine') {
                       pkg[depType][dep] = version;
                     }
                   }

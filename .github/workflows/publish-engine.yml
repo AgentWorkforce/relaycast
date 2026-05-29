@@ -1,0 +1,123 @@
+name: Publish Engine
+
+# Independent publish flow for @relaycast/engine.
+#
+# The engine is versioned and released SEPARATELY from the lockstep
+# @relaycast/* packages (see publish-npm.yml). This lets the open-core engine
+# ship on its own cadence (e.g. 1.3.0-rc.x on the `next` tag) without bumping
+# the SDK/types/server set. Triggered manually.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type (ignored if custom_version is set)"
+        required: true
+        type: choice
+        options:
+          - prerelease
+          - prepatch
+          - preminor
+          - premajor
+          - patch
+          - minor
+          - major
+        default: "prerelease"
+      custom_version:
+        description: "Custom version, e.g. 1.3.0-rc.0 (overrides bump type)"
+        required: false
+        type: string
+      tag:
+        description: "NPM dist-tag"
+        required: true
+        type: choice
+        options:
+          - next
+          - latest
+          - beta
+          - alpha
+        default: "next"
+      dry_run:
+        description: "Dry run (do not actually publish)"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-engine
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NPM_CONFIG_FUND: false
+
+jobs:
+  publish:
+    name: Build, test & publish @relaycast/engine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set engine version
+        id: ver
+        working-directory: packages/engine
+        env:
+          # Bound to env (not interpolated into the script body) to avoid shell
+          # injection from the free-form custom_version input.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$CUSTOM_VERSION" ]; then
+            npm version "$CUSTOM_VERSION" --no-git-tag-version --allow-same-version
+          else
+            npm version "$VERSION_TYPE" --no-git-tag-version --preid=rc
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing @relaycast/engine@$NEW_VERSION"
+
+      - name: Build engine (and its workspace deps)
+        run: npx turbo build --filter=@relaycast/engine
+
+      - name: Test engine
+        run: npx turbo test --filter=@relaycast/engine
+        env:
+          DO_NOT_TRACK: '1'
+
+      - name: Update npm for OIDC/provenance support
+        run: npm install -g npm@latest
+
+      - name: Dry run
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/engine
+        run: npm publish --dry-run --access public --tag "${{ github.event.inputs.tag }}" --ignore-scripts
+
+      - name: Publish to NPM
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: packages/engine
+        run: npm publish --access public --provenance --tag "${{ github.event.inputs.tag }}" --ignore-scripts
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Publish Engine" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Package**: \`@relaycast/engine\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version**: \`${{ steps.ver.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
