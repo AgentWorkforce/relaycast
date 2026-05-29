@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createRelayMcpServer } from '@relaycast/mcp';
@@ -48,7 +49,7 @@ export class InProcessMcpSessionHost implements McpSessionHost {
     }
 
     // New session (initialize).
-    const newSessionId = crypto.randomUUID();
+    const newSessionId = randomUUID();
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => newSessionId,
     });

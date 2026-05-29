@@ -8,8 +8,10 @@ export function buildFtsQuery(q: string): string {
   return q
     .toLowerCase()
     .trim()
-    // Strip characters that have special meaning in FTS5 (except quotes for phrases)
-    .replace(/[^a-z0-9\s"]/g, ' ')
+    // Strip characters that have special meaning in FTS5 (except quotes for
+    // phrases). Keep Unicode letters/numbers so non-English queries (CJK,
+    // Cyrillic, accented Latin, …) still match instead of being stripped away.
+    .replace(/[^\p{L}\p{N}\s"]/gu, ' ')
     .split(/\s+/)
     .filter(Boolean)
     .join(' ');

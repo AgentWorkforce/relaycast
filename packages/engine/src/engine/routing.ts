@@ -392,22 +392,24 @@ export async function routeBySkill(
 
   // D1 does not support bm25() with GROUP BY / aggregate context, so fetch
   // individual FTS match rows and compute min rank per entity in JS.
+  // Guard the FTS MATCH: buildFtsQuery can yield '' after sanitization, and an
+  // empty MATCH throws an fts5 syntax error — skip the rank queries in that case.
   const [skillFtsRaw, agentFtsRaw, baseRows] = await Promise.all([
-    db.all<{ skill_id: string; rank: number }>(sql`
+    ftsQuery ? db.all<{ skill_id: string; rank: number }>(sql`
       SELECT ds.id AS skill_id, bm25(directory_skills_fts) AS rank
       FROM directory_skills_fts
       JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
       JOIN directory_agents da ON da.id = ds.directory_agent_id
       WHERE directory_skills_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
-    `),
-    db.all<{ directory_agent_id: string; rank: number }>(sql`
+    `) : Promise.resolve([] as { skill_id: string; rank: number }[]),
+    ftsQuery ? db.all<{ directory_agent_id: string; rank: number }>(sql`
       SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
       FROM directory_agents_fts
       JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
       WHERE directory_agents_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
-    `),
+    `) : Promise.resolve([] as { directory_agent_id: string; rank: number }[]),
     db.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(sql`
       SELECT
         a.id AS agent_id,

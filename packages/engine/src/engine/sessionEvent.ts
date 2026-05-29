@@ -105,7 +105,8 @@ export async function listSessionEvents(
     limit?: number;
   },
 ) {
-  const limit = options?.limit ?? 100;
+  const requested = options?.limit;
+  const limit = Math.min(Math.max(Number.isFinite(requested) ? (requested as number) : 100, 1), 500);
 
   const query = db
     .select()

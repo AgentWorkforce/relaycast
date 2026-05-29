@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { eq, and, sql, lt, gt, isNull, inArray, asc } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray, asc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -492,11 +492,13 @@ export async function getDmMessages(
 
   const conditions = [eq(messages.channelId, conv.channelId)];
 
+  // Snowflake ids vary in digit width over time; compare/sort numerically so
+  // pagination stays stable across the width boundary (lexicographic would skip/repeat).
   if (opts.before) {
-    conditions.push(lt(messages.id, opts.before));
+    conditions.push(sql`CAST(${messages.id} AS INTEGER) < CAST(${opts.before} AS INTEGER)`);
   }
   if (opts.after) {
-    conditions.push(gt(messages.id, opts.after));
+    conditions.push(sql`CAST(${messages.id} AS INTEGER) > CAST(${opts.after} AS INTEGER)`);
   }
 
   const rows = await db
@@ -511,7 +513,7 @@ export async function getDmMessages(
     .from(messages)
     .innerJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
-    .orderBy(sql`${messages.id} DESC`)
+    .orderBy(sql`CAST(${messages.id} AS INTEGER) DESC`)
     .limit(limit);
 
   const attachmentMap = await fetchAttachmentsBatch(db, workspaceId, rows.map((r) => r.id));

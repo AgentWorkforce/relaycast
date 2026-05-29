@@ -32,7 +32,11 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     .where(eq(agents.id, agentId));
   const agentName = agent?.name ?? '';
 
-  const mentionRows = await db
+  // Escape LIKE metacharacters so a name containing % or _ can't widen the match,
+  // and skip entirely if the name is empty (which would degenerate to '%@%' and
+  // flood the inbox with every @-containing message).
+  const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  const mentionRows = !agentName ? [] : await db
     .select({
       id: messages.id,
       channelName: channels.name,
@@ -46,7 +50,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     .where(
       and(
         eq(messages.workspaceId, workspaceId),
-        sql`${messages.body} LIKE ${'%@' + agentName + '%'}`,
+        sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
         ne(messages.agentId, agentId), // exclude self-mentions
       ),
     )

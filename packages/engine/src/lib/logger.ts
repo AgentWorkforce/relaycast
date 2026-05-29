@@ -66,10 +66,6 @@ export function loggerEnvFromRuntime(runtime: EngineRuntime | undefined): Logger
   };
 }
 
-function isProduction(env: LoggerEnv): boolean {
-  return env.environment.toLowerCase() === 'production';
-}
-
 function getPostHogHost(env: LoggerEnv): string {
   const configured = env.posthogHost ?? DEFAULT_POSTHOG_HOST;
   return configured.endsWith('/') ? configured.slice(0, -1) : configured;
@@ -181,7 +177,6 @@ function writeConsole(level: LogLevel, source: string, message: string, metadata
 export function createLogger(env: LoggerEnv, options: CreateLoggerOptions): Logger {
   const appVersion = getAppVersion(env);
   const sdkVersion = getSdkVersion(env, options.request, options.sdkVersion);
-  const production = isProduction(env);
   const baseFields = options.fields ?? {};
   const state = options.state ?? { pending: new Set<Promise<void>>() };
 
@@ -195,12 +190,12 @@ export function createLogger(env: LoggerEnv, options: CreateLoggerOptions): Logg
       ...fields,
     };
 
-    // Console output is always useful in self-host/dev. In production with a
-    // PostHog key configured (cloud) we additionally export to the OTLP endpoint.
-    if (!production || !env.posthogApiKey) {
-      writeConsole(level, options.source, message, metadata);
-      if (!env.posthogApiKey) return;
-    }
+    // Always write to the console so logs are never silently lost — even in
+    // production, where the OTLP export can fail (network/misconfig) and
+    // swallows its own errors. When a PostHog key is configured we additionally
+    // export to the OTLP endpoint.
+    writeConsole(level, options.source, message, metadata);
+    if (!env.posthogApiKey) return;
 
     const promise = sendToPostHog(env, level, message, metadata, appVersion);
     state.pending.add(promise);

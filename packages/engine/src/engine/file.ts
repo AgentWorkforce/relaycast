@@ -16,6 +16,14 @@ export async function createUpload(
   const id = generateId();
   const storageKey = `${workspaceId}/${id}/${data.filename}`;
 
+  // Sign the upload URL before persisting, so a storage error doesn't leave an
+  // orphaned `pending` row behind.
+  const { uploadUrl, expiresAt } = await storage.createUploadUrl({
+    storageKey,
+    contentType: data.content_type,
+    sizeBytes: data.size_bytes,
+  });
+
   await db.insert(files).values({
     id,
     workspaceId,
@@ -25,12 +33,6 @@ export async function createUpload(
     sizeBytes: data.size_bytes,
     storageKey,
     status: 'pending',
-  });
-
-  const { uploadUrl, expiresAt } = await storage.createUploadUrl({
-    storageKey,
-    contentType: data.content_type,
-    sizeBytes: data.size_bytes,
   });
 
   return {
@@ -56,12 +58,14 @@ export async function completeUpload(
     return null;
   }
 
+  // Generate the URL before flipping status, so a transient storage error keeps
+  // completeUpload retry-safe (the row stays `pending` rather than `complete`).
+  const downloadUrl = await storage.createDownloadUrl({ storageKey: file.storageKey });
+
   await db
     .update(files)
     .set({ status: 'complete' })
     .where(eq(files.id, fileId));
-
-  const downloadUrl = await storage.createDownloadUrl({ storageKey: file.storageKey });
 
   return {
     id: file.id,

@@ -5,11 +5,8 @@
 import type { KeyValueStore } from '../ports/kv.js';
 
 export async function incrementUsage(kv: KeyValueStore, workspaceId: string, metric: string, amount: number = 1): Promise<number> {
-  const key = `usage:${workspaceId}:${metric}`;
-  const current = parseInt(await kv.get(key) || '0', 10);
-  const next = current + amount;
-  await kv.put(key, String(next));
-  return next;
+  // Atomic increment — avoids the lost-update race of a get→parse→put round-trip.
+  return kv.increment(`usage:${workspaceId}:${metric}`, amount);
 }
 
 export async function getUsageCounters(kv: KeyValueStore, workspaceId: string) {

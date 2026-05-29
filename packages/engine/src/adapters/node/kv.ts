@@ -58,4 +58,14 @@ export class InProcessKeyValueStore implements KeyValueStore {
   async delete(key: string): Promise<void> {
     this.store.delete(key);
   }
+
+  async increment(key: string, delta: number): Promise<number> {
+    // Single-process: there is no await between read and write, so this is
+    // atomic with respect to other JS turns — no lost-update window.
+    const current = parseInt(this.live(key)?.value ?? '0', 10) || 0;
+    const next = current + delta;
+    const existing = this.store.get(key);
+    this.store.set(key, { value: String(next), expiresAt: existing?.expiresAt ?? null });
+    return next;
+  }
 }
