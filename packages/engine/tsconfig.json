@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/__tests__", "src/**/__tests__", "dist"],
+  "references": [
+    { "path": "../types" },
+    { "path": "../a2a" },
+    { "path": "../mcp" }
+  ]
+}
