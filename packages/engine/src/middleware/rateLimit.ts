@@ -1,6 +1,10 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 
+// Conservative per-minute ceiling applied when the entitlements lookup fails,
+// so an entitlements outage degrades to a safe default rather than no limit.
+const FALLBACK_RATE_PER_MIN = 300;
+
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
 // POST endpoints get tighter limits, GET endpoints get looser.
 const ROUTE_MULTIPLIERS: Record<string, number> = {
@@ -39,13 +43,18 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   const window = Math.floor(Date.now() / 60000);
   const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${window}`;
 
+  // Resolve the per-minute limit. If entitlements are unavailable, fall back to
+  // a conservative default and still enforce it — an entitlements outage must
+  // NOT translate into unlimited throughput.
+  let globalLimit: number;
   try {
-    // Both the entitlements lookup and the limiter check are inside the
-    // fail-open boundary — never 500 a request because rate-limit infra hiccuped.
-    const limits = await entitlements.getLimits(workspace);
-    const globalLimit = limits.rate_per_min;
-    const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
+    globalLimit = (await entitlements.getLimits(workspace)).rate_per_min;
+  } catch {
+    globalLimit = FALLBACK_RATE_PER_MIN;
+  }
+  const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
 
+  try {
     const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: 60_000 });
     c.header('X-RateLimit-Limit', String(limit));
     c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));
@@ -63,7 +72,8 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
       );
     }
   } catch {
-    // Fail open if the limiter is unavailable — never block a request on infra.
+    // Only the limiter backend failing is fail-open — a transient infra hiccup
+    // shouldn't 500 the request (the limit was still computed above).
   }
 
   await next();
