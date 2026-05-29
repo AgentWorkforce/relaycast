@@ -52,6 +52,9 @@ export async function registerAgent(
         name: data.name,
         handle: `@${data.name}`,
         type: data.type || 'agent',
+        // Set status explicitly: the column DEFAULT is the deprecated 'online'
+        // on databases migrated before 0013, and SQLite can't ALTER a default.
+        status: 'active',
         tokenHash,
         persona: data.persona ?? null,
         metadata: data.metadata ?? {},

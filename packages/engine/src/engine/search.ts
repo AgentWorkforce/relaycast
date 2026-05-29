@@ -68,9 +68,9 @@ export async function searchMessages(
       AND m.workspace_id = ${workspaceId}
       ${channelId ? sql`AND m.channel_id = ${channelId}` : sql``}
       ${agentId ? sql`AND m.agent_id = ${agentId}` : sql``}
-      ${opts.before ? sql`AND CAST(m.id AS INTEGER) < CAST(${opts.before} AS INTEGER)` : sql``}
-      ${opts.after ? sql`AND CAST(m.id AS INTEGER) > CAST(${opts.after} AS INTEGER)` : sql``}
-    ORDER BY rank, CAST(m.id AS INTEGER) DESC
+      ${opts.before ? sql`AND m.id < ${opts.before}` : sql``}
+      ${opts.after ? sql`AND m.id > ${opts.after}` : sql``}
+    ORDER BY rank, m.id DESC
     LIMIT ${limit}
   `);
 
