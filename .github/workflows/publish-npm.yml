@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Package to publish"
+        description: "Package to publish (engine is versioned independently — see publish-engine job)"
         required: true
         type: choice
         options:
@@ -17,6 +17,7 @@ on:
           - mcp
           - react
           - openclaw
+          - engine
         default: "all"
       version:
         description: "Version bump type"
@@ -67,6 +68,9 @@ jobs:
   build:
     name: Build & Version
     runs-on: ubuntu-latest
+    # @relaycast/engine is published by the independent publish-engine job
+    # below, which does its own versioning — skip the lockstep build for it.
+    if: github.event.inputs.package != 'engine'
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
 
@@ -120,8 +124,8 @@ jobs:
 
             const packagesDir = 'packages';
             // @relaycast/engine is versioned + published independently
-            // (see publish-engine.yml); never touch it in the lockstep sweep,
-            // and don't rewrite other packages' dependency on it.
+            // (see the publish-engine job below); never touch it in the
+            // lockstep sweep, and don't rewrite other packages' dependency on it.
             const SKIP = new Set(['engine']);
             for (const dir of fs.readdirSync(packagesDir)) {
               if (SKIP.has(dir)) { console.log('skip (independent): ' + dir); continue; }
@@ -232,12 +236,13 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
 
-  # Publish a single package (when not "all")
+  # Publish a single package (when not "all"). Engine is excluded — it has its
+  # own independently-versioned job below.
   publish-single:
     name: Publish Single Package
     needs: build
     runs-on: ubuntu-latest
-    if: github.event.inputs.package != 'all'
+    if: github.event.inputs.package != 'all' && github.event.inputs.package != 'engine'
 
     steps:
       - name: Checkout code
@@ -270,6 +275,72 @@ jobs:
         if: github.event.inputs.dry_run != 'true'
         working-directory: packages/${{ github.event.inputs.package }}
         run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+
+  # Publish @relaycast/engine — independently versioned, NOT part of the
+  # lockstep sweep above. It lives in this workflow (rather than a separate
+  # file) so npm trusted publishing (OIDC) only ever needs to trust one
+  # workflow filename. This job is fully self-contained: it does its own
+  # version bump, build and test, and does not depend on the lockstep `build`.
+  publish-engine:
+    name: Publish @relaycast/engine
+    runs-on: ubuntu-latest
+    if: github.event.inputs.package == 'engine'
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set engine version
+        id: ver
+        working-directory: packages/engine
+        env:
+          # Bound to env (not interpolated into the script body) to avoid shell
+          # injection from the free-form custom_version input.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$CUSTOM_VERSION" ]; then
+            npm version "$CUSTOM_VERSION" --no-git-tag-version --allow-same-version
+          else
+            npm version "$VERSION_TYPE" --no-git-tag-version --preid=rc
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing @relaycast/engine@$NEW_VERSION"
+
+      - name: Build engine (and its workspace deps)
+        run: npx turbo build --filter=@relaycast/engine
+
+      - name: Test engine
+        run: npx turbo test --filter=@relaycast/engine
+        env:
+          DO_NOT_TRACK: '1'
+
+      - name: Update npm for OIDC/provenance support
+        run: npm install -g npm@latest
+
+      - name: Dry run
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/engine
+        run: npm publish --dry-run --access public --tag "${{ github.event.inputs.tag }}" --ignore-scripts
+
+      - name: Publish to NPM
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: packages/engine
+        run: npm publish --access public --provenance --tag "${{ github.event.inputs.tag }}" --ignore-scripts
 
   # Create git tag and release
   create-release:
@@ -347,7 +418,7 @@ jobs:
   # Summary
   summary:
     name: Summary
-    needs: [build, publish-packages, publish-single, create-release]
+    needs: [build, publish-packages, publish-single, publish-engine, create-release]
     runs-on: ubuntu-latest
     if: always()
 
@@ -356,7 +427,7 @@ jobs:
         run: |
           echo "## Publish Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version**: \`${{ needs.build.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${{ needs.build.outputs.new_version || needs.publish-engine.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Package**: \`${{ github.event.inputs.package }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**NPM Tag**: \`${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> $GITHUB_STEP_SUMMARY
@@ -367,4 +438,5 @@ jobs:
           echo "| Build & Version | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Publish NPM Packages | ${{ needs.publish-packages.result == 'success' && '✅' || (needs.publish-packages.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Publish Single | ${{ needs.publish-single.result == 'success' && '✅' || (needs.publish-single.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-single.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish Engine | ${{ needs.publish-engine.result == 'success' && '✅' || (needs.publish-engine.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.publish-engine.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Create Release | ${{ needs.create-release.result == 'success' && '✅' || (needs.create-release.result == 'skipped' && '⏭️' || '❌') }} ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
