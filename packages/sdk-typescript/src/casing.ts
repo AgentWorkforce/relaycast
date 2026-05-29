@@ -8,7 +8,7 @@ export type CamelCase<S extends string> =
 export type Camelize<T> =
   T extends Primitive ? T :
   T extends Array<infer U> ? Array<Camelize<U>> :
-  T extends Record<string, unknown>
+  T extends object
     ? { [K in keyof T as K extends string ? CamelCase<K> : K]: Camelize<T[K]> }
     : T;
 
