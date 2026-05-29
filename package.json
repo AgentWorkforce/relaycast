@@ -16,6 +16,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply relaycast --remote",
     "db:execute": "wrangler d1 execute relaycast",
     "e2e": "npx tsx scripts/e2e.ts",
+    "e2e:actions": "npx tsx scripts/e2e-actions.ts",
     "local:parity": "node scripts/check-local-api-parity.mjs",
     "local:build": "cargo build --release --manifest-path packages/local/Cargo.toml"
   },
