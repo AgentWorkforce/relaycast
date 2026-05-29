@@ -1181,7 +1181,10 @@ ${B}${CYAN}╔══════════════════════
     const openWs = (token: string) => {
       const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
       const events: any[] = [];
-      sock.on('message', (d) => events.push(JSON.parse(d.toString())));
+      sock.on('message', (d) => {
+        // Guard against non-JSON frames so a stray payload can't crash the script.
+        try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
+      });
       const ready = new Promise<void>((resolve, reject) => {
         sock.on('open', () => resolve());
         sock.on('error', reject);
@@ -1202,7 +1205,9 @@ ${B}${CYAN}╔══════════════════════
 
     const handlerWs = openWs(leadToken);
     const callerWs = openWs(backendToken);
-    await Promise.all([handlerWs.ready, callerWs.ready]);
+    await run('Connect handler + caller WebSockets', async () => {
+      await Promise.all([handlerWs.ready, callerWs.ready]);
+    });
     let invocationId = '';
 
     await run(`Register "deploy" action (handler ${LEAD})`, async () => {

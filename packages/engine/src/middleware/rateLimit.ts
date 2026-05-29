@@ -31,19 +31,21 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   const { entitlements, rateLimiter } = c.get('engine');
-  const limits = await entitlements.getLimits(workspace);
-  const globalLimit = limits.rate_per_min;
 
   // Apply route-specific multiplier if applicable
   const routeKey = getRouteKey(c.req.method, c.req.path);
-  const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
-
   // The rate limiter port is not workspace-scoped, so the workspace id is part
   // of the bucket key (the Cloudflare adapter previously scoped via the DO id).
   const window = Math.floor(Date.now() / 60000);
   const bucketKey = `${workspace.id}:${routeKey ?? 'global'}:${window}`;
 
   try {
+    // Both the entitlements lookup and the limiter check are inside the
+    // fail-open boundary — never 500 a request because rate-limit infra hiccuped.
+    const limits = await entitlements.getLimits(workspace);
+    const globalLimit = limits.rate_per_min;
+    const limit = routeKey ? Math.ceil(globalLimit * ROUTE_MULTIPLIERS[routeKey]) : globalLimit;
+
     const { allowed, count, remaining } = await rateLimiter.check({ bucketKey, limit, windowMs: 60_000 });
     c.header('X-RateLimit-Limit', String(limit));
     c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));

@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
+import { isSafeExternalUrl } from '../lib/ssrf.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -26,10 +27,14 @@ function buildAgentCardUrl(externalUrl: string): string {
 }
 
 async function pingExternalAgent(externalUrl: string): Promise<boolean> {
+  // SSRF guard: only ping public http(s) hosts (rejects loopback/private/etc.).
+  if (!isSafeExternalUrl(externalUrl)) return false;
   try {
     const response = await globalThis.fetch(buildAgentCardUrl(externalUrl), {
       method: 'GET',
       headers: { accept: 'application/json' },
+      // Bound each ping so one slow/hung endpoint can't stall the whole sweep.
+      signal: AbortSignal.timeout(5_000),
     });
     return response.ok;
   } catch {

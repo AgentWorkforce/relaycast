@@ -25,6 +25,7 @@ import { a2aAgents, agents } from '../db/schema.js';
 import { registerAgent, getAgentByName, updateAgent } from './agent.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
+import { isSafeExternalUrl } from '../lib/ssrf.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -145,9 +146,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard> {
+  if (!isSafeExternalUrl(agentCardUrl)) {
+    const err = new Error(`Refusing to fetch agent card from non-public URL: ${agentCardUrl}`);
+    Object.assign(err, { code: 'a2a_agent_url_forbidden', status: 400 });
+    throw err;
+  }
   const response = await globalThis.fetch(agentCardUrl, {
     method: 'GET',
     headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(5_000),
   });
 
   if (!response.ok) {
@@ -300,7 +307,9 @@ export async function registerA2aAgent(
   let relayToken: string;
   if (existingProxy) {
     const meta = (existingProxy.metadata ?? {}) as Record<string, unknown>;
-    const isA2aProxy = existingProxy.type === 'external' || meta.a2a === true;
+    // Only an actual A2A proxy may be reused — require the a2a marker, not just
+    // type 'external', so an unrelated agent can never be hijacked by name.
+    const isA2aProxy = existingProxy.type === 'external' && meta.a2a === true;
     if (!isA2aProxy) {
       const err = new Error(`Agent "${relayName}" already exists in this workspace`);
       Object.assign(err, { code: 'agent_already_exists', status: 409 });
@@ -510,6 +519,12 @@ export async function sendToExternalAgent(
 ): Promise<A2aResponse> {
   const request = JsonRpcRequestSchema.parse(jsonRpcPayload);
   const targetUrl = normalizeBaseUrl(agentUrl);
+
+  if (!isSafeExternalUrl(targetUrl)) {
+    const err = new Error(`Refusing to send to non-public A2A URL: ${targetUrl}`);
+    Object.assign(err, { code: 'a2a_agent_url_forbidden', status: 400 });
+    throw err;
+  }
 
   let lastError: unknown;
 

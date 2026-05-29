@@ -1,4 +1,4 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import {
   readReceipts,
@@ -7,6 +7,8 @@ import {
   channelMembers,
   channels,
   deliveries,
+  dmConversations,
+  dmParticipants,
 } from '../db/schema.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -23,6 +25,29 @@ export async function markRead(
     .from(messages)
     .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
   if (!msg) return null;
+
+  // Authorize: the agent must be able to see this message — i.e. a member of
+  // the channel, or a participant of the DM conversation backing it. Without
+  // this, any agent could mark arbitrary message ids read. Treat unauthorized
+  // as not-found so we don't reveal message existence.
+  const [channelMembership] = await db
+    .select({ agentId: channelMembers.agentId })
+    .from(channelMembers)
+    .where(and(eq(channelMembers.channelId, msg.channelId), eq(channelMembers.agentId, agentId)));
+  let authorized = Boolean(channelMembership);
+  if (!authorized) {
+    const [dmMembership] = await db
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .innerJoin(dmConversations, eq(dmParticipants.conversationId, dmConversations.id))
+      .where(and(
+        eq(dmConversations.channelId, msg.channelId),
+        eq(dmParticipants.agentId, agentId),
+        isNull(dmParticipants.leftAt),
+      ));
+    authorized = Boolean(dmMembership);
+  }
+  if (!authorized) return null;
 
   // Upsert read receipt (idempotent)
   await db

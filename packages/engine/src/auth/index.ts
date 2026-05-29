@@ -9,8 +9,8 @@ export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function unauthorized(message: string): AuthResult {
-  return { ok: false, status: 401, code: 'unauthorized', message };
+function unauthorized(message: string, code = 'unauthorized'): AuthResult {
+  return { ok: false, status: 401, code, message };
 }
 
 /**
@@ -44,7 +44,7 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
         return unauthorized('Workspace key required (rk_live_...)');
       }
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-      if (!agent) return unauthorized('Invalid agent token');
+      if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return { ok: true, workspace, agent };

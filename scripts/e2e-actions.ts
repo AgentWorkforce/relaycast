@@ -156,9 +156,10 @@ async function main(): Promise<void> {
   await test('Get action by name', async () => {
     const r = await req('GET', '/v1/actions/deploy', { token: caller.token });
     if (r.status !== 200) throw new Error(`status ${r.status}`);
-    if (r.json.data.handler_agent_id !== handler.id && r.json.data.handler_agent !== handler.name) {
-      // handler exposed either as id or name depending on shape; tolerate both
-    }
+    if (r.json.data?.name !== 'deploy') throw new Error(`expected action name "deploy", got ${JSON.stringify(r.json.data?.name)}`);
+    // handler is exposed either as id or name depending on shape — accept either.
+    const handlerOk = r.json.data.handler_agent_id === handler.id || r.json.data.handler_agent === handler.name;
+    if (!handlerOk) throw new Error(`handler mismatch: ${JSON.stringify(r.json.data)}`);
   });
 
   // ── 4. Caller invokes → gets invocation_id with status 'invoked' ──

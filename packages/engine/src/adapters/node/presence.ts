@@ -127,6 +127,9 @@ export class InProcessPresence implements PresenceTracker {
       for (const s of stale) {
         await this.broadcast(workspaceId, stillOnline, this.buildEvent('agent.offline', s.id, s.name));
       }
+      // Reclaim the workspace entry once it has no tracked agents, so the map
+      // doesn't grow unbounded with workspace churn.
+      if (map.size === 0) this.workspaces.delete(workspaceId);
     }
   }
 }

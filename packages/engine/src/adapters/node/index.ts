@@ -79,7 +79,13 @@ export interface NodeRuntime {
 export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const handle = getSqliteDb(options.dbPath);
   if (options.migrate !== false) {
-    runMigrations(handle);
+    try {
+      runMigrations(handle);
+    } catch (err) {
+      // Don't leak the open file handle if startup migrations fail.
+      try { handle.sqlite.close(); } catch { /* ignore */ }
+      throw err;
+    }
   }
   const db = handle.db;
 
@@ -125,6 +131,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     handle,
     close() {
       presence.stop();
+      kv.dispose();
       try {
         handle.sqlite.close();
       } catch {

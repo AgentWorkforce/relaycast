@@ -64,8 +64,9 @@ async function attemptDelivery(
       if (response.ok) {
         return { ok: true, retryable: false };
       }
-      // 4xx errors are not retried (client error, won't succeed on retry)
-      if (response.status >= 400 && response.status < 500) {
+      // 4xx errors are not retried (client error, won't succeed on retry) —
+      // except 408 (timeout) and 429 (rate limited), which are transient.
+      if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
         return { ok: false, retryable: false };
       }
     } catch {
@@ -94,8 +95,10 @@ export async function deliverEvent(
       secret: r.secret,
       filter: r.filter as { channel?: string; mentions?: string } | null,
     }));
-  } catch {
-    return { attempted: 0, succeeded: 0, failed: 0, retryableFailures: 0 };
+  } catch (err) {
+    // Don't swallow: a transient subscription-lookup failure must surface so the
+    // caller (queue consumer) retries instead of silently dropping the event.
+    throw err;
   }
 
   if (subscriptions.length === 0) {

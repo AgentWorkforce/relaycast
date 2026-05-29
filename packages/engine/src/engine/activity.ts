@@ -9,7 +9,7 @@ export async function getActivityFeed(
   workspaceId: string,
   limit: number = 20,
 ) {
-  const effectiveLimit = Math.min(Math.max(limit, 1), 100);
+  const effectiveLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 20, 1), 100);
 
   const rows = await db
     .select({
@@ -25,7 +25,9 @@ export async function getActivityFeed(
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .innerJoin(agents, eq(messages.agentId, agents.id))
     .where(eq(messages.workspaceId, workspaceId))
-    .orderBy(desc(messages.createdAt))
+    // id is a monotonic snowflake — use it as a stable tiebreaker so same-second
+    // messages don't shuffle between calls.
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(effectiveLimit);
 
   return rows.map((r) => {

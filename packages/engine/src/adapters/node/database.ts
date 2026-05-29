@@ -71,12 +71,16 @@ export function runMigrations(handle: SqliteDbHandle): { applied: string[] } {
   for (const file of files) {
     if (done.has(file)) continue;
     // drizzle-kit separates statements with `--> statement-breakpoint`; SQLite's
-    // `exec` runs the whole script. Migration DDL is idempotent-friendly
-    // (CREATE ... IF NOT EXISTS), so we don't wrap in an explicit transaction
-    // (some files may contain their own, which would nest and throw).
+    // `exec` runs the whole script. Apply the DDL and record the migration as
+    // applied in one transaction so a crash mid-migration can't leave the schema
+    // changed but unrecorded (which would replay and fail on the next boot).
+    // drizzle migrations never contain their own BEGIN/COMMIT, so this won't nest.
     const ddl = readFileSync(join(dir, file), 'utf8').replace(/-->\s*statement-breakpoint/g, '');
-    sqlite.exec(ddl);
-    insert.run(file, Math.floor(Date.now() / 1000));
+    const applyOne = sqlite.transaction(() => {
+      sqlite.exec(ddl);
+      insert.run(file, Math.floor(Date.now() / 1000));
+    });
+    applyOne();
     applied.push(file);
   }
 

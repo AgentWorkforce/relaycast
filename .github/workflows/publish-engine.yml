@@ -76,12 +76,16 @@ jobs:
       - name: Set engine version
         id: ver
         working-directory: packages/engine
+        env:
+          # Bound to env (not interpolated into the script body) to avoid shell
+          # injection from the free-form custom_version input.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
         run: |
-          CUSTOM="${{ github.event.inputs.custom_version }}"
-          if [ -n "$CUSTOM" ]; then
-            npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+          if [ -n "$CUSTOM_VERSION" ]; then
+            npm version "$CUSTOM_VERSION" --no-git-tag-version --allow-same-version
           else
-            npm version "${{ github.event.inputs.version }}" --no-git-tag-version --preid=rc
+            npm version "$VERSION_TYPE" --no-git-tag-version --preid=rc
           fi
           NEW_VERSION=$(node -p "require('./package.json').version")
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"

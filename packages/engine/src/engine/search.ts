@@ -29,7 +29,10 @@ export async function searchMessages(
       .select()
       .from(channels)
       .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, opts.channel)));
-    if (ch) channelId = ch.id;
+    // A requested channel filter that resolves to nothing must yield no results,
+    // not silently fall through to an unfiltered search.
+    if (!ch) return [];
+    channelId = ch.id;
   }
 
   let agentId: string | undefined;
@@ -38,7 +41,8 @@ export async function searchMessages(
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, opts.from)));
-    if (agent) agentId = agent.id;
+    if (!agent) return [];
+    agentId = agent.id;
   }
 
   // Build the FTS5 query with parameterized SQL.
@@ -64,9 +68,9 @@ export async function searchMessages(
       AND m.workspace_id = ${workspaceId}
       ${channelId ? sql`AND m.channel_id = ${channelId}` : sql``}
       ${agentId ? sql`AND m.agent_id = ${agentId}` : sql``}
-      ${opts.before ? sql`AND m.id < ${opts.before}` : sql``}
-      ${opts.after ? sql`AND m.id > ${opts.after}` : sql``}
-    ORDER BY rank
+      ${opts.before ? sql`AND CAST(m.id AS INTEGER) < CAST(${opts.before} AS INTEGER)` : sql``}
+      ${opts.after ? sql`AND CAST(m.id AS INTEGER) > CAST(${opts.after} AS INTEGER)` : sql``}
+    ORDER BY rank, CAST(m.id AS INTEGER) DESC
     LIMIT ${limit}
   `);
 

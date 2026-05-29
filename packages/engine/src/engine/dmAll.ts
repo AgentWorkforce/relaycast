@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, inArray } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -122,9 +122,11 @@ export async function getDmMessagesForWorkspace(
     throw err;
   }
 
+  // Snowflake ids vary in digit width over time; compare/sort numerically so
+  // pagination is stable across the width boundary (lexicographic would skip/repeat).
   const conditions = [eq(messages.channelId, conv.channelId)];
-  if (opts.before) conditions.push(lt(messages.id, opts.before));
-  if (opts.after) conditions.push(gt(messages.id, opts.after));
+  if (opts.before) conditions.push(sql`CAST(${messages.id} AS INTEGER) < CAST(${opts.before} AS INTEGER)`);
+  if (opts.after) conditions.push(sql`CAST(${messages.id} AS INTEGER) > CAST(${opts.after} AS INTEGER)`);
 
   const rows = await db
     .select({
@@ -137,7 +139,7 @@ export async function getDmMessagesForWorkspace(
     .from(messages)
     .innerJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
-    .orderBy(sql`${messages.id} DESC`)
+    .orderBy(sql`CAST(${messages.id} AS INTEGER) DESC`)
     .limit(limit);
 
   return rows.map((r) => ({

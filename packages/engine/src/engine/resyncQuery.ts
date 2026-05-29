@@ -20,7 +20,12 @@ export async function replayMissedEvents(
   workspaceId: string,
   since: string, // ISO timestamp
 ): Promise<Record<string, unknown>[]> {
-  const sinceUnix = Math.floor(new Date(since).getTime() / 1000);
+  const sinceMs = new Date(since).getTime();
+  if (!Number.isFinite(sinceMs)) {
+    // Invalid `since` — return nothing rather than running queries with NaN.
+    return [];
+  }
+  const sinceUnix = Math.floor(sinceMs / 1000);
   const events: Array<{ ts: number; payload: Record<string, unknown> }> = [];
 
   const buildEvent = (
