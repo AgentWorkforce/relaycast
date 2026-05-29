@@ -22,7 +22,8 @@ import { z } from 'zod';
 import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/schema.js';
-import { registerAgent } from './agent.js';
+import { registerAgent, getAgentByName, updateAgent } from './agent.js';
+import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -282,16 +283,43 @@ export async function registerA2aAgent(
     throw err;
   }
 
-  const provisioned = await registerAgent(db, workspaceId, {
-    name: relayName,
-    type: 'external',
-    persona: `External A2A agent proxy for ${agentCard.name}`,
-    metadata: {
-      a2a: true,
-      a2a_external_url: externalUrl,
-      a2a_skills: agentCard.skills,
-    },
-  });
+  const proxyMetadata = {
+    a2a: true,
+    a2a_external_url: externalUrl,
+    a2a_skills: agentCard.skills,
+    a2a_active: true,
+  };
+
+  // A prior removeA2aAgent soft-removes the A2A agent: it deletes the a2a_agents
+  // row but keeps the relay proxy agent (marked offline, a2a_active:false) to
+  // preserve history. On re-registration the existence check above passes (no
+  // a2a row), so reuse + reactivate that leftover proxy rather than inserting a
+  // duplicate name and tripping the agents (workspace, name) unique constraint.
+  const existingProxy = await getAgentByName(db, workspaceId, relayName);
+  let relayAgentId: string;
+  let relayToken: string;
+  if (existingProxy) {
+    const meta = (existingProxy.metadata ?? {}) as Record<string, unknown>;
+    const isA2aProxy = existingProxy.type === 'external' || meta.a2a === true;
+    if (!isA2aProxy) {
+      const err = new Error(`Agent "${relayName}" already exists in this workspace`);
+      Object.assign(err, { code: 'agent_already_exists', status: 409 });
+      throw err;
+    }
+    await updateAgent(db, workspaceId, relayName, { status: 'active', metadata: proxyMetadata });
+    const rotated = await rotateAgentToken(db, workspaceId, relayName);
+    relayAgentId = existingProxy.id;
+    relayToken = rotated.token;
+  } else {
+    const provisioned = await registerAgent(db, workspaceId, {
+      name: relayName,
+      type: 'external',
+      persona: `External A2A agent proxy for ${agentCard.name}`,
+      metadata: proxyMetadata,
+    });
+    relayAgentId = provisioned.id;
+    relayToken = provisioned.token;
+  }
 
   const healthOk = await healthCheckAgent(externalUrl);
   let certification: 'level_0' | 'level_1' = healthOk ? 'level_1' : 'level_0';
@@ -299,7 +327,7 @@ export async function registerA2aAgent(
   await db.insert(a2aAgents).values({
     id: `a2a_${crypto.randomUUID()}`,
     workspaceId,
-    relayAgentId: provisioned.id,
+    relayAgentId,
     agentCard,
     externalUrl,
     authScheme: input.authScheme ?? null,
@@ -326,7 +354,7 @@ export async function registerA2aAgent(
 
   return {
     relayName,
-    relayToken: provisioned.token,
+    relayToken,
     webhookUrl: buildWebhookUrl(workspaceId, relayName),
     certification,
   };
