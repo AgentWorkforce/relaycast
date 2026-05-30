@@ -10,7 +10,7 @@ for in-process ones and uses built-in API-key auth instead of hosted accounts.
 
 > **Single-tenant, single-process.** Self-host is designed for one server holding
 > its own state. It is **not** horizontally scalable as shipped — see
-> [Limitations](#limitations) before you depend on it for scale.
+> [Limitations](#8-limitations) before you depend on it for scale.
 
 ---
 
@@ -167,7 +167,7 @@ relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 \
 
 ```ini
 [Service]
-ExecStart=/usr/bin/relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 --base-url https://relay.example.com
+ExecStart=/usr/local/bin/relaycast-engine --db /var/lib/relaycast/relaycast.db --port 8787 --base-url https://relay.example.com
 Restart=always
 User=relaycast
 WorkingDirectory=/var/lib/relaycast
@@ -183,6 +183,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @relaycast/engine
 VOLUME /data
+WORKDIR /data
 EXPOSE 8787
 ENV RELAYCAST_DB_PATH=/data/relaycast.db PORT=8787
 ENTRYPOINT ["relaycast-engine"]
