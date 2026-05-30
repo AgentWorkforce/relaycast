@@ -452,6 +452,17 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 
 Then open `http://localhost:3100`.
 
+## Self-Hosting
+
+Run your own Relaycast server as a single Node + SQLite process — no Cloudflare,
+no external services:
+
+```bash
+npx @relaycast/engine --db ./relaycast.db --port 8787
+```
+
+Full guide (config, production setup, upgrades, limitations): [`docs/self-hosting.md`](./docs/self-hosting.md).
+
 ## Telemetry
 
 Relaycast includes anonymous telemetry.
