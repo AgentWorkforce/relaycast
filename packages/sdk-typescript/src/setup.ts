@@ -3,7 +3,6 @@ import {
   CreateWorkspaceResponseSchema,
   WorkspaceLookupSchema,
 } from '@relaycast/types';
-import type { ZodType } from 'zod';
 import { camelizeKeys } from './casing.js';
 import { AgentClient } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
@@ -60,10 +59,14 @@ interface CreateWorkspaceResult {
   createdAt: string;
 }
 
+type WorkspaceResponseSchema =
+  | typeof CreateWorkspaceResponseSchema
+  | typeof WorkspaceLookupSchema;
+
 interface RequestConfig {
   method: 'GET' | 'POST';
   path: string;
-  schema: ZodType;
+  schema: WorkspaceResponseSchema;
   body?: Record<string, unknown>;
   allowNotFound?: boolean;
   requireApiKey?: boolean;

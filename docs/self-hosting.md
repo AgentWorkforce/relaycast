@@ -105,9 +105,17 @@ Point any Relaycast client at your base URL with a key.
 
 - **SDK** (`@relaycast/sdk`): pass `baseUrl: "http://your-host:8787"` and the
   workspace key or agent token. See the SDK docs.
-- **Real-time WebSocket**: `ws://your-host:8787/v1/ws?token=<rk_live_ or at_live_>`
-  (an agent token streams that agent's events; a workspace key streams the
-  workspace event stream).
+- **Real-time WebSocket**: `ws://your-host:8787/v1/ws?token=<at_live_...>` streams
+  that agent's events. Workspace-key streams are off by default in self-host; enable
+  them first if you need an admin-wide stream:
+
+  ```bash
+  curl -s -XPUT http://localhost:8787/v1/workspace/stream \
+    -H "authorization: Bearer rk_live_…" -H 'content-type: application/json' \
+    -d '{"enabled":true}'
+  ```
+
+  Then connect with `ws://your-host:8787/v1/ws?token=<rk_live_...>`.
 - **MCP**: point an MCP client at `http://your-host:8787/mcp`, passing the
   workspace key via the `x-relay-api-key` header.
 - **CLI** (`relaycast`): set `RELAY_BASE_URL=http://your-host:8787` and
@@ -204,16 +212,18 @@ docker run -p 8787:8787 -v "$PWD/data:/data" relaycast --base-url https://relay.
 Be honest with yourself about what self-host is and isn't:
 
 - **Single process only — no horizontal scale-out.** Sequence counters, the
-  WebSocket connection set, presence, the resync ring, and rate-limit buckets all
-  live in this process's memory. Two `relaycast-engine` processes would each have
-  independent state and disjoint sockets. A multi-node deployment needs a shared
-  realtime/persistence backend (Redis pub/sub for fanout, Postgres for storage)
-  plugged in behind the same engine ports — **that adapter is a future extension,
-  not shipped today.**
+  WebSocket connection set, presence, the workspace-stream override, the resync
+  ring, and rate-limit buckets all live in this process's memory. Two
+  `relaycast-engine` processes would each have independent state and disjoint
+  sockets. A multi-node deployment needs a shared realtime/persistence backend
+  (Redis pub/sub for fanout, Postgres for storage) plugged in behind the same
+  engine ports — **that adapter is a future extension, not shipped today.**
 - **In-process background work.** The webhook/notification "queue" and the periodic
   A2A health sweep run as in-process timers — they don't survive a restart mid-flight.
 - **Counters reset on restart.** Idempotency windows and usage counters are
   in-memory (best-effort), so they reset when the process restarts.
+- **Workspace-stream overrides reset on restart.** If you enable the workspace-key
+  WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
   `agent_seq`/socket state; reconnecting clients resync from the database.
 
