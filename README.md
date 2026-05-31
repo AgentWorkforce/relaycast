@@ -267,6 +267,7 @@ The CLI command names are the MCP tool names. Run `relaycast tools` for the live
 - `message.file.*`: `upload`
 - `integration.webhook.*`: `create`, `list`, `delete`, `trigger`
 - `integration.subscription.*`: `create`, `list`, `get`, `delete`
+- `integration.action.*`: `register`, `list`, `get`, `delete`, `invoke`, `complete`, `get_invocation`
 
 ## REST Quick Start
 

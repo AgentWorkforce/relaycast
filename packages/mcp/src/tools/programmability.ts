@@ -1,7 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { RelayCast } from '@relaycast/sdk';
+import type { RelayCast, AgentClient } from '@relaycast/sdk';
 import { SubscribableEventTypeSchema } from '@relaycast/types';
+import {
+  identityOverrideInputShape,
+  workspaceRoutingInputShape,
+  workspaceRefFromArgs,
+} from '../workspaces.js';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -12,6 +17,7 @@ export function registerProgrammabilityTools(
     wsRouting?: { workspace_id?: string; workspace_alias?: string },
     asIdentity?: string,
   ) => RelayCast,
+  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
   // === Inbound Webhooks ===
 
@@ -175,6 +181,158 @@ export function registerProgrammabilityTools(
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
+    };
+  });
+
+  // === Actions (agent-to-agent RPC) ===
+
+  server.registerTool('integration.action.register', {
+    title: 'Register Action',
+    description: 'Register an action (async agent-to-agent RPC) that a specific agent handles. Other agents invoke the action; the handler agent receives an `action.invoked` event and reports the result. Replaces the legacy command API. Requires the hosted engine (gateway.relaycast.dev) or a self-hosted engine.',
+    inputSchema: {
+      name: z.string().describe('Action name (e.g. "deploy", "review")'),
+      description: z.string().describe('Human-readable description of what the action does'),
+      handler_agent: z.string().describe('Name of the registered agent that handles invocations'),
+      input_schema: z.object({}).passthrough().optional().describe('JSON Schema describing the action input'),
+      output_schema: z.object({}).passthrough().optional().describe('JSON Schema describing the action output'),
+      available_to: z.array(z.string()).optional().describe('Agent names allowed to invoke this action (defaults to all)'),
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, description, handler_agent, input_schema, output_schema, available_to }) => {
+    const relay = getRelay();
+    const result = await relay.actions.register({
+      name,
+      description,
+      handlerAgent: handler_agent,
+      inputSchema: input_schema,
+      outputSchema: output_schema,
+      availableTo: available_to,
+    });
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.list', {
+    title: 'List Actions',
+    description: 'List all registered actions in the workspace. Returns each action\'s name, description, handler agent, and input/output schemas.',
+    inputSchema: {},
+    outputSchema: {
+      actions: z.array(z.object({}).passthrough()).describe('Array of action objects'),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async () => {
+    const relay = getRelay();
+    const actions = await relay.actions.list();
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(actions, null, 2) }],
+      structuredContent: { actions: actions as unknown as Record<string, unknown>[] },
+    };
+  });
+
+  server.registerTool('integration.action.get', {
+    title: 'Get Action',
+    description: 'Get a single registered action by name, including its handler agent and input/output schemas.',
+    inputSchema: {
+      name: z.string().describe('Name of the action to fetch'),
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name }) => {
+    const relay = getRelay();
+    const result = await relay.actions.get(name);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.delete', {
+    title: 'Delete Action',
+    description: 'Permanently remove a registered action from the workspace. Once deleted, agents can no longer invoke it.',
+    inputSchema: {
+      name: z.string().describe('Name of the action to delete'),
+    },
+    outputSchema: {
+      message: z.string().describe('Confirmation message'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, async ({ name }) => {
+    const relay = getRelay();
+    await relay.actions.delete(name);
+    const message = `Deleted action ${name}`;
+    return {
+      content: [{ type: 'text' as const, text: message }],
+      structuredContent: { message },
+    };
+  });
+
+  server.registerTool('integration.action.invoke', {
+    title: 'Invoke Action',
+    description: 'Invoke a registered action as the current agent. The invocation is routed to the handler agent for async processing; the returned invocation id can be used to poll for the result. The handler receives an `action.invoked` event.',
+    inputSchema: {
+      name: z.string().describe('Name of the action to invoke'),
+      input: z.object({}).passthrough().optional().describe('Input object matching the action\'s input schema'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async ({ name, input, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.invoke(name, input);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.complete', {
+    title: 'Complete Action Invocation',
+    description: 'As the handler agent, report the result (or error) of an action invocation. Marks the invocation completed or failed and notifies the caller with an `action.completed`/`action.failed` event.',
+    inputSchema: {
+      name: z.string().describe('Name of the action'),
+      invocation_id: z.string().describe('Invocation id returned by invoke'),
+      output: z.object({}).passthrough().optional().describe('Result object matching the action\'s output schema'),
+      error: z.string().optional().describe('Error message if the invocation failed'),
+      duration_ms: z.number().optional().describe('How long the action took, in milliseconds'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, invocation_id, output, error, duration_ms, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.completeInvocation(name, invocation_id, {
+      output,
+      error,
+      durationMs: duration_ms,
+    });
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
+    };
+  });
+
+  server.registerTool('integration.action.get_invocation', {
+    title: 'Get Action Invocation',
+    description: 'Get the status and result of an action invocation by id. Use this to poll for completion after invoking an action.',
+    inputSchema: {
+      name: z.string().describe('Name of the action'),
+      invocation_id: z.string().describe('Invocation id returned by invoke'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
+    },
+    outputSchema: jsonResult,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ name, invocation_id, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    const result = await client.actions.getInvocation(name, invocation_id);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
     };
   });
 

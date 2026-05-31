@@ -17,6 +17,20 @@ const mockRelay = {
     get: vi.fn(),
     delete: vi.fn(),
   },
+  actions: {
+    register: vi.fn(),
+    list: vi.fn(),
+    get: vi.fn(),
+    delete: vi.fn(),
+  },
+};
+
+const mockAgentClient = {
+  actions: {
+    invoke: vi.fn(),
+    completeInvocation: vi.fn(),
+    getInvocation: vi.fn(),
+  },
 };
 
 describe('programmability tools', () => {
@@ -29,6 +43,7 @@ describe('programmability tools', () => {
     registerProgrammabilityTools(
       mcpServer,
       () => mockRelay as any,
+      () => mockAgentClient as any,
     );
     client = new Client({ name: 'test-client', version: '0.1.0' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -157,5 +172,63 @@ describe('programmability tools', () => {
     expect(result.content).toEqual([
       { type: 'text', text: 'Deleted subscription sub_1' },
     ]);
+  });
+
+  // === Actions ===
+
+  it('register_action calls relay.actions.register()', async () => {
+    mockRelay.actions.register.mockResolvedValue({ id: 'act_1', name: 'deploy' });
+    await client.callTool({
+      name: 'integration.action.register',
+      arguments: { name: 'deploy', description: 'Deploy the app', handler_agent: 'DeployBot' },
+    });
+    expect(mockRelay.actions.register).toHaveBeenCalledWith({
+      name: 'deploy',
+      description: 'Deploy the app',
+      handlerAgent: 'DeployBot',
+      inputSchema: undefined,
+      outputSchema: undefined,
+      availableTo: undefined,
+    });
+  });
+
+  it('list_actions calls relay.actions.list()', async () => {
+    mockRelay.actions.list.mockResolvedValue([]);
+    await client.callTool({ name: 'integration.action.list', arguments: {} });
+    expect(mockRelay.actions.list).toHaveBeenCalled();
+  });
+
+  it('delete_action calls relay.actions.delete()', async () => {
+    mockRelay.actions.delete.mockResolvedValue(undefined);
+    const result = await client.callTool({
+      name: 'integration.action.delete',
+      arguments: { name: 'deploy' },
+    });
+    expect(mockRelay.actions.delete).toHaveBeenCalledWith('deploy');
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Deleted action deploy' },
+    ]);
+  });
+
+  it('invoke_action calls agentClient.actions.invoke()', async () => {
+    mockAgentClient.actions.invoke.mockResolvedValue({ invocation_id: 'inv_1', action_name: 'deploy', status: 'invoked' });
+    await client.callTool({
+      name: 'integration.action.invoke',
+      arguments: { name: 'deploy', input: { env: 'staging' } },
+    });
+    expect(mockAgentClient.actions.invoke).toHaveBeenCalledWith('deploy', { env: 'staging' });
+  });
+
+  it('complete_action calls agentClient.actions.completeInvocation()', async () => {
+    mockAgentClient.actions.completeInvocation.mockResolvedValue({ invocation_id: 'inv_1', status: 'completed' });
+    await client.callTool({
+      name: 'integration.action.complete',
+      arguments: { name: 'deploy', invocation_id: 'inv_1', output: { url: 'https://x' }, duration_ms: 12 },
+    });
+    expect(mockAgentClient.actions.completeInvocation).toHaveBeenCalledWith('deploy', 'inv_1', {
+      output: { url: 'https://x' },
+      error: undefined,
+      durationMs: 12,
+    });
   });
 });

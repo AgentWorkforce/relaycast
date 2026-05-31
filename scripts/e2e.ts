@@ -1145,98 +1145,116 @@ ${B}${CYAN}╔══════════════════════
   // ── 15. Actions (agent-to-agent RPC) ──────────────────────────────────
   step('Actions');
 
-  // Lightweight raw agent WebSocket to verify action.* fanout.
-  const openWs = (token: string) => {
-    const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
-    const events: any[] = [];
-    sock.on('message', (d) => {
-      // Guard against non-JSON frames so a stray payload can't crash the script.
-      try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
-    });
-    const ready = new Promise<void>((resolve, reject) => {
-      sock.on('open', () => resolve());
-      sock.on('error', reject);
-    });
-    const waitFor = (type: string, timeoutMs = 5000) =>
-      new Promise<any>((resolve, reject) => {
-        const found = events.find((e) => e.type === type);
-        if (found) return resolve(found);
-        const start = Date.now();
-        const timer = setInterval(() => {
-          const e = events.find((ev) => ev.type === type);
-          if (e) { clearInterval(timer); resolve(e); }
-          else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
-        }, 50);
-      });
-    return { ready, waitFor, close: () => sock.close() };
-  };
-
-  const handlerWs = openWs(leadToken);
-  const callerWs = openWs(backendToken);
-  await run('Connect handler + caller WebSockets', async () => {
-    await Promise.all([handlerWs.ready, callerWs.ready]);
-  });
-  let invocationId = '';
-
-  await run(`Register "deploy" action (handler ${LEAD})`, async () => {
-    await relay.actions.register({
-      name: 'deploy',
-      description: 'Deploy the application to staging or production',
-      handlerAgent: LEAD,
-      inputSchema: { type: 'object', properties: { env: { type: 'string' } }, required: ['env'] },
-      outputSchema: { type: 'object', properties: { url: { type: 'string' } } },
-    });
-    log('⚙️ ', `Registered ${B}deploy${R} action handled by ${YELLOW}${B}${LEAD}${R}`);
-  });
-  await pause();
-
-  await run('List actions includes deploy', async () => {
-    const actions = await relay.actions.list();
-    const names = actions.map((a) => a.name);
-    if (!names.includes('deploy')) throw new Error(`deploy not listed: ${JSON.stringify(names)}`);
-    log('📋', `Actions: ${names.join(', ')}`);
-  });
-
-  await run(`${BACKEND} invokes deploy → invocationId`, async () => {
-    const r = await backend.actions.invoke('deploy', { env: 'staging' });
-    invocationId = r.invocationId;
-    if (!invocationId) throw new Error('no invocationId returned');
-    log('🚀', `${BLUE}${B}${BACKEND}${R} invoked deploy → invocation ${B}${invocationId}${R} (status ${r.status})`);
-  });
-
-  await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
-    await handlerWs.waitFor('action.invoked');
-  });
-  await pause();
-
-  await run('Handler completes the invocation', async () => {
-    const r = await lead.actions.completeInvocation('deploy', invocationId, {
-      output: { url: 'https://staging.example.com' }, durationMs: 1200,
-    });
-    if (r.status !== 'completed') throw new Error(`status ${r.status}`);
-    log('✅', `Handler completed invocation → ${B}completed${R}`);
-  });
-
-  await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
-    await callerWs.waitFor('action.completed');
-  });
-
-  await run('Get invocation shows completed + output', async () => {
-    const inv = await backend.actions.getInvocation('deploy', invocationId);
-    if (inv.status !== 'completed') throw new Error(`status ${inv.status}`);
-    if ((inv.output as Record<string, unknown> | null)?.url !== 'https://staging.example.com') {
-      throw new Error('output not recorded');
+  // The hosted engine (gateway / self-host) implements /v1/actions. The legacy
+  // server (api.relaycast.dev) does not — probe and skip gracefully there.
+  let actionsSupported = true;
+  try {
+    await relay.actions.list();
+  } catch (err) {
+    if (
+      err instanceof RelayError &&
+      (err.statusCode === 404 || err.code === 'not_found' || /route not found/i.test(err.message))
+    ) {
+      actionsSupported = false;
     }
-  });
-  await pause();
+  }
 
-  await run('Delete deploy action', async () => {
-    await relay.actions.delete('deploy');
-    log('🗑️ ', `Deleted deploy action`);
-  });
+  if (!actionsSupported) {
+    log('ℹ️ ', 'Skipping Actions: target does not expose /v1/actions (legacy server).');
+  } else {
+    // Lightweight raw agent WebSocket to verify action.* fanout.
+    const openWs = (token: string) => {
+      const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
+      const events: any[] = [];
+      sock.on('message', (d) => {
+        // Guard against non-JSON frames so a stray payload can't crash the script.
+        try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
+      });
+      const ready = new Promise<void>((resolve, reject) => {
+        sock.on('open', () => resolve());
+        sock.on('error', reject);
+      });
+      const waitFor = (type: string, timeoutMs = 5000) =>
+        new Promise<any>((resolve, reject) => {
+          const found = events.find((e) => e.type === type);
+          if (found) return resolve(found);
+          const start = Date.now();
+          const timer = setInterval(() => {
+            const e = events.find((ev) => ev.type === type);
+            if (e) { clearInterval(timer); resolve(e); }
+            else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
+          }, 50);
+        });
+      return { ready, waitFor, close: () => sock.close() };
+    };
 
-  handlerWs.close();
-  callerWs.close();
+    const handlerWs = openWs(leadToken);
+    const callerWs = openWs(backendToken);
+    await run('Connect handler + caller WebSockets', async () => {
+      await Promise.all([handlerWs.ready, callerWs.ready]);
+    });
+    let invocationId = '';
+
+    await run(`Register "deploy" action (handler ${LEAD})`, async () => {
+      await relay.actions.register({
+        name: 'deploy',
+        description: 'Deploy the application to staging or production',
+        handlerAgent: LEAD,
+        inputSchema: { type: 'object', properties: { env: { type: 'string' } }, required: ['env'] },
+        outputSchema: { type: 'object', properties: { url: { type: 'string' } } },
+      });
+      log('⚙️ ', `Registered ${B}deploy${R} action handled by ${YELLOW}${B}${LEAD}${R}`);
+    });
+    await pause();
+
+    await run('List actions includes deploy', async () => {
+      const actions = await relay.actions.list();
+      const names = actions.map((a) => a.name);
+      if (!names.includes('deploy')) throw new Error(`deploy not listed: ${JSON.stringify(names)}`);
+      log('📋', `Actions: ${names.join(', ')}`);
+    });
+
+    await run(`${BACKEND} invokes deploy → invocationId`, async () => {
+      const r = await backend.actions.invoke('deploy', { env: 'staging' });
+      invocationId = r.invocationId;
+      if (!invocationId) throw new Error('no invocationId returned');
+      log('🚀', `${BLUE}${B}${BACKEND}${R} invoked deploy → invocation ${B}${invocationId}${R} (status ${r.status})`);
+    });
+
+    await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
+      await handlerWs.waitFor('action.invoked');
+    });
+    await pause();
+
+    await run('Handler completes the invocation', async () => {
+      const r = await lead.actions.completeInvocation('deploy', invocationId, {
+        output: { url: 'https://staging.example.com' }, durationMs: 1200,
+      });
+      if (r.status !== 'completed') throw new Error(`status ${r.status}`);
+      log('✅', `Handler completed invocation → ${B}completed${R}`);
+    });
+
+    await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
+      await callerWs.waitFor('action.completed');
+    });
+
+    await run('Get invocation shows completed + output', async () => {
+      const inv = await backend.actions.getInvocation('deploy', invocationId);
+      if (inv.status !== 'completed') throw new Error(`status ${inv.status}`);
+      if ((inv.output as Record<string, unknown> | null)?.url !== 'https://staging.example.com') {
+        throw new Error('output not recorded');
+      }
+    });
+    await pause();
+
+    await run('Delete deploy action', async () => {
+      await relay.actions.delete('deploy');
+      log('🗑️ ', `Deleted deploy action`);
+    });
+
+    handlerWs.close();
+    callerWs.close();
+  }
   await pause();
 
   // ── 16. Inbound Webhooks ──────────────────────────────────────────────

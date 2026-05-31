@@ -53,6 +53,9 @@ import type {
   ChannelUnmutedEvent,
   FileUploadedEvent,
   WebhookReceivedEvent,
+  ActionInvokedEvent,
+  ActionCompletedEvent,
+  ActionFailedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
 } from './types.js';
@@ -343,6 +346,10 @@ export class AgentClient {
     channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
     fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
     webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
+    // Actions (agent-to-agent RPC)
+    actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
+    actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
+    actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
     // Lifecycle
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
