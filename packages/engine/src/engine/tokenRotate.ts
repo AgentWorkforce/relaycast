@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -17,8 +17,8 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
     throw err;
   }
 
-  const newToken = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-  const newTokenHash = crypto.createHash('sha256').update(newToken).digest('hex');
+  const newToken = `at_live_${randomHex(16)}`;
+  const newTokenHash = await sha256Hex(newToken);
 
   await db
     .update(agents)

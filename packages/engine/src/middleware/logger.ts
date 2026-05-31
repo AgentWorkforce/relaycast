@@ -1,6 +1,6 @@
-import crypto from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
+import { randomUuid, sha256Hex } from '../lib/crypto.js';
 import { createRequestLogger } from '../lib/logger.js';
 import { deriveClientName, extractHarness, extractOriginInfo } from '../lib/origin.js';
 
@@ -42,8 +42,8 @@ function tokenType(token: string): 'agent' | 'workspace' | 'unknown' {
   return 'unknown';
 }
 
-function hashIdentifier(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
+async function hashIdentifier(value: string): Promise<string> {
+  return (await sha256Hex(value)).slice(0, 16);
 }
 
 function routeGroupForPath(path: string): string {
@@ -105,7 +105,7 @@ function statusClass(statusCode: number): string {
 }
 
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const requestId = crypto.randomUUID();
+  const requestId = randomUuid();
   c.set('requestId', requestId);
   const requestHeaders = c.req.raw.headers;
   const clientName = deriveClientName(requestHeaders);
@@ -136,6 +136,11 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const connectingIp = requestHeaders.get('cf-connecting-ip');
   const userAgent = requestHeaders.get('user-agent');
   const errorInfo = statusCode >= 400 ? await extractErrorInfo(c.res) : {};
+  const [actorFingerprint, ipHash, uaHash] = await Promise.all([
+    presentedToken ? hashIdentifier(presentedToken) : undefined,
+    connectingIp ? hashIdentifier(connectingIp) : undefined,
+    userAgent ? hashIdentifier(userAgent) : undefined,
+  ]);
 
   const metadata: Record<string, unknown> = {
     status_code: statusCode,
@@ -146,9 +151,9 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     ...(contentType ? { content_type: contentType } : {}),
     ...(accept ? { accept } : {}),
     ...(clientName ? { client_name: clientName } : {}),
-    ...(presentedToken ? { actor_fingerprint: hashIdentifier(presentedToken) } : {}),
-    ...(connectingIp ? { ip_hash: hashIdentifier(connectingIp) } : {}),
-    ...(userAgent ? { ua_hash: hashIdentifier(userAgent) } : {}),
+    ...(actorFingerprint ? { actor_fingerprint: actorFingerprint } : {}),
+    ...(ipHash ? { ip_hash: ipHash } : {}),
+    ...(uaHash ? { ua_hash: uaHash } : {}),
     ...originInfo,
     harness,
     ...errorInfo,

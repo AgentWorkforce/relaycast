@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { webhooks, channels, messages, agents } from '../db/schema.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -15,8 +15,8 @@ async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> 
 
   if (existing) return existing.id;
 
-  const token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const token = `at_live_${randomHex(16)}`;
+  const tokenHash = await sha256Hex(token);
   const agentId = generateId();
 
   await db

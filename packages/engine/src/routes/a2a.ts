@@ -214,7 +214,7 @@ async function resolveWorkspaceFromAuth(c: Context<AppEnv>): Promise<{ id: strin
   if (!authHeader?.startsWith('Bearer ')) return null;
 
   const token = authHeader.slice(7);
-  const hash = hashToken(token);
+  const hash = await hashToken(token);
   const db = c.get('db');
 
   if (token.startsWith('rk_live_')) {
@@ -344,7 +344,8 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const token = c.req.header('Authorization')?.startsWith('Bearer ')
       ? c.req.header('Authorization')!.slice(7)
       : null;
-    if (!token || hashToken(token) !== relayAgent.tokenHash) {
+    const tokenHash = token ? await hashToken(token) : null;
+    if (!tokenHash || tokenHash !== relayAgent.tokenHash) {
       return c.json({
         ok: false,
         error: { code: 'unauthorized', message: 'Missing or invalid bearer token' },

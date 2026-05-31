@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   A2aAgentCardSchema,
@@ -26,6 +25,7 @@ import { registerAgent, getAgentByName, updateAgent } from './agent.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { randomUuid, sha256Hex } from '../lib/crypto.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -127,13 +127,13 @@ function wellKnownAgentCardUrl(agentUrl: string): string {
   return `${base.origin}/.well-known/agent-card.json`;
 }
 
-function deriveRelayName(card: A2aAgentCard): string {
+async function deriveRelayName(card: A2aAgentCard): Promise<string> {
   const slug = card.name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'agent';
-  const suffix = crypto.createHash('sha256').update(card.url).digest('hex').slice(0, 8);
+  const suffix = (await sha256Hex(card.url)).slice(0, 8);
   return `ext-${slug}-${suffix}`;
 }
 
@@ -184,7 +184,7 @@ function extractAttachmentsFromParts(parts: A2aPart[]): FileAttachment[] {
   for (const part of parts) {
     if (part.kind === 'file') {
       attachments.push({
-        file_id: part.file.uri ?? crypto.randomUUID(),
+        file_id: part.file.uri ?? randomUuid(),
         filename: part.file.name,
         content_type: part.file.mime_type ?? 'application/octet-stream',
         size_bytes: part.file.bytes ?? 0,
@@ -276,7 +276,7 @@ export async function registerA2aAgent(
     ?? await fetchAgentCard(ensureString(input.agentCardUrl, 'agent_card_url is required when agent_card is not provided'));
   const agentCard = A2aAgentCardSchema.parse(resolvedCard);
   const externalUrl = normalizeBaseUrl(agentCard.url);
-  const relayName = deriveRelayName(agentCard);
+  const relayName = await deriveRelayName(agentCard);
 
   const [existing] = await db
     .select({ id: a2aAgents.id })
@@ -334,7 +334,7 @@ export async function registerA2aAgent(
   let certification: 'level_0' | 'level_1' = healthOk ? 'level_1' : 'level_0';
 
   await db.insert(a2aAgents).values({
-    id: `a2a_${crypto.randomUUID()}`,
+    id: `a2a_${randomUuid()}`,
     workspaceId,
     relayAgentId,
     agentCard,
@@ -503,7 +503,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
   const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact) => artifact.parts) ?? [];
 
   return {
-    id: String(parsedResponse.id ?? task?.id ?? crypto.randomUUID()),
+    id: String(parsedResponse.id ?? task?.id ?? randomUuid()),
     agent_id: task?.id ?? 'external',
     agent_name: 'external',
     text: parts.length > 0 ? extractTextFromParts(parts) : task?.status.message ?? '',

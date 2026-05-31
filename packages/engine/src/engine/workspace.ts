@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels } from '../db/schema.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -13,8 +13,8 @@ type CreateWorkspaceOptions =
       ownerApiKeyHash?: string;
     };
 
-function hashApiKey(apiKey: string) {
-  return crypto.createHash('sha256').update(apiKey).digest('hex');
+function hashApiKey(apiKey: string): Promise<string> {
+  return sha256Hex(apiKey);
 }
 
 function buildWorkspaceResponse(
@@ -35,7 +35,7 @@ export async function createWorkspace(
 ) {
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
-  const derivedOwnerApiKeyHash = providedOwnerApiKey ? hashApiKey(providedOwnerApiKey) : undefined;
+  const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
   if (providedOwnerApiKeyHash && derivedOwnerApiKeyHash && providedOwnerApiKeyHash !== derivedOwnerApiKeyHash) {
     const err = new Error('ownerApiKeyHash must match the provided ownerApiKey');
@@ -62,8 +62,8 @@ export async function createWorkspace(
   }
 
   const workspaceId = generateId();
-  const apiKey = `rk_live_${crypto.randomBytes(16).toString('hex')}`;
-  const apiKeyHash = hashApiKey(apiKey);
+  const apiKey = `rk_live_${randomHex(16)}`;
+  const apiKeyHash = await hashApiKey(apiKey);
 
   const [createdWorkspace] = await db
     .insert(workspaces)

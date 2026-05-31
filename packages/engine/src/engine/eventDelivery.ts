@@ -1,11 +1,11 @@
-import { createHmac } from 'node:crypto';
 import type { getDb } from '../db/index.js';
+import { hmacSha256Hex } from '../lib/crypto.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
 
 type Db = ReturnType<typeof getDb>;
 
-export function signPayload(payload: string, secret: string): string {
-  return createHmac('sha256', secret).update(payload).digest('hex');
+export function signPayload(payload: string, secret: string): Promise<string> {
+  return hmacSha256Hex(payload, secret);
 }
 
 interface DeliveryTarget {
@@ -130,7 +130,7 @@ export async function deliverEvent(
       };
 
       if (sub.secret) {
-        headers['X-Relay-Signature'] = `sha256=${signPayload(body, sub.secret)}`;
+        headers['X-Relay-Signature'] = `sha256=${await signPayload(body, sub.secret)}`;
       }
 
       return attemptDelivery(sub.url, body, headers);

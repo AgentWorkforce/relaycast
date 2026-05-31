@@ -169,7 +169,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     const { auth, connections, kv, config } = c.get('engine');
     const db = c.get('db');
-    const hash = auth.hashToken(token);
+    const hash = await auth.hashToken(token);
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
       surface: originInfo.origin_surface,
