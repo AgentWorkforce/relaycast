@@ -4,6 +4,11 @@ import { formatReplyCountLabel, MessageMarkdown } from '@relaycast/react';
 import { AgentAvatar } from './AgentAvatar';
 import type { MessageWithMeta } from '@relaycast/sdk';
 
+type MessageReaction = {
+  emoji: string;
+  count: number;
+};
+
 function relativeTime(timestamp: string): string {
   const diff = Date.now() - new Date(timestamp).getTime();
   const seconds = Math.floor(diff / 1000);
@@ -25,6 +30,7 @@ interface MessageCardProps {
 }
 
 export function MessageCard({ message, compact = false, onOpenThread, mentionNames, onOpenAgent }: MessageCardProps) {
+  const reactions = (message.reactions ?? []) as MessageReaction[];
   return (
     <div className="group mx-3 rounded-2xl px-4 py-3 transition-colors hover:bg-[var(--brand-primary-faint)]">
       <div className="flex gap-3">
@@ -44,9 +50,9 @@ export function MessageCard({ message, compact = false, onOpenThread, mentionNam
             onMentionClick={onOpenAgent}
             mentionClassName="font-semibold text-[var(--brand-primary-strong)] hover:underline cursor-pointer"
           />
-          {((message.reactions?.length ?? 0) > 0 || message.replyCount > 0) && (
+          {(reactions.length > 0 || message.replyCount > 0) && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {(message.reactions ?? []).map((r) => (
+              {reactions.map((r) => (
                 <span key={r.emoji} className="rounded-full border border-[var(--border-default)] bg-[var(--surface-soft)] px-2 py-1 text-xs text-[var(--text-secondary)]">
                   {r.emoji} {r.count}
                 </span>

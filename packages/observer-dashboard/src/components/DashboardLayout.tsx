@@ -12,11 +12,12 @@ import { cn, formatDmLabel } from '../lib/utils';
 import type { Agent as ApiAgent, MessageCreatedEvent, DmConversationSummary, WorkspaceDmConversation } from '@relaycast/sdk';
 
 function toSummary(wdc: WorkspaceDmConversation): DmConversationSummary {
+  const participants = wdc.participants as string[];
   return {
     id: wdc.id,
     type: wdc.type as '1:1' | 'group',
     name: null,
-    participants: wdc.participants.map((name) => ({ agentId: '', agentName: name })),
+    participants: participants.map((name) => ({ agentId: '', agentName: name })),
     lastMessage: wdc.lastMessage
       ? { id: '', text: wdc.lastMessage.text, agentId: '', createdAt: wdc.lastMessage.createdAt }
       : null,

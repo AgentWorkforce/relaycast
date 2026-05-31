@@ -32,6 +32,10 @@ type Db = ReturnType<typeof getDb>;
 const RETRY_DELAYS_MS = [250, 750] as const;
 const DEFAULT_WEBHOOK_BASE_PATH = '/a2a/webhook';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 const RelayFileAttachmentSchema = z.object({
   file_id: z.string(),
   filename: z.string(),
@@ -169,9 +173,15 @@ export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard
 
 function extractTextFromParts(parts: A2aPart[]): string {
   return parts
-    .map((part) => {
-      if (part.kind === 'text') return part.text;
-      if (part.kind === 'file') return `[file] ${part.file.name}`;
+    .map((rawPart) => {
+      const part = rawPart as {
+        kind?: string;
+        text?: string;
+        file?: { name?: string };
+        data?: unknown;
+      };
+      if (part.kind === 'text') return part.text ?? '';
+      if (part.kind === 'file') return `[file] ${part.file?.name ?? 'attachment'}`;
       return JSON.stringify(part.data);
     })
     .join('\n')
@@ -182,27 +192,42 @@ function extractAttachmentsFromParts(parts: A2aPart[]): FileAttachment[] {
   const attachments: FileAttachment[] = [];
 
   for (const part of parts) {
-    if (part.kind === 'file') {
+    const candidate = part as {
+      kind?: string;
+      file?: {
+        uri?: string;
+        name?: string;
+        mime_type?: string;
+        bytes?: number;
+      };
+      data?: unknown;
+    };
+    if (candidate.kind === 'file' && candidate.file?.name) {
       attachments.push({
-        file_id: part.file.uri ?? randomUuid(),
-        filename: part.file.name,
-        content_type: part.file.mime_type ?? 'application/octet-stream',
-        size_bytes: part.file.bytes ?? 0,
+        file_id: candidate.file.uri ?? randomUuid(),
+        filename: candidate.file.name,
+        content_type: candidate.file.mime_type ?? 'application/octet-stream',
+        size_bytes: candidate.file.bytes ?? 0,
       });
       continue;
     }
 
-    if (part.kind === 'data' && typeof part.data.file_id === 'string' && typeof part.data.filename === 'string') {
+    if (
+      candidate.kind === 'data'
+      && isRecord(candidate.data)
+      && typeof candidate.data.file_id === 'string'
+      && typeof candidate.data.filename === 'string'
+    ) {
       attachments.push({
-        file_id: part.data.file_id,
-        filename: part.data.filename,
+        file_id: candidate.data.file_id,
+        filename: candidate.data.filename,
         content_type:
-          typeof part.data.content_type === 'string'
-            ? part.data.content_type
+          typeof candidate.data.content_type === 'string'
+            ? candidate.data.content_type
             : 'application/octet-stream',
         size_bytes:
-          typeof part.data.size_bytes === 'number'
-            ? part.data.size_bytes
+          typeof candidate.data.size_bytes === 'number'
+            ? candidate.data.size_bytes
             : 0,
       });
     }
@@ -500,7 +525,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
   const parsedResponse = JsonRpcResponseSchema.parse(jsonRpc);
   const task = parsedResponse.result?.task;
   const responseMessage = parsedResponse.result?.message ?? task?.history?.at(-1);
-  const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact) => artifact.parts) ?? [];
+  const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact: { parts: A2aPart[] }) => artifact.parts) ?? [];
 
   return {
     id: String(parsedResponse.id ?? task?.id ?? randomUuid()),

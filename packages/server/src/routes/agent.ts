@@ -68,6 +68,7 @@ agentRoutes.post(
         }, 400);
       }
       const { name, type, persona, metadata, skills } = parsed.data;
+      const agentType = typeof type === 'string' ? type : undefined;
       const nextMetadata = {
         ...(metadata || {}),
         ...(skills ? { skills } : {}),
@@ -75,7 +76,7 @@ agentRoutes.post(
 
       const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
-        type,
+        type: agentType,
         persona,
         metadata: nextMetadata,
       });

@@ -138,7 +138,8 @@ export class WsClient {
         const parsed = JSON.parse(String(event.data));
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
-          this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+          const serverEvent = result.data as { type: string };
+          this.emit(serverEvent.type, camelizeKeys(serverEvent) as WsClientEvent);
         } else if (
           parsed !== null &&
           typeof parsed === 'object' &&

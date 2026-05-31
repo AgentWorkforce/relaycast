@@ -1,15 +1,19 @@
-import type { WsClient, WsClientEvent } from '@relaycast/sdk';
+import type { WsClient } from '@relaycast/sdk';
 import type { SubscriptionManager } from './subscriptions.js';
 
-function getStringEventField(event: WsClientEvent, field: string): string | null {
-  const candidate = (event as Record<string, unknown>)[field];
+type ResourceEvent = {
+  type?: string;
+} & Record<string, unknown>;
+
+function getStringEventField(event: ResourceEvent, field: string): string | null {
+  const candidate = event[field];
   return typeof candidate === 'string' ? candidate : null;
 }
 
 /**
  * Maps a WebSocket ServerEvent to the relay:// resource URIs it affects.
  */
-export function eventToResourceUris(event: WsClientEvent): string[] {
+export function eventToResourceUris(event: ResourceEvent): string[] {
   switch (event.type) {
     case 'message.created': {
       const channel = getStringEventField(event, 'channel');
@@ -90,12 +94,18 @@ export class WsBridge {
    */
   start(): void {
     this.unsubscribeFn = this.wsClient.on('*', (event) => {
+      const wsEvent = event as ResourceEvent;
       // Filter out client-only events (open, close, error, reconnecting)
       // Only process server events that affect resources
-      if (event.type === 'open' || event.type === 'close' || event.type === 'error' || event.type === 'reconnecting') {
+      if (
+        wsEvent.type === 'open'
+        || wsEvent.type === 'close'
+        || wsEvent.type === 'error'
+        || wsEvent.type === 'reconnecting'
+      ) {
         return;
       }
-      const uris = eventToResourceUris(event);
+      const uris = eventToResourceUris(wsEvent);
       const matched = this.subscriptions.getMatchingSubscriptions(uris);
       for (const uri of matched) {
         this.notifyCallback(uri);

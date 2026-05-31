@@ -1,57 +1,82 @@
 import type {
   WsClientEvent,
-  MessageCreatedEvent,
-  MessageUpdatedEvent,
-  ThreadReplyEvent,
-  ReactionAddedEvent,
-  ReactionRemovedEvent,
-  AgentOnlineEvent,
-  AgentOfflineEvent,
-  ChannelCreatedEvent,
-  ChannelUpdatedEvent,
-  ChannelArchivedEvent,
-  MemberJoinedEvent,
-  MemberLeftEvent,
   MessageWithMeta,
-  ReactionGroup,
 } from '@relaycast/sdk';
 import type { RelayStore } from './types.js';
 
+type EventMessage = {
+  id: string;
+  agentName: string;
+  agentId?: string;
+  text: string;
+  attachments?: MessageWithMeta['attachments'];
+};
+
+type MessageCreatedEvent = { channel: string; message: EventMessage };
+type MessageUpdatedEvent = { channel: string; message: EventMessage };
+type ThreadReplyEvent = { parentId: string; message: EventMessage };
+type ReactionEvent = {
+  messageId: string;
+  emoji: string;
+  agentName: string;
+  threadId?: string;
+};
+type AgentPresenceEvent = {
+  type: 'agent.online' | 'agent.offline';
+  agent: { name: string };
+};
+type ChannelEvent = {
+  channel: {
+    name: string;
+    topic?: string | null;
+  };
+};
+type MemberEvent = {
+  channel: string;
+  agentName: string;
+};
+type ReactionGroupView = {
+  emoji: string;
+  count: number;
+  agents: string[];
+};
+
 export function handleServerEvent(store: RelayStore, event: WsClientEvent): void {
-  switch (event.type) {
+  const serverEvent = event as { type?: string };
+  switch (serverEvent.type) {
     case 'message.created':
-      handleMessageCreated(store, event);
+      handleMessageCreated(store, event as MessageCreatedEvent);
       break;
     case 'message.updated':
-      handleMessageUpdated(store, event);
+      handleMessageUpdated(store, event as MessageUpdatedEvent);
       break;
     case 'thread.reply':
-      handleThreadReply(store, event);
+      handleThreadReply(store, event as ThreadReplyEvent);
       break;
     case 'reaction.added':
-      handleReactionAdded(store, event);
+      handleReactionAdded(store, event as ReactionEvent);
       break;
     case 'reaction.removed':
-      handleReactionRemoved(store, event);
+      handleReactionRemoved(store, event as ReactionEvent);
       break;
     case 'agent.online':
     case 'agent.offline':
-      handlePresenceChange(store, event);
+      handlePresenceChange(store, event as AgentPresenceEvent);
       break;
     case 'channel.created':
-      handleChannelCreated(store, event);
+      handleChannelCreated(store, event as ChannelEvent);
       break;
     case 'channel.updated':
-      handleChannelUpdated(store, event);
+      handleChannelUpdated(store, event as ChannelEvent);
       break;
     case 'channel.archived':
-      handleChannelArchived(store, event);
+      handleChannelArchived(store, event as ChannelEvent);
       break;
     case 'member.joined':
-      handleMemberJoined(store, event);
+      handleMemberJoined(store, event as MemberEvent);
       break;
     case 'member.left':
-      handleMemberLeft(store, event);
+      handleMemberLeft(store, event as MemberEvent);
       break;
     case 'dm.received':
     case 'group_dm.received':
@@ -149,16 +174,19 @@ function handleThreadReply(store: RelayStore, event: ThreadReplyEvent): void {
 function updateReactionsOnMessage(
   messages: MessageWithMeta[],
   messageId: string,
-  updater: (reactions: ReactionGroup[]) => ReactionGroup[],
+  updater: (reactions: ReactionGroupView[]) => ReactionGroupView[],
 ): MessageWithMeta[] | null {
   const idx = messages.findIndex((m) => m.id === messageId);
   if (idx === -1) return null;
   const updated = [...messages];
-  updated[idx] = { ...updated[idx], reactions: updater(updated[idx].reactions) };
+  updated[idx] = {
+    ...updated[idx],
+    reactions: updater(updated[idx].reactions as ReactionGroupView[]) as MessageWithMeta['reactions'],
+  };
   return updated;
 }
 
-function handleReactionAdded(store: RelayStore, event: ReactionAddedEvent): void {
+function handleReactionAdded(store: RelayStore, event: ReactionEvent): void {
   const state = store.getState();
 
   // Update in channel messages
@@ -198,11 +226,12 @@ function handleReactionAdded(store: RelayStore, event: ReactionAddedEvent): void
       if (updatedReplies) return { ...prev, replies: updatedReplies };
       // Check parent
       if (prev.parent && prev.parent.id === event.messageId) {
-        const existing = prev.parent.reactions.find((r) => r.emoji === event.emoji);
-        let newReactions: ReactionGroup[];
+        const parentReactions = prev.parent.reactions as ReactionGroupView[];
+        const existing = parentReactions.find((r) => r.emoji === event.emoji);
+        let newReactions: ReactionGroupView[];
         if (existing) {
           if (existing.agents.includes(event.agentName)) return prev;
-          newReactions = prev.parent.reactions.map((r) =>
+          newReactions = parentReactions.map((r) =>
             r.emoji === event.emoji
               ? { ...r, count: r.count + 1, agents: [...r.agents, event.agentName] }
               : r,
@@ -217,7 +246,7 @@ function handleReactionAdded(store: RelayStore, event: ReactionAddedEvent): void
   }
 }
 
-function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): void {
+function handleReactionRemoved(store: RelayStore, event: ReactionEvent): void {
   const state = store.getState();
 
   for (const channel of Object.keys(state.channelMessages)) {
@@ -248,7 +277,7 @@ function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): 
       });
       if (updatedReplies) return { ...prev, replies: updatedReplies };
       if (prev.parent && prev.parent.id === event.messageId) {
-        const newReactions = prev.parent.reactions
+        const newReactions = (prev.parent.reactions as ReactionGroupView[])
           .map((r) =>
             r.emoji === event.emoji
               ? { ...r, count: Math.max(0, r.count - 1), agents: r.agents.filter((a) => a !== event.agentName) }
@@ -262,7 +291,7 @@ function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): 
   }
 }
 
-function handlePresenceChange(store: RelayStore, event: AgentOnlineEvent | AgentOfflineEvent): void {
+function handlePresenceChange(store: RelayStore, event: AgentPresenceEvent): void {
   const state = store.getState();
   const newStatus = event.type === 'agent.online' ? 'online' : 'offline';
   const exists = state.agents.data.some((a) => a.name === event.agent.name);
@@ -290,7 +319,7 @@ function handlePresenceChange(store: RelayStore, event: AgentOnlineEvent | Agent
   }
 }
 
-function handleChannelCreated(store: RelayStore, event: ChannelCreatedEvent): void {
+function handleChannelCreated(store: RelayStore, event: ChannelEvent): void {
   const state = store.getState();
   const exists = state.channels.data.some((c) => c.name === event.channel.name);
   if (exists) return;
@@ -310,7 +339,7 @@ function handleChannelCreated(store: RelayStore, event: ChannelCreatedEvent): vo
   });
 }
 
-function handleChannelUpdated(store: RelayStore, event: ChannelUpdatedEvent): void {
+function handleChannelUpdated(store: RelayStore, event: ChannelEvent): void {
   const state = store.getState();
   const updated = state.channels.data.map((c) =>
     c.name === event.channel.name ? { ...c, topic: event.channel.topic } : c,
@@ -318,7 +347,7 @@ function handleChannelUpdated(store: RelayStore, event: ChannelUpdatedEvent): vo
   store.setState({ channels: { ...state.channels, data: updated } });
 }
 
-function handleChannelArchived(store: RelayStore, event: ChannelArchivedEvent): void {
+function handleChannelArchived(store: RelayStore, event: ChannelEvent): void {
   const state = store.getState();
   const updated = state.channels.data.map((c) =>
     c.name === event.channel.name ? { ...c, isArchived: true } : c,
@@ -326,7 +355,7 @@ function handleChannelArchived(store: RelayStore, event: ChannelArchivedEvent): 
   store.setState({ channels: { ...state.channels, data: updated } });
 }
 
-function handleMemberJoined(store: RelayStore, event: MemberJoinedEvent): void {
+function handleMemberJoined(store: RelayStore, event: MemberEvent): void {
   store.updateChannelDetail(event.channel, (prev) => {
     if (prev.members.some((m) => m.agentName === event.agentName)) return prev;
     const newMember = {
@@ -345,7 +374,7 @@ function handleMemberJoined(store: RelayStore, event: MemberJoinedEvent): void {
   store.setState({ channels: { ...state.channels, data: updated } });
 }
 
-function handleMemberLeft(store: RelayStore, event: MemberLeftEvent): void {
+function handleMemberLeft(store: RelayStore, event: MemberEvent): void {
   store.updateChannelDetail(event.channel, (prev) => ({
     ...prev,
     members: prev.members.filter((m) => m.agentName !== event.agentName),

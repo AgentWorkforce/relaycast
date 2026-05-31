@@ -45,7 +45,7 @@ export function RelayProvider({ apiKey, agentToken, wsToken, baseUrl, channels, 
     });
 
     const offAll = ws.on('*', (event) => {
-      const t = event.type as string;
+      const t = (event as { type?: string }).type;
       // Filter out client-only events and pong
       if (t !== 'pong' && t !== 'open' && t !== 'close' && t !== 'error' && t !== 'reconnecting') {
         handleServerEvent(store, event as WsClientEvent);

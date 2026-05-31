@@ -1,11 +1,14 @@
-import type { CreateAgentRequest } from './types.js';
 import { RelayError } from './errors.js';
 
-export interface RegisterAgentInput extends CreateAgentRequest {
+export interface RegisterAgentInput {
+  name: string;
+  type?: 'agent' | 'human' | 'system';
+  persona?: string;
+  metadata?: Record<string, unknown>;
   strict?: boolean;
 }
 
-export type RegisterOrRotateInput = CreateAgentRequest;
+export type RegisterOrRotateInput = Omit<RegisterAgentInput, 'strict'>;
 
 export interface ResolvedIdentity {
   agentId: string;

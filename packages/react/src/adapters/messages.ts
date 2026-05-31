@@ -1,5 +1,10 @@
 import type { MessageWithMeta } from '@relaycast/sdk';
 
+type MessageReaction = {
+  emoji: string;
+  agents: string[];
+};
+
 export interface ThreadSummaryViewModel {
   threadId: string;
   replyCount: number;
@@ -70,7 +75,9 @@ export function mapMessageWithMetaToChannelMessage(
       }
       : undefined,
     reactions: message.reactions
-      ? Object.fromEntries(message.reactions.map((reaction) => [reaction.emoji, reaction.agents]))
+      ? Object.fromEntries(
+        (message.reactions as MessageReaction[]).map((reaction) => [reaction.emoji, reaction.agents]),
+      )
       : undefined,
     isRead: true,
   };
