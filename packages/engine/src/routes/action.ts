@@ -123,7 +123,10 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'));
+    const agent = c.get('agent');
+    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'), {
+      caller_agent_id: agent?.id,
+    });
     if (!deleted) {
       return c.json(
         { ok: false, error: { code: 'action_not_found', message: 'Action not found' } },
@@ -294,7 +297,10 @@ actionRoutes.get('/actions/:name/invocations/:id', requireAuth, rateLimit, async
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await actionEngine.getInvocation(db, workspace.id, c.req.param('name'), c.req.param('id'));
+    const agent = c.get('agent');
+    const result = await actionEngine.getInvocation(db, workspace.id, c.req.param('name'), c.req.param('id'), {
+      caller_agent_id: agent?.id,
+    });
     if (!result) {
       return c.json(
         { ok: false, error: { code: 'invocation_not_found', message: 'Invocation not found' } },

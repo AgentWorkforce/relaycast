@@ -1,4 +1,4 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -121,10 +121,32 @@ export async function getAction(db: Db, workspaceId: string, name: string) {
   };
 }
 
-export async function deleteAction(db: Db, workspaceId: string, name: string) {
+export async function deleteAction(
+  db: Db,
+  workspaceId: string,
+  name: string,
+  options?: { caller_agent_id?: string },
+) {
+  const [existing] = await db
+    .select({
+      id: actions.id,
+      handlerAgentId: actions.handlerAgentId,
+    })
+    .from(actions)
+    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
+
+  if (!existing) return false;
+
+  if (options?.caller_agent_id && options.caller_agent_id !== existing.handlerAgentId) {
+    const err = new Error('Only the handler agent can delete this action') as Error & { status: number; code: string };
+    err.status = 403;
+    err.code = 'forbidden';
+    throw err;
+  }
+
   const result = await db
     .delete(actions)
-    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
+    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.id, existing.id)))
     .returning();
 
   return result.length > 0;
@@ -270,10 +292,30 @@ export async function completeInvocation(
   };
 }
 
-export async function getInvocation(db: Db, workspaceId: string, actionName: string, invocationId: string) {
+export async function getInvocation(
+  db: Db,
+  workspaceId: string,
+  actionName: string,
+  invocationId: string,
+  options?: { caller_agent_id?: string },
+) {
   const [row] = await db
-    .select()
+    .select({
+      id: actionInvocations.id,
+      actionName: actionInvocations.actionName,
+      callerId: actionInvocations.callerId,
+      callerName: actionInvocations.callerName,
+      input: actionInvocations.input,
+      output: actionInvocations.output,
+      status: actionInvocations.status,
+      error: actionInvocations.error,
+      durationMs: actionInvocations.durationMs,
+      createdAt: actionInvocations.createdAt,
+      completedAt: actionInvocations.completedAt,
+      handlerAgentId: actions.handlerAgentId,
+    })
     .from(actionInvocations)
+    .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
     .where(
       and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -283,6 +325,17 @@ export async function getInvocation(db: Db, workspaceId: string, actionName: str
     );
 
   if (!row) return null;
+
+  if (
+    options?.caller_agent_id
+    && options.caller_agent_id !== row.callerId
+    && options.caller_agent_id !== row.handlerAgentId
+  ) {
+    const err = new Error('Only the invoking agent or handler agent can view this invocation') as Error & { status: number; code: string };
+    err.status = 403;
+    err.code = 'forbidden';
+    throw err;
+  }
 
   return {
     invocation_id: row.id,

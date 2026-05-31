@@ -398,7 +398,13 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a workspace and get an API key when a new workspace is created. This operation is idempotent by workspace name for the same bearer workspace key: if you repeat the call with the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is returned with a `200` response; otherwise a new workspace is created and returned with a `201` response.
+      description: >
+        Create a workspace and get an API key when a new workspace is created.
+        This operation is idempotent by workspace name for the same bearer
+        workspace key: if you repeat the call with the same name and the same
+        `Authorization: Bearer rk_*` key, the existing workspace is returned
+        with a `200` response; otherwise a new workspace is created and
+        returned with a `201` response.
       tags:
         - Workspaces
       security:
@@ -2505,7 +2511,9 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: Delete action
-      description: Delete a registered action
+      description: >
+        Delete a registered action. Workspace keys may delete any action; agent
+        tokens may only delete actions handled by that same agent.
       tags:
         - Actions
       security:
@@ -2520,6 +2528,12 @@ paths:
       responses:
         '204':
           description: Action deleted
+        '403':
+          description: Agent token can only delete actions handled by that agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Action not found
           content:
@@ -2576,7 +2590,10 @@ paths:
   /actions/{name}/invocations/{id}:
     get:
       summary: Get invocation
-      description: Fetch the status and result of an action invocation
+      description: >
+        Fetch the status and result of an action invocation. Workspace keys may
+        read any invocation; agent tokens may only read invocations where the
+        agent is the caller or handler.
       tags:
         - Actions
       security:
@@ -2600,6 +2617,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Agent token can only read invocations it called or handles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Invocation not found
           content:
