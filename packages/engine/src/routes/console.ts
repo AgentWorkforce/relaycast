@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const consoleRoutes = new Hono<AppEnv>();
 
@@ -49,11 +49,7 @@ consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
 
     return c.json({ ok: true, data });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -72,11 +68,7 @@ consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
     const data = await consoleEngine.getConsoleOverview(db, workspace.id, parsed.data.days);
     return c.json({ ok: true, data });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -100,11 +92,7 @@ consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
     );
     return c.json({ ok: true, data });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -123,10 +111,6 @@ consoleRoutes.get('/console/costs', requireAuth, rateLimit, async (c) => {
     const data = await consoleEngine.getCostStats(db, workspace.id, parsed.data.days);
     return c.json({ ok: true, data });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });

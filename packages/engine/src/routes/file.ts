@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
+import { errorResponse } from '../lib/httpError.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
@@ -59,11 +59,7 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
 
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -108,11 +104,7 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -138,11 +130,7 @@ fileRoutes.get('/files/:id', requireAuth, rateLimit, async (c) => {
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -174,11 +162,7 @@ fileRoutes.delete('/files/:id', requireAgentToken, rateLimit, async (c) => {
 
     return c.body(null, 204);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -199,10 +183,6 @@ fileRoutes.get('/files', requireAuth, rateLimit, async (c) => {
 
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });

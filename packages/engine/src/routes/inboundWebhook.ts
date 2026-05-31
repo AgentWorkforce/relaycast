@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
+import { errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
@@ -65,11 +65,7 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
     });
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -81,11 +77,7 @@ inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) 
     const result = await inboundWebhookEngine.listWebhooks(db, workspace.id);
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -110,11 +102,7 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
     });
     return c.body(null, 204);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -169,10 +157,6 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
 
     return c.json({ ok: true, data: responseData }, 201);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });

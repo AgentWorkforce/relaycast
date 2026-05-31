@@ -106,7 +106,7 @@ export async function listMessageLogs(
     delivery_kind: row.deliveryKind,
     text: row.body,
     content_type: row.contentType,
-    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+    metadata: row.metadata ?? {},
     attachment_count: row.attachmentCount,
     mention_count: row.mentionCount,
     latency_ms: row.latencyMs,

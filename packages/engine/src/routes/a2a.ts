@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
+import { asCodedError, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
@@ -145,7 +146,7 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       },
     }, 201);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     return jsonResponse(c, {
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -166,7 +167,7 @@ a2aRoutes.delete('/v1/a2a/agents/:name', requireAuth, rateLimit, async (c) => {
 
     return c.json({ ok: true, data: { name: c.req.param('name'), removed: true } });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     return jsonResponse(c, {
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -180,7 +181,7 @@ a2aRoutes.get('/v1/a2a/agents', requireAuth, rateLimit, async (c) => {
     const agentsList = await a2aEngine.listA2aAgents(c.get('db'), c.get('workspace').id);
     return c.json({ ok: true, data: agentsList });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     return jsonResponse(c, {
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -201,7 +202,7 @@ a2aRoutes.get('/v1/a2a/agents/:name/card', requireAuth, rateLimit, async (c) => 
 
     return c.json({ ok: true, data: record.agent_card });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     return jsonResponse(c, {
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -260,7 +261,7 @@ async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
     const card = await a2aEngine.getWorkspaceAgentCard(db, workspace.id, workspace.name, new URL(c.req.url).origin);
     return c.json(card);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     return jsonResponse(c, {
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
@@ -317,7 +318,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       }
     }
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number; data?: unknown };
+    const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,
       a2aEngine.jsonRpcError(undefined, -32000, error.message || 'Internal error', error.data),
@@ -425,7 +426,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
 
     return c.json(response);
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number; data?: unknown };
+    const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
       c,
       a2aEngine.jsonRpcError(undefined, -32000, error.message || 'Internal error', error.data),

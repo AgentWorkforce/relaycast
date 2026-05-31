@@ -167,9 +167,10 @@ export async function triggerWebhook(
 
   // Webhook must have a creator agent to post messages
   if (!webhook.createdBy) {
-    const err = new Error('Webhook has no associated agent and cannot post messages');
-    (err as Error & { code?: string; status?: number }).code = 'webhook_no_agent';
-    (err as Error & { code?: string; status?: number }).status = 422;
+    const err = Object.assign(
+      new Error('Webhook has no associated agent and cannot post messages'),
+      { code: 'webhook_no_agent', status: 422 },
+    );
     throw err;
   }
 

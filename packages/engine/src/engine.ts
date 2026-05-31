@@ -10,6 +10,7 @@ import { loggerMiddleware } from './middleware/logger.js';
 import { agents, workspaces } from './db/schema.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
+import { asCodedError } from './lib/httpError.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
 
@@ -196,7 +197,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // Global error handler
   app.onError((err, c) => {
-    const error = err as Error & { code?: string; status?: number };
+    const error = asCodedError(err);
     const logger = getRequestLogger(c, 'engine.on_error');
     logger.error('Unhandled request error', {
       error_code: error.code ?? 'internal_error',

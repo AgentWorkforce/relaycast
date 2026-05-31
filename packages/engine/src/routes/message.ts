@@ -10,6 +10,7 @@ import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -137,11 +138,7 @@ messageRoutes.post(
       const { _deliveries: _drop, ...responseData } = idempotent.data as typeof idempotent.data & { _deliveries?: unknown };
       return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -176,11 +173,7 @@ messageRoutes.get(
       );
       return c.json({ ok: true, data: messages });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -204,11 +197,7 @@ messageRoutes.get(
       }
       return c.json({ ok: true, data: message });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

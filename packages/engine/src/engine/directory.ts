@@ -213,7 +213,7 @@ async function loadSkills(
       name: row.name,
       description: row.description,
       tags: row.tags || [],
-      metadata: (row.metadata || {}) as Record<string, unknown>,
+      metadata: row.metadata ?? {},
     };
 
     const list = skillsByAgent.get(row.directoryAgentId) || [];
@@ -246,8 +246,8 @@ function serializeDirectoryAgent(
     documentation_url: row.documentationUrl,
     version: row.version,
     tags: row.tags || [],
-    capabilities: (row.capabilities || {}) as Record<string, unknown>,
-    metadata: (row.metadata || {}) as Record<string, unknown>,
+    capabilities: row.capabilities ?? {},
+    metadata: row.metadata ?? {},
     status: row.status,
     rating_avg: ratingAverage(row),
     rating_count: row.ratingCount,
@@ -686,7 +686,7 @@ export async function syncSourceAgentDirectoryEntry(
     metadata?: Record<string, unknown> | null;
   },
 ) {
-  const metadata = (sourceAgent.metadata || {}) as Record<string, unknown>;
+  const metadata = sourceAgent.metadata ?? {};
   const skills = parseSourceAgentSkills(metadata);
 
   if (skills.length === 0) {

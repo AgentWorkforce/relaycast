@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -23,10 +24,7 @@ export async function registerAction(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.handler_agent)));
 
   if (!agent) {
-    const err = new Error(`Agent "${data.handler_agent}" not found`) as Error & { status: number; code: string };
-    err.status = 404;
-    err.code = 'agent_not_found';
-    throw err;
+    throw codedError(`Agent "${data.handler_agent}" not found`, 'agent_not_found', 404);
   }
 
   const id = `act_${generateId()}`;
@@ -152,20 +150,14 @@ export async function invokeAction(
     );
 
   if (!action) {
-    const err = new Error(`Action "${actionName}" not found`) as Error & { status: number; code: string };
-    err.status = 404;
-    err.code = 'action_not_found';
-    throw err;
+    throw codedError(`Action "${actionName}" not found`, 'action_not_found', 404);
   }
 
   // Check availableTo access control — deny if caller is absent OR not in the list
   if (action.availableTo && action.availableTo.length > 0) {
     if (!data.caller_name || !action.availableTo.includes(data.caller_name)) {
       const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
-      const err = new Error(`${who} is not authorized to invoke action "${actionName}"`) as Error & { status: number; code: string };
-      err.status = 403;
-      err.code = 'action_denied';
-      throw err;
+      throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
     }
   }
 
@@ -228,10 +220,7 @@ export async function completeInvocation(
 
   // Agent tokens must belong to the handler agent
   if (data.caller_agent_id && existing.handlerAgentId && data.caller_agent_id !== existing.handlerAgentId) {
-    const err = new Error('Only the handler agent can complete this invocation') as Error & { status: number; code: string };
-    err.status = 403;
-    err.code = 'forbidden';
-    throw err;
+    throw codedError('Only the handler agent can complete this invocation', 'forbidden', 403);
   }
 
   const status = data.error ? 'failed' : 'completed';

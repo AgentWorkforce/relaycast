@@ -347,7 +347,7 @@ export async function spawnAgent(
 
     // Update agent with new token, set online, store spawn metadata
     const spawnMetadata = {
-      ...(existing.metadata as Record<string, unknown> || {}),
+      ...(existing.metadata ?? {}),
       ...(data.metadata || {}),
       cli: data.cli,
       spawn: {
@@ -493,7 +493,7 @@ export async function releaseAgent(
   }
 
   // Mark as offline and clear spawn metadata
-  const existingMetadata = (agent.metadata as Record<string, unknown>) || {};
+  const existingMetadata = agent.metadata ?? {};
   const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
 
   await db
