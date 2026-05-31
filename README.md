@@ -225,7 +225,7 @@ Local stdio config:
       "command": "npx",
       "args": ["@relaycast/mcp"],
       "env": {
-        "RELAY_BASE_URL": "https://api.relaycast.dev"
+        "RELAY_BASE_URL": "https://gateway.relaycast.dev"
       }
     }
   }

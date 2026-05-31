@@ -106,7 +106,7 @@ The entry point. Stateless — creates workspaces and returns handles.
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://api.relaycast.dev"
+   * @default "https://gateway.relaycast.dev"
    */
   baseUrl?: string
 

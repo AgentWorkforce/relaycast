@@ -18,7 +18,7 @@ interface CreateWorkspaceResponse {
   apiKey?: string;
 }
 
-const DEFAULT_BASE_URL = 'https://api.relaycast.dev';
+const DEFAULT_BASE_URL = 'https://gateway.relaycast.dev';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
