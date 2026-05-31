@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createRelayMcpServer } from '@relaycast/mcp';
+import { createRelayMcpServer } from '@relaycast/mcp/server';
 import type { McpSessionHost } from '../../ports/mcp.js';
 
 interface Session {
