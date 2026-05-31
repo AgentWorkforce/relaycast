@@ -1,12 +1,12 @@
-import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { workspaces, agents } from '../db/schema.js';
+import { sha256Hex } from '../lib/crypto.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 
 /** SHA-256 hash of a raw token to its stored form. */
-export function hashToken(token: string): string {
-  return crypto.createHash('sha256').update(token).digest('hex');
+export function hashToken(token: string): Promise<string> {
+  return sha256Hex(token);
 }
 
 function unauthorized(message: string, code = 'unauthorized'): AuthResult {
@@ -22,13 +22,13 @@ function unauthorized(message: string, code = 'unauthorized'): AuthResult {
  * provider backed by its own accounts/billing system.
  */
 export class SqliteApiKeyAuthProvider implements AuthProvider {
-  hashToken(token: string): string {
+  hashToken(token: string): Promise<string> {
     return hashToken(token);
   }
 
   async authenticate(args: { token: string; require: AuthRequire; db: EngineDb }): Promise<AuthResult> {
     const { token, require, db } = args;
-    const hash = hashToken(token);
+    const hash = await hashToken(token);
 
     if (token.startsWith('rk_live_')) {
       if (require === 'agent') {

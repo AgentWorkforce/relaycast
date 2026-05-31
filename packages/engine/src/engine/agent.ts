@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
-import { eq, and, lt, or, sql, inArray } from 'drizzle-orm';
+import { eq, and, lt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, channels, channelMembers, actions, deliveries } from '../db/schema.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -36,8 +36,8 @@ export async function registerAgent(
   },
 ) {
   const agentId = generateId();
-  const token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const token = `at_live_${randomHex(16)}`;
+  const tokenHash = await sha256Hex(token);
 
   // Use INSERT directly and let the unique index (workspace_id, name) enforce
   // uniqueness. Avoids TOCTOU race between SELECT check and INSERT that causes
@@ -342,8 +342,8 @@ export async function spawnAgent(
     // Agent exists - rotate token and update metadata
     alreadyExisted = true;
     agentId = existing.id;
-    token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    token = `at_live_${randomHex(16)}`;
+    const tokenHash = await sha256Hex(token);
 
     // Update agent with new token, set online, store spawn metadata
     const spawnMetadata = {
@@ -372,8 +372,8 @@ export async function spawnAgent(
   } else {
     // Create new agent
     agentId = generateId();
-    token = `at_live_${crypto.randomBytes(16).toString('hex')}`;
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    token = `at_live_${randomHex(16)}`;
+    const tokenHash = await sha256Hex(token);
 
     const spawnMetadata = {
       ...(data.metadata || {}),

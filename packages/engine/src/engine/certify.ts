@@ -1,8 +1,8 @@
-import crypto from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { getDb } from '../db/index.js';
 import { certifications } from '../db/schema.js';
+import { randomUuid } from '../lib/crypto.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -92,7 +92,7 @@ async function rpcCall(agentUrl: string, method: string, params: Record<string, 
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         method,
         params,
       }),
@@ -188,11 +188,11 @@ async function runTest(
 }
 
 function buildMessageParams() {
-  const taskId = `task_${crypto.randomUUID()}`;
-  const contextId = `ctx_${crypto.randomUUID()}`;
+  const taskId = `task_${randomUuid()}`;
+  const contextId = `ctx_${randomUuid()}`;
   return {
     message: {
-      message_id: `msg_${crypto.randomUUID()}`,
+      message_id: `msg_${randomUuid()}`,
       role: 'user',
       context_id: contextId,
       parts: [{ kind: 'text', text: 'Certification probe message' }],
@@ -377,7 +377,7 @@ async function levelThreeTests(agentUrl: string): Promise<CertificationTestResul
       };
     }),
     await runTest('cancellation_latency', 'Cancellation completes quickly', async () => {
-      const taskId = `task_${crypto.randomUUID()}`;
+      const taskId = `task_${randomUuid()}`;
       await rpcCall(agentUrl, 'message/send', {
         ...buildMessageParams(),
         task_id: taskId,
@@ -422,7 +422,7 @@ export async function createCertificationRun(
   workspaceId: string,
   input: PersistCertificationInput,
 ) {
-  const id = `cert_${crypto.randomUUID()}`;
+  const id = `cert_${randomUuid()}`;
   const now = new Date();
 
   await db.insert(certifications).values({

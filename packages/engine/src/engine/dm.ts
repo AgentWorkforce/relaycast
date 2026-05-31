@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { eq, and, sql, lt, gt, isNull, inArray, asc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -12,6 +11,7 @@ import {
   files,
   deliveries,
 } from '../db/schema.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { logMessage } from './console.js';
@@ -54,13 +54,9 @@ async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string
   return map;
 }
 
-function getDmPairKey(workspaceId: string, agentA: string, agentB: string): string {
+async function getDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {
   const [first, second] = [agentA, agentB].sort();
-  return crypto
-    .createHash('sha256')
-    .update(`${workspaceId}:${first}:${second}`)
-    .digest('hex')
-    .slice(0, 24);
+  return (await sha256Hex(`${workspaceId}:${first}:${second}`)).slice(0, 24);
 }
 
 async function resolveConversation(
@@ -88,7 +84,7 @@ async function resolveConversation(
   let conversationId = existing[0]?.id;
 
   if (!conversationId) {
-    const pairKey = getDmPairKey(workspaceId, fromAgentId, toAgentId);
+    const pairKey = await getDmPairKey(workspaceId, fromAgentId, toAgentId);
     const deterministicConversationId = `dm_${pairKey}`;
     const deterministicChannelId = `dmch_${pairKey}`;
 

@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { KeyValueStore } from '../ports/kv.js';
+import { sha256Hex } from '../lib/crypto.js';
 
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 const IDEMPOTENCY_LOCK_TTL_SECONDS = 30;
@@ -29,10 +29,12 @@ interface RunIdempotentOptions<T> {
   operation: () => Promise<T>;
 }
 
-function buildKey(workspaceId: string, actorId: string, scope: string, key: string): string {
-  const digest = createHash('sha256').update(key).digest('hex');
-  const scopeDigest = createHash('sha256').update(scope).digest('hex').slice(0, 16);
-  return `idem:v1:${workspaceId}:${actorId}:${scopeDigest}:${digest}`;
+async function buildKey(workspaceId: string, actorId: string, scope: string, key: string): Promise<string> {
+  const [digest, scopeDigest] = await Promise.all([
+    sha256Hex(key),
+    sha256Hex(scope),
+  ]);
+  return `idem:v1:${workspaceId}:${actorId}:${scopeDigest.slice(0, 16)}:${digest}`;
 }
 
 export function parseIdempotencyKey(headerValue: string | undefined): { key?: string; error?: string } {
@@ -87,7 +89,7 @@ export async function runIdempotent<T>(
   let lockAcquired = false;
 
   if (kvStore) {
-    kvKey = buildKey(workspaceId, actorId, scope, key);
+    kvKey = await buildKey(workspaceId, actorId, scope, key);
     lockKey = `${kvKey}:lock`;
 
     try {
