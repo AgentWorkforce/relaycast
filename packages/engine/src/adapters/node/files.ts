@@ -1,16 +1,19 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
+import { z } from 'zod';
 import type { FileStorage } from '../../ports/files.js';
 
 const URL_TTL_SECONDS = 3600;
 const ROUTE_PREFIX = '/_relayfiles';
 
-interface TokenPayload {
-  key: string;
-  op: 'put' | 'get';
-  exp: number;
-}
+const tokenPayloadSchema = z.object({
+  key: z.string(),
+  op: z.enum(['put', 'get']),
+  exp: z.number(),
+});
+
+type TokenPayload = z.infer<typeof tokenPayloadSchema>;
 
 /**
  * Local-filesystem file storage replacing Cloudflare R2 for self-host. Blobs are
@@ -70,7 +73,11 @@ export class LocalFileStorage implements FileStorage {
     const b = Buffer.from(expected);
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
     try {
-      const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenPayload;
+      const parsed = tokenPayloadSchema.safeParse(
+        JSON.parse(Buffer.from(body, 'base64url').toString('utf8')),
+      );
+      if (!parsed.success) return null;
+      const payload = parsed.data;
       if (payload.exp * 1000 < Date.now()) return null;
       return payload;
     } catch {

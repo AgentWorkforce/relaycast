@@ -6,6 +6,7 @@ import * as directoryEngine from '../engine/directory.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { asCodedError } from '../lib/httpError.js';
 
 export const directoryRoutes = new Hono<AppEnv>();
 
@@ -61,7 +62,7 @@ function parseTagsParam(value: string | undefined): string[] | undefined {
 }
 
 function handleError(c: Context<AppEnv>, err: unknown) {
-  const error = err as Error & { code?: string; status?: number; cause?: unknown };
+  const error = asCodedError(err);
   const cause = error.cause instanceof Error ? error.cause.message : (error.cause ? String(error.cause) : '');
   const message = cause ? `${error.message} [cause: ${cause}]` : error.message;
   return c.json({

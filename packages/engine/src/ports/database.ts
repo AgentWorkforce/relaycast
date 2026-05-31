@@ -21,8 +21,17 @@ import type * as schema from '../db/schema.js';
 // which is exactly what the D1 driver produces, so the Cloudflare adapter's
 // handle is assignable directly. The Node better-sqlite3 driver is synchronous;
 // `await` on its thenable builders works at runtime, and the Node adapter casts
-// its handle to this type once at construction. Result type is left `any` so we
-// don't pull a D1-specific result type (and thus `@cloudflare/workers-types`)
-// into the platform-agnostic engine.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type EngineDb = BaseSQLiteDatabase<'async', any, typeof schema>;
+// its handle to this type once at construction.
+//
+// The second parameter is `TRunResult` — the return type of `db.run(...)`. The
+// drivers disagree on it (better-sqlite3: `{ changes, lastInsertRowid }`; D1:
+// `D1Result`) and share no common shape, so no single concrete type fits both,
+// and naming either here would drag a platform's types into the agnostic engine.
+//
+// So we leave it as a type parameter, defaulting to `unknown`. Engine core uses
+// the bare `EngineDb` (i.e. `EngineDb<unknown>`) and never calls `.run()` or
+// reads a run result, so it stays platform-free. Each adapter specializes it
+// with its own driver's result type (the Node adapter → `EngineDb<RunResult>`),
+// importing only that platform's types, so the precise run-result type flows all
+// the way through on that side without the engine ever depending on it.
+export type EngineDb<TRunResult = unknown> = BaseSQLiteDatabase<'async', TRunResult, typeof schema>;

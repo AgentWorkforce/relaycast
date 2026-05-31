@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as presenceEngine from '../engine/presence.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const presenceRoutes = new Hono<AppEnv>();
 
@@ -15,11 +15,7 @@ presenceRoutes.get('/agents/presence', requireAuth, rateLimit, async (c) => {
     const result = await presenceEngine.getPresence(db, c.get('engine').presence, workspace.id);
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -35,11 +31,7 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
     });
     return c.json({ ok: true });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });
 
@@ -66,10 +58,6 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
     });
     return c.json({ ok: true });
   } catch (err: unknown) {
-    const error = err as Error & { code?: string; status?: number };
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, err);
   }
 });

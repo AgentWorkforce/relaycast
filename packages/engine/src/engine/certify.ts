@@ -27,6 +27,27 @@ const JsonRpcResponseSchema = z.object({
   }).optional(),
 });
 
+// Narrow schemas for probing untrusted external A2A responses. These walk the
+// raw response body defensively (matching the protocol's optional shapes)
+// instead of asserting types with `as`.
+const taskLifecycleSchema = z.object({
+  result: z.object({
+    task: z.object({
+      status: z.object({ state: z.string() }),
+    }),
+  }),
+});
+
+const jsonRpcEnvelopeSchema = z.object({
+  jsonrpc: z.literal('2.0'),
+  result: z.unknown().optional(),
+  error: z.unknown().optional(),
+});
+
+const jsonRpcErrorCodeSchema = z.object({
+  error: z.object({ code: z.number() }),
+});
+
 export const CertificationLevelSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
 export interface CertificationTestResult {
@@ -277,15 +298,12 @@ async function levelTwoTests(agentUrl: string): Promise<CertificationTestResult[
     }),
     await runTest('task_lifecycle', 'Task lifecycle state response', async () => {
       const response = await rpcCall(agentUrl, 'tasks/get', { id: taskId, task_id: taskId });
-      const body = response.body as Record<string, unknown> | null;
-      const result = body?.result as Record<string, unknown> | undefined;
-      const task = result?.task as Record<string, unknown> | undefined;
-      const statusObj = task?.status as Record<string, unknown> | undefined;
-      const state = statusObj?.state;
+      const lifecycle = taskLifecycleSchema.safeParse(response.body);
+      const state = lifecycle.success ? lifecycle.data.result.task.status.state : undefined;
       const allowed = ['submitted', 'working', 'input-required', 'completed', 'failed', 'canceled', 'unknown'];
       return {
-        passed: response.ok && typeof state === 'string' && allowed.includes(state),
-        message: response.ok && typeof state === 'string' ? `tasks/get returned lifecycle state "${state}"` : 'tasks/get did not return a lifecycle state',
+        passed: response.ok && state !== undefined && allowed.includes(state),
+        message: response.ok && state !== undefined ? `tasks/get returned lifecycle state "${state}"` : 'tasks/get did not return a lifecycle state',
         details: { status: response.status, state, body: response.body },
       };
     }),
@@ -307,18 +325,20 @@ async function levelTwoTests(agentUrl: string): Promise<CertificationTestResult[
     }),
     await runTest('jsonrpc_shape', 'JSON-RPC envelope shape', async () => {
       const response = await rpcCall(agentUrl, 'message/send', params);
-      const body = response.body as Record<string, unknown> | null;
+      const envelope = jsonRpcEnvelopeSchema.safeParse(response.body);
+      // JSON-RPC 2.0 requires exactly one of `result`/`error` — never both.
+      const hasPayload = envelope.success
+        && ((envelope.data.result !== undefined) !== (envelope.data.error !== undefined));
       return {
-        passed: Boolean(body && body.jsonrpc === '2.0' && ('result' in body || 'error' in body)),
-        message: body && body.jsonrpc === '2.0' ? 'Response used a JSON-RPC 2.0 envelope' : 'Response did not use a valid JSON-RPC 2.0 envelope',
-        details: { body, parse_error: response.parse_error },
+        passed: hasPayload,
+        message: envelope.success ? 'Response used a JSON-RPC 2.0 envelope' : 'Response did not use a valid JSON-RPC 2.0 envelope',
+        details: { body: response.body, parse_error: response.parse_error },
       };
     }),
     await runTest('error_handling', 'Protocol error handling', async () => {
       const response = await rpcCall(agentUrl, 'method/doesNotExist', {});
-      const errBody = response.body as Record<string, unknown> | null;
-      const errorObj = errBody?.error as Record<string, unknown> | undefined;
-      const errorCode = errorObj?.code;
+      const errorBody = jsonRpcErrorCodeSchema.safeParse(response.body);
+      const errorCode = errorBody.success ? errorBody.data.error.code : undefined;
       return {
         passed: response.status > 0 && typeof errorCode === 'number',
         message: typeof errorCode === 'number' ? `Unsupported method produced error code ${errorCode}` : 'Unsupported method did not produce a JSON-RPC error',

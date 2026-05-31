@@ -11,6 +11,7 @@ import * as sessionEventEngine from '../engine/sessionEvent.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -107,12 +108,7 @@ agentRoutes.post(
       });
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      const status = error.status || 500;
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, status as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -130,11 +126,7 @@ agentRoutes.get(
       const agents = await agentEngine.listAgents(db, workspace.id, status);
       return c.json({ ok: true, data: agents });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -158,11 +150,7 @@ agentRoutes.get(
       }
       return c.json({ ok: true, data: agent });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -218,7 +206,7 @@ agentRoutes.patch(
           id: updated.id,
           name: updated.name,
           status: updated.status,
-          metadata: (updated.metadata || {}) as Record<string, unknown>,
+          metadata: updated.metadata ?? {},
         });
       }
       emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
@@ -228,11 +216,7 @@ agentRoutes.patch(
       });
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -259,11 +243,7 @@ agentRoutes.delete(
       });
       return c.body(null, 204);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -341,11 +321,7 @@ agentRoutes.post(
 
       return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as ContentfulStatusCode);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -442,11 +418,7 @@ agentRoutes.post(
 
       return c.json({ ok: true, data: event }, 201);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json(
-        { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-        (error.status || 500) as ContentfulStatusCode,
-      );
+      return errorResponse(c, err);
     }
   },
 );
@@ -479,11 +451,7 @@ agentRoutes.get(
 
       return c.json({ ok: true, data: events });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json(
-        { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-        (error.status || 500) as ContentfulStatusCode,
-      );
+      return errorResponse(c, err);
     }
   },
 );
@@ -542,11 +510,7 @@ agentRoutes.post(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
@@ -10,6 +9,7 @@ import { channels, messages } from '../db/schema.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -85,11 +85,7 @@ reactionRoutes.post(
 
       return c.json({ ok: true, data: reactionData }, 201);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -165,11 +161,7 @@ reactionRoutes.delete(
 
       return c.body(null, 204);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -197,11 +189,7 @@ reactionRoutes.get(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

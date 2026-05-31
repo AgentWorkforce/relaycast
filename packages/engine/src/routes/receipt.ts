@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -9,6 +8,7 @@ import { messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const receiptRoutes = new Hono<AppEnv>();
 
@@ -64,11 +64,7 @@ receiptRoutes.post(
 
       return c.json({ ok: true, data: result }, 200);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -96,11 +92,7 @@ receiptRoutes.get(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -128,11 +120,7 @@ receiptRoutes.get(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

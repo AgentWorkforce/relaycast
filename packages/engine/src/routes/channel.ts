@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
@@ -8,6 +7,7 @@ import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -83,12 +83,7 @@ channelRoutes.post(
 
       return c.json({ ok: true, data: result }, 201);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      const status = error.status || 500;
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, status as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -110,11 +105,7 @@ channelRoutes.get(
       );
       return c.json({ ok: true, data: channels });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -141,11 +132,7 @@ channelRoutes.get(
       }
       return c.json({ ok: true, data: channel });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -202,11 +189,7 @@ channelRoutes.patch(
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -265,11 +248,7 @@ channelRoutes.patch(
 
       return c.json({ ok: true, data: updated });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -319,11 +298,7 @@ channelRoutes.delete(
 
       return c.body(null, 204);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -375,11 +350,7 @@ channelRoutes.post(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -443,11 +414,7 @@ channelRoutes.post(
 
       return c.body(null, 204);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -469,11 +436,7 @@ channelRoutes.get(
       );
       return c.json({ ok: true, data: members });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -547,11 +510,7 @@ channelRoutes.post(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -603,11 +562,7 @@ channelRoutes.post(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -659,11 +614,7 @@ channelRoutes.post(
 
       return c.json({ ok: true, data: result });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

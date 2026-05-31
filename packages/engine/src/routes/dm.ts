@@ -11,6 +11,7 @@ import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { errorResponse } from '../lib/httpError.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -134,11 +135,7 @@ dmRoutes.post(
       const { _delivery: _drop, ...responseData } = idempotent.data as typeof idempotent.data & { _delivery?: unknown };
       return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -160,11 +157,7 @@ dmRoutes.get(
       );
       return c.json({ ok: true, data: conversations });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );
@@ -195,11 +188,7 @@ dmRoutes.get(
       );
       return c.json({ ok: true, data: msgs });
     } catch (err: unknown) {
-      const error = err as Error & { code?: string; status?: number };
-      return c.json({
-        ok: false,
-        error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as ContentfulStatusCode);
+      return errorResponse(c, err);
     }
   },
 );

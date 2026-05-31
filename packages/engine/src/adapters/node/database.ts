@@ -1,13 +1,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database, { type RunResult } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
 
+/** The engine handle specialized to better-sqlite3's synchronous run-result. */
+export type NodeEngineDb = EngineDb<RunResult>;
+
 export interface SqliteDbHandle {
-  db: EngineDb;
+  db: NodeEngineDb;
   /** The raw better-sqlite3 connection (for migrations, pragmas, backups). */
   sqlite: Database.Database;
 }
@@ -17,14 +20,15 @@ export interface SqliteDbHandle {
  * (created if absent) or `':memory:'` for tests. Sets WAL + foreign keys.
  *
  * The better-sqlite3 driver is synchronous; Drizzle query builders are thenable
- * so the engine's `await db.select()...` works unchanged. The handle is cast to
- * the async {@link EngineDb} surface once here.
+ * so the engine's `await db.select()...` works unchanged. Only the sync→async
+ * surface kind is bridged by the cast here — the run-result type (`RunResult`)
+ * is preserved, so {@link NodeEngineDb} stays precisely typed.
  */
 export function getSqliteDb(path: string): SqliteDbHandle {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
-  const db = drizzle(sqlite, { schema }) as unknown as EngineDb;
+  const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
   return { db, sqlite };
 }
 

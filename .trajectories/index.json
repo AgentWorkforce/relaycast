@@ -1,13 +1,5 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-31T07:12:06.785Z",
-  "trajectories": {
-    "traj_gk8yfvbi52hm": {
-      "title": "Fix issue 143",
-      "status": "completed",
-      "startedAt": "2026-05-31T07:03:06.043Z",
-      "completedAt": "2026-05-31T07:12:06.624Z",
-      "path": "/Users/will/Projects/AgentWorkforce/relaycast/.trajectories/completed/2026-05/traj_gk8yfvbi52hm.json"
-    }
-  }
+  "lastUpdated": "2026-05-31T16:23:47.625Z",
+  "trajectories": {}
 }
