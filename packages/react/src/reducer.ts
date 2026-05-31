@@ -28,7 +28,12 @@ type AgentPresenceEvent = {
 type ChannelEvent = {
   channel: {
     name: string;
-    topic?: string | null;
+    topic: string | null;
+  };
+};
+type ChannelArchivedEvent = {
+  channel: {
+    name: string;
   };
 };
 type MemberEvent = {
@@ -70,7 +75,7 @@ export function handleServerEvent(store: RelayStore, event: WsClientEvent): void
       handleChannelUpdated(store, event as ChannelEvent);
       break;
     case 'channel.archived':
-      handleChannelArchived(store, event as ChannelEvent);
+      handleChannelArchived(store, event as ChannelArchivedEvent);
       break;
     case 'member.joined':
       handleMemberJoined(store, event as MemberEvent);
@@ -347,7 +352,7 @@ function handleChannelUpdated(store: RelayStore, event: ChannelEvent): void {
   store.setState({ channels: { ...state.channels, data: updated } });
 }
 
-function handleChannelArchived(store: RelayStore, event: ChannelEvent): void {
+function handleChannelArchived(store: RelayStore, event: ChannelArchivedEvent): void {
   const state = store.getState();
   const updated = state.channels.data.map((c) =>
     c.name === event.channel.name ? { ...c, isArchived: true } : c,
