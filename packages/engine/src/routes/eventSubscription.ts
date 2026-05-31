@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -54,7 +55,7 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -70,7 +71,7 @@ eventSubscriptionRoutes.get('/subscriptions', requireAuth, rateLimit, async (c) 
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -96,7 +97,7 @@ eventSubscriptionRoutes.get('/subscriptions/:id', requireAuth, rateLimit, async 
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -125,6 +126,6 @@ eventSubscriptionRoutes.delete('/subscriptions/:id', requireAuth, rateLimit, asy
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });

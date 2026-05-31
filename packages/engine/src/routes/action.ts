@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -75,7 +76,7 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -91,7 +92,7 @@ actionRoutes.get('/actions', requireAuth, rateLimit, async (c) => {
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -113,7 +114,7 @@ actionRoutes.get('/actions/:name', requireAuth, rateLimit, async (c) => {
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -138,7 +139,7 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -214,7 +215,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -284,7 +285,7 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });
@@ -306,7 +307,7 @@ actionRoutes.get('/actions/:name/invocations/:id', requireAuth, rateLimit, async
     const error = err as Error & { code?: string; status?: number };
     return c.json(
       { ok: false, error: { code: error.code || 'internal_error', message: error.message } },
-      (error.status || 500) as any,
+      (error.status || 500) as ContentfulStatusCode,
     );
   }
 });

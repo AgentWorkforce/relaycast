@@ -12,7 +12,6 @@ import { InProcessPresence, type InProcessPresenceOptions } from './presence.js'
 import { InProcessRateLimiter } from './rate-limit.js';
 import { InProcessKeyValueStore } from './kv.js';
 import { InProcessEventQueue } from './event-queue.js';
-import { InProcessMcpSessionHost } from './mcp.js';
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 
 export {
@@ -21,7 +20,6 @@ export {
   InProcessRateLimiter,
   InProcessKeyValueStore,
   InProcessEventQueue,
-  InProcessMcpSessionHost,
   LocalFileStorage,
   createFileRouteHandler,
   FILE_ROUTE_PREFIX,
@@ -35,7 +33,7 @@ export type { InProcessPresenceOptions } from './presence.js';
 export interface NodeRuntimeOptions {
   /** SQLite file path, or ':memory:' for tests. */
   dbPath: string;
-  /** This server's own origin, used for signed file URLs and the MCP base URL. */
+  /** This server's own origin, used for signed file URLs. */
   baseUrl: string;
   /** Directory blobs are written to. Default: `<cwd>/relaycast-files`. */
   fileDir?: string;
@@ -102,7 +100,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     options.fileSecret ?? randomBytes(32).toString('hex'),
   );
   const webhookQueue = new InProcessEventQueue(db, (err, ctx) => telemetry.captureException(err, ctx));
-  const mcp = new InProcessMcpSessionHost({ baseUrl: options.baseUrl });
 
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
   const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
@@ -113,7 +110,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     connections: realtime,
     presence,
     rateLimiter,
-    mcp,
     files: fileStorage,
     kv,
     webhookQueue,

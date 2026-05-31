@@ -30,9 +30,9 @@ export interface AuthProvider {
   authenticate(args: { token: string; require: AuthRequire; db: EngineDb }): Promise<AuthResult>;
 
   /**
-   * Hash a raw token to its stored form. Used by the `/v1/ws` upgrade and MCP
-   * key handling, which look tokens up directly. Providers that don't use hashed
-   * keys may return the token unchanged.
+   * Hash a raw token to its stored form. Used by the `/v1/ws` upgrade, which
+   * looks tokens up directly. Providers that don't use hashed keys may return
+   * the token unchanged.
    */
   hashToken(token: string): Promise<string>;
 }

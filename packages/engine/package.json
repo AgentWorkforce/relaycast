@@ -43,9 +43,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@relaycast/a2a": "1.1.7",
-    "@relaycast/mcp": "1.1.7",
     "@relaycast/types": "1.1.7",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.45.1",

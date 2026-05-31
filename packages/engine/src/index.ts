@@ -19,7 +19,6 @@ export type {
   PresenceTracker,
   RateLimiter,
   RateLimitResult,
-  McpSessionHost,
   FileStorage,
   KeyValueStore,
   EventQueue,

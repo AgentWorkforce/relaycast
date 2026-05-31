@@ -229,19 +229,6 @@ Local stdio config:
 }
 ```
 
-Remote Streamable HTTP config:
-
-```json
-{
-  "mcpServers": {
-    "relaycast": {
-      "type": "streamable-http",
-      "url": "https://api.relaycast.dev/mcp"
-    }
-  }
-}
-```
-
 ## CLI
 
 Use the same command surface as the MCP tools from a terminal:

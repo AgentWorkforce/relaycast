@@ -7,7 +7,7 @@
  *
  * Two groups:
  *  - **Ports** — infrastructure the engine needs (db, realtime, presence, rate
- *    limiting, MCP sessions, file blobs, key/value).
+ *    limiting, file blobs, key/value).
  *  - **Providers** — the open-core "hosting" seam the cloud layer overrides
  *    (auth, entitlements/billing, telemetry). Each ships an OSS default.
  */
@@ -21,7 +21,6 @@ export type {
 } from './realtime.js';
 export type { PresenceTracker } from './presence.js';
 export type { RateLimiter, RateLimitResult } from './rate-limit.js';
-export type { McpSessionHost } from './mcp.js';
 export type { FileStorage } from './files.js';
 export type { KeyValueStore } from './kv.js';
 export type { EventQueue, QueuedEvent } from './event-queue.js';
@@ -43,7 +42,6 @@ import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry } from './realtime.js';
 import type { PresenceTracker } from './presence.js';
 import type { RateLimiter } from './rate-limit.js';
-import type { McpSessionHost } from './mcp.js';
 import type { FileStorage } from './files.js';
 import type { KeyValueStore } from './kv.js';
 import type { EventQueue } from './event-queue.js';
@@ -58,7 +56,6 @@ export interface EnginePorts {
   connections: ConnectionRegistry;
   presence: PresenceTracker;
   rateLimiter: RateLimiter;
-  mcp: McpSessionHost;
   files: FileStorage;
   kv: KeyValueStore;
   webhookQueue: EventQueue;

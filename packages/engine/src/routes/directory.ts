@@ -1,4 +1,5 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import * as directoryEngine from '../engine/directory.js';
@@ -59,14 +60,14 @@ function parseTagsParam(value: string | undefined): string[] | undefined {
   return tags.length ? tags : undefined;
 }
 
-function handleError(c: any, err: unknown) {
+function handleError(c: Context<AppEnv>, err: unknown) {
   const error = err as Error & { code?: string; status?: number; cause?: unknown };
   const cause = error.cause instanceof Error ? error.cause.message : (error.cause ? String(error.cause) : '');
   const message = cause ? `${error.message} [cause: ${cause}]` : error.message;
   return c.json({
     ok: false,
     error: { code: error.code || 'internal_error', message },
-  }, (error.status || 500) as any);
+  }, (error.status || 500) as ContentfulStatusCode);
 }
 
 directoryRoutes.post('/directory/agents', requireWorkspaceKey, rateLimit, async (c) => {

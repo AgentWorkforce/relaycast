@@ -11,7 +11,7 @@ import {
  * Conformance suite for the in-process Node adapter. These assert the
  * parity-critical realtime invariants the Cloudflare DOs guarantee — sequence
  * monotonicity, mute filtering, resync (ring + DB gap-fill), presence sweep,
- * rate limiting, MCP session routing, and force-disconnect — so the same suite
+ * rate limiting, and force-disconnect — so the same suite
  * can later run against the DO adapter to prove cross-runtime parity.
  */
 describe('node adapter conformance', () => {
@@ -160,17 +160,6 @@ describe('node adapter conformance', () => {
       rt.attachAgentSocket('w1', 'a', sock);
       await rt.disconnectAgent('w1', 'a');
       expect(sock.closed).toBe(true);
-    });
-  });
-
-  describe('mcp session routing', () => {
-    it('returns 404 for an unknown session id', async () => {
-      const res = await stack.app.request('/mcp', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'mcp-session-id': 'does-not-exist' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
-      });
-      expect(res.status).toBe(404);
     });
   });
 

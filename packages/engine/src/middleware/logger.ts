@@ -48,7 +48,6 @@ async function hashIdentifier(value: string): Promise<string> {
 
 function routeGroupForPath(path: string): string {
   if (path === '/v1/ws') return 'ws';
-  if (path === '/mcp') return 'mcp';
   if (path.startsWith('/v1/')) return 'api_v1';
   if (path.startsWith('/.well-known/')) return 'well_known';
   if (path.startsWith('/health')) return 'health';
