@@ -12,9 +12,20 @@ export interface CodedError extends Error {
   status?: number;
 }
 
-/** Narrow an unknown thrown value to a {@link CodedError} without asserting. */
+/**
+ * Narrow an unknown thrown value to a {@link CodedError} without asserting.
+ * Plain (non-`Error`) objects are wrapped while preserving their own properties
+ * — so a thrown `{ code, status, message }` still surfaces its `code`/`status`,
+ * matching the behavior of the `err as Error & {...}` reads this replaces.
+ */
 export function asCodedError(err: unknown): CodedError {
   if (err instanceof Error) return err as CodedError;
+  if (err && typeof err === 'object' && !Array.isArray(err)) {
+    const message = 'message' in err ? String((err as { message: unknown }).message) : 'Unknown error';
+    const error = Object.assign(new Error(message), err);
+    error.message = message;
+    return error as CodedError;
+  }
   return new Error(typeof err === 'string' ? err : 'Unknown error');
 }
 

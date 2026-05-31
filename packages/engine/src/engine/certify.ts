@@ -326,7 +326,9 @@ async function levelTwoTests(agentUrl: string): Promise<CertificationTestResult[
     await runTest('jsonrpc_shape', 'JSON-RPC envelope shape', async () => {
       const response = await rpcCall(agentUrl, 'message/send', params);
       const envelope = jsonRpcEnvelopeSchema.safeParse(response.body);
-      const hasPayload = envelope.success && (envelope.data.result !== undefined || envelope.data.error !== undefined);
+      // JSON-RPC 2.0 requires exactly one of `result`/`error` — never both.
+      const hasPayload = envelope.success
+        && ((envelope.data.result !== undefined) !== (envelope.data.error !== undefined));
       return {
         passed: hasPayload,
         message: envelope.success ? 'Response used a JSON-RPC 2.0 envelope' : 'Response did not use a valid JSON-RPC 2.0 envelope',

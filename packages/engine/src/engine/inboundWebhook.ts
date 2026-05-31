@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { webhooks, channels, messages, agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -39,9 +40,7 @@ async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> 
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, WEBHOOK_AGENT_NAME)));
 
   if (!created) {
-    const err = new Error('Failed to provision inbound webhook agent identity');
-    Object.assign(err, { code: 'webhook_agent_provision_failed', status: 500 });
-    throw err;
+    throw codedError('Failed to provision inbound webhook agent identity', 'webhook_agent_provision_failed', 500);
   }
 
   return created.id;
@@ -167,11 +166,7 @@ export async function triggerWebhook(
 
   // Webhook must have a creator agent to post messages
   if (!webhook.createdBy) {
-    const err = Object.assign(
-      new Error('Webhook has no associated agent and cannot post messages'),
-      { code: 'webhook_no_agent', status: 422 },
-    );
-    throw err;
+    throw codedError('Webhook has no associated agent and cannot post messages', 'webhook_no_agent', 422);
   }
 
   // Create message in the bound channel using the webhook creator's identity
