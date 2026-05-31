@@ -34,5 +34,5 @@ export interface AuthProvider {
    * key handling, which look tokens up directly. Providers that don't use hashed
    * keys may return the token unchanged.
    */
-  hashToken(token: string): Promise<string>;
+  hashToken(token: string): string | Promise<string>;
 }
