@@ -85,14 +85,14 @@ This spec does **not** cover: self-hosted server setup, Python SDK changes, or c
 └────────────────────┬─────────────────────────────────┘
                      │
 ┌────────────────────▼─────────────────────────────────┐
-│  Relaycast API  (api.relaycast.dev / localhost:7528) │
+│  Relaycast API  (gateway.relaycast.dev / :8787)     │
 │  /v1/workspaces, /v1/agents, /v1/channels, etc.     │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Cloud API base URL
 
-`RelaycastSetup` defaults to `https://api.relaycast.dev`. This is overridable via constructor option for staging/dev environments or local development.
+`RelaycastSetup` defaults to `https://gateway.relaycast.dev` (the hosted engine). This is overridable via the `baseUrl` constructor option for staging/dev environments or for a self-hosted engine (`http://localhost:8787`).
 
 ---
 
@@ -132,13 +132,6 @@ export interface RelaycastSetupOptions {
     maxRetries: number
     baseDelayMs: number
   }
-
-  /**
-   * Enable local mode, targeting a locally running Relaycast daemon.
-   * Automatically sets baseUrl to http://127.0.0.1:7528 if not overridden.
-   * @default false
-   */
-  local?: boolean
 }
 
 export class RelaycastSetup {
@@ -479,13 +472,13 @@ const alice = await workspace.registerAgent({ name: 'Alice', type: 'agent' })
 
 This is also the relaycast-side entry point for a `@relayfile/sdk` `AgentWorkspaceInvite`: pass `invite.workspaceId` and `invite.relaycastApiKey` to `joinWorkspace()`, set `baseUrl` from `invite.relaycastBaseUrl` when present, then claim the invited identity with `workspace.relayCast().agents.registerOrRotate({ name: invite.agentName })`. For the full multi-agent workflow, see [Agent Workspace Golden Path](../../relayfile/docs/agent-workspace-golden-path.md).
 
-### Local development mode
+### Self-hosted / local development mode
+
+Run the engine locally (`npx @relaycast/engine`, default port 8787) and point `baseUrl` at it:
 
 ```ts
 const setup = new RelaycastSetup({
-  local: true,
-  // Optionally override the default local URL
-  // baseUrl: 'http://127.0.0.1:7528',
+  baseUrl: 'http://localhost:8787',
 })
 
 const workspace = await setup.createWorkspace({ name: 'local-dev' })

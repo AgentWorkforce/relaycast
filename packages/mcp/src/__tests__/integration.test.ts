@@ -582,30 +582,4 @@ describe('MCP → SDK → HTTP integration', () => {
     const req = findReq((r) => r.url.includes('/subscriptions/sub_1') && r.method === 'DELETE');
     expect(req).toBeDefined();
   });
-
-  it('integration.command.register → POST /v1/commands', async () => {
-    await client.callTool({ name: 'integration.command.register', arguments: { command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' } });
-    const req = findReq((r) => r.url.includes('/commands') && r.method === 'POST' && !r.url.includes('/invoke'));
-    expect(req).toBeDefined();
-    expect(req!.body).toMatchObject({ command: 'deploy', description: 'Deploy', handler_agent: 'IntegrationBot' });
-  });
-
-  it('integration.command.list → GET /v1/commands', async () => {
-    await client.callTool({ name: 'integration.command.list', arguments: {} });
-    const req = findReq((r) => r.url.includes('/commands') && r.method === 'GET');
-    expect(req).toBeDefined();
-  });
-
-  it('integration.command.delete → DELETE /v1/commands/:command', async () => {
-    await client.callTool({ name: 'integration.command.delete', arguments: { command: 'deploy' } });
-    const req = findReq((r) => r.url.includes('/commands/deploy') && r.method === 'DELETE');
-    expect(req).toBeDefined();
-  });
-
-  it('integration.command.invoke → POST /v1/commands/:command/invoke', async () => {
-    await client.callTool({ name: 'integration.command.invoke', arguments: { command: 'deploy', channel: 'general' } });
-    const req = findReq((r) => r.url.includes('/commands/deploy/invoke'));
-    expect(req).toBeDefined();
-    expect(req!.body).toMatchObject({ channel: 'general' });
-  });
 });

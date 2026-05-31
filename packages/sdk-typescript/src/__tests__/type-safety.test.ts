@@ -2,7 +2,7 @@ import { describe, expectTypeOf, it } from 'vitest';
 import { AgentClient } from '../agent.js';
 import { RelayCast } from '../relay.js';
 import type {
-  CommandInvokeResult,
+  InvokeActionResult,
   DirectoryAgent,
   DirectorySearchResult,
   DmConversation,
@@ -13,7 +13,7 @@ import type {
 } from '../types.js';
 
 describe('AgentClient return types', () => {
-  it('exposes strongly typed results for messaging and commands', () => {
+  it('exposes strongly typed results for messaging and actions', () => {
     expectTypeOf<ReturnType<AgentClient['dm']>>()
       .toEqualTypeOf<Promise<MessageWithMeta>>();
     expectTypeOf<ReturnType<AgentClient['dms']['createGroup']>>()
@@ -22,8 +22,8 @@ describe('AgentClient return types', () => {
       .toEqualTypeOf<Promise<MessageWithMeta>>();
     expectTypeOf<ReturnType<AgentClient['search']>>()
       .toEqualTypeOf<Promise<SearchResult[]>>();
-    expectTypeOf<ReturnType<AgentClient['commands']['invoke']>>()
-      .toEqualTypeOf<Promise<CommandInvokeResult>>();
+    expectTypeOf<ReturnType<AgentClient['actions']['invoke']>>()
+      .toEqualTypeOf<Promise<InvokeActionResult>>();
   });
 
   it('exposes strongly typed results for directory and routing methods', () => {

@@ -39,10 +39,10 @@ describe('RelayCast baseUrl options', () => {
     const { RelayCast } = await import('../relay.js');
     mockFetch.mockImplementation(() => mockWorkspaceResponse());
 
-    await RelayCast.createWorkspace('Test Workspace', 'http://127.0.0.1:7528');
+    await RelayCast.createWorkspace('Test Workspace', 'http://localhost:8787');
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('http://127.0.0.1:7528/v1/workspaces');
+    expect(url).toBe('http://localhost:8787/v1/workspaces');
   });
 
   it('createWorkspace defaults to hosted API', async () => {
@@ -52,7 +52,7 @@ describe('RelayCast baseUrl options', () => {
     await RelayCast.createWorkspace('Test Workspace');
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/workspaces');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces');
   });
 
   it('createWorkspace supports options object with auth', async () => {
@@ -61,11 +61,11 @@ describe('RelayCast baseUrl options', () => {
 
     await RelayCast.createWorkspace('Test Workspace', {
       apiKey: 'rk_live_existing',
-      baseUrl: 'http://127.0.0.1:7528',
+      baseUrl: 'http://localhost:8787',
     });
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('http://127.0.0.1:7528/v1/workspaces');
+    expect(url).toBe('http://localhost:8787/v1/workspaces');
     expect(init.headers.Authorization).toBe('Bearer rk_live_existing');
   });
 });

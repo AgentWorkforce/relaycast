@@ -23,9 +23,6 @@ import type {
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   EventSubscription,
-  CreateCommandRequest,
-  CreateCommandResponse,
-  AgentCommand,
   ActivityItem,
   DmMessage,
   WorkspaceDmConversation,
@@ -48,6 +45,29 @@ import type {
   RoutingConfig,
   SearchDirectoryQuery,
   UpdateRoutingConfigRequest,
+  ListDirectoryQuery,
+  UpdateDirectoryAgentRequest,
+  DirectoryRating,
+  RateDirectoryAgentRequest,
+  RouteFeedbackRequest,
+  RouteFeedbackResult,
+  SkillSearchQuery,
+  SkillSearchResult,
+  ActionDefinition,
+  RegisterActionRequest,
+  SessionEvent,
+  EmitSessionEventRequest,
+  ListSessionEventsQuery,
+  CertificationRun,
+  SubmitCertificationRequest,
+  MonitorCertificationRequest,
+  ConsoleMessageLog,
+  ConsoleMessagesQuery,
+  ConsoleOverview,
+  ConsoleAgentStat,
+  ConsoleAgentStatsQuery,
+  ConsoleWindowQuery,
+  ConsoleCostStats,
 } from './types.js';
 import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
@@ -86,13 +106,6 @@ export type EnsureWorkspaceResponse = { existed: boolean; name: string } & Creat
 
 interface ChannelListOptions {
   includeArchived?: boolean;
-}
-
-interface CommandRegisterInput {
-  command: string;
-  description: string;
-  handlerAgent: string;
-  parameters?: CreateCommandRequest['parameters'];
 }
 
 type RegisterTypedIdentityInput = Omit<CreateAgentRequest, 'type'>;
@@ -135,7 +148,7 @@ export class RelayCast {
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
     const { apiKey, baseUrl } = resolveWorkspaceBootstrapOptions(options);
-    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+    const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -182,7 +195,7 @@ export class RelayCast {
   }
 
   static async lookupWorkspace(name: string, baseUrl?: string): Promise<WorkspaceLookup | null> {
-    const requestBaseUrl = baseUrl ?? 'https://api.relaycast.dev';
+    const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
 
     const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -372,6 +385,44 @@ export class RelayCast {
     return this.client.post('/v1/skills/sync', data);
   }
 
+  searchSkills(query?: SkillSearchQuery): Promise<SkillSearchResult[]> {
+    const params: Record<string, string> = {};
+    if (query?.q) params.q = query.q;
+    if (query?.limit != null) params.limit = String(query.limit);
+    return this.client.get('/v1/skills/search', params);
+  }
+
+  routeFeedback(data: RouteFeedbackRequest): Promise<RouteFeedbackResult> {
+    return this.client.post('/v1/route/feedback', data);
+  }
+
+  listDirectory(query?: ListDirectoryQuery): Promise<DirectoryAgent[]> {
+    const params: Record<string, string> = {};
+    if (query?.status) params.status = query.status;
+    if (query?.limit != null) params.limit = String(query.limit);
+    return this.client.get('/v1/directory/agents', params);
+  }
+
+  getDirectoryAgent(slug: string): Promise<DirectoryAgent> {
+    return this.client.get(`/v1/directory/agents/${encodeURIComponent(slug)}`);
+  }
+
+  updateDirectoryAgent(slug: string, data: UpdateDirectoryAgentRequest): Promise<DirectoryAgent> {
+    return this.client.patch(`/v1/directory/agents/${encodeURIComponent(slug)}`, data);
+  }
+
+  deleteDirectoryAgent(slug: string): Promise<void> {
+    return this.client.delete(`/v1/directory/agents/${encodeURIComponent(slug)}`);
+  }
+
+  listDirectoryRatings(slug: string): Promise<DirectoryRating[]> {
+    return this.client.get(`/v1/directory/agents/${encodeURIComponent(slug)}/ratings`);
+  }
+
+  rateDirectoryAgent(slug: string, data: RateDirectoryAgentRequest): Promise<DirectoryRating> {
+    return this.client.post(`/v1/directory/agents/${encodeURIComponent(slug)}/ratings`, data);
+  }
+
   getRoutingConfig(): Promise<RoutingConfig> {
     return this.client.get('/v1/routing/config');
   }
@@ -469,6 +520,16 @@ export class RelayCast {
       this.client.post('/v1/agents/spawn', data),
     release: (data: ReleaseAgentRequest): Promise<ReleaseAgentResponse> =>
       this.client.post('/v1/agents/release', data),
+    events: {
+      emit: (name: string, data: EmitSessionEventRequest): Promise<SessionEvent> =>
+        this.client.post(`/v1/agents/${encodeURIComponent(name)}/events`, data),
+      list: (name: string, query?: ListSessionEventsQuery): Promise<SessionEvent[]> => {
+        const params: Record<string, string> = {};
+        if (query?.type) params.type = query.type;
+        if (query?.limit != null) params.limit = String(query.limit);
+        return this.client.get(`/v1/agents/${encodeURIComponent(name)}/events`, params);
+      },
+    },
   };
 
   webhooks = {
@@ -499,15 +560,62 @@ export class RelayCast {
       this.client.delete(`/v1/subscriptions/${encodeURIComponent(id)}`),
   };
 
-  commands = {
-    register: (data: CommandRegisterInput): Promise<CreateCommandResponse> =>
-      this.client.post('/v1/commands', data),
+  actions = {
+    register: (data: RegisterActionRequest): Promise<ActionDefinition> =>
+      this.client.post('/v1/actions', data),
 
-    list: (): Promise<AgentCommand[]> =>
-      this.client.get('/v1/commands'),
+    list: (): Promise<ActionDefinition[]> =>
+      this.client.get('/v1/actions'),
 
-    delete: (command: string): Promise<void> =>
-      this.client.delete(`/v1/commands/${encodeURIComponent(command)}`),
+    get: (name: string): Promise<ActionDefinition> =>
+      this.client.get(`/v1/actions/${encodeURIComponent(name)}`),
+
+    delete: (name: string): Promise<void> =>
+      this.client.delete(`/v1/actions/${encodeURIComponent(name)}`),
+  };
+
+  certify = {
+    submit: (data: SubmitCertificationRequest): Promise<CertificationRun> =>
+      this.client.post('/v1/certify', data),
+
+    get: (id: string): Promise<CertificationRun> =>
+      this.client.get(`/v1/certify/${encodeURIComponent(id)}`),
+
+    /** Public badge SVG URL for a certification run (served without an auth header). */
+    badgeUrl: (id: string): string =>
+      new URL(`/v1/certify/${encodeURIComponent(id)}/badge.svg`, this.client.baseUrl).toString(),
+
+    monitor: (data: MonitorCertificationRequest): Promise<CertificationRun> =>
+      this.client.post('/v1/certify/monitor', data),
+  };
+
+  console = {
+    messages: (query?: ConsoleMessagesQuery): Promise<ConsoleMessageLog[]> => {
+      const params: Record<string, string> = {};
+      if (query?.limit != null) params.limit = String(query.limit);
+      if (query?.before) params.before = query.before;
+      if (query?.agentId) params.agentId = query.agentId;
+      if (query?.channelId) params.channelId = query.channelId;
+      if (query?.conversationId) params.conversationId = query.conversationId;
+      if (query?.deliveryKind) params.deliveryKind = query.deliveryKind;
+      return this.client.get('/v1/console/messages', params);
+    },
+    stats: (query?: ConsoleWindowQuery): Promise<ConsoleOverview> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      return this.client.get('/v1/console/stats', params);
+    },
+    agents: (query?: ConsoleAgentStatsQuery): Promise<ConsoleAgentStat[]> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      if (query?.limit != null) params.limit = String(query.limit);
+      return this.client.get('/v1/console/agents', params);
+    },
+    costs: (query?: ConsoleWindowQuery): Promise<ConsoleCostStats> => {
+      const params: Record<string, string> = {};
+      if (query?.days != null) params.days = String(query.days);
+      return this.client.get('/v1/console/costs', params);
+    },
   };
 
   activity = (limit?: number): Promise<ActivityItem[]> => {

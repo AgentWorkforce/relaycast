@@ -19,7 +19,7 @@ describe('RelayCast', () => {
     vi.useRealTimers();
   });
 
-  it('requires apiKey when local mode is not enabled', async () => {
+  it('requires apiKey', async () => {
     const { RelayCast } = await import('../relay.js');
     expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
   });
@@ -34,7 +34,7 @@ describe('RelayCast', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace');
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBe('Bearer rk_live_test123');
       expect(init.headers['X-SDK-Version']).toBeDefined();
@@ -52,7 +52,7 @@ describe('RelayCast', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace');
       expect(init.method).toBe('PATCH');
       expect(init.headers['Content-Type']).toBe('application/json');
       expect(init.body).toBe(JSON.stringify({ name: 'new' }));
@@ -84,7 +84,7 @@ describe('RelayCast', () => {
       const result = await relay.workspace.stream.get();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace/stream');
       expect(init.method).toBe('GET');
       expect(result).toEqual({ enabled: true, defaultEnabled: false, override: null });
     });
@@ -99,7 +99,7 @@ describe('RelayCast', () => {
       const result = await relay.workspace.stream.set(false);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace/stream');
       expect(init.method).toBe('PUT');
       expect(init.body).toBe(JSON.stringify({ enabled: false }));
       expect(result).toEqual({ enabled: false, defaultEnabled: false, override: true });
@@ -115,7 +115,7 @@ describe('RelayCast', () => {
       const result = await relay.workspace.stream.inherit();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace/stream');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace/stream');
       expect(init.method).toBe('PUT');
       expect(init.body).toBe(JSON.stringify({ mode: 'inherit' }));
       expect(result).toEqual({ enabled: true, defaultEnabled: true, override: null });
@@ -131,7 +131,7 @@ describe('RelayCast', () => {
       await relay.agents.register({ name: 'Worker' } as any);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'Worker' }));
     });
@@ -144,7 +144,7 @@ describe('RelayCast', () => {
       await relay.system({ name: 'System' } as any);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'System', type: 'system' }));
     });
@@ -157,7 +157,7 @@ describe('RelayCast', () => {
       await relay.agents.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
       expect(init.method).toBe('GET');
     });
 
@@ -169,7 +169,7 @@ describe('RelayCast', () => {
       await relay.agents.list({ status: 'active' } as any);
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents?status=active');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents?status=active');
     });
 
     it('get() calls GET /v1/agents/:name with URL encoding', async () => {
@@ -180,7 +180,7 @@ describe('RelayCast', () => {
       await relay.agents.get('a/b');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents/a%2Fb');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/a%2Fb');
     });
   });
 
@@ -192,7 +192,7 @@ describe('RelayCast', () => {
       mockFetch.mockImplementation(() => mockResponse({
         relay_name: 'ext-weather-123',
         relay_token: 'rt_test',
-        webhook_url: 'https://api.relaycast.dev/a2a/webhook/ext-weather-123',
+        webhook_url: 'https://gateway.relaycast.dev/a2a/webhook/ext-weather-123',
         certification: 'level_1',
       }));
 
@@ -203,7 +203,7 @@ describe('RelayCast', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/a2a/register');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/a2a/register');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({
         agent_card_url: 'https://agent.example/.well-known/agent-card.json',
@@ -213,7 +213,7 @@ describe('RelayCast', () => {
       expect(result).toEqual({
         relayName: 'ext-weather-123',
         relayToken: 'rt_test',
-        webhookUrl: 'https://api.relaycast.dev/a2a/webhook/ext-weather-123',
+        webhookUrl: 'https://gateway.relaycast.dev/a2a/webhook/ext-weather-123',
         certification: 'level_1',
       });
     });
@@ -226,7 +226,7 @@ describe('RelayCast', () => {
       await relay.listA2aAgents();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/a2a/agents');
       expect(init.method).toBe('GET');
     });
 
@@ -238,7 +238,7 @@ describe('RelayCast', () => {
       const result = await relay.removeA2aAgent('a/b');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents/a%2Fb');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/a2a/agents/a%2Fb');
       expect(init.method).toBe('DELETE');
       expect(result).toEqual({ name: 'a/b', removed: true });
     });
@@ -268,7 +268,7 @@ describe('RelayCast', () => {
       const result = await relay.getA2aAgentCard('a/b');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/a2a/agents/a%2Fb/card');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/a2a/agents/a%2Fb/card');
       expect(init.method).toBe('GET');
       expect(result).toEqual({
         name: 'Weather Agent',
@@ -295,7 +295,7 @@ describe('RelayCast', () => {
       const result = await relay.route('refund_lookup', 'Need a refund decision');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/route');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/route');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({
         skill: 'refund_lookup',
@@ -321,7 +321,7 @@ describe('RelayCast', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/directory/search?q=refund&tags=billing%2Cpriority&status=active&limit=5');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/search?q=refund&tags=billing%2Cpriority&status=active&limit=5');
       expect(init.method).toBe('GET');
     });
 
@@ -359,7 +359,7 @@ describe('RelayCast', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/directory/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/agents');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({
         source_agent_name: 'billing-router',
@@ -387,7 +387,7 @@ describe('RelayCast', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/skills/sync');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/skills/sync');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({
         agent_name: 'billing-router',
@@ -418,7 +418,7 @@ describe('RelayCast', () => {
       const result = await relay.getRoutingConfig();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/routing/config');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/routing/config');
       expect(init.method).toBe('GET');
       expect(result).toEqual({
         weights: {
@@ -458,7 +458,7 @@ describe('RelayCast', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/routing/config');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/routing/config');
       expect(init.method).toBe('PUT');
       expect(init.body).toBe(JSON.stringify({
         weights: {
@@ -600,7 +600,7 @@ describe('RelayCast', () => {
       await relay.workspace.delete();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace');
       expect(init.method).toBe('DELETE');
     });
   });
@@ -616,7 +616,7 @@ describe('RelayCast', () => {
       const result = await relay.systemPrompt.get();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace/system-prompt');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace/system-prompt');
       expect(init.method).toBe('GET');
       expect(result).toEqual({ prompt: 'Be helpful', isDefault: false });
     });
@@ -631,7 +631,7 @@ describe('RelayCast', () => {
       await relay.systemPrompt.set({ prompt: 'New prompt' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspace/system-prompt');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspace/system-prompt');
       expect(init.method).toBe('PUT');
       expect(init.body).toBe(JSON.stringify({ prompt: 'New prompt' }));
     });
@@ -646,7 +646,7 @@ describe('RelayCast', () => {
       await relay.agents.update('Bot', { status: 'online' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents/Bot');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Bot');
       expect(init.method).toBe('PATCH');
       expect(init.body).toBe(JSON.stringify({ status: 'online' }));
     });
@@ -663,7 +663,7 @@ describe('RelayCast', () => {
       await relay.agents.delete('Bot');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents/Bot');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Bot');
       expect(init.method).toBe('DELETE');
     });
   });
@@ -678,7 +678,7 @@ describe('RelayCast', () => {
       const result = await relay.agents.presence();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents/presence');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/presence');
       expect(init.method).toBe('GET');
       expect(result).toEqual([{ agentId: 'a_1', agentName: 'Bot', status: 'online' }]);
     });
@@ -703,7 +703,7 @@ describe('RelayCast', () => {
       const result = await RelayCast.createWorkspace('My Workspace');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspaces');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
       expect(init.headers.Authorization).toBeUndefined();
@@ -781,7 +781,7 @@ describe('RelayCast', () => {
       const result = await RelayCast.lookupWorkspace('My Workspace');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/workspaces/by-name/My%20Workspace');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces/by-name/My%20Workspace');
       expect(init.method).toBe('GET');
       expect(init.headers.Authorization).toBeUndefined();
       expect(result).toEqual({ id: 'ws_1', name: 'My Workspace', createdAt: '2024-01-01' });
@@ -923,7 +923,7 @@ describe('RelayCast', () => {
       expect(result).toMatchObject({ id: 'a_1', name: 'Bot', token: 'at_live_new' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/agents');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
       expect(init.body).toBe(JSON.stringify({ name: 'Bot' }));
     });
 
@@ -964,7 +964,7 @@ describe('RelayCast', () => {
       });
 
       const [workspaceUrl] = mockFetch.mock.calls[1]!;
-      expect(workspaceUrl).toBe('https://api.relaycast.dev/v1/workspace');
+      expect(workspaceUrl).toBe('https://gateway.relaycast.dev/v1/workspace');
     });
   });
 
@@ -977,7 +977,7 @@ describe('RelayCast', () => {
       await relay.channels.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels');
       expect(init.method).toBe('GET');
     });
 
@@ -989,7 +989,7 @@ describe('RelayCast', () => {
       await relay.channels.list({ includeArchived: true });
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels?include_archived=true');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels?include_archived=true');
     });
 
     it('get() calls GET /v1/channels/:name', async () => {
@@ -1000,7 +1000,7 @@ describe('RelayCast', () => {
       await relay.channels.get('general');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels/general');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/general');
       expect(init.method).toBe('GET');
     });
   });
@@ -1024,7 +1024,7 @@ describe('RelayCast', () => {
       const result = await relay.dmMessages('conv_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations/conv_1/messages');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/dm/conversations/conv_1/messages');
       expect(init.method).toBe('GET');
       expect(result).toEqual([
         {
@@ -1047,7 +1047,7 @@ describe('RelayCast', () => {
       await relay.messages.list('general');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/general/messages');
       expect(init.method).toBe('GET');
     });
 
@@ -1059,7 +1059,7 @@ describe('RelayCast', () => {
       await relay.messages.list('general', { limit: 50 });
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages?limit=50');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/general/messages?limit=50');
     });
 
     it('list() strips # prefix from channel name', async () => {
@@ -1070,7 +1070,7 @@ describe('RelayCast', () => {
       await relay.messages.list('#general');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels/general/messages');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/general/messages');
     });
 
     it('get() calls GET /v1/messages/:id', async () => {
@@ -1081,7 +1081,7 @@ describe('RelayCast', () => {
       await relay.messages.get('msg_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/msg_1');
       expect(init.method).toBe('GET');
     });
 
@@ -1093,7 +1093,7 @@ describe('RelayCast', () => {
       await relay.messages.thread('msg_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/replies');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/msg_1/replies');
       expect(init.method).toBe('GET');
     });
 
@@ -1105,7 +1105,7 @@ describe('RelayCast', () => {
       await relay.messages.thread('msg_1', { limit: 20 });
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/replies?limit=20');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/msg_1/replies?limit=20');
     });
 
     it('reactions() calls GET /v1/messages/:id/reactions', async () => {
@@ -1116,7 +1116,7 @@ describe('RelayCast', () => {
       await relay.messages.reactions('msg_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/messages/msg_1/reactions');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/msg_1/reactions');
       expect(init.method).toBe('GET');
     });
   });

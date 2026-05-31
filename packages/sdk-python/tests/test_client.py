@@ -25,7 +25,7 @@ def test_http_client_constructor_sets_api_key_and_base_url():
 def test_http_client_constructor_default_base_url_is_set_and_stripped():
     c = HttpClient(api_key=API_KEY)
     assert c.api_key == API_KEY
-    assert c.base_url == "https://api.agentrelay.dev"
+    assert c.base_url == "https://gateway.relaycast.dev"
 
 
 @respx.mock

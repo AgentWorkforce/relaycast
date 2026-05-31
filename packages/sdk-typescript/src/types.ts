@@ -160,9 +160,264 @@ export interface UpdateRoutingConfigRequest {
   circuitBreakerCooldownSeconds?: number;
 }
 
+// === Directory (extended) ===
+
+export interface ListDirectoryQuery {
+  status?: string;
+  limit?: number;
+}
+
+export interface UpdateDirectoryAgentRequest {
+  sourceAgentName?: string | null;
+  slug?: string;
+  name?: string;
+  description?: string | null;
+  provider?: string | null;
+  endpointUrl?: string | null;
+  documentationUrl?: string | null;
+  version?: string | null;
+  tags?: string[];
+  capabilities?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  status?: string;
+  skills?: DirectorySkillInput[];
+}
+
+export interface DirectoryRating {
+  id: string;
+  score: number;
+  review: string | null;
+  raterAgentId: string;
+  raterAgentName: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface RateDirectoryAgentRequest {
+  score: number;
+  review?: string;
+}
+
+// === Routing / Skills (extended) ===
+
+export interface RouteFeedbackRequest {
+  agentName: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface RouteFeedbackResult {
+  ok: boolean;
+}
+
+export interface SkillSearchQuery {
+  q?: string;
+  limit?: number;
+}
+
+export interface SkillSearchResult {
+  agentName: string;
+  skillName: string;
+  description: string | null;
+  tags: string[];
+  relevanceScore: number;
+}
+
+// === Actions ===
+
+export interface ActionDefinition {
+  id: string;
+  name: string;
+  description: string;
+  handlerAgent: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  availableTo: string[] | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface RegisterActionRequest {
+  name: string;
+  description: string;
+  handlerAgent: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  availableTo?: string[];
+}
+
+export interface InvokeActionResult {
+  invocationId: string;
+  actionName: string;
+  handlerAgentId: string;
+  input: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+}
+
+export interface CompleteInvocationRequest {
+  output?: Record<string, unknown>;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface ActionInvocation {
+  invocationId: string;
+  actionName: string;
+  callerId: string | null;
+  callerName?: string | null;
+  input?: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  status: string;
+  error: string | null;
+  durationMs: number | null;
+  createdAt?: string;
+  completedAt: string | null;
+}
+
+// === Agent session events ===
+
+export interface SessionEvent {
+  id: string;
+  agentId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  sequence?: number;
+  createdAt: string;
+}
+
+export interface EmitSessionEventRequest {
+  type: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ListSessionEventsQuery {
+  type?: string;
+  limit?: number;
+}
+
+// === Certification ===
+
+export interface CertificationTestResult {
+  name?: string;
+  passed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface CertificationRun {
+  id: string;
+  agentUrl: string;
+  level: number;
+  source?: string;
+  status?: string;
+  passed: boolean;
+  passedTests: number;
+  totalTests: number;
+  monitorEnabled?: boolean;
+  monitorIntervalMinutes?: number | null;
+  lastRunAt?: string | null;
+  startedAt?: string;
+  completedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  tests: CertificationTestResult[];
+}
+
+export interface SubmitCertificationRequest {
+  agentUrl: string;
+  level?: 1 | 2 | 3;
+}
+
+export interface MonitorCertificationRequest {
+  agentUrl: string;
+  level?: 1 | 2 | 3;
+  intervalMinutes?: number;
+}
+
+// === Console / observability ===
+
+export interface ConsoleMessagesQuery {
+  limit?: number;
+  before?: string;
+  agentId?: string;
+  channelId?: string;
+  conversationId?: string;
+  deliveryKind?: 'channel' | 'dm';
+}
+
+export interface ConsoleMessageLog {
+  id: string;
+  messageId: string | null;
+  channelId: string | null;
+  channelName: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  conversationId: string | null;
+  deliveryKind: string;
+  text: string | null;
+  contentType: string | null;
+  metadata: Record<string, unknown>;
+  attachmentCount: number;
+  mentionCount: number;
+  latencyMs: number | null;
+  createdAt: string;
+}
+
+export interface ConsoleWindowQuery {
+  days?: number;
+}
+
+export interface ConsoleAgentStatsQuery {
+  days?: number;
+  limit?: number;
+}
+
+export interface ConsoleOverview {
+  windowDays: number;
+  since: string;
+  totalMessages: number;
+  channelMessages: number;
+  dmMessages: number;
+  uniqueAgents: number;
+  avgLatencyMs: number;
+  maxLatencyMs: number;
+  attachmentCount: number;
+  mentionCount: number;
+}
+
+export interface ConsoleAgentStat {
+  agentId: string;
+  agentName: string;
+  messageCount: number;
+  channelCount: number;
+  dmCount: number;
+  avgLatencyMs: number;
+  lastMessageAt: string | null;
+}
+
+export interface ConsoleCostAgent {
+  agentId: string;
+  agentName: string;
+  messageCount: number;
+  totalCostUsd: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ConsoleCostStats {
+  windowDays: number;
+  totals: {
+    totalCostUsd: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  agents: ConsoleCostAgent[];
+}
+
 export type ActivityItem = Camelize<Raw.ActivityItem>;
 export type Agent = Camelize<Raw.Agent>;
-export type AgentCommand = Camelize<Raw.AgentCommand>;
 export type AgentListQuery = Camelize<Raw.AgentListQuery>;
 export type AgentOfflineEvent = Camelize<Raw.AgentOfflineEvent>;
 export type AgentOnlineEvent = Camelize<Raw.AgentOnlineEvent>;
@@ -175,14 +430,9 @@ export type JoinChannelResponse = Camelize<Raw.JoinChannelResponse>;
 export type InviteChannelResponse = Camelize<Raw.InviteChannelResponse>;
 export type ChannelReadStatus = Camelize<Raw.ChannelReadStatus>;
 export type ChannelUpdatedEvent = Camelize<Raw.ChannelUpdatedEvent>;
-export type CommandInvocation = Camelize<Raw.CommandInvocation>;
-export type CommandInvokeResult = CommandInvocation;
-export type CommandInvokedEvent = Camelize<Raw.CommandInvokedEvent>;
 export type CreateAgentRequest = Camelize<Raw.CreateAgentRequest>;
 export type CreateAgentResponse = Camelize<Raw.CreateAgentResponse>;
 export type CreateChannelRequest = Camelize<Raw.CreateChannelRequest>;
-export type CreateCommandRequest = Camelize<Raw.CreateCommandRequest>;
-export type CreateCommandResponse = Camelize<Raw.CreateCommandResponse>;
 export type CreateGroupDmRequest = Camelize<Raw.CreateGroupDmRequest>;
 export type DmConversation = Camelize<Raw.DmConversation>;
 export type CreateGroupDmResponse = Camelize<Raw.CreateGroupDmResponse>;
@@ -206,7 +456,6 @@ export type GroupDmMessageResponse = Camelize<Raw.GroupDmMessageResponse>;
 export type GroupDmParticipantResponse = Camelize<Raw.GroupDmParticipantResponse>;
 export type GroupDmReceivedEvent = Camelize<Raw.GroupDmReceivedEvent>;
 export type InboxResponse = Camelize<Raw.InboxResponse>;
-export type InvokeCommandRequest = Camelize<Raw.InvokeCommandRequest>;
 export type MemberJoinedEvent = Camelize<Raw.MemberJoinedEvent>;
 export type MemberLeftEvent = Camelize<Raw.MemberLeftEvent>;
 export type ChannelMutedEvent = Camelize<Raw.ChannelMutedEvent>;

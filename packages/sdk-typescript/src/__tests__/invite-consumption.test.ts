@@ -436,7 +436,7 @@ describe('relayfile invite consumption', () => {
       'rk_live_from_invite',
     );
 
-    expect(workspace.info.baseUrl).toBe('https://api.relaycast.dev');
+    expect(workspace.info.baseUrl).toBe('https://gateway.relaycast.dev');
   });
 
   it('surfaces invalid invite credentials as unauthorized without retrying', async () => {

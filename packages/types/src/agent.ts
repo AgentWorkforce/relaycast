@@ -24,11 +24,22 @@ export const AgentSchema = z.object({
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
+export const AgentSkillInputSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+export type AgentSkillInput = z.infer<typeof AgentSkillInputSchema>;
+
 export const CreateAgentRequestSchema = z.object({
   name: z.string(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  skills: z.array(AgentSkillInputSchema).optional(),
+  capabilities: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 

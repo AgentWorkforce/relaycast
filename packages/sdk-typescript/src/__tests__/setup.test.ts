@@ -59,7 +59,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.info).toEqual({
       workspaceId: 'ws_1',
       apiKey: 'rk_live_workspace',
-      baseUrl: 'https://api.relaycast.dev',
+      baseUrl: 'https://gateway.relaycast.dev',
       createdAt: '2026-04-30T12:00:00.000Z',
       name: 'Acme Ops',
     });
@@ -67,7 +67,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.apiKey).toBe('rk_live_workspace');
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/workspaces');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces');
     expect(init.method).toBe('POST');
     expect(init.headers['Content-Type']).toBe('application/json');
     expect(init.headers['X-SDK-Version']).toBeDefined();
@@ -328,7 +328,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.info).toEqual({
       workspaceId: 'ws_join',
       apiKey: 'rk_live_join',
-      baseUrl: 'https://api.relaycast.dev',
+      baseUrl: 'https://gateway.relaycast.dev',
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -357,7 +357,7 @@ describe('RelaycastSetup', () => {
     });
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/workspaces/by-name/Lookup%20Workspace');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces/by-name/Lookup%20Workspace');
     expect(init.method).toBe('GET');
   });
 
@@ -379,16 +379,13 @@ describe('RelaycastSetup', () => {
     await expect(setup.lookupWorkspace('Missing Workspace')).resolves.toBeNull();
   });
 
-  it('local mode uses the local daemon baseUrl, and explicit baseUrl still wins', async () => {
+  it('explicit baseUrl overrides the hosted default', async () => {
     const { RelaycastSetup } = await import('../setup.js');
 
-    const localOnly = await new RelaycastSetup({ local: true }).joinWorkspace('ws_local', 'rk_local');
     const explicit = await new RelaycastSetup({
-      local: true,
       baseUrl: 'http://localhost:9999',
     }).joinWorkspace('ws_override', 'rk_override');
 
-    expect(localOnly.info.baseUrl).toBe('http://127.0.0.1:7528');
     expect(explicit.info.baseUrl).toBe('http://localhost:9999');
   });
 });
@@ -434,7 +431,7 @@ describe('WorkspaceHandle', () => {
     expect(workspace.getAgentToken('Alice')).toBe('at_live_alice');
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/agents');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
     expect(init.method).toBe('POST');
     expect(init.headers.Authorization).toBe('Bearer rk_live_workspace');
     expect(JSON.parse(init.body)).toEqual({

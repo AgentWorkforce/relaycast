@@ -8,7 +8,7 @@ use crate::error::{RelayError, Result};
 use crate::types::ApiResponse;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
@@ -18,7 +18,7 @@ const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
 pub struct ClientOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://api.relaycast.dev).
+    /// The base URL for the API (defaults to https://gateway.relaycast.dev).
     pub base_url: Option<String>,
     /// SDK origin surface metadata.
     pub origin_surface: Option<String>,

@@ -1,12 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { RelayCast, AgentClient } from '@relaycast/sdk';
+import type { RelayCast } from '@relaycast/sdk';
 import { SubscribableEventTypeSchema } from '@relaycast/types';
-import {
-  identityOverrideInputShape,
-  workspaceRoutingInputShape,
-  workspaceRefFromArgs,
-} from '../workspaces.js';
 
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
@@ -17,7 +12,6 @@ export function registerProgrammabilityTools(
     wsRouting?: { workspace_id?: string; workspace_alias?: string },
     asIdentity?: string,
   ) => RelayCast,
-  getAgentClient: (wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => AgentClient,
 ): void {
   // === Inbound Webhooks ===
 
@@ -181,103 +175,6 @@ export function registerProgrammabilityTools(
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { message },
-    };
-  });
-
-  // === Agent Commands ===
-
-  server.registerTool('integration.command.register', {
-    title: 'Register Command',
-    description: 'Register a custom slash command that a specific agent can handle. Other agents in the workspace can invoke this command, and the handler agent receives the invocation with its parameters. Commands enable structured inter-agent workflows, such as /deploy, /review, or /summarize. Re-registering an existing command updates its definition.',
-    inputSchema: {
-      command: z.string().describe('Command name without the leading slash (e.g. "deploy", "review", "summarize")'),
-      description: z.string().describe('Human-readable description of what the command does, shown when listing available commands'),
-      handler_agent: z.string().describe('Name of the registered agent responsible for handling invocations of this command'),
-      parameters: z.array(z.object({
-        name: z.string().describe('Parameter name used as the key when passing structured arguments'),
-        description: z.string().optional().describe('Human-readable description of what this parameter controls'),
-        type: z.enum(['string', 'number', 'boolean']).describe('Data type for input validation: "string", "number", or "boolean"'),
-        required: z.boolean().optional().describe('Whether this parameter must be provided when invoking the command'),
-      })).optional().describe('Array of parameter definitions that the command accepts for structured input'),
-    },
-    outputSchema: jsonResult,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ command, description, handler_agent, parameters }) => {
-    const relay = getRelay();
-    const result = await relay.commands.register({
-      command,
-      description,
-      handlerAgent: handler_agent,
-      parameters,
-    });
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      structuredContent: result as unknown as Record<string, unknown>,
-    };
-  });
-
-  server.registerTool('integration.command.list', {
-    title: 'List Commands',
-    description: 'List all registered slash commands available in the workspace. Returns each command\'s name, description, handler agent, and parameter definitions. Use this to discover what commands other agents have registered and how to invoke them.',
-    inputSchema: {
-      handler_agent: z.string().optional().describe('Filter commands to show only those handled by this specific agent name'),
-    },
-    outputSchema: {
-      commands: z.array(z.object({}).passthrough()).describe('Array of command objects with name, description, handler, and parameters'),
-    },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
-    const relay = getRelay();
-    const commands = await relay.commands.list();
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(commands, null, 2) }],
-      structuredContent: { commands: commands as unknown as Record<string, unknown>[] },
-    };
-  });
-
-  server.registerTool('integration.command.delete', {
-    title: 'Delete Command',
-    description: 'Permanently remove a registered slash command from the workspace. Once deleted, other agents can no longer invoke the command. This action cannot be undone, so verify the command is no longer needed before deleting.',
-    inputSchema: {
-      command: z.string().describe('Name of the command to delete, without the leading slash (e.g. "deploy")'),
-    },
-    outputSchema: {
-      message: z.string().describe('Confirmation message indicating the command was deleted'),
-    },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, async ({ command }) => {
-    const relay = getRelay();
-    await relay.commands.delete(command);
-    const message = `Deleted command /${command}`;
-    return {
-      content: [{ type: 'text' as const, text: message }],
-      structuredContent: { message },
-    };
-  });
-
-  server.registerTool('integration.command.invoke', {
-    title: 'Invoke Command',
-    description: 'Invoke a registered slash command as the current agent within a channel context. The invocation is routed to the command\'s handler agent for processing. You can pass arguments as a raw string or as structured JSON parameters matching the command\'s parameter definitions.',
-    inputSchema: {
-      command: z.string().describe('Name of the command to invoke, without the leading slash (e.g. "deploy", "review")'),
-      channel: z.string().describe('Name of the channel providing context for the command invocation'),
-      args: z.string().optional().describe('Raw argument string passed to the command handler (e.g. "production --force")'),
-      parameters: z.string().optional().describe('JSON-encoded object of structured parameters matching the command\'s parameter definitions'),
-      ...workspaceRoutingInputShape,
-      ...identityOverrideInputShape,
-    },
-    outputSchema: jsonResult,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ command, channel, args, parameters, workspace_id, workspace_alias, as: asIdentity }) => {
-    const client = getAgentClient(
-      workspaceRefFromArgs({ workspace_id, workspace_alias }),
-      asIdentity,
-    );
-    const parsedParams = parameters ? JSON.parse(parameters) : undefined;
-    const result = await client.commands.invoke(command, { channel, args, parameters: parsedParams });
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      structuredContent: result as unknown as Record<string, unknown>,
     };
   });
 

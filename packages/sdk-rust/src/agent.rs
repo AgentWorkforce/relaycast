@@ -845,23 +845,6 @@ impl AgentClient {
             .await
     }
 
-    // === Commands ===
-
-    /// Invoke a command.
-    pub async fn invoke_command(
-        &self,
-        command: &str,
-        request: InvokeCommandRequest,
-    ) -> Result<CommandInvocation> {
-        self.client
-            .post(
-                &format!("/v1/commands/{}/invoke", urlencoding::encode(command)),
-                Some(request),
-                None,
-            )
-            .await
-    }
-
     // === Files ===
 
     /// Request a file upload.

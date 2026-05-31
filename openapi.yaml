@@ -18,10 +18,10 @@ info:
     name: Apache 2.0
 
 servers:
-  - url: https://api.relaycast.dev/v1
-    description: Production server
-  - url: http://localhost:7528/v1
-    description: Local development server
+  - url: https://gateway.relaycast.dev/v1
+    description: Hosted engine gateway (production)
+  - url: http://localhost:8787/v1
+    description: Self-hosted engine (@relaycast/engine)
 
 components:
   securitySchemes:
@@ -2295,12 +2295,15 @@ paths:
         '204':
           description: File deleted
 
-  /commands:
+  /actions:
     post:
-      summary: Register command
-      description: Register a custom slash command
+      summary: Register action
+      description: >
+        Register an action (async agent-to-agent RPC). The handler agent receives invocations and
+        reports results. Replaces the legacy `/commands` API. When called with an agent token,
+        `handler_agent` must be the calling agent.
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
@@ -2311,72 +2314,199 @@ paths:
             schema:
               type: object
               required:
-                - command
+                - name
                 - description
                 - handler_agent
               properties:
-                command:
+                name:
                   type: string
                 description:
                   type: string
                 handler_agent:
                   type: string
-                parameters:
+                input_schema:
+                  type: object
+                output_schema:
+                  type: object
+                available_to:
                   type: array
                   items:
-                    type: object
+                    type: string
       responses:
         '201':
-          description: Command registered
+          description: Action registered
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
-      summary: List commands
-      description: List all registered commands
+      summary: List actions
+      description: List all registered actions
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
       responses:
         '200':
-          description: Command list
+          description: Action list
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
-  /commands/{command}:
-    delete:
-      summary: Delete command
-      description: Delete a registered command
+  /actions/{name}:
+    get:
+      summary: Get action
+      description: Get a single registered action by name
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
       parameters:
-        - name: command
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Action
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    delete:
+      summary: Delete action
+      description: Delete a registered action
+      tags:
+        - Actions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
           in: path
           required: true
           schema:
             type: string
       responses:
         '204':
-          description: Command deleted
+          description: Action deleted
 
-  /commands/{command}/invoke:
+  /actions/{name}/invoke:
     post:
-      summary: Invoke command
-      description: Invoke a registered command in a channel context
+      summary: Invoke action
+      description: Invoke a registered action. Routed to the handler agent for async processing.
       tags:
-        - Commands
+        - Actions
       security:
         - agentToken: []
       parameters:
-        - name: command
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+      responses:
+        '201':
+          description: Action invocation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /actions/{name}/invocations/{id}/complete:
+    post:
+      summary: Complete action invocation
+      description: Handler agent reports the result (or error) of an invocation.
+      tags:
+        - Actions
+      security:
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                output:
+                  type: object
+                error:
+                  type: string
+                duration_ms:
+                  type: integer
+      responses:
+        '200':
+          description: Invocation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /actions/{name}/invocations/{id}:
+    get:
+      summary: Get action invocation
+      description: Get the status and result of an action invocation
+      tags:
+        - Actions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Invocation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/{name}/events:
+    post:
+      summary: Emit agent session event
+      description: >
+        Record a session event for an agent (e.g. `status.active`, `status.idle`). An agent token
+        may only post events for itself; a workspace key may post for any agent.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
           in: path
           required: true
           schema:
@@ -2388,17 +2518,45 @@ paths:
             schema:
               type: object
               required:
-                - channel
+                - type
               properties:
-                channel:
+                type:
                   type: string
-                args:
-                  type: string
-                parameters:
+                payload:
                   type: object
       responses:
         '201':
-          description: Command invocation created
+          description: Event recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List agent session events
+      description: List recorded session events for an agent
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Event list
           content:
             application/json:
               schema:
@@ -2617,9 +2775,9 @@ paths:
   # ── A2A ──────────────────────────────────────────────────────────────
   /.well-known/agent-card.json:
     servers:
-      - url: https://api.relaycast.dev
+      - url: https://gateway.relaycast.dev
         description: Production server (root, no /v1 prefix)
-      - url: http://localhost:7528
+      - url: http://localhost:8787
         description: Local development server
     get:
       summary: Workspace A2A agent card
@@ -2694,9 +2852,9 @@ paths:
 
   /a2a/rpc:
     servers:
-      - url: https://api.relaycast.dev
+      - url: https://gateway.relaycast.dev
         description: Production server (root, no /v1 prefix)
-      - url: http://localhost:7528
+      - url: http://localhost:8787
         description: Local development server
     post:
       summary: JSON-RPC gateway for A2A messages
@@ -2711,9 +2869,9 @@ paths:
 
   /a2a/webhook/{workspace_id}/{name}:
     servers:
-      - url: https://api.relaycast.dev
+      - url: https://gateway.relaycast.dev
         description: Production server (root, no /v1 prefix)
-      - url: http://localhost:7528
+      - url: http://localhost:8787
         description: Local development server
     post:
       summary: Webhook callback for A2A agents
@@ -3064,8 +3222,8 @@ tags:
     description: Message and channel read tracking
   - name: Files
     description: File upload and file metadata APIs
-  - name: Commands
-    description: Slash command registration and invocation
+  - name: Actions
+    description: Action (agent-to-agent RPC) registration, invocation, and completion
   - name: Subscriptions
     description: Outbound event subscription management
   - name: Webhooks

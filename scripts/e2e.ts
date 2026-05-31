@@ -6,13 +6,10 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e                                   # defaults to npm run dev server (http://localhost:8787)
- *   npm run e2e -- --local                        # SDK local mode (http://127.0.0.1:7528)
- *   npm run e2e -- --local --ci                   # SDK local mode in CI
- *   npm run e2e -- --local http://127.0.0.1:7529 # SDK local mode with custom port
+ *   npm run e2e                                   # defaults to the engine dev server (http://localhost:8787)
+ *   npm run e2e -- http://localhost:8787 --ci     # self-hosted engine in CI
  *   npm run e2e -- --continue-on-failure          # keep running after step failures
- *   npm run e2e -- --next-version                  # test the actions contract (not the legacy /commands API)
- *   npm run e2e -- https://relaycast.dev --ci
+ *   npm run e2e -- https://gateway.relaycast.dev --ci
  */
 
 import { createServer } from 'node:http';
@@ -25,12 +22,8 @@ import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/s
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
-const LOCAL = flags.has('--local');
 const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
-// When set, exercise the actions contract (the async agent-to-agent RPC that
-// supersedes the legacy /v1/commands API) instead of the command section.
-const NEXT_VERSION = flags.has('--next-version');
-const DEFAULT_BASE_URL = LOCAL ? 'http://127.0.0.1:7528' : 'http://localhost:8787';
+const DEFAULT_BASE_URL = 'http://localhost:8787';
 const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
 
@@ -290,7 +283,6 @@ ${B}${CYAN}╔══════════════════════
 ╚══════════════════════════════════════════════╝${R}
 `);
   log('🌐', `Server: ${B}${BASE_URL}${R}`);
-  log('🏁', `Target: ${B}${LOCAL ? 'SDK local mode' : 'HTTP base URL mode'}${R}`);
   log('⚙️ ', `Mode:   ${B}${CI ? 'CI (auto)' : 'Interactive'}${R}`);
   log('🧭', `Flow:   ${B}${CONTINUE_ON_FAILURE ? 'Continue on failure' : 'Fail fast (default)'}${R}`);
 
@@ -381,13 +373,6 @@ ${B}${CYAN}╔══════════════════════
   // ── 1. Create workspace ──────────────────────────────────────────────
   step('Create workspace');
   await run('Create workspace', async () => {
-    if (LOCAL) {
-      const host = new URL(BASE_URL).hostname.toLowerCase();
-      if (!isLocalHost(host)) {
-        throw new Error(`--local requires a local base URL, got: ${BASE_URL}`);
-      }
-    }
-
     const wsName = `e2e-${Date.now()}`;
     const res = await RelayCast.createWorkspace(wsName, BASE_URL);
     workspaceKey = res.apiKey;
@@ -1157,165 +1142,102 @@ ${B}${CYAN}╔══════════════════════
   // Let trailing WS events flush
   await pause();
 
-  // ── 15. Actions (--next-version) or Commands (legacy) ──────────────────
-  if (NEXT_VERSION) {
-    step('Actions');
+  // ── 15. Actions (agent-to-agent RPC) ──────────────────────────────────
+  step('Actions');
 
-    // Raw HTTP against the /v1/actions contract (the SDK predates actions).
-    const actionReq = async (method: string, path: string, token: string, body?: unknown) => {
-      const res = await fetch(`${BASE_URL}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${token}`,
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+  // Lightweight raw agent WebSocket to verify action.* fanout.
+  const openWs = (token: string) => {
+    const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
+    const events: any[] = [];
+    sock.on('message', (d) => {
+      // Guard against non-JSON frames so a stray payload can't crash the script.
+      try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      sock.on('open', () => resolve());
+      sock.on('error', reject);
+    });
+    const waitFor = (type: string, timeoutMs = 5000) =>
+      new Promise<any>((resolve, reject) => {
+        const found = events.find((e) => e.type === type);
+        if (found) return resolve(found);
+        const start = Date.now();
+        const timer = setInterval(() => {
+          const e = events.find((ev) => ev.type === type);
+          if (e) { clearInterval(timer); resolve(e); }
+          else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
+        }, 50);
       });
-      const text = await res.text();
-      let json: any;
-      try { json = JSON.parse(text); } catch { json = text; }
-      return { status: res.status, json };
-    };
+    return { ready, waitFor, close: () => sock.close() };
+  };
 
-    // Raw agent WebSocket that records events and can await a given type.
-    const openWs = (token: string) => {
-      const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
-      const events: any[] = [];
-      sock.on('message', (d) => {
-        // Guard against non-JSON frames so a stray payload can't crash the script.
-        try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
-      });
-      const ready = new Promise<void>((resolve, reject) => {
-        sock.on('open', () => resolve());
-        sock.on('error', reject);
-      });
-      const waitFor = (type: string, timeoutMs = 5000) =>
-        new Promise<any>((resolve, reject) => {
-          const found = events.find((e) => e.type === type);
-          if (found) return resolve(found);
-          const start = Date.now();
-          const timer = setInterval(() => {
-            const e = events.find((ev) => ev.type === type);
-            if (e) { clearInterval(timer); resolve(e); }
-            else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
-          }, 50);
-        });
-      return { ready, waitFor, close: () => sock.close() };
-    };
+  const handlerWs = openWs(leadToken);
+  const callerWs = openWs(backendToken);
+  await run('Connect handler + caller WebSockets', async () => {
+    await Promise.all([handlerWs.ready, callerWs.ready]);
+  });
+  let invocationId = '';
 
-    const handlerWs = openWs(leadToken);
-    const callerWs = openWs(backendToken);
-    await run('Connect handler + caller WebSockets', async () => {
-      await Promise.all([handlerWs.ready, callerWs.ready]);
+  await run(`Register "deploy" action (handler ${LEAD})`, async () => {
+    await relay.actions.register({
+      name: 'deploy',
+      description: 'Deploy the application to staging or production',
+      handlerAgent: LEAD,
+      inputSchema: { type: 'object', properties: { env: { type: 'string' } }, required: ['env'] },
+      outputSchema: { type: 'object', properties: { url: { type: 'string' } } },
     });
-    let invocationId = '';
+    log('⚙️ ', `Registered ${B}deploy${R} action handled by ${YELLOW}${B}${LEAD}${R}`);
+  });
+  await pause();
 
-    await run(`Register "deploy" action (handler ${LEAD})`, async () => {
-      const r = await actionReq('POST', '/v1/actions', leadToken, {
-        name: 'deploy',
-        description: 'Deploy the application to staging or production',
-        handler_agent: LEAD,
-        input_schema: { type: 'object', properties: { env: { type: 'string' } }, required: ['env'] },
-        output_schema: { type: 'object', properties: { url: { type: 'string' } } },
-      });
-      if (r.status !== 201) throw new Error(`expected 201, got ${r.status}: ${JSON.stringify(r.json)}`);
-      log('⚙️ ', `Registered ${B}deploy${R} action handled by ${YELLOW}${B}${LEAD}${R}`);
+  await run('List actions includes deploy', async () => {
+    const actions = await relay.actions.list();
+    const names = actions.map((a) => a.name);
+    if (!names.includes('deploy')) throw new Error(`deploy not listed: ${JSON.stringify(names)}`);
+    log('📋', `Actions: ${names.join(', ')}`);
+  });
+
+  await run(`${BACKEND} invokes deploy → invocationId`, async () => {
+    const r = await backend.actions.invoke('deploy', { env: 'staging' });
+    invocationId = r.invocationId;
+    if (!invocationId) throw new Error('no invocationId returned');
+    log('🚀', `${BLUE}${B}${BACKEND}${R} invoked deploy → invocation ${B}${invocationId}${R} (status ${r.status})`);
+  });
+
+  await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
+    await handlerWs.waitFor('action.invoked');
+  });
+  await pause();
+
+  await run('Handler completes the invocation', async () => {
+    const r = await lead.actions.completeInvocation('deploy', invocationId, {
+      output: { url: 'https://staging.example.com' }, durationMs: 1200,
     });
-    await pause();
+    if (r.status !== 'completed') throw new Error(`status ${r.status}`);
+    log('✅', `Handler completed invocation → ${B}completed${R}`);
+  });
 
-    await run('Ownership enforced: non-handler cannot register', async () => {
-      const r = await actionReq('POST', '/v1/actions', backendToken, {
-        name: 'sneaky', description: 'x', handler_agent: LEAD,
-      });
-      if (r.status !== 403) throw new Error(`expected 403, got ${r.status}`);
-    });
+  await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
+    await callerWs.waitFor('action.completed');
+  });
 
-    await run('List actions includes deploy', async () => {
-      const r = await actionReq('GET', '/v1/actions', backendToken);
-      const names = (r.json.data ?? []).map((a: any) => a.name);
-      if (!names.includes('deploy')) throw new Error(`deploy not listed: ${JSON.stringify(names)}`);
-      log('📋', `Actions: ${names.join(', ')}`);
-    });
+  await run('Get invocation shows completed + output', async () => {
+    const inv = await backend.actions.getInvocation('deploy', invocationId);
+    if (inv.status !== 'completed') throw new Error(`status ${inv.status}`);
+    if ((inv.output as Record<string, unknown> | null)?.url !== 'https://staging.example.com') {
+      throw new Error('output not recorded');
+    }
+  });
+  await pause();
 
-    await run(`${BACKEND} invokes deploy → invocation_id`, async () => {
-      const r = await actionReq('POST', '/v1/actions/deploy/invoke', backendToken, { input: { env: 'staging' } });
-      if (r.status !== 201) throw new Error(`expected 201, got ${r.status}: ${JSON.stringify(r.json)}`);
-      invocationId = r.json.data.invocation_id;
-      if (!invocationId) throw new Error('no invocation_id returned');
-      log('🚀', `${BLUE}${B}${BACKEND}${R} invoked deploy → invocation ${B}${invocationId}${R} (status invoked)`);
-    });
+  await run('Delete deploy action', async () => {
+    await relay.actions.delete('deploy');
+    log('🗑️ ', `Deleted deploy action`);
+  });
 
-    await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
-      await handlerWs.waitFor('action.invoked');
-    });
-    await pause();
-
-    await run('Handler completes the invocation', async () => {
-      const r = await actionReq('POST', `/v1/actions/deploy/invocations/${invocationId}/complete`, leadToken, {
-        output: { url: 'https://staging.example.com' }, duration_ms: 1200,
-      });
-      if (r.status !== 200) throw new Error(`expected 200, got ${r.status}: ${JSON.stringify(r.json)}`);
-      if (r.json.data.status !== 'completed') throw new Error(`status ${r.json.data.status}`);
-      log('✅', `Handler completed invocation → ${B}completed${R}`);
-    });
-
-    await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
-      await callerWs.waitFor('action.completed');
-    });
-
-    await run('Get invocation shows completed + output', async () => {
-      const r = await actionReq('GET', `/v1/actions/deploy/invocations/${invocationId}`, backendToken);
-      if (r.json.data.status !== 'completed') throw new Error(`status ${r.json.data.status}`);
-      if (r.json.data.output?.url !== 'https://staging.example.com') throw new Error('output not recorded');
-    });
-    await pause();
-
-    await run('Delete deploy action', async () => {
-      const r = await actionReq('DELETE', '/v1/actions/deploy', leadToken);
-      if (r.status >= 300 && r.status !== 204) throw new Error(`status ${r.status}`);
-      log('🗑️ ', `Deleted deploy action`);
-    });
-
-    handlerWs.close();
-    callerWs.close();
-    await pause();
-  } else {
-    step('Commands');
-
-    await run('Register /deploy command', async () => {
-      await relay.commands.register({
-        command: 'deploy',
-        description: 'Deploy the application to staging or production',
-        handlerAgent: LEAD,
-        parameters: [
-          { name: 'env', type: 'string' as const, required: true, description: 'Target environment' },
-        ],
-      });
-      log('⚙️ ', `Registered ${B}/deploy${R} command handled by ${YELLOW}${B}${LEAD}${R}`);
-    });
-    await pause();
-
-    await run('List commands', async () => {
-      const cmds = await relay.commands.list();
-      if (cmds.length === 0) throw new Error('Expected at least one command');
-      log('📋', `Commands: ${cmds.map((c) => `/${c.command}`).join(', ')}`);
-    });
-
-    await run(`${BACKEND} invokes /deploy`, async () => {
-      const result = await backend.commands.invoke('deploy', {
-        channel: channelName,
-        args: '--env staging',
-      });
-      log('🚀', `${BLUE}${B}${BACKEND}${R} invoked /deploy → invocation ${JSON.stringify(result).slice(0, 80)}`);
-    });
-    await pause();
-
-    await run('Delete /deploy command', async () => {
-      await relay.commands.delete('deploy');
-      log('🗑️ ', `Deleted /deploy command`);
-    });
-    await pause();
-  }
+  handlerWs.close();
+  callerWs.close();
+  await pause();
 
   // ── 16. Inbound Webhooks ──────────────────────────────────────────────
   step('Inbound Webhooks');

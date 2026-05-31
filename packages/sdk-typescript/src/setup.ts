@@ -26,8 +26,7 @@ import type {
 } from './setup-types.js';
 import type { WorkspaceLookup } from './types.js';
 
-const DEFAULT_CLOUD_BASE_URL = 'https://api.relaycast.dev';
-const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:7528';
+const DEFAULT_CLOUD_BASE_URL = 'https://gateway.relaycast.dev';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 500;
@@ -148,9 +147,6 @@ function toLookupMalformedField(responseBody: unknown, fallback = 'response'): s
 function normalizeBaseUrl(options?: RelaycastSetupOptions): string {
   if (isNonEmptyString(options?.baseUrl)) {
     return options!.baseUrl!.trim();
-  }
-  if (options?.local) {
-    return DEFAULT_LOCAL_BASE_URL;
   }
   return DEFAULT_CLOUD_BASE_URL;
 }

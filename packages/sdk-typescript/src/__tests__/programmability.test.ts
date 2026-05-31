@@ -42,7 +42,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.create({ name: 'GitHub', channel: 'dev' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/webhooks');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'GitHub', channel: 'dev' }));
     });
@@ -55,7 +55,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/webhooks');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
       expect(init.method).toBe('GET');
     });
 
@@ -67,7 +67,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.delete('wh_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/webhooks/wh_1');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks/wh_1');
       expect(init.method).toBe('DELETE');
     });
 
@@ -81,7 +81,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.trigger('wh_1', { text: 'alert', source: 'github' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/hooks/wh_1');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/hooks/wh_1');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ text: 'alert', source: 'github' }));
     });
@@ -103,7 +103,7 @@ describe('Programmability SDK', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/subscriptions');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({
         events: ['message.created'],
@@ -119,7 +119,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/subscriptions');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions');
       expect(init.method).toBe('GET');
     });
 
@@ -133,7 +133,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.get('sub_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/subscriptions/sub_1');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions/sub_1');
       expect(init.method).toBe('GET');
     });
 
@@ -145,84 +145,194 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.delete('sub_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/subscriptions/sub_1');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions/sub_1');
       expect(init.method).toBe('DELETE');
     });
   });
 
-  // === Commands (workspace-level on Relay, invoke on AgentClient) ===
+  // === Actions (workspace-level on Relay, invoke on AgentClient) ===
 
-  describe('commands', () => {
-    it('register() posts to /v1/commands', async () => {
+  describe('actions', () => {
+    it('register() posts to /v1/actions', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ id: 'cmd_1', command: 'deploy', description: 'Deploy app' }),
+        mockResponse({ id: 'act_1', name: 'deploy', description: 'Deploy app', handler_agent: 'DeployBot' }),
       );
-      await relay.commands.register({
-        command: 'deploy',
+      await relay.actions.register({
+        name: 'deploy',
         description: 'Deploy the app',
         handlerAgent: 'DeployBot',
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/commands');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/actions');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({
-        command: 'deploy',
+        name: 'deploy',
         description: 'Deploy the app',
         handler_agent: 'DeployBot',
       });
     });
 
-    it('list() gets /v1/commands', async () => {
+    it('list() gets /v1/actions', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mockResponse([]));
-      await relay.commands.list();
+      await relay.actions.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/commands');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/actions');
       expect(init.method).toBe('GET');
     });
 
-    it('delete() deletes /v1/commands/:command (handles 204)', async () => {
+    it('delete() deletes /v1/actions/:name (handles 204)', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() => mock204());
-      await relay.commands.delete('deploy');
+      await relay.actions.delete('deploy');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/commands/deploy');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy');
       expect(init.method).toBe('DELETE');
     });
 
-    it('invoke() posts to /v1/commands/:command/invoke (agent-scoped)', async () => {
+    it('invoke() posts to /v1/actions/:name/invoke (agent-scoped)', async () => {
       const me = new AgentClient(new HttpClient({ apiKey: 'at_live_agent123' }));
 
       mockFetch.mockImplementation(() =>
         mockResponse({
-          id: 'inv_1',
-          command: 'deploy',
-          channel: 'ops',
-          invoked_by: 'agent_1',
+          invocation_id: 'inv_1',
+          action_name: 'deploy',
           handler_agent_id: 'agent_handler_1',
-          args: '--force',
-          parameters: null,
-          message_id: 'msg_1',
+          input: { force: true },
+          status: 'invoked',
           created_at: '2025-01-01',
         }),
       );
-      await me.commands.invoke('deploy', { channel: 'ops', args: '--force' });
+      await me.actions.invoke('deploy', { force: true });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/commands/deploy/invoke');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy/invoke');
       expect(init.method).toBe('POST');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
-      expect(JSON.parse(init.body)).toEqual({ channel: 'ops', args: '--force' });
+      expect(JSON.parse(init.body)).toEqual({ input: { force: true } });
+    });
+  });
+
+  // === New engine bindings (actions invocations, agent events, certify, directory, console) ===
+
+  describe('engine bindings', () => {
+    it('actions.completeInvocation() posts to the invocation complete route', async () => {
+      const me = new AgentClient(new HttpClient({ apiKey: 'at_live_agent123' }));
+      mockFetch.mockImplementation(() => mockResponse({ invocation_id: 'inv_1', action_name: 'deploy', status: 'completed' }));
+      await me.actions.completeInvocation('deploy', 'inv_1', { output: { ok: true }, durationMs: 12 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy/invocations/inv_1/complete');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ output: { ok: true }, duration_ms: 12 });
+    });
+
+    it('agents.events.emit() posts a session event', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'evt_1', agent_id: 'agent_1', type: 'status.active', payload: {}, created_at: '2025-01-01' }, true, 201));
+      await relay.agents.events.emit('Worker', { type: 'status.active' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Worker/events');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ type: 'status.active' });
+    });
+
+    it('agents.events.list() gets session events with filters', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.agents.events.list('Worker', { type: 'status.active', limit: 50 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Worker/events?type=status.active&limit=50');
+      expect(init.method).toBe('GET');
+    });
+
+    it('certify.submit() posts to /v1/certify', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'cert_1', agent_url: 'https://a.dev', level: 1, passed: true, passed_tests: 3, total_tests: 3, tests: [] }, true, 201));
+      await relay.certify.submit({ agentUrl: 'https://a.dev', level: 1 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/certify');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ agent_url: 'https://a.dev', level: 1 });
+    });
+
+    it('certify.badgeUrl() builds the public badge URL', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      expect(relay.certify.badgeUrl('cert_1')).toBe('https://gateway.relaycast.dev/v1/certify/cert_1/badge.svg');
+    });
+
+    it('listDirectory() gets /v1/directory/agents with status filter', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.listDirectory({ status: 'active', limit: 10 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/agents?status=active&limit=10');
+      expect(init.method).toBe('GET');
+    });
+
+    it('rateDirectoryAgent() posts a rating', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'drate_1', score: 5, review: 'great', rater_agent_id: 'a1', rater_agent_name: 'A', created_at: '2025-01-01', updated_at: '2025-01-01' }, true, 201));
+      await relay.rateDirectoryAgent('my-agent', { score: 5, review: 'great' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/agents/my-agent/ratings');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ score: 5, review: 'great' });
+    });
+
+    it('searchSkills() gets /v1/skills/search', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.searchSkills({ q: 'deploy', limit: 5 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/skills/search?q=deploy&limit=5');
+      expect(init.method).toBe('GET');
+    });
+
+    it('routeFeedback() posts to /v1/route/feedback', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ ok: true }));
+      await relay.routeFeedback({ agentName: 'Worker', success: true });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/route/feedback');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ agent_name: 'Worker', success: true });
+    });
+
+    it('console.stats() gets /v1/console/stats with window', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ window_days: 7 }));
+      await relay.console.stats({ days: 7 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/console/stats?days=7');
+      expect(init.method).toBe('GET');
     });
   });
 
@@ -246,7 +356,7 @@ describe('Programmability SDK', () => {
       await me.send('#ops', 'Deploy complete', { blocks });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/channels/ops/messages');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/ops/messages');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
       expect(body.text).toBe('Deploy complete');
@@ -282,7 +392,7 @@ describe('Programmability SDK', () => {
       await me.reply('m_1', 'Please review', { blocks });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://api.relaycast.dev/v1/messages/m_1/replies');
+      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/m_1/replies');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
       expect(body.text).toBe('Please review');

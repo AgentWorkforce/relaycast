@@ -24,7 +24,7 @@ describe('Relay workspace methods', () => {
     await relay.activity();
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/activity');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/activity');
   });
 
   it('activity(5) calls GET /v1/activity?limit=5', async () => {
@@ -35,7 +35,7 @@ describe('Relay workspace methods', () => {
     await relay.activity(5);
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/activity?limit=5');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/activity?limit=5');
   });
 
   it('allDmConversations() calls GET /v1/dm/conversations/all', async () => {
@@ -46,7 +46,7 @@ describe('Relay workspace methods', () => {
     await relay.allDmConversations();
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations/all');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/dm/conversations/all');
     expect(init.method).toBe('GET');
   });
 
@@ -64,7 +64,7 @@ describe('Relay workspace methods', () => {
     const result = await relay.dmMessages('c_1', { limit: 10, before: 'msg_9' });
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/dm/conversations/c_1/messages?limit=10&before=msg_9');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/dm/conversations/c_1/messages?limit=10&before=msg_9');
     expect(init.method).toBe('GET');
     expect(result[0]).toEqual({
       id: 'msg_1',
@@ -85,7 +85,7 @@ describe('Relay workspace methods', () => {
     const result = await relay.agents.rotateToken('TestBot');
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/agents/TestBot/rotate-token');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/agents/TestBot/rotate-token');
     expect(init.method).toBe('POST');
     expect(result).toEqual({ token: 'at_live_newtoken' });
   });
@@ -100,6 +100,6 @@ describe('Relay workspace methods', () => {
     await relay.agents.rotateToken('a/b');
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://api.relaycast.dev/v1/agents/a%2Fb/rotate-token');
+    expect(url).toBe('https://gateway.relaycast.dev/v1/agents/a%2Fb/rotate-token');
   });
 });

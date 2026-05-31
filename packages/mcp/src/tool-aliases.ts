@@ -35,10 +35,6 @@ export const LEGACY_TOOL_NAME_ALIASES = {
   list_subscriptions: 'integration.subscription.list',
   get_subscription: 'integration.subscription.get',
   delete_subscription: 'integration.subscription.delete',
-  register_command: 'integration.command.register',
-  list_commands: 'integration.command.list',
-  delete_command: 'integration.command.delete',
-  invoke_command: 'integration.command.invoke',
   add_agent: 'agent.add',
   remove_agent: 'agent.remove',
   // v0.5 two-level aliases
@@ -60,10 +56,6 @@ export const LEGACY_TOOL_NAME_ALIASES = {
   'subscription.list': 'integration.subscription.list',
   'subscription.get': 'integration.subscription.get',
   'subscription.delete': 'integration.subscription.delete',
-  'command.register': 'integration.command.register',
-  'command.list': 'integration.command.list',
-  'command.delete': 'integration.command.delete',
-  'command.invoke': 'integration.command.invoke',
 } as const satisfies Record<string, string>;
 
 export function resolveToolName(toolName: string): string {

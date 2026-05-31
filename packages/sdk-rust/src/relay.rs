@@ -4,148 +4,11 @@ use crate::agent::AgentClient;
 use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
-use url::Url;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
-const DEFAULT_LOCAL_BASE_URL: &str = "http://127.0.0.1:7528";
-
-#[derive(Debug)]
-struct ResolvedLocalRuntime {
-    api_key: String,
-    base_url: String,
-}
-
-fn strip_trailing_slash(url: &str) -> String {
-    url.trim_end_matches('/').to_string()
-}
-
-fn io_err(context: &str, err: impl std::fmt::Display) -> RelayError {
-    RelayError::InvalidResponse(format!("{context}: {err}"))
-}
-
-fn resolve_local_binary_path() -> Result<PathBuf> {
-    let env_bin = env::var("RELAYCAST_LOCAL_BIN").unwrap_or_default();
-    if !env_bin.trim().is_empty() {
-        let path = PathBuf::from(env_bin.trim());
-        if !path.exists() {
-            return Err(RelayError::InvalidResponse(format!(
-                "RELAYCAST_LOCAL_BIN does not exist: {}",
-                path.display()
-            )));
-        }
-        return Ok(path);
-    }
-
-    let asset = match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "aarch64") => "local-darwin-arm64",
-        ("macos", "x86_64") => "local-darwin-x64",
-        ("linux", "x86_64") => "local-linux-x64",
-        ("windows", "x86_64") => "local-windows-x64.exe",
-        (os, arch) => {
-            return Err(RelayError::InvalidResponse(format!(
-                "Unsupported platform for local relaycast runtime: {os}/{arch}"
-            )))
-        }
-    };
-
-    // Allow binaries shipped with the crate package.
-    let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("bin")
-        .join(asset);
-    if bundled.exists() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o755);
-            let _ = fs::set_permissions(&bundled, perms);
-        }
-        return Ok(bundled);
-    }
-
-    // Fall back to PATH lookup (`local` / `local.exe`).
-    if cfg!(windows) {
-        Ok(PathBuf::from("local.exe"))
-    } else {
-        Ok(PathBuf::from("local"))
-    }
-}
-
-fn is_local_healthy(base_url: &str) -> bool {
-    let health_url = format!("{}/health", strip_trailing_slash(base_url));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(600))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
-
-    match client.get(health_url).send() {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
-    }
-}
-
-fn wait_for_local_health(base_url: &str, attempts: usize, sleep: Duration) -> bool {
-    for _ in 0..attempts {
-        if is_local_healthy(base_url) {
-            return true;
-        }
-        thread::sleep(sleep);
-    }
-    false
-}
-
-fn ensure_local_runtime(
-    base_url_override: Option<&str>,
-    api_key_override: Option<&str>,
-) -> Result<ResolvedLocalRuntime> {
-    let env_base_url = env::var("RELAYCAST_LOCAL_BASE_URL").ok();
-    let base_url = strip_trailing_slash(
-        base_url_override
-            .or(env_base_url.as_deref())
-            .unwrap_or(DEFAULT_LOCAL_BASE_URL),
-    );
-    let parsed = Url::parse(&base_url)?;
-    let host = parsed.host_str().unwrap_or("127.0.0.1").to_string();
-    let port = parsed.port().unwrap_or(7528);
-
-    if !is_local_healthy(&base_url) {
-        let binary = resolve_local_binary_path()?;
-        Command::new(&binary)
-            .arg("--host")
-            .arg(&host)
-            .arg("--port")
-            .arg(port.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| io_err("failed starting local relaycast daemon", e))?;
-
-        if !wait_for_local_health(&base_url, 40, Duration::from_millis(100)) {
-            return Err(RelayError::InvalidResponse(format!(
-                "failed to start local relaycast daemon at {base_url}"
-            )));
-        }
-    }
-
-    let api_key = api_key_override
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| RelayError::InvalidResponse("RelayCast api_key is required".to_string()))?;
-
-    Ok(ResolvedLocalRuntime { api_key, base_url })
-}
 
 fn strip_hash(channel: &str) -> &str {
     channel.strip_prefix('#').unwrap_or(channel)
@@ -156,10 +19,11 @@ fn strip_hash(channel: &str) -> &str {
 pub struct RelayCastOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://api.relaycast.dev).
+    /// The base URL for the API (defaults to https://gateway.relaycast.dev).
+    ///
+    /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
+    /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
-    /// Enable local mode (`local` daemon) auto-bootstrap.
-    pub local: bool,
 }
 
 impl RelayCastOptions {
@@ -168,28 +32,12 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
-            local: false,
-        }
-    }
-
-    /// Create options for local mode.
-    pub fn local(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: Some(DEFAULT_LOCAL_BASE_URL.to_string()),
-            local: true,
         }
     }
 
     /// Set a custom base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
-        self
-    }
-
-    /// Enable or disable local mode.
-    pub fn with_local(mut self, local: bool) -> Self {
-        self.local = local;
         self
     }
 }
@@ -203,31 +51,18 @@ pub struct RelayCast {
 impl RelayCast {
     /// Create a new RelayCast client with the given options.
     pub fn new(options: RelayCastOptions) -> Result<Self> {
-        let resolved = if options.local {
-            ensure_local_runtime(
-                options.base_url.as_deref(),
-                if options.api_key.trim().is_empty() {
-                    None
-                } else {
-                    Some(options.api_key.as_str())
-                },
-            )?
-        } else {
-            if options.api_key.trim().is_empty() {
-                return Err(RelayError::InvalidResponse(
-                    "RelayCast api_key is required".to_string(),
-                ));
-            }
-            ResolvedLocalRuntime {
-                api_key: options.api_key,
-                base_url: options
-                    .base_url
-                    .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            }
-        };
+        if options.api_key.trim().is_empty() {
+            return Err(RelayError::InvalidResponse(
+                "RelayCast api_key is required".to_string(),
+            ));
+        }
 
-        let mut client_options = ClientOptions::new(resolved.api_key);
-        client_options = client_options.with_base_url(resolved.base_url);
+        let base_url = options
+            .base_url
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+
+        let mut client_options = ClientOptions::new(options.api_key);
+        client_options = client_options.with_base_url(base_url);
         let client = HttpClient::new(client_options)?;
         Ok(Self { client })
     }
@@ -644,31 +479,6 @@ impl RelayCast {
         self.client
             .delete(
                 &format!("/v1/subscriptions/{}", urlencoding::encode(id)),
-                None,
-            )
-            .await
-    }
-
-    // === Commands ===
-
-    /// Register a command.
-    pub async fn register_command(
-        &self,
-        request: CreateCommandRequest,
-    ) -> Result<CreateCommandResponse> {
-        self.client.post("/v1/commands", Some(request), None).await
-    }
-
-    /// List commands.
-    pub async fn list_commands(&self) -> Result<Vec<AgentCommand>> {
-        self.client.get("/v1/commands", None, None).await
-    }
-
-    /// Delete a command.
-    pub async fn delete_command(&self, command: &str) -> Result<()> {
-        self.client
-            .delete(
-                &format!("/v1/commands/{}", urlencoding::encode(command)),
                 None,
             )
             .await

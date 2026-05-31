@@ -80,7 +80,7 @@ pub struct BootstrapConfig {
     pub preferred_name: Option<String>,
     /// Agent type (e.g. "agent", "human", "system"). Defaults to "agent".
     pub agent_type: Option<String>,
-    /// Custom base URL. Defaults to https://api.relaycast.dev.
+    /// Custom base URL. Defaults to https://gateway.relaycast.dev.
     pub base_url: Option<String>,
     /// Workspace API key from environment or config.
     /// If not set, a new workspace is created.

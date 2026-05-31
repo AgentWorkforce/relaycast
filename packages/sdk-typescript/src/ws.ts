@@ -88,7 +88,7 @@ export class WsClient {
     this.circuitBreakerMaxAttempts = Number.isFinite(options.circuitBreakerMaxAttempts)
       ? Math.max(1, Math.floor(options.circuitBreakerMaxAttempts!))
       : 30;
-    const base = (options.baseUrl ?? 'https://api.relaycast.dev').replace(/\/+$/, '');
+    const base = (options.baseUrl ?? 'https://gateway.relaycast.dev').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
     this.originSurface = origin.surface;
     this.originClient = origin.client;

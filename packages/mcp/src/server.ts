@@ -439,7 +439,7 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
   registerChannelTools(mcpServer, getAgentClient);
   registerMessagingTools(mcpServer, getAgentClient);
   registerFeatureTools(mcpServer, getAgentClient);
-  registerProgrammabilityTools(mcpServer, getRelay, getAgentClient);
+  registerProgrammabilityTools(mcpServer, getRelay);
 
   // Register system prompt
   registerSystemPrompt(mcpServer);
