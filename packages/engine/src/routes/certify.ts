@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -53,7 +54,7 @@ certifyRoutes.post('/certify', requireAuth, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -73,7 +74,7 @@ certifyRoutes.get('/certify/:id', requireAuth, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -132,6 +133,6 @@ certifyRoutes.post('/certify/monitor', requireAuth, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });

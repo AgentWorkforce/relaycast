@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
@@ -87,7 +88,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, status as any);
+      }, status as ContentfulStatusCode);
     }
   },
 );
@@ -113,7 +114,7 @@ channelRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -144,7 +145,7 @@ channelRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -205,7 +206,7 @@ channelRoutes.patch(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -268,7 +269,7 @@ channelRoutes.patch(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -322,7 +323,7 @@ channelRoutes.delete(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -378,7 +379,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -446,7 +447,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -472,7 +473,7 @@ channelRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -550,7 +551,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -606,7 +607,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -662,7 +663,7 @@ channelRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );

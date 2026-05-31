@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
@@ -68,7 +69,7 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -84,7 +85,7 @@ inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) 
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -113,7 +114,7 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -172,6 +173,6 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });

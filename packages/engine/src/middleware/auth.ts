@@ -4,7 +4,7 @@ import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
 
-// Re-exported for the WS upgrade + MCP key handling, which look tokens up
+// Re-exported for the WS upgrade, which looks tokens up
 // directly. The active provider's `hashToken` is preferred at those call sites.
 export { hashToken } from '../auth/index.js';
 

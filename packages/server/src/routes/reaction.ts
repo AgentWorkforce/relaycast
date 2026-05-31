@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
@@ -88,7 +89,7 @@ reactionRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -168,7 +169,7 @@ reactionRoutes.delete(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -200,7 +201,7 @@ reactionRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );

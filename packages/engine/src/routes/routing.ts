@@ -1,4 +1,5 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../env.js';
@@ -49,12 +50,12 @@ const syncAgentSkillsSchema = z.object({
   skills: z.array(skillSchema).optional(),
 });
 
-function handleError(c: any, err: unknown) {
+function handleError(c: Context<AppEnv>, err: unknown) {
   const error = err as Error & { code?: string; status?: number };
   return c.json({
     ok: false,
     error: { code: error.code || 'internal_error', message: error.message },
-  }, (error.status || 500) as any);
+  }, (error.status || 500) as ContentfulStatusCode);
 }
 
 routingRoutes.post('/route', requireAuth, rateLimit, async (c) => {

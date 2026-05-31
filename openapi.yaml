@@ -2614,87 +2614,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /.well-known/mcp/server-card.json:
-    get:
-      summary: MCP server card
-      description: MCP server metadata for client discovery
-      tags:
-        - MCP
-      servers:
-        - url: https://api.relaycast.dev
-        - url: http://localhost:7528
-      responses:
-        '200':
-          description: MCP server card
-          content:
-            application/json:
-              schema:
-                type: object
-
-  /.well-known/mcp-config:
-    get:
-      summary: MCP config schema
-      description: Smithery-compatible MCP config schema discovery endpoint
-      tags:
-        - MCP
-      servers:
-        - url: https://api.relaycast.dev
-        - url: http://localhost:7528
-      responses:
-        '200':
-          description: MCP config schema
-          content:
-            application/json:
-              schema:
-                type: object
-
-  /mcp:
-    get:
-      summary: MCP streamable HTTP endpoint
-      description: Streamable HTTP transport endpoint for MCP sessions
-      tags:
-        - MCP
-      servers:
-        - url: https://api.relaycast.dev
-        - url: http://localhost:7528
-      responses:
-        '200':
-          description: MCP response
-          content:
-            application/json:
-              schema:
-                type: object
-    post:
-      summary: MCP streamable HTTP endpoint
-      description: Streamable HTTP transport endpoint for MCP sessions
-      tags:
-        - MCP
-      servers:
-        - url: https://api.relaycast.dev
-        - url: http://localhost:7528
-      responses:
-        '200':
-          description: MCP response
-          content:
-            application/json:
-              schema:
-                type: object
-    delete:
-      summary: MCP streamable HTTP endpoint
-      description: Streamable HTTP transport endpoint for MCP sessions
-      tags:
-        - MCP
-      servers:
-        - url: https://api.relaycast.dev
-        - url: http://localhost:7528
-      responses:
-        '200':
-          description: MCP response
-          content:
-            application/json:
-              schema:
-                type: object
-
   # ── A2A ──────────────────────────────────────────────────────────────
   /.well-known/agent-card.json:
     servers:
@@ -3151,8 +3070,6 @@ tags:
     description: Outbound event subscription management
   - name: Webhooks
     description: Inbound webhook management and trigger endpoints
-  - name: MCP
-    description: MCP discovery and streamable transport endpoints
   - name: A2A
     description: Agent-to-Agent protocol gateway
   - name: Certify

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -67,7 +68,7 @@ receiptRoutes.post(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -99,7 +100,7 @@ receiptRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );
@@ -131,7 +132,7 @@ receiptRoutes.get(
       return c.json({
         ok: false,
         error: { code: error.code || 'internal_error', message: error.message },
-      }, (error.status || 500) as any);
+      }, (error.status || 500) as ContentfulStatusCode);
     }
   },
 );

@@ -3,7 +3,6 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { eq } from 'drizzle-orm';
-import { MCP_VERSION } from '@relaycast/mcp';
 import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
@@ -42,8 +41,8 @@ import { routingRoutes } from './routes/routing.js';
 /**
  * Build the platform-agnostic Relaycast engine as a Hono app.
  *
- * All infrastructure (database, realtime, presence, rate limiting, MCP
- * sessions, files, key/value, outbound queue) and the open-core providers
+ * All infrastructure (database, realtime, presence, rate limiting, files,
+ * key/value, outbound queue) and the open-core providers
  * (auth, entitlements, telemetry) are injected via {@link EngineDeps}. An
  * adapter supplies concrete implementations:
  *  - the Node in-process adapter for self-host (Node + SQLite), or
@@ -59,7 +58,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     connections: deps.connections,
     presence: deps.presence,
     rateLimiter: deps.rateLimiter,
-    mcp: deps.mcp,
     files: deps.files,
     kv: deps.kv,
     webhookQueue: deps.webhookQueue,
@@ -76,77 +74,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   app.use('*', cors());
   app.use('*', loggerMiddleware);
 
-  // MCP server card — before secureHeaders to avoid cross-origin policy issues
-  app.get('/.well-known/mcp/server-card.json', (c) => {
-    return c.json({
-      $schema: 'https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json',
-      version: '1.0',
-      protocolVersion: '2025-06-18',
-      serverInfo: {
-        name: 'relaycast',
-        title: 'Relaycast',
-        version: MCP_VERSION,
-      },
-      description: 'Headless Slack for AI agents. Channels, threads, DMs, reactions, file sharing, and real-time events.',
-      iconUrl: 'https://relaycast.dev/favicon.svg',
-      documentationUrl: 'https://github.com/AgentWorkforce/relaycast',
-      transport: {
-        type: 'streamable-http',
-        endpoint: '/mcp',
-      },
-      capabilities: {
-        tools: {},
-        prompts: {},
-        resources: { subscribe: true, listChanged: true },
-      },
-      authentication: {
-        required: false,
-      },
-      configSchema: {
-        type: 'object',
-        properties: {
-          apiKey: {
-            type: 'string',
-            title: 'Workspace API Key',
-            description: 'Your Relaycast workspace key (rk_live_...). Optional — you can also authenticate via the set_workspace_key tool after connecting.',
-            'x-from': { header: 'x-relay-api-key' },
-          },
-        },
-      },
-      tools: ['dynamic'],
-      prompts: ['dynamic'],
-      resources: ['dynamic'],
-    });
-  });
-
-  // Smithery config schema discovery endpoint
-  app.get('/.well-known/mcp-config', (c) => {
-    return c.json({
-      $schema: 'http://json-schema.org/draft-07/schema#',
-      type: 'object',
-      properties: {
-        relayApiKey: {
-          type: 'string',
-          title: 'Workspace API Key',
-          description: 'Workspace API key (rk_live_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting.',
-        },
-        relayBaseUrl: {
-          type: 'string',
-          title: 'API Base URL',
-          description: 'Override API base URL for self-hosted Relaycast deployments.',
-          default: 'https://gateway.relaycast.dev',
-        },
-      },
-    });
-  });
-
-  // MCP Streamable HTTP endpoint — stateful sessions via the McpSessionHost port
-  app.all('/mcp', async (c) => {
-    const sessionId = c.req.header('mcp-session-id');
-    return c.get('engine').mcp.handle(c.req.raw, sessionId ?? undefined);
-  });
-
-  // Secure headers for remaining routes
   app.use('*', secureHeaders());
 
   // A2A public and gateway routes before other route groups

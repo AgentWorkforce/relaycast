@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -71,7 +72,7 @@ commandRoutes.post('/commands', requireAuth, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -87,7 +88,7 @@ commandRoutes.get('/commands', requireAuth, rateLimit, async (c) => {
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -116,7 +117,7 @@ commandRoutes.delete('/commands/:command', requireAuth, rateLimit, async (c) => 
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
 
@@ -185,6 +186,6 @@ commandRoutes.post('/commands/:command/invoke', requireAuth, rateLimit, async (c
     return c.json({
       ok: false,
       error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as any);
+    }, (error.status || 500) as ContentfulStatusCode);
   }
 });
