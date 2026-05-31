@@ -11,7 +11,6 @@ on:
           - all
           - a2a
           - types
-          - server
           - sdk-typescript
           - cli
           - mcp
@@ -122,7 +121,9 @@ jobs:
             // @relaycast/engine is versioned + published independently
             // (see publish-engine.yml); never touch it in the lockstep sweep,
             // and don't rewrite other packages' dependency on it.
-            const SKIP = new Set(['engine']);
+            // @relaycast/server is deprecated and frozen — no longer published,
+            // so leave its version untouched.
+            const SKIP = new Set(['engine', 'server']);
             for (const dir of fs.readdirSync(packagesDir)) {
               if (SKIP.has(dir)) { console.log('skip (independent): ' + dir); continue; }
               const pkgPath = path.join(packagesDir, dir, 'package.json');
@@ -193,7 +194,6 @@ jobs:
         package:
           - a2a
           - types
-          - server
           - sdk-typescript
           - cli
           - mcp
@@ -334,7 +334,6 @@ jobs:
             |---------|---------|
             | @relaycast/a2a | ${{ needs.build.outputs.new_version }} |
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
-            | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
             | relaycast | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |

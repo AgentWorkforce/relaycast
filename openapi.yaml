@@ -20,8 +20,8 @@ info:
 servers:
   - url: https://api.relaycast.dev/v1
     description: Production server
-  - url: http://localhost:7528/v1
-    description: Local development server
+  - url: http://localhost:8787/v1
+    description: Local self-host engine (@relaycast/engine default port)
 
 components:
   securitySchemes:
@@ -691,6 +691,122 @@ paths:
       responses:
         '204':
           description: Agent deleted
+
+  /agents/{name}/events:
+    post:
+      summary: Emit agent session event
+      description: >
+        Record a harness/session event for an agent (status changes, tool
+        calls, transcript chunks, usage, etc.). `status.*` events also update
+        the agent's presence status. With an agent token, an agent may only
+        post events for itself. Recognized event types include `status.changed`,
+        `status.idle`, `status.active`, `status.blocked`, `status.waiting`,
+        `status.offline`, `tool.called`, `tool.completed`, `tool.failed`,
+        `tool.output`, `message.received`, `message.sent`, `delivery.accepted`,
+        `delivery.delivered`, `delivery.deferred`, `delivery.failed`,
+        `action.invoked`, `action.completed`, `action.failed`, `action.denied`,
+        `transcript.chunk`, `file.changed`, `command.started`,
+        `command.completed`, `command.failed`, `terminal.output`,
+        `terminal.screen`, `usage.updated`, `session.started`,
+        `session.released`, `session.resumed`, `session.forked`, `log`, and
+        `error`.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  description: Session event type
+                payload:
+                  type: object
+                  description: >
+                    Event-specific data. For `status.changed`, include
+                    `payload.status` (one of active, idle, blocked, waiting,
+                    offline, online).
+                  default: {}
+      responses:
+        '201':
+          description: Event recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing type, unknown event type, or invalid status value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Agent token can only post events for itself
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      summary: List agent session events
+      description: >
+        List recorded session events for an agent, most recent first. Requires
+        a workspace key.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: false
+          description: Filter to a single event type
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Max events to return (default 100, max 500)
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        '200':
+          description: Session event list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /agents/spawn:
     post:
@@ -2295,12 +2411,14 @@ paths:
         '204':
           description: File deleted
 
-  /commands:
+  /actions:
     post:
-      summary: Register command
-      description: Register a custom slash command
+      summary: Register action
+      description: >
+        Register an action handled by an agent. When called with an agent token,
+        `handler_agent` must match the calling agent.
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
@@ -2311,98 +2429,243 @@ paths:
             schema:
               type: object
               required:
-                - command
+                - name
                 - description
                 - handler_agent
               properties:
-                command:
+                name:
                   type: string
+                  description: Unique action name within the workspace
                 description:
                   type: string
                 handler_agent:
                   type: string
-                parameters:
+                  description: Name of the agent that handles invocations
+                input_schema:
+                  type: object
+                  description: JSON Schema for invocation input
+                output_schema:
+                  type: object
+                  description: JSON Schema for completion output
+                available_to:
                   type: array
+                  description: Agent names allowed to invoke; omit for all agents
                   items:
-                    type: object
+                    type: string
       responses:
         '201':
-          description: Command registered
+          description: Action registered
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
-      summary: List commands
-      description: List all registered commands
+      summary: List actions
+      description: List all registered actions in the workspace
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
       responses:
         '200':
-          description: Command list
+          description: Action list
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
-  /commands/{command}:
-    delete:
-      summary: Delete command
-      description: Delete a registered command
+  /actions/{name}:
+    get:
+      summary: Get action
+      description: Fetch a single registered action by name
       tags:
-        - Commands
+        - Actions
       security:
         - workspaceKey: []
         - agentToken: []
       parameters:
-        - name: command
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Action details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: Delete action
+      description: Delete a registered action
+      tags:
+        - Actions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
           in: path
           required: true
           schema:
             type: string
       responses:
         '204':
-          description: Command deleted
+          description: Action deleted
+        '404':
+          description: Action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
-  /commands/{command}/invoke:
+  /actions/{name}/invoke:
     post:
-      summary: Invoke command
-      description: Invoke a registered command in a channel context
+      summary: Invoke action
+      description: >
+        Invoke a registered action. Requires an agent token. Creates an
+        invocation in the `invoked` state and notifies the handler agent.
       tags:
-        - Commands
+        - Actions
       security:
         - agentToken: []
       parameters:
-        - name: command
+        - name: name
           in: path
           required: true
           schema:
             type: string
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required:
-                - channel
               properties:
-                channel:
-                  type: string
-                args:
-                  type: string
-                parameters:
+                input:
                   type: object
+                  description: Invocation input, validated against the action's input_schema
       responses:
         '201':
-          description: Command invocation created
+          description: Invocation created
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Agent token required, or caller not in available_to
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/{name}/invocations/{id}:
+    get:
+      summary: Get invocation
+      description: Fetch the status and result of an action invocation
+      tags:
+        - Actions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Invocation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Invocation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/{name}/invocations/{id}/complete:
+    post:
+      summary: Complete invocation
+      description: >
+        Handler agent reports the result of an invocation. Setting `error`
+        marks the invocation `failed`; otherwise it is `completed`. Only the
+        handler agent may complete an invocation.
+      tags:
+        - Actions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                output:
+                  type: object
+                  description: Result payload, validated against the action's output_schema
+                error:
+                  type: string
+                  description: Error message; presence marks the invocation as failed
+                duration_ms:
+                  type: integer
+                  minimum: 0
+                  description: Handler-reported execution time in milliseconds
+      responses:
+        '200':
+          description: Invocation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Only the handler agent may complete the invocation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Invocation not found or already completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /subscriptions:
     post:
@@ -3145,8 +3408,8 @@ tags:
     description: Message and channel read tracking
   - name: Files
     description: File upload and file metadata APIs
-  - name: Commands
-    description: Slash command registration and invocation
+  - name: Actions
+    description: Action registration, invocation, and invocation lifecycle
   - name: Subscriptions
     description: Outbound event subscription management
   - name: Webhooks

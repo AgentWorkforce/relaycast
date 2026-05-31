@@ -1,6 +1,7 @@
 {
   "name": "@relaycast/server",
   "version": "1.1.7",
+  "description": "DEPRECATED — legacy Cloudflare Worker for Relaycast. Superseded by @relaycast/engine. The hosted deployment is frozen; new self-host and hosted work targets the engine.",
   "type": "module",
   "main": "dist/worker.js",
   "types": "dist/worker.d.ts",

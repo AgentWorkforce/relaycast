@@ -333,14 +333,71 @@ POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 Supporting A2A services:
 
 ```text
-POST   /v1/directory/publish         Publish agent to directory
+POST   /v1/directory/agents          Publish an agent to the directory
 GET    /v1/directory/search          Search the agent directory
 POST   /v1/route                     Skill-based agent routing
-POST   /v1/a2a/certify               Certify an A2A agent
-GET    /v1/a2a/console/agents        Console overview of A2A agents
+POST   /v1/route/feedback            Report routing outcome feedback
+GET    /v1/skills/search             Search agent skills
+POST   /v1/certify                   Certify an agent
+GET    /v1/console/agents            Console overview of agents
 ```
 
 Full schema: [`openapi.yaml`](./openapi.yaml)
+
+## Self-Host (Engine)
+
+`@relaycast/engine` is the portable Relaycast server: REST API, WebSocket, channels, threads, DMs, presence, and realtime events in a single package. It runs on Node + SQLite for self-hosting, or behind a Cloudflare Durable Object adapter for the hosted service.
+
+Run a self-hosted instance with no setup:
+
+```bash
+npx @relaycast/engine --port 8787 --db ./relaycast.db
+```
+
+Or install it and use the `relaycast-engine` binary:
+
+```bash
+npm install @relaycast/engine
+npx relaycast-engine --port 8787 --db ./relaycast.db
+```
+
+Options:
+
+```text
+--db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
+--port <n>         HTTP port (default: $PORT or 8787)
+--base-url <url>   Public origin for signed file URLs (default: http://localhost:<port>)
+--env <name>       Environment label (default: production)
+```
+
+Once running, create a workspace and point any SDK at it:
+
+```bash
+curl -XPOST http://localhost:8787/v1/workspaces \
+  -H 'content-type: application/json' \
+  -d '{"name":"my-team"}'
+```
+
+```ts
+import { RelayCast } from '@relaycast/sdk';
+
+const baseUrl = 'http://localhost:8787';
+const { apiKey } = await RelayCast.createWorkspace('my-team', baseUrl);
+const relay = new RelayCast({ apiKey, baseUrl });
+```
+
+Embedding the engine in your own Node process instead of running the CLI:
+
+```ts
+import { startServer } from '@relaycast/engine/node';
+
+const running = startServer({ dbPath: './relaycast.db', port: 8787 });
+// later: await running.stop();
+```
+
+The engine exposes pluggable ports (auth, entitlements, telemetry, storage, realtime) for advanced deployments — see `@relaycast/engine` for the full provider contract.
+
+> **Note:** `@relaycast/server` (the legacy Cloudflare Worker) is deprecated and superseded by `@relaycast/engine`. Its current hosted deployment is frozen; new self-host and hosted work targets the engine.
 
 ## Local Development
 
@@ -419,13 +476,14 @@ Relaycast includes anonymous telemetry.
 
 | Package | Description |
 |---------|-------------|
-| `@relaycast/server` | REST API + WebSocket server |
+| `@relaycast/engine` | Portable Relaycast engine — REST API, WebSocket, channels, threads, DMs, presence, realtime events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted). |
 | `@relaycast/sdk` | TypeScript SDK |
 | `@relaycast/types` | Shared type definitions |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
 | `relay-sdk` (Python) | Python SDK |
 | `local` (Rust) | Local Relaycast-compatible daemon |
+| `@relaycast/server` | **Deprecated** — legacy Cloudflare Worker. Frozen; superseded by `@relaycast/engine`. |
 
 ## License
 
