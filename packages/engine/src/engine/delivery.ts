@@ -11,11 +11,11 @@ function toIso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-function serializeDelivery(row: DeliveryRow) {
+function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
     id: row.id,
     message_id: row.messageId,
-    channel_id: '', // filled in by callers that have the message row
+    channel_id: row.channelId ?? '',
     agent_id: row.agentId,
     status: row.status as DeliveryStatus,
     mode: row.mode,
@@ -98,16 +98,20 @@ export async function listDeliveries(
   });
 }
 
-/** Fetch a single delivery owned by the agent, or null. */
+/**
+ * Fetch a single delivery owned by the agent, joined to its message so the
+ * caller has the `channelId` for serialization. Returns null if not found.
+ */
 async function getOwnedDelivery(
   db: Db,
   workspaceId: string,
   agentId: string,
   deliveryId: string,
-): Promise<DeliveryRow | null> {
+): Promise<(DeliveryRow & { channelId: string }) | null> {
   const [row] = await db
-    .select()
+    .select({ delivery: deliveries, channelId: messages.channelId })
     .from(deliveries)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .where(
       and(
         eq(deliveries.id, deliveryId),
@@ -115,12 +119,7 @@ async function getOwnedDelivery(
         eq(deliveries.agentId, agentId),
       ),
     );
-  return row ?? null;
-}
-
-async function reloadDelivery(db: Db, deliveryId: string): Promise<DeliveryRow> {
-  const [row] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId));
-  return row;
+  return row ? { ...row.delivery, channelId: row.channelId } : null;
 }
 
 /**
@@ -135,14 +134,14 @@ export async function ackDelivery(
 ) {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
+  if (existing.status === 'delivered') return serializeDelivery(existing);
 
-  if (existing.status !== 'delivered') {
-    await db
-      .update(deliveries)
-      .set({ status: 'delivered', updatedAt: new Date() })
-      .where(eq(deliveries.id, deliveryId));
-  }
-  return serializeDelivery(await reloadDelivery(db, deliveryId));
+  const [updated] = await db
+    .update(deliveries)
+    .set({ status: 'delivered', updatedAt: new Date() })
+    .where(eq(deliveries.id, deliveryId))
+    .returning();
+  return serializeDelivery({ ...updated, channelId: existing.channelId });
 }
 
 /**
@@ -159,7 +158,7 @@ export async function failDelivery(
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
 
-  await db
+  const [updated] = await db
     .update(deliveries)
     .set({
       status: 'failed',
@@ -167,8 +166,9 @@ export async function failDelivery(
       retryable: opts.retryable ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(deliveries.id, deliveryId));
-  return serializeDelivery(await reloadDelivery(db, deliveryId));
+    .where(eq(deliveries.id, deliveryId))
+    .returning();
+  return serializeDelivery({ ...updated, channelId: existing.channelId });
 }
 
 /**
@@ -185,7 +185,7 @@ export async function deferDelivery(
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
 
-  await db
+  const [updated] = await db
     .update(deliveries)
     .set({
       status: 'deferred',
@@ -193,6 +193,7 @@ export async function deferDelivery(
       reason: opts.reason ?? existing.reason,
       updatedAt: new Date(),
     })
-    .where(eq(deliveries.id, deliveryId));
-  return serializeDelivery(await reloadDelivery(db, deliveryId));
+    .where(eq(deliveries.id, deliveryId))
+    .returning();
+  return serializeDelivery({ ...updated, channelId: existing.channelId });
 }

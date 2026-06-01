@@ -85,7 +85,11 @@ describe('durable delivery api', () => {
       headers: { authorization: `Bearer ${bob.token}` },
     });
     expect(ack1.status).toBe(200);
-    expect(((await ack1.json()) as { data: { status: string } }).data.status).toBe('delivered');
+    const ack1Data = ((await ack1.json()) as { data: { status: string; channel_id: string } }).data;
+    expect(ack1Data.status).toBe('delivered');
+    // channel_id is populated on the transition response, matching the queued item.
+    expect(ack1Data.channel_id).toBe(item.channel_id);
+    expect(ack1Data.channel_id).not.toBe('');
 
     // Idempotent: second ack still 200 + delivered.
     const ack2 = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
@@ -115,6 +119,7 @@ describe('durable delivery api', () => {
     expect(data.status).toBe('failed');
     expect(data.error).toBe('handler threw');
     expect(data.retryable).toBe(true);
+    expect(data.channel_id).toBe(item.channel_id);
   });
 
   it('defers a delivery with available_at and keeps it in the queue', async () => {
@@ -133,6 +138,7 @@ describe('durable delivery api', () => {
     expect(data.status).toBe('deferred');
     expect(data.available_at).toBe(availableAt);
     expect(data.reason).toBe('busy');
+    expect(data.channel_id).toBe(item.channel_id);
 
     // Deferred items remain in the default queue for later retry.
     const queued = await listDeliveries(bob.token);
