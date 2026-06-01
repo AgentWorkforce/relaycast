@@ -198,19 +198,70 @@ describe('durable delivery api', () => {
     expect(res.status).toBe(404);
   });
 
-  it('emits delivery.delivered to the recipient on ack', async () => {
+  it('emits delivery.delivered once on ack, not on idempotent retries', async () => {
     const { ws, bob } = await seed();
     const [item] = await listDeliveries(bob.token);
 
     const bobSock = new FakeSocket();
     stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
 
-    const res = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+    const ackOnce = () => stack.app.request(`/v1/deliveries/${item.id}/ack`, {
       method: 'POST',
       headers: { authorization: `Bearer ${bob.token}` },
     });
-    expect(res.status).toBe(200);
+
+    expect((await ackOnce()).status).toBe(200);
+    // A second ack is a no-op and must not re-emit the event.
+    expect((await ackOnce()).status).toBe(200);
     await new Promise((r) => setTimeout(r, 50));
-    expect(bobSock.ofType('delivery.delivered').length).toBeGreaterThanOrEqual(1);
+    expect(bobSock.ofType('delivery.delivered')).toHaveLength(1);
+  });
+
+  it('preserves failure metadata across repeated fail calls (idempotent)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const first = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'boom', retryable: true }),
+    });
+    expect(first.status).toBe(200);
+
+    // A second fail (even with an empty body) must not null out the recorded
+    // error/retryable — the first failure is preserved.
+    const second = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(second.status).toBe(200);
+    const data = ((await second.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('failed');
+    expect(data.error).toBe('boom');
+    expect(data.retryable).toBe(true);
+  });
+
+  it('clears a deferred delivery from the replay queue when the message is read', async () => {
+    const { bob, messageId } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+
+    const read = await stack.app.request(`/v1/messages/${messageId}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(read.status).toBe(200);
+
+    // The deferred item is now delivered and out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });
 });

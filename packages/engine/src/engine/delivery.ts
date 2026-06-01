@@ -122,19 +122,29 @@ async function getOwnedDelivery(
   return row ? { ...row.delivery, channelId: row.channelId } : null;
 }
 
+// The outcome of a transition: the (possibly unchanged) delivery plus whether
+// this call actually mutated state. Callers fan out lifecycle events only when
+// `changed` is true so idempotent retries don't emit duplicate notifications.
+export type TransitionResult = { delivery: ReturnType<typeof serializeDelivery>; changed: boolean };
+
+function unixSeconds(value: Date | null | undefined): number | null {
+  return value ? Math.floor(value.getTime() / 1000) : null;
+}
+
 /**
- * Idempotently transition a delivery to `delivered`. Repeated calls return the
- * same delivered record. Returns null if the delivery is not found / not owned.
+ * Idempotently transition a delivery to `delivered`. `delivered` is terminal,
+ * so repeated acks are no-ops (reported as `changed: false`). Returns null if
+ * the delivery is not found / not owned.
  */
 export async function ackDelivery(
   db: Db,
   workspaceId: string,
   agentId: string,
   deliveryId: string,
-) {
+): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered') return serializeDelivery(existing);
+  if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
 
   const [updated] = await db
     .update(deliveries)
@@ -146,9 +156,11 @@ export async function ackDelivery(
 
 /**
  * Idempotently record a delivery as `failed`, capturing error text and
- * retryability. `delivered` is terminal, so a fail never resurrects an
- * already-acked delivery (the WHERE guard also closes the read→write race
- * against a concurrent ack). Returns null if not found / not owned.
+ * retryability. Both `delivered` and `failed` are treated as settled: once a
+ * delivery has failed, repeated calls are no-ops that preserve the original
+ * failure metadata (no `null` overwrite, no `updatedAt` churn, no duplicate
+ * event). The WHERE guard also closes the read→write race against a concurrent
+ * ack. Returns null if not found / not owned.
  */
 export async function failDelivery(
   db: Db,
@@ -156,10 +168,12 @@ export async function failDelivery(
   agentId: string,
   deliveryId: string,
   opts: { error?: string; retryable?: boolean } = {},
-) {
+): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered') return serializeDelivery(existing);
+  if (existing.status === 'delivered' || existing.status === 'failed') {
+    return { delivery: serializeDelivery(existing), changed: false };
+  }
 
   const [updated] = await db
     .update(deliveries)
@@ -176,9 +190,11 @@ export async function failDelivery(
 
 /**
  * Idempotently record a delivery as `deferred` with the time it next becomes
- * available. `delivered` is terminal, so a defer never resurrects an
- * already-acked delivery (the WHERE guard also closes the read→write race
- * against a concurrent ack). Returns null if not found / not owned.
+ * available. A re-defer to the same `available_at`/reason is a no-op (reported
+ * as `changed: false`); deferring to a new time is a real change. `delivered`
+ * is terminal, so a defer never resurrects an already-acked delivery (the WHERE
+ * guard also closes the read→write race against a concurrent ack). Returns null
+ * if not found / not owned.
  */
 export async function deferDelivery(
   db: Db,
@@ -186,17 +202,23 @@ export async function deferDelivery(
   agentId: string,
   deliveryId: string,
   opts: { availableAt: Date; reason?: string },
-) {
+): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered') return serializeDelivery(existing);
+  if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
+
+  const targetReason = opts.reason ?? existing.reason;
+  const unchanged = existing.status === 'deferred'
+    && unixSeconds(existing.availableAt) === unixSeconds(opts.availableAt)
+    && existing.reason === targetReason;
+  if (unchanged) return { delivery: serializeDelivery(existing), changed: false };
 
   const [updated] = await db
     .update(deliveries)
     .set({
       status: 'deferred',
       availableAt: opts.availableAt,
-      reason: opts.reason ?? existing.reason,
+      reason: targetReason,
       updatedAt: new Date(),
     })
     .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
@@ -205,9 +227,10 @@ export async function deferDelivery(
 }
 
 /**
- * Resolve the result of a status-guarded transition: use the updated row when
- * the write landed, otherwise (a concurrent ack won the race and the row is now
- * terminal) re-read and return the current state without resurrecting it.
+ * Resolve the result of a status-guarded transition: when the write landed,
+ * report the updated row as changed. When it did not (the row was deleted, or a
+ * concurrent ack won the race and the row is now terminal), re-read and return
+ * the current state as unchanged — never resurrecting it or emitting an event.
  */
 async function resolveTransition(
   db: Db,
@@ -216,8 +239,8 @@ async function resolveTransition(
   deliveryId: string,
   updated: DeliveryRow | undefined,
   channelId: string,
-) {
-  if (updated) return serializeDelivery({ ...updated, channelId });
+): Promise<TransitionResult | null> {
+  if (updated) return { delivery: serializeDelivery({ ...updated, channelId }), changed: true };
   const current = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
-  return current ? serializeDelivery(current) : null;
+  return current ? { delivery: serializeDelivery(current), changed: false } : null;
 }

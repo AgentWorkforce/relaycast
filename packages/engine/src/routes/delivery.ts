@@ -58,15 +58,19 @@ deliveryRoutes.post(
           error: { code: 'delivery_not_found', message: 'Delivery not found' },
         }, 404);
       }
-      runInBackground(
-        c,
-        fanoutToAgents(c, [agent!.id], 'delivery.delivered', {
-          delivery_id: result.id,
-          message_id: result.message_id,
-        }),
-        'fanout delivery.delivered',
-      );
-      return c.json({ ok: true, data: result });
+      // Only fan out when this call actually transitioned the delivery, so
+      // idempotent retries don't emit duplicate notifications.
+      if (result.changed) {
+        runInBackground(
+          c,
+          fanoutToAgents(c, [agent!.id], 'delivery.delivered', {
+            delivery_id: result.delivery.id,
+            message_id: result.delivery.message_id,
+          }),
+          'fanout delivery.delivered',
+        );
+      }
+      return c.json({ ok: true, data: result.delivery });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -99,17 +103,19 @@ deliveryRoutes.post(
           error: { code: 'delivery_not_found', message: 'Delivery not found' },
         }, 404);
       }
-      runInBackground(
-        c,
-        fanoutToAgents(c, [agent!.id], 'delivery.failed', {
-          delivery_id: result.id,
-          message_id: result.message_id,
-          error: result.error,
-          retryable: result.retryable,
-        }),
-        'fanout delivery.failed',
-      );
-      return c.json({ ok: true, data: result });
+      if (result.changed) {
+        runInBackground(
+          c,
+          fanoutToAgents(c, [agent!.id], 'delivery.failed', {
+            delivery_id: result.delivery.id,
+            message_id: result.delivery.message_id,
+            error: result.delivery.error,
+            retryable: result.delivery.retryable,
+          }),
+          'fanout delivery.failed',
+        );
+      }
+      return c.json({ ok: true, data: result.delivery });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -145,17 +151,19 @@ deliveryRoutes.post(
           error: { code: 'delivery_not_found', message: 'Delivery not found' },
         }, 404);
       }
-      runInBackground(
-        c,
-        fanoutToAgents(c, [agent!.id], 'delivery.deferred', {
-          delivery_id: result.id,
-          message_id: result.message_id,
-          available_at: result.available_at,
-          reason: result.reason,
-        }),
-        'fanout delivery.deferred',
-      );
-      return c.json({ ok: true, data: result });
+      if (result.changed) {
+        runInBackground(
+          c,
+          fanoutToAgents(c, [agent!.id], 'delivery.deferred', {
+            delivery_id: result.delivery.id,
+            message_id: result.delivery.message_id,
+            available_at: result.delivery.available_at,
+            reason: result.delivery.reason,
+          }),
+          'fanout delivery.deferred',
+        );
+      }
+      return c.json({ ok: true, data: result.delivery });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
