@@ -150,6 +150,18 @@ pub use ws::{
 
 // Re-export commonly used types
 pub use types::{
+    // Actions & session events
+    ActionDefinition,
+    ActionInvocation,
+    ActionInvokedEvent,
+    ActionResultEvent,
+    CompleteInvocationRequest,
+    EmitSessionEventRequest,
+    InvokeActionRequest,
+    InvokeActionResult,
+    ListSessionEventsQuery,
+    RegisterActionRequest,
+    SessionEvent,
     // Agents
     Agent,
     AgentChannelMembership,
