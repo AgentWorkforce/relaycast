@@ -5,6 +5,11 @@ import { z } from 'zod';
 //   delivered -> recipient acked (terminal success)
 //   deferred  -> recipient asked to retry no earlier than available_at
 //   failed    -> recipient failed to handle; retryable indicates whether a retry is sane
+//
+// `delivered` is the only terminal state — nothing reopens an acked delivery.
+// `failed` is intentionally NOT terminal: a retryable failure may later be acked
+// (the retry succeeded) or deferred (retry later). `failDelivery` is still
+// idempotent — repeating a fail preserves the original error/retryable.
 export const DeliveryStatusSchema = z.enum(['accepted', 'delivered', 'deferred', 'failed']);
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 

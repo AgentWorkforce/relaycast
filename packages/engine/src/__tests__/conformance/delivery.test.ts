@@ -178,6 +178,27 @@ describe('durable delivery api', () => {
     expect(await listDeliveries(bob.token)).toHaveLength(0);
   });
 
+  it('allows recovering a failed delivery via ack (retryable failures are not terminal)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'transient', retryable: true }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('failed');
+
+    // A retry that succeeds can ack the previously-failed delivery.
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+    expect(((await ack.json()) as { data: { status: string } }).data.status).toBe('delivered');
+  });
+
   it('rejects an invalid defer payload', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);
