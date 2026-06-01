@@ -89,10 +89,12 @@ jobs:
 
       - name: Version all packages
         id: bump
+        env:
+          # Bind workflow inputs through env so free-form custom_version is not
+          # interpolated into the shell script body.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
         run: |
-          CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
-          VERSION_TYPE="${{ github.event.inputs.version }}"
-
           # Read current version from types (canonical source)
           CURRENT_VERSION=$(node -p "require('./packages/types/package.json').version")
           echo "Current version: $CURRENT_VERSION"
@@ -113,10 +115,13 @@ jobs:
           echo "New version: $NEW_VERSION"
 
           # Sync all package versions and internal dependencies
-          node -e "
+          NEW_VERSION="$NEW_VERSION" node <<'NODE'
             const fs = require('fs');
             const path = require('path');
-            const version = '$NEW_VERSION';
+            const version = process.env.NEW_VERSION;
+            if (!version) {
+              throw new Error('NEW_VERSION is required');
+            }
 
             const packagesDir = 'packages';
             for (const dir of fs.readdirSync(packagesDir)) {
@@ -148,7 +153,7 @@ jobs:
               fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
               console.log('CLI_VERSION -> ' + version);
             }
-          "
+          NODE
 
       - name: Clean reinstall after version bump
         run: |
@@ -317,6 +322,7 @@ jobs:
             ```bash
             npm install @relaycast/a2a@${{ needs.build.outputs.new_version }}
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/engine@${{ needs.build.outputs.new_version }}
             npm install relaycast@${{ needs.build.outputs.new_version }}
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
