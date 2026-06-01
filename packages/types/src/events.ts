@@ -220,7 +220,7 @@ export const ActionCompletedEventSchema = z.object({
   type: z.literal('action.completed'),
   invocation_id: z.string(),
   action_name: z.string(),
-  status: z.string(),
+  status: z.literal('completed'),
   output: z.record(z.string(), z.unknown()).nullable(),
   error: z.string().nullable(),
 });
@@ -230,7 +230,7 @@ export const ActionFailedEventSchema = z.object({
   type: z.literal('action.failed'),
   invocation_id: z.string(),
   action_name: z.string(),
-  status: z.string(),
+  status: z.literal('failed'),
   output: z.record(z.string(), z.unknown()).nullable(),
   error: z.string().nullable(),
 });

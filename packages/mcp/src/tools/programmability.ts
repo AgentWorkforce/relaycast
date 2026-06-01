@@ -297,7 +297,7 @@ export function registerProgrammabilityTools(
       invocation_id: z.string().describe('Invocation id returned by invoke'),
       output: z.object({}).passthrough().optional().describe('Result object matching the action\'s output schema'),
       error: z.string().optional().describe('Error message if the invocation failed'),
-      duration_ms: z.number().optional().describe('How long the action took, in milliseconds'),
+      duration_ms: z.number().int().nonnegative().optional().describe('How long the action took, in milliseconds'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },

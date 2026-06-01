@@ -1156,6 +1156,8 @@ ${B}${CYAN}╔══════════════════════
       (err.statusCode === 404 || err.code === 'not_found' || /route not found/i.test(err.message))
     ) {
       actionsSupported = false;
+    } else {
+      throw err;
     }
   }
 
