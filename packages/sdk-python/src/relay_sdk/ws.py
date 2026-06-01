@@ -42,7 +42,7 @@ class WsClient:
         origin_version: str | None = None,
     ) -> None:
         self._token = token
-        base = (base_url or "https://api.agentrelay.dev").rstrip("/")
+        base = (base_url or "https://gateway.relaycast.dev").rstrip("/")
         self._base_url = base.replace("https://", "wss://").replace("http://", "ws://")
         self._origin_surface = (origin_surface or "sdk").strip()[:32]
         self._origin_client = (origin_client or "@relaycast/python-sdk").strip()[:80]

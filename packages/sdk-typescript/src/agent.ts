@@ -29,8 +29,9 @@ import type {
   UploadResponse,
   CompleteUploadResponse,
   FileInfo,
-  InvokeCommandRequest,
-  CommandInvokeResult,
+  InvokeActionResult,
+  CompleteInvocationRequest,
+  ActionInvocation,
   WsClientEvent,
   MessageCreatedEvent,
   MessageUpdatedEvent,
@@ -52,7 +53,9 @@ import type {
   ChannelUnmutedEvent,
   FileUploadedEvent,
   WebhookReceivedEvent,
-  CommandInvokedEvent,
+  ActionInvokedEvent,
+  ActionCompletedEvent,
+  ActionFailedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
 } from './types.js';
@@ -343,7 +346,10 @@ export class AgentClient {
     channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
     fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
     webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
-    commandInvoked:  (handler: (e: CommandInvokedEvent) => void): (() => void)  => this.onEvent('command.invoked', handler),
+    // Actions (agent-to-agent RPC)
+    actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
+    actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
+    actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
     // Lifecycle
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
@@ -711,16 +717,28 @@ export class AgentClient {
     );
   }
 
-  // === Commands ===
+  // === Actions ===
 
-  commands = {
+  actions = {
     invoke: (
-      command: string,
-      data: InvokeCommandRequest,
-    ): Promise<CommandInvokeResult> =>
+      name: string,
+      input?: Record<string, unknown>,
+    ): Promise<InvokeActionResult> =>
+      this.client.post(`/v1/actions/${encodeURIComponent(name)}/invoke`, { input }),
+
+    completeInvocation: (
+      name: string,
+      invocationId: string,
+      data: CompleteInvocationRequest,
+    ): Promise<ActionInvocation> =>
       this.client.post(
-        `/v1/commands/${encodeURIComponent(command)}/invoke`,
+        `/v1/actions/${encodeURIComponent(name)}/invocations/${encodeURIComponent(invocationId)}/complete`,
         data,
+      ),
+
+    getInvocation: (name: string, invocationId: string): Promise<ActionInvocation> =>
+      this.client.get(
+        `/v1/actions/${encodeURIComponent(name)}/invocations/${encodeURIComponent(invocationId)}`,
       ),
   };
 

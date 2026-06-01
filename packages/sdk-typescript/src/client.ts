@@ -130,7 +130,7 @@ export class HttpClient {
   constructor(options: ClientOptions) {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
     this._apiKey = options.apiKey;
-    this._baseUrl = options.baseUrl ?? 'https://api.relaycast.dev';
+    this._baseUrl = options.baseUrl ?? 'https://gateway.relaycast.dev';
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;

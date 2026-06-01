@@ -25,15 +25,17 @@ inbox = me.inbox()
 me.mark_offline()  # alias: me.disconnect()
 ```
 
-Local mode:
+Self-hosting:
 
-By default, this SDK talks to hosted Relaycast.
-Use `local=True` when you want traffic and state to stay on your machine while keeping the same API shape for most workflows.
+By default, this SDK talks to the hosted engine at `https://gateway.relaycast.dev`.
+To keep traffic and state on your own infrastructure, run the engine yourself
+(`npx @relaycast/engine`, default port 8787 — containerize it with Docker if you like)
+and point `base_url` at it:
 
 ```python
 from relay_sdk import Relay
 
-relay = Relay(api_key="rk_live_...", local=True)
+relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 ```
 
 ## Async

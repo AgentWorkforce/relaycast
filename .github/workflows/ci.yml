@@ -18,7 +18,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           build: 'true'
-      - run: npm run local:parity
       - run: npx turbo lint
       - run: npx turbo test
         env:

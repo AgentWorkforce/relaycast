@@ -45,7 +45,7 @@ describe('relaycast', () => {
     expect(stderr).toBe('');
     expect(stdout).toContain('workspace.create');
     expect(stdout).toContain('message.post');
-    expect(stdout).toContain('integration.command.invoke');
+    expect(stdout).toContain('integration.webhook.trigger');
   });
 
   it('calls an MCP tool by command name', async () => {

@@ -69,8 +69,7 @@ need_regex "createWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "joinWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "lookupWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "registerAgent\\(" packages/sdk-typescript/src/setup.ts
-need_fixed "https://api.relaycast.dev" packages/sdk-typescript/src/setup.ts
-need_fixed "http://127.0.0.1:7528" packages/sdk-typescript/src/setup.ts
+need_fixed "https://gateway.relaycast.dev" packages/sdk-typescript/src/setup.ts
 need_fixed "CreateWorkspaceResponseSchema" packages/sdk-typescript/src/setup.ts
 need_fixed "WorkspaceLookupSchema" packages/sdk-typescript/src/setup.ts
 need_fixed "camelizeKeys" packages/sdk-typescript/src/setup.ts
@@ -307,7 +306,7 @@ echo "communicate Relay contract present"
     dependsOn: ['verify-setup-types', 'verify-setup-errors', 'verify-communicate-relay'],
     task: `Create packages/sdk-typescript/src/setup.ts.
 Implement RelaycastSetup and WorkspaceHandle exactly as the accepted contract states.
-Default cloud base URL is https://api.relaycast.dev; local mode defaults to http://127.0.0.1:7528.
+Default cloud base URL is https://gateway.relaycast.dev (the hosted engine); a self-hosted engine is reached by passing baseUrl (e.g. http://localhost:8787).
 Use fetch with JSON headers, X-SDK-Version, optional Authorization, timeout, retry, Retry-After, and jitter.
 Wrap non-2xx API envelopes in RelaycastApiError and validate required fields.
 WorkspaceHandle must manage agent tokens for registerAgent(), relay(), getAgentToken(), and listRegisteredAgents().
@@ -538,7 +537,7 @@ set -euo pipefail
 mkdir -p .relay
 log=.relay/sdk-setup-client-server.log
 rm -f "$log"
-npm --workspace @relaycast/server run dev -- --port 8799 >"$log" 2>&1 &
+node packages/engine/dist/bin/serve.js --port 8799 >"$log" 2>&1 &
 server_pid=$!
 cleanup() {
   kill "$server_pid" >/dev/null 2>&1 || true
@@ -583,7 +582,7 @@ set -euo pipefail
 mkdir -p .relay
 log=.relay/sdk-setup-client-server-final.log
 rm -f "$log"
-npm --workspace @relaycast/server run dev -- --port 8799 >"$log" 2>&1 &
+node packages/engine/dist/bin/serve.js --port 8799 >"$log" 2>&1 &
 server_pid=$!
 cleanup() {
   kill "$server_pid" >/dev/null 2>&1 || true
@@ -612,14 +611,14 @@ npx tsx scripts/e2e-sdk-setup-client.ts http://127.0.0.1:8799
   .step('run-focused-server-regressions', {
     type: 'deterministic',
     dependsOn: ['run-local-e2e-final'],
-    command: 'npm --workspace @relaycast/server run test -- src/routes/__tests__/workspace.test.ts src/routes/__tests__/agent.test.ts src/routes/__tests__/message.test.ts src/routes/__tests__/dm.test.ts',
+    command: 'npm --workspace @relaycast/engine run test',
     captureOutput: true,
     failOnError: true,
   })
   .step('run-monorepo-regression-final', {
     type: 'deterministic',
     dependsOn: ['run-focused-server-regressions'],
-    command: 'npx turbo test --filter=@relaycast/sdk --filter=@relaycast/server',
+    command: 'npx turbo test --filter=@relaycast/sdk --filter=@relaycast/engine',
     captureOutput: true,
     failOnError: true,
   })

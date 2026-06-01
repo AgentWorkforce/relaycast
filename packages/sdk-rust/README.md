@@ -219,15 +219,19 @@ let options = RelayCastOptions::new("rk_live_xxx")
 let relay = RelayCast::new(options)?;
 ```
 
-Local mode:
+Self-hosting:
 
-By default, the Rust SDK talks to hosted Relaycast.
-Use local mode when you want traffic and state to stay on your machine while keeping the same interface for most workflows.
+By default, the Rust SDK talks to the hosted engine at `https://gateway.relaycast.dev`.
+To keep traffic and state on your own infrastructure, run the engine yourself
+(`npx @relaycast/engine`, default port 8787 — containerize it with Docker if you like)
+and point `base_url` at it:
 
 ```rust
 use relaycast::{RelayCast, RelayCastOptions};
 
-let relay = RelayCast::new(RelayCastOptions::local("rk_live_xxx"))?;
+let relay = RelayCast::new(
+    RelayCastOptions::new("rk_live_xxx").with_base_url("http://localhost:8787"),
+)?;
 ```
 
 ## Changelog

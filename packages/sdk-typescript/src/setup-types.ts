@@ -3,7 +3,7 @@ import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://api.relaycast.dev"
+   * @default "https://gateway.relaycast.dev"
    */
   baseUrl?: string;
 
@@ -28,13 +28,6 @@ export interface RelaycastSetupOptions {
     maxRetries: number;
     baseDelayMs: number;
   };
-
-  /**
-   * Enable local mode, targeting a locally running Relaycast daemon.
-   * Automatically sets baseUrl to http://127.0.0.1:7528 if not overridden.
-   * @default false
-   */
-  local?: boolean;
 }
 
 export interface CreateWorkspaceOptions {

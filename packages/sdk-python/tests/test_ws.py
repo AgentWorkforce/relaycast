@@ -11,7 +11,7 @@ from relay_sdk.ws import WsClient
 class TestWsClientInit:
     def test_default_base_url(self):
         ws = WsClient(token="at_xxx")
-        assert ws._base_url == "wss://api.agentrelay.dev"
+        assert ws._base_url == "wss://gateway.relaycast.dev"
 
     def test_custom_base_url_https(self):
         ws = WsClient(token="at_xxx", base_url="https://custom.example.com")

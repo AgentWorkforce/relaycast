@@ -51,24 +51,9 @@ class TestRelay:
         assert r._client.api_key == KEY
         assert r._client.base_url == BASE
 
-    def test_constructor_requires_api_key_without_local(self):
+    def test_constructor_requires_api_key(self):
         with pytest.raises(ValueError, match="api_key is required"):
             Relay(None, base_url=BASE)
-
-    def test_constructor_requires_api_key_with_local(self):
-        with pytest.raises(ValueError, match="api_key is required"):
-            Relay(None, base_url=BASE, local=True)
-
-    def test_constructor_local_mode_uses_runtime_bootstrap(self, monkeypatch):
-        def fake_runtime(*, api_key, base_url):
-            assert api_key == KEY
-            assert base_url == BASE
-            return (KEY, BASE)
-
-        monkeypatch.setattr("relay_sdk.relay.ensure_local_runtime", fake_runtime)
-        relay = Relay(KEY, base_url=BASE, local=True)
-        assert relay._client.api_key == KEY
-        assert relay._client.base_url == BASE
 
     @respx.mock
     def test_workspace_info(self):
@@ -172,14 +157,9 @@ class TestRelay:
 
 class TestAsyncRelay:
     @pytest.mark.asyncio
-    async def test_constructor_requires_api_key_without_local(self):
+    async def test_constructor_requires_api_key(self):
         with pytest.raises(ValueError, match="api_key is required"):
             AsyncRelay(None, base_url=BASE)
-
-    @pytest.mark.asyncio
-    async def test_constructor_requires_api_key_with_local(self):
-        with pytest.raises(ValueError, match="api_key is required"):
-            AsyncRelay(None, base_url=BASE, local=True)
 
     @pytest.mark.asyncio
     @respx.mock

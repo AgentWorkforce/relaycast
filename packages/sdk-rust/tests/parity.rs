@@ -8,11 +8,10 @@ use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
-fn local_options_builder_sets_expected_defaults() {
-    let options = RelayCastOptions::local("rk_live_local");
-    assert!(options.local);
-    assert_eq!(options.api_key, "rk_live_local");
-    assert_eq!(options.base_url.as_deref(), Some("http://127.0.0.1:7528"));
+fn options_builder_sets_expected_defaults() {
+    let options = RelayCastOptions::new("rk_live_test").with_base_url("http://localhost:8787");
+    assert_eq!(options.api_key, "rk_live_test");
+    assert_eq!(options.base_url.as_deref(), Some("http://localhost:8787"));
 }
 
 fn ok(data: serde_json::Value) -> ResponseTemplate {

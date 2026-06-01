@@ -12,7 +12,7 @@ from .errors import RelayError
 
 SDK_VERSION = "0.1.0"
 
-_DEFAULT_BASE_URL = "https://api.agentrelay.dev"
+_DEFAULT_BASE_URL = "https://gateway.relaycast.dev"
 _RETRY_BACKOFFS = [0.2, 0.4, 0.8]
 _DEFAULT_ORIGIN_SURFACE = "sdk"
 _DEFAULT_ORIGIN_CLIENT = "@relaycast/python-sdk"

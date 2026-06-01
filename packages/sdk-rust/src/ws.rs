@@ -12,7 +12,7 @@ use url::Url;
 use crate::error::{RelayError, Result};
 use crate::types::WsEvent;
 
-const DEFAULT_BASE_URL: &str = "https://api.relaycast.dev";
+const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
@@ -25,7 +25,7 @@ const DEFAULT_MAX_RECONNECT_DELAY_MS: u64 = 30_000;
 pub struct WsClientOptions {
     /// The agent token for authentication.
     pub token: String,
-    /// The base URL for the API (defaults to https://api.relaycast.dev).
+    /// The base URL for the API (defaults to https://gateway.relaycast.dev).
     pub base_url: Option<String>,
     /// Enable debug logging for dropped/malformed messages.
     pub debug: bool,

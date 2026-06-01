@@ -52,11 +52,10 @@ packages/sdk-typescript/src/
 **`RelaycastSetupOptions`**
 ```ts
 {
-  baseUrl?: string                                 // > local default > public default
+  baseUrl?: string                                 // overrides the hosted default (https://gateway.relaycast.dev)
   apiKey?: string | (() => string | Promise<string>)
   requestTimeoutMs?: number                        // default 30_000, applied via AbortSignal.timeout
   retry?: { maxRetries: number; baseDelayMs: number }  // default { 3, 500 }
-  local?: boolean                                  // when true and baseUrl unset, use http://127.0.0.1:7528
 }
 ```
 
@@ -178,8 +177,8 @@ Each bullet is a single test case. **All must pass before this step is COMPLETE.
 16. `relayCast()` — returns `RelayCast` configured with workspace `apiKey` and `baseUrl`.
 17. `getAgentToken('Alice')` after register — returns the stored token; unknown name returns `undefined`.
 18. `listRegisteredAgents()` — returns all registered records in registration order.
-19. Local mode — `new RelaycastSetup({ local: true })` produces `baseUrl === 'http://127.0.0.1:7528'`.
-20. Local mode + explicit `baseUrl` — explicit wins.
+19. Default base URL — `new RelaycastSetup()` produces `baseUrl === 'https://gateway.relaycast.dev'`.
+20. Explicit `baseUrl` (e.g. a self-hosted engine) overrides the default.
 21. `apiKey` as function — invoked once per request (or memoized; assert behavior the impl chooses) and bearer header reflects the resolved value.
 22. Origin headers — every direct fetch carries `X-SDK-Version`, `X-Relaycast-Origin-Surface/Client/Version`.
 
@@ -193,9 +192,9 @@ Each bullet is a single test case. **All must pass before this step is COMPLETE.
 
 ### 3c. Local E2E — `packages/sdk-typescript/scripts/e2e-setup-client.ts` (new)
 
-Run against a locally booted server (`packages/server` via `wrangler dev` or equivalent). Steps, all asserted:
+Run against a locally booted engine (`npx @relaycast/engine`, default port 8787). Steps, all asserted:
 
-E1. `setup = new RelaycastSetup({ local: true })`.
+E1. `setup = new RelaycastSetup({ baseUrl: 'http://localhost:8787' })`.
 E2. `ws1 = await setup.createWorkspace({ name: \`e2e-\${Date.now()}\` })` — handle has non-empty `apiKey`.
 E3. `ws2 = await setup.joinWorkspace(ws1.workspaceId, ws1.apiKey)` — `ws2.workspaceId === ws1.workspaceId`.
 E4. `lookupWorkspace(ws1.info.name!)` returns id matching `ws1.workspaceId`; `lookupWorkspace('does-not-exist')` returns `null`.
@@ -226,7 +225,7 @@ Single owner per file. Workers MUST coordinate in `#wf-sdk-setup-client` before 
 | **worker-setup-core** | `setup.ts` | depends on `setup-types.ts`, `setup-errors.ts`; reads `relay.ts`, `agent.ts`, `client.ts`, `casing.ts`, `origin.ts`, `version.ts` |
 | **worker-communicate** | `communicate/relay.ts`, `communicate/types.ts`, `communicate/index.ts` | `agent.ts`, `ws.ts`, `types.ts` |
 | **worker-tests-unit** | `__tests__/setup.test.ts`, `__tests__/communicate-relay.test.ts` | all impl files (read only) |
-| **worker-e2e** | `scripts/e2e-setup-client.ts`, optional `package.json` script entry (`e2e:setup`) | `packages/server` (run only, no edits) |
+| **worker-e2e** | `scripts/e2e-setup-client.ts`, optional `package.json` script entry (`e2e:setup`) | `packages/engine` (run only, no edits) |
 | **lead-acceptance-contract** | `src/index.ts` (final export wiring), `docs/sdk-setup-client-acceptance.md` | n/a |
 
 **Coordination rules:**

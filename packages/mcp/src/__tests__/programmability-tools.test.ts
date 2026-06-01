@@ -17,19 +17,19 @@ const mockRelay = {
     get: vi.fn(),
     delete: vi.fn(),
   },
-  commands: {
+  actions: {
     register: vi.fn(),
     list: vi.fn(),
+    get: vi.fn(),
     delete: vi.fn(),
   },
 };
 
 const mockAgentClient = {
-  client: {
-    post: vi.fn(),
-  },
-  commands: {
+  actions: {
     invoke: vi.fn(),
+    completeInvocation: vi.fn(),
+    getInvocation: vi.fn(),
   },
 };
 
@@ -174,159 +174,61 @@ describe('programmability tools', () => {
     ]);
   });
 
-  // === Commands ===
+  // === Actions ===
 
-  it('register_command calls relay.commands.register()', async () => {
-    mockRelay.commands.register.mockResolvedValue({
-      id: 'cmd_1',
-      command: 'deploy',
-    });
+  it('register_action calls relay.actions.register()', async () => {
+    mockRelay.actions.register.mockResolvedValue({ id: 'act_1', name: 'deploy' });
     await client.callTool({
-      name: 'integration.command.register',
-      arguments: {
-        command: 'deploy',
-        description: 'Deploy the app',
-        handler_agent: 'DeployBot',
-      },
+      name: 'integration.action.register',
+      arguments: { name: 'deploy', description: 'Deploy the app', handler_agent: 'DeployBot' },
     });
-    expect(mockRelay.commands.register).toHaveBeenCalledWith({
-      command: 'deploy',
+    expect(mockRelay.actions.register).toHaveBeenCalledWith({
+      name: 'deploy',
       description: 'Deploy the app',
       handlerAgent: 'DeployBot',
-      parameters: undefined,
+      inputSchema: undefined,
+      outputSchema: undefined,
+      availableTo: undefined,
     });
   });
 
-  it('list_commands calls relay.commands.list()', async () => {
-    mockRelay.commands.list.mockResolvedValue([]);
-    await client.callTool({ name: 'integration.command.list', arguments: {} });
-    expect(mockRelay.commands.list).toHaveBeenCalled();
+  it('list_actions calls relay.actions.list()', async () => {
+    mockRelay.actions.list.mockResolvedValue([]);
+    await client.callTool({ name: 'integration.action.list', arguments: {} });
+    expect(mockRelay.actions.list).toHaveBeenCalled();
   });
 
-  it('delete_command calls relay.commands.delete()', async () => {
-    mockRelay.commands.delete.mockResolvedValue(undefined);
+  it('delete_action calls relay.actions.delete()', async () => {
+    mockRelay.actions.delete.mockResolvedValue(undefined);
     const result = await client.callTool({
-      name: 'integration.command.delete',
-      arguments: { command: 'deploy' },
+      name: 'integration.action.delete',
+      arguments: { name: 'deploy' },
     });
-    expect(mockRelay.commands.delete).toHaveBeenCalledWith('deploy');
+    expect(mockRelay.actions.delete).toHaveBeenCalledWith('deploy');
     expect(result.content).toEqual([
-      { type: 'text', text: 'Deleted command /deploy' },
+      { type: 'text', text: 'Deleted action deploy' },
     ]);
   });
 
-  it('invoke_command calls agentClient.commands.invoke()', async () => {
-    mockAgentClient.commands.invoke.mockResolvedValue({
-      id: 'inv_1',
-      command: 'deploy',
-      channel: 'ops',
-    });
+  it('invoke_action calls agentClient.actions.invoke()', async () => {
+    mockAgentClient.actions.invoke.mockResolvedValue({ invocation_id: 'inv_1', action_name: 'deploy', status: 'invoked' });
     await client.callTool({
-      name: 'integration.command.invoke',
-      arguments: {
-        command: 'deploy',
-        channel: 'ops',
-        args: '--force',
-      },
+      name: 'integration.action.invoke',
+      arguments: { name: 'deploy', input: { env: 'staging' } },
     });
-    expect(mockAgentClient.commands.invoke).toHaveBeenCalledWith('deploy', {
-      channel: 'ops',
-      args: '--force',
-      parameters: undefined,
-    });
+    expect(mockAgentClient.actions.invoke).toHaveBeenCalledWith('deploy', { env: 'staging' });
   });
 
-  it('invoke_command parses JSON parameters string', async () => {
-    mockAgentClient.commands.invoke.mockResolvedValue({
-      id: 'inv_2',
-      command: 'scale',
-      channel: 'ops',
-    });
+  it('complete_action calls agentClient.actions.completeInvocation()', async () => {
+    mockAgentClient.actions.completeInvocation.mockResolvedValue({ invocation_id: 'inv_1', status: 'completed' });
     await client.callTool({
-      name: 'integration.command.invoke',
-      arguments: {
-        command: 'scale',
-        channel: 'ops',
-        parameters: '{"replicas": 3}',
-      },
+      name: 'integration.action.complete',
+      arguments: { name: 'deploy', invocation_id: 'inv_1', output: { url: 'https://x' }, duration_ms: 12 },
     });
-    expect(mockAgentClient.commands.invoke).toHaveBeenCalledWith('scale', {
-      channel: 'ops',
-      args: undefined,
-      parameters: { replicas: 3 },
-    });
-  });
-});
-
-describe('programmability tools with identity overrides', () => {
-  let mcpServer: McpServer;
-  let client: Client;
-
-  const defaultClient = {
-    commands: {
-      invoke: vi.fn(),
-    },
-  };
-  const identityClient = {
-    commands: {
-      invoke: vi.fn(),
-    },
-  };
-
-  const getAgentClient = vi.fn((_wsRouting?: { workspace_id?: string; workspace_alias?: string }, as?: string) => {
-    if (as === 'InvokerBot') {
-      return identityClient as any;
-    }
-    return defaultClient as any;
-  });
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mcpServer = new McpServer({ name: 'test', version: '0.1.0' });
-    registerProgrammabilityTools(
-      mcpServer,
-      () => mockRelay as any,
-      getAgentClient,
-    );
-    client = new Client({ name: 'test-client', version: '0.1.0' });
-    const [ct, st] = InMemoryTransport.createLinkedPair();
-    await Promise.all([client.connect(ct), mcpServer.connect(st)]);
-  });
-
-  it('integration.command.invoke passes workspace routing and as to getAgentClient', async () => {
-    identityClient.commands.invoke.mockResolvedValue({ id: 'inv_3', command: 'deploy', channel: 'ops' });
-    await client.callTool({
-      name: 'integration.command.invoke',
-      arguments: {
-        command: 'deploy',
-        channel: 'ops',
-        args: '--force',
-        workspace_alias: 'beta',
-        as: 'InvokerBot',
-      },
-    });
-    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' }, 'InvokerBot');
-    expect(identityClient.commands.invoke).toHaveBeenCalledWith('deploy', {
-      channel: 'ops',
-      args: '--force',
-      parameters: undefined,
-    });
-  });
-
-  it('integration.command.invoke falls back to the active identity when as is omitted', async () => {
-    defaultClient.commands.invoke.mockResolvedValue({ id: 'inv_4', command: 'deploy', channel: 'ops' });
-    await client.callTool({
-      name: 'integration.command.invoke',
-      arguments: {
-        command: 'deploy',
-        channel: 'ops',
-      },
-    });
-    expect(getAgentClient).toHaveBeenCalledWith(undefined, undefined);
-    expect(defaultClient.commands.invoke).toHaveBeenCalledWith('deploy', {
-      channel: 'ops',
-      args: undefined,
-      parameters: undefined,
+    expect(mockAgentClient.actions.completeInvocation).toHaveBeenCalledWith('deploy', 'inv_1', {
+      output: { url: 'https://x' },
+      error: undefined,
+      durationMs: 12,
     });
   });
 });

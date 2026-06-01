@@ -205,6 +205,37 @@ export const CommandInvokedEventSchema = z.object({
 });
 export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
 
+// Action (agent-to-agent RPC) events. Delivered to the handler agent on invoke,
+// and to the caller agent on completion/failure.
+export const ActionInvokedEventSchema = z.object({
+  type: z.literal('action.invoked'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  caller_name: z.string(),
+  handler_agent_id: z.string(),
+});
+export type ActionInvokedEvent = z.infer<typeof ActionInvokedEventSchema>;
+
+export const ActionCompletedEventSchema = z.object({
+  type: z.literal('action.completed'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  status: z.literal('completed'),
+  output: z.record(z.string(), z.unknown()).nullable(),
+  error: z.string().nullable(),
+});
+export type ActionCompletedEvent = z.infer<typeof ActionCompletedEventSchema>;
+
+export const ActionFailedEventSchema = z.object({
+  type: z.literal('action.failed'),
+  invocation_id: z.string(),
+  action_name: z.string(),
+  status: z.literal('failed'),
+  output: z.record(z.string(), z.unknown()).nullable(),
+  error: z.string().nullable(),
+});
+export type ActionFailedEvent = z.infer<typeof ActionFailedEventSchema>;
+
 // WebSocket client events (emitted by WsClient, not from server)
 export const WsOpenEventSchema = z.object({
   type: z.literal('open'),
@@ -256,6 +287,9 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
   CommandInvokedEventSchema,
+  ActionInvokedEventSchema,
+  ActionCompletedEventSchema,
+  ActionFailedEventSchema,
   PongEventSchema,
 ]);
 
@@ -295,6 +329,9 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
   CommandInvokedEventSchema,
+  ActionInvokedEventSchema,
+  ActionCompletedEventSchema,
+  ActionFailedEventSchema,
   PongEventSchema,
   // Client-only events
   WsOpenEventSchema,

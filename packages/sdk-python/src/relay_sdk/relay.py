@@ -8,7 +8,6 @@ from urllib.parse import quote
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
 from .errors import RelayError
-from .local_runtime import ensure_local_runtime
 from .models import Agent, CreateAgentRequest, CreateAgentResponse, TokenRotateResponse, Workspace
 
 
@@ -119,22 +118,12 @@ class Relay:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
-        local: bool = False,
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
     ) -> None:
-        if local and (not api_key or not api_key.strip()):
-            raise ValueError("Relay api_key is required")
-
-        if local:
-            api_key, base_url = ensure_local_runtime(
-                api_key=api_key,
-                base_url=base_url,
-            )
-
         if not api_key or not api_key.strip():
-            raise ValueError("Relay api_key is required unless local mode is enabled")
+            raise ValueError("Relay api_key is required")
 
         self._client = HttpClient(
             api_key,
@@ -271,22 +260,12 @@ class AsyncRelay:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
-        local: bool = False,
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
     ) -> None:
-        if local and (not api_key or not api_key.strip()):
-            raise ValueError("Relay api_key is required")
-
-        if local:
-            api_key, base_url = ensure_local_runtime(
-                api_key=api_key,
-                base_url=base_url,
-            )
-
         if not api_key or not api_key.strip():
-            raise ValueError("Relay api_key is required unless local mode is enabled")
+            raise ValueError("Relay api_key is required")
 
         self._client = AsyncHttpClient(
             api_key,
