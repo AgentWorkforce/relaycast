@@ -146,6 +146,38 @@ describe('durable delivery api', () => {
     expect(queued[0].status).toBe('deferred');
   });
 
+  it('does not resurrect a delivered (terminal) delivery via defer or fail', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+
+    // A late defer must not move a delivered record back into the queue.
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(((await defer.json()) as { data: { status: string } }).data.status).toBe('delivered');
+
+    // Same for a late fail.
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'too late' }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('delivered');
+
+    // Stays out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+  });
+
   it('rejects an invalid defer payload', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);

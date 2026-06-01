@@ -1,4 +1,4 @@
-import { eq, and, asc, inArray } from 'drizzle-orm';
+import { eq, ne, and, asc, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -146,7 +146,9 @@ export async function ackDelivery(
 
 /**
  * Idempotently record a delivery as `failed`, capturing error text and
- * retryability. Returns null if the delivery is not found / not owned.
+ * retryability. `delivered` is terminal, so a fail never resurrects an
+ * already-acked delivery (the WHERE guard also closes the read→write race
+ * against a concurrent ack). Returns null if not found / not owned.
  */
 export async function failDelivery(
   db: Db,
@@ -157,6 +159,7 @@ export async function failDelivery(
 ) {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
+  if (existing.status === 'delivered') return serializeDelivery(existing);
 
   const [updated] = await db
     .update(deliveries)
@@ -166,14 +169,16 @@ export async function failDelivery(
       retryable: opts.retryable ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(deliveries.id, deliveryId))
+    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
     .returning();
-  return serializeDelivery({ ...updated, channelId: existing.channelId });
+  return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
 /**
  * Idempotently record a delivery as `deferred` with the time it next becomes
- * available. Returns null if the delivery is not found / not owned.
+ * available. `delivered` is terminal, so a defer never resurrects an
+ * already-acked delivery (the WHERE guard also closes the read→write race
+ * against a concurrent ack). Returns null if not found / not owned.
  */
 export async function deferDelivery(
   db: Db,
@@ -184,6 +189,7 @@ export async function deferDelivery(
 ) {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
+  if (existing.status === 'delivered') return serializeDelivery(existing);
 
   const [updated] = await db
     .update(deliveries)
@@ -193,7 +199,25 @@ export async function deferDelivery(
       reason: opts.reason ?? existing.reason,
       updatedAt: new Date(),
     })
-    .where(eq(deliveries.id, deliveryId))
+    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
     .returning();
-  return serializeDelivery({ ...updated, channelId: existing.channelId });
+  return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+}
+
+/**
+ * Resolve the result of a status-guarded transition: use the updated row when
+ * the write landed, otherwise (a concurrent ack won the race and the row is now
+ * terminal) re-read and return the current state without resurrecting it.
+ */
+async function resolveTransition(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  deliveryId: string,
+  updated: DeliveryRow | undefined,
+  channelId: string,
+) {
+  if (updated) return serializeDelivery({ ...updated, channelId });
+  const current = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
+  return current ? serializeDelivery(current) : null;
 }
