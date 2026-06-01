@@ -334,10 +334,6 @@ POST   /v1/certify                   Certify an A2A agent
 GET    /v1/console/stats             Workspace console overview
 ```
 
-> Note: the hosted engine replaced the legacy `/v1/commands` API with `/v1/actions`. The legacy
-> `@relaycast/server` is no longer part of this repo, but its previously deployed worker stays live at
-> `https://api.relaycast.dev` and continues to serve the older `/v1/commands` surface for existing clients.
-
 Full schema: [`openapi.yaml`](./openapi.yaml)
 
 ## Local Development

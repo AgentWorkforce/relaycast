@@ -14,11 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # NOTE: The per-PR API preview deployed the legacy @relaycast/server worker, which
-  # has been removed from this repo (superseded by @relaycast/engine). PR validation
-  # now runs the engine e2e locally in the `ci` workflow. The cleanup job below stays
-  # so any lingering preview workers from older PRs are still torn down on close.
-
   cleanup-preview:
     name: Cleanup Preview
     if: github.event.action == 'closed' && (github.event.pull_request.merged == true || github.event.pull_request.state == 'closed') && github.event.pull_request.head.repo.full_name == github.repository

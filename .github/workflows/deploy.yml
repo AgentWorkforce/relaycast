@@ -27,11 +27,6 @@ jobs:
         env:
           DO_NOT_TRACK: '1'
 
-  # NOTE: The legacy @relaycast/server worker (relaycast-api / -staging) is no longer
-  # built or deployed from this repo — it has been superseded by @relaycast/engine
-  # (hosted at gateway.relaycast.dev). The previously deployed worker stays live for
-  # older clients; it is simply no longer redeployed here.
-
   deploy-observer-pages:
     name: Deploy Observer Dashboard
     runs-on: ubuntu-latest
