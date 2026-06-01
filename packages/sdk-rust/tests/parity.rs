@@ -805,7 +805,10 @@ async fn action_lifecycle_uses_expected_endpoints() {
         .mount(&server)
         .await;
     let fetched = relay.get_action("deploy").await.expect("get_action failed");
-    assert_eq!(fetched.available_to.as_deref(), Some(&["BackendAgent".to_string()][..]));
+    assert_eq!(
+        fetched.available_to.as_deref(),
+        Some(&["BackendAgent".to_string()][..])
+    );
 
     // delete (204)
     Mock::given(method("DELETE"))
@@ -814,7 +817,10 @@ async fn action_lifecycle_uses_expected_endpoints() {
         .expect(1)
         .mount(&server)
         .await;
-    relay.delete_action("deploy").await.expect("delete_action failed");
+    relay
+        .delete_action("deploy")
+        .await
+        .expect("delete_action failed");
 }
 
 #[tokio::test]
@@ -1000,7 +1006,7 @@ fn deserializes_action_ws_events() {
     }))
     .expect("action.completed should deserialize");
     match completed {
-        WsEvent::ActionCompleted(e) => assert_eq!(e.status, ActionInvocationStatus::Completed),
+        WsEvent::ActionCompleted(e) => assert_eq!(e.action_name, "deploy"),
         other => panic!("expected ActionCompleted, got {other:?}"),
     }
 
@@ -1017,4 +1023,17 @@ fn deserializes_action_ws_events() {
         WsEvent::ActionFailed(e) => assert_eq!(e.error.as_deref(), Some("boom")),
         other => panic!("expected ActionFailed, got {other:?}"),
     }
+
+    // A mismatched status fails fast (event-specific literal): an action.completed
+    // payload carrying status "invoked" must not deserialize.
+    let bad: Result<WsEvent, _> = serde_json::from_value(json!({
+        "type": "action.completed",
+        "invocation_id": "inv_1",
+        "action_name": "deploy",
+        "status": "invoked"
+    }));
+    assert!(
+        bad.is_err(),
+        "action.completed with status 'invoked' should fail"
+    );
 }

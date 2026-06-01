@@ -151,18 +151,12 @@ pub use ws::{
 // Re-export commonly used types
 pub use types::{
     // Actions & session events
+    ActionCompletedEvent,
     ActionDefinition,
+    ActionFailedEvent,
     ActionInvocation,
     ActionInvocationStatus,
     ActionInvokedEvent,
-    ActionResultEvent,
-    CompleteInvocationRequest,
-    EmitSessionEventRequest,
-    InvokeActionRequest,
-    InvokeActionResult,
-    ListSessionEventsQuery,
-    RegisterActionRequest,
-    SessionEvent,
     // Agents
     Agent,
     AgentChannelMembership,
@@ -183,6 +177,8 @@ pub use types::{
     ChannelWithMembers,
     CommandInvocation,
     CommandInvokedEvent,
+    CompleteInvocationRequest,
+    CompletedStatus,
     CreateAgentRequest,
     CreateAgentResponse,
     CreateChannelRequest,
@@ -201,7 +197,9 @@ pub use types::{
     DmConversationSummary,
     DmReceivedEvent,
     DmSendResponse,
+    EmitSessionEventRequest,
     EventSubscription,
+    FailedStatus,
     // Files
     FileInfo,
     FileListOptions,
@@ -213,7 +211,10 @@ pub use types::{
     GroupDmReceivedEvent,
     // Inbox
     InboxResponse,
+    InvokeActionRequest,
+    InvokeActionResult,
     InvokeCommandRequest,
+    ListSessionEventsQuery,
     MemberJoinedEvent,
     MemberLeftEvent,
     // Messages
@@ -230,11 +231,13 @@ pub use types::{
     ReactionGroup,
     ReactionRemovedEvent,
     ReaderInfo,
+    RegisterActionRequest,
     ReleaseAgentRequest,
     ReleaseAgentResponse,
     // Search
     SearchOptions,
     SendDmRequest,
+    SessionEvent,
     SetSystemPromptRequest,
     SpawnAgentRequest,
     SpawnAgentResponse,

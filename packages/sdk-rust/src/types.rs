@@ -1022,9 +1022,9 @@ pub enum WsEvent {
     #[serde(rename = "action.invoked")]
     ActionInvoked(ActionInvokedEvent),
     #[serde(rename = "action.completed")]
-    ActionCompleted(ActionResultEvent),
+    ActionCompleted(ActionCompletedEvent),
     #[serde(rename = "action.failed")]
-    ActionFailed(ActionResultEvent),
+    ActionFailed(ActionFailedEvent),
     #[serde(rename = "pong")]
     Pong,
     #[serde(other)]
@@ -1176,13 +1176,40 @@ pub struct ActionInvokedEvent {
     pub handler_agent_id: String,
 }
 
-/// `action.completed` / `action.failed` — delivered to the caller when an
-/// invocation finishes.
+/// Literal `completed` status for [`ActionCompletedEvent`]; deserialization
+/// rejects any other value so malformed `action.completed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletedStatus {
+    Completed,
+}
+
+/// Literal `failed` status for [`ActionFailedEvent`]; deserialization rejects
+/// any other value so malformed `action.failed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedStatus {
+    Failed,
+}
+
+/// `action.completed` — delivered to the caller when an invocation succeeds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActionResultEvent {
+pub struct ActionCompletedEvent {
     pub invocation_id: String,
     pub action_name: String,
-    pub status: ActionInvocationStatus,
+    pub status: CompletedStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `action.failed` — delivered to the caller when an invocation fails.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionFailedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub status: FailedStatus,
     #[serde(default)]
     pub output: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
