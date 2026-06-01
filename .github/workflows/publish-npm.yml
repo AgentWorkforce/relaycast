@@ -145,11 +145,11 @@ jobs:
 
             // Sync package version constants
             const sdkVersionPath = path.join(packagesDir, 'sdk-typescript', 'src', 'version.ts');
-            fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+            fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\n');
             console.log('SDK_VERSION -> ' + version);
             const cliVersionPath = path.join(packagesDir, 'cli', 'src', 'version.ts');
             if (fs.existsSync(cliVersionPath)) {
-              fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+              fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\n');
               console.log('CLI_VERSION -> ' + version);
             }
           NODE
