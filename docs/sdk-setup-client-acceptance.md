@@ -225,7 +225,7 @@ Single owner per file. Workers MUST coordinate in `#wf-sdk-setup-client` before 
 | **worker-setup-core** | `setup.ts` | depends on `setup-types.ts`, `setup-errors.ts`; reads `relay.ts`, `agent.ts`, `client.ts`, `casing.ts`, `origin.ts`, `version.ts` |
 | **worker-communicate** | `communicate/relay.ts`, `communicate/types.ts`, `communicate/index.ts` | `agent.ts`, `ws.ts`, `types.ts` |
 | **worker-tests-unit** | `__tests__/setup.test.ts`, `__tests__/communicate-relay.test.ts` | all impl files (read only) |
-| **worker-e2e** | `scripts/e2e-setup-client.ts`, optional `package.json` script entry (`e2e:setup`) | `packages/server` (run only, no edits) |
+| **worker-e2e** | `scripts/e2e-setup-client.ts`, optional `package.json` script entry (`e2e:setup`) | `packages/engine` (run only, no edits) |
 | **lead-acceptance-contract** | `src/index.ts` (final export wiring), `docs/sdk-setup-client-acceptance.md` | n/a |
 
 **Coordination rules:**

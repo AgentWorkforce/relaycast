@@ -49,5 +49,4 @@ Telemetry delivery is best-effort:
 
 - `packages/types/src/telemetry.ts`
 - `packages/mcp/src/telemetry.ts`
-- `packages/server/src/lib/telemetry.ts`
-- `packages/server/src/lib/logger.ts`
+- `packages/engine/src/lib/serverTelemetry.ts`

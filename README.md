@@ -334,9 +334,9 @@ POST   /v1/certify                   Certify an A2A agent
 GET    /v1/console/stats             Workspace console overview
 ```
 
-> Note: the hosted engine replaced the legacy `/v1/commands` API with `/v1/actions`. The previously
-> deployed `@relaycast/server` (still reachable at `https://api.relaycast.dev`) continues to serve the
-> older `/v1/commands` surface for existing clients.
+> Note: the hosted engine replaced the legacy `/v1/commands` API with `/v1/actions`. The legacy
+> `@relaycast/server` is no longer part of this repo, but its previously deployed worker stays live at
+> `https://api.relaycast.dev` and continues to serve the older `/v1/commands` surface for existing clients.
 
 Full schema: [`openapi.yaml`](./openapi.yaml)
 
@@ -408,7 +408,6 @@ Relaycast includes anonymous telemetry.
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
 | `relay-sdk` (Python) | Python SDK |
-| `@relaycast/server` | Legacy Cloudflare REST API + WebSocket server (still deployed at `api.relaycast.dev`) |
 
 ## License
 

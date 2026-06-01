@@ -11,7 +11,6 @@ on:
           - all
           - a2a
           - types
-          - server
           - sdk-typescript
           - cli
           - mcp
@@ -193,7 +192,6 @@ jobs:
         package:
           - a2a
           - types
-          - server
           - sdk-typescript
           - cli
           - mcp
@@ -334,7 +332,6 @@ jobs:
             |---------|---------|
             | @relaycast/a2a | ${{ needs.build.outputs.new_version }} |
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
-            | @relaycast/server | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
             | relaycast | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |

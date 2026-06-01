@@ -8,8 +8,8 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 - `openapi.yaml` for HTTP API schema.
 - Root `package.json` for scripts and workspace configuration.
 - `packages/engine` for API behavior — the canonical, portable server that powers the hosted gateway
-  (`gateway.relaycast.dev`) and self-hosting. `packages/server` is the legacy Cloudflare deployment,
-  still live at `api.relaycast.dev` for older clients; do not treat it as the API source of truth.
+  (`gateway.relaycast.dev`) and self-hosting. The legacy `@relaycast/server` has been removed from this
+  repo; its previously deployed worker stays live at `api.relaycast.dev` for older clients.
 - `packages/sdk-typescript` for TypeScript SDK surface.
 
 
