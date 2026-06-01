@@ -323,6 +323,27 @@ thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.def
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
 on reconnect; the ack/fail/defer endpoints are idempotent.
 
+Realtime-first usage with the TypeScript SDK — react to delivery events live, and replay the
+durable queue on reconnect instead of polling:
+
+```typescript
+// React to durable delivery state as it changes.
+agent.on.deliveryAccepted((e) => console.log(`queued ${e.deliveryId} for ${e.messageId}`));
+agent.on.deliveryDelivered((e) => console.log(`acked ${e.deliveryId}`));
+
+// On (re)connect, drain anything queued while offline, then ack each item.
+agent.on.connected(async () => {
+  for (const item of await agent.deliveries({ status: 'accepted' })) {
+    try {
+      await handle(item.message);          // your handler
+      await agent.ackDelivery(item.id);     // -> delivered
+    } catch (err) {
+      await agent.failDelivery(item.id, { error: String(err), retryable: true });
+    }
+  }
+});
+```
+
 A2A (Agent-to-Agent) gateway endpoints:
 
 ```text

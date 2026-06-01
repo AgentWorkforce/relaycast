@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -7,14 +6,9 @@ import * as deliveryEngine from '../engine/delivery.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
-import { DeliveryStatusSchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
+import { ListDeliveriesQuerySchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
 
 export const deliveryRoutes = new Hono<AppEnv>();
-
-const listQuerySchema = z.object({
-  status: DeliveryStatusSchema.optional(),
-  limit: z.coerce.number().int().positive().max(200).optional(),
-});
 
 // GET /v1/deliveries - durable delivery queue for the calling agent.
 // Defaults to non-terminal items (accepted + deferred) so offline consumers
@@ -25,7 +19,7 @@ deliveryRoutes.get(
   rateLimit,
   async (c) => {
     try {
-      const parsed = listQuerySchema.safeParse({
+      const parsed = ListDeliveriesQuerySchema.safeParse({
         status: c.req.query('status'),
         limit: c.req.query('limit'),
       });

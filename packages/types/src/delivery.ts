@@ -47,7 +47,8 @@ export type DeliveryItem = z.infer<typeof DeliveryItemSchema>;
 
 export const ListDeliveriesQuerySchema = z.object({
   status: DeliveryStatusSchema.optional(),
-  limit: z.number().int().positive().max(200).optional(),
+  // Coerce so the same schema validates both typed callers and raw HTTP query strings.
+  limit: z.coerce.number().int().positive().max(200).optional(),
 });
 export type ListDeliveriesQuery = z.infer<typeof ListDeliveriesQuerySchema>;
 
@@ -58,7 +59,7 @@ export const FailDeliveryRequestSchema = z.object({
 export type FailDeliveryRequest = z.infer<typeof FailDeliveryRequestSchema>;
 
 export const DeferDeliveryRequestSchema = z.object({
-  available_at: z.string().datetime(),
+  available_at: z.iso.datetime(),
   reason: z.string().optional(),
 });
 export type DeferDeliveryRequest = z.infer<typeof DeferDeliveryRequestSchema>;
