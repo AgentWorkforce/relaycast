@@ -126,12 +126,16 @@ function normalizeSubscriptionChannel(channel: string): string {
 }
 
 function ensureRelaycastMessageEventId(event: RelaycastMessageEvent): RelaycastMessageEvent {
-  if (typeof event.id === 'string' && event.id.length > 0) {
+  const eventWithId = event as RelaycastMessageEvent & {
+    id?: unknown;
+    message: { id: string };
+  };
+  if (typeof eventWithId.id === 'string' && eventWithId.id.length > 0) {
     return event;
   }
   return {
     ...event,
-    id: stableRelaycastEventId(event.message.id),
+    id: stableRelaycastEventId(eventWithId.message.id),
   } as RelaycastMessageEvent;
 }
 
@@ -538,13 +542,17 @@ export class AgentClient {
   };
 
   private matchesSubscription(channels: Set<string>, event: RelaycastMessageEvent): boolean {
-    switch (event.type) {
+    const typedEvent = event as RelaycastMessageEvent & {
+      type: string;
+      channel?: string;
+    };
+    switch (typedEvent.type) {
       case 'dm.received':
       case 'group_dm.received':
         return channels.has('@self');
       case 'message.created':
       case 'thread.reply':
-        return channels.has(stripHash(event.channel));
+        return typeof typedEvent.channel === 'string' && channels.has(stripHash(typedEvent.channel));
       default:
         return false;
     }

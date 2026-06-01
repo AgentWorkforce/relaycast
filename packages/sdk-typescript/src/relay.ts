@@ -306,7 +306,7 @@ export class RelayCast {
     }
 
     emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
-      requested_name: data.name,
+      requested_name: (data as RegisterAgentInput & { name: string }).name,
     });
     return this.registerWithLegacySuffix(request);
   }

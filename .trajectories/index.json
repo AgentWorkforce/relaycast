@@ -1,5 +1,13 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-31T16:23:47.625Z",
-  "trajectories": {}
+  "lastUpdated": "2026-06-01T05:25:00.947Z",
+  "trajectories": {
+    "traj_bnyxpkfr09go": {
+      "title": "Review and fix PR #153",
+      "status": "completed",
+      "startedAt": "2026-06-01T05:25:00.199Z",
+      "completedAt": "2026-06-01T05:25:00.857Z",
+      "path": "/home/daytona/workspace/.trajectories/completed/2026-06/traj_bnyxpkfr09go.json"
+    }
+  }
 }

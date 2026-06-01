@@ -795,6 +795,17 @@ pub enum ActionInvocationStatus {
     Unknown,
 }
 
+impl std::fmt::Display for ActionInvocationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Invoked => "invoked",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterActionRequest {
     pub name: String,
