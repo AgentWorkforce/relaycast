@@ -908,4 +908,61 @@ impl AgentClient {
 
         self.client.get("/v1/files", query_ref, None).await
     }
+
+    // === Actions (agent-to-agent RPC) ===
+
+    /// Invoke a registered action. The handler agent receives an `action.invoked`
+    /// event; the returned invocation id can be polled with [`Self::get_action_invocation`].
+    pub async fn invoke_action(
+        &self,
+        name: &str,
+        input: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<InvokeActionResult> {
+        self.client
+            .post(
+                &format!("/v1/actions/{}/invoke", urlencoding::encode(name)),
+                Some(InvokeActionRequest { input }),
+                None,
+            )
+            .await
+    }
+
+    /// As the handler agent, report the result (or error) of an invocation.
+    pub async fn complete_action_invocation(
+        &self,
+        name: &str,
+        invocation_id: &str,
+        request: CompleteInvocationRequest,
+    ) -> Result<ActionInvocation> {
+        self.client
+            .post(
+                &format!(
+                    "/v1/actions/{}/invocations/{}/complete",
+                    urlencoding::encode(name),
+                    urlencoding::encode(invocation_id)
+                ),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Get the status and result of an action invocation.
+    pub async fn get_action_invocation(
+        &self,
+        name: &str,
+        invocation_id: &str,
+    ) -> Result<ActionInvocation> {
+        self.client
+            .get(
+                &format!(
+                    "/v1/actions/{}/invocations/{}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(invocation_id)
+                ),
+                None,
+                None,
+            )
+            .await
+    }
 }

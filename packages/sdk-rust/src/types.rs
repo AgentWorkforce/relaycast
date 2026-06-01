@@ -780,6 +780,130 @@ pub struct CommandInvocation {
     pub created_at: String,
 }
 
+// === Actions (agent-to-agent RPC) ===
+
+/// Status of an action invocation. `action.completed` always reports
+/// [`ActionInvocationStatus::Completed`] and `action.failed` reports
+/// [`ActionInvocationStatus::Failed`]; `Unknown` is a forward-compatible fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInvocationStatus {
+    Invoked,
+    Completed,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegisterActionRequest {
+    pub name: String,
+    pub description: String,
+    pub handler_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_to: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionDefinition {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub handler_agent: String,
+    #[serde(default)]
+    pub input_schema: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub output_schema: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub available_to: Option<Vec<String>>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvokeActionRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvokeActionResult {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub handler_agent_id: String,
+    #[serde(default)]
+    pub input: serde_json::Map<String, serde_json::Value>,
+    pub status: ActionInvocationStatus,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompleteInvocationRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionInvocation {
+    pub invocation_id: String,
+    pub action_name: String,
+    #[serde(default)]
+    pub caller_id: Option<String>,
+    #[serde(default)]
+    pub caller_name: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    pub status: ActionInvocationStatus,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+// === Agent session events ===
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmitSessionEventRequest {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    pub id: String,
+    pub agent_id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub payload: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub sequence: Option<i64>,
+    pub created_at: String,
+}
+
+/// Query filters for [`crate::RelayCast::list_agent_events`].
+#[derive(Debug, Clone, Default)]
+pub struct ListSessionEventsQuery {
+    pub event_type: Option<String>,
+    pub limit: Option<i32>,
+}
+
 // === WebSocket Events ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -895,6 +1019,12 @@ pub enum WsEvent {
     WebhookReceived(WebhookReceivedEvent),
     #[serde(rename = "command.invoked")]
     CommandInvoked(CommandInvokedEvent),
+    #[serde(rename = "action.invoked")]
+    ActionInvoked(ActionInvokedEvent),
+    #[serde(rename = "action.completed")]
+    ActionCompleted(ActionCompletedEvent),
+    #[serde(rename = "action.failed")]
+    ActionFailed(ActionFailedEvent),
     #[serde(rename = "pong")]
     Pong,
     #[serde(other)]
@@ -1035,4 +1165,53 @@ pub struct CommandInvokedEvent {
     pub handler_agent_id: String,
     pub args: Option<String>,
     pub parameters: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `action.invoked` — delivered to the handler agent when an action is invoked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionInvokedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub caller_name: String,
+    pub handler_agent_id: String,
+}
+
+/// Literal `completed` status for [`ActionCompletedEvent`]; deserialization
+/// rejects any other value so malformed `action.completed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletedStatus {
+    Completed,
+}
+
+/// Literal `failed` status for [`ActionFailedEvent`]; deserialization rejects
+/// any other value so malformed `action.failed` payloads fail fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedStatus {
+    Failed,
+}
+
+/// `action.completed` — delivered to the caller when an invocation succeeds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionCompletedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub status: CompletedStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `action.failed` — delivered to the caller when an invocation fails.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionFailedEvent {
+    pub invocation_id: String,
+    pub action_name: String,
+    pub status: FailedStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
 }

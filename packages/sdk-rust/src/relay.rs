@@ -484,6 +484,90 @@ impl RelayCast {
             .await
     }
 
+    // === Actions (agent-to-agent RPC) ===
+
+    /// Register an action (async agent-to-agent RPC). Replaces the legacy command API.
+    pub async fn register_action(
+        &self,
+        request: RegisterActionRequest,
+    ) -> Result<ActionDefinition> {
+        self.client.post("/v1/actions", Some(request), None).await
+    }
+
+    /// List registered actions.
+    pub async fn list_actions(&self) -> Result<Vec<ActionDefinition>> {
+        self.client.get("/v1/actions", None, None).await
+    }
+
+    /// Get a single action by name.
+    pub async fn get_action(&self, name: &str) -> Result<ActionDefinition> {
+        self.client
+            .get(
+                &format!("/v1/actions/{}", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Delete an action.
+    pub async fn delete_action(&self, name: &str) -> Result<()> {
+        self.client
+            .delete(&format!("/v1/actions/{}", urlencoding::encode(name)), None)
+            .await
+    }
+
+    // === Agent session events ===
+
+    /// Emit a session event for an agent (e.g. `status.active`).
+    pub async fn emit_agent_event(
+        &self,
+        name: &str,
+        request: EmitSessionEventRequest,
+    ) -> Result<SessionEvent> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// List recorded session events for an agent.
+    pub async fn list_agent_events(
+        &self,
+        name: &str,
+        query: Option<ListSessionEventsQuery>,
+    ) -> Result<Vec<SessionEvent>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(event_type) = query.event_type {
+            params.push(("type".to_string(), event_type));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get(
+                &format!("/v1/agents/{}/events", urlencoding::encode(name)),
+                query_ref,
+                None,
+            )
+            .await
+    }
+
     // === Stats & Activity ===
 
     /// Get workspace statistics.

@@ -1,7 +1,8 @@
 use relaycast::{
-    AgentClient, CreateAgentRequest, CreateChannelRequest, DmConversationSummary,
-    MessageInjectionMode, MessageListQuery, RelayCast, RelayCastOptions, ReleaseAgentRequest,
-    SpawnAgentRequest, WsEvent,
+    ActionInvocationStatus, AgentClient, CompleteInvocationRequest, CreateAgentRequest,
+    CreateChannelRequest, DmConversationSummary, EmitSessionEventRequest, ListSessionEventsQuery,
+    MessageInjectionMode, MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions,
+    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -728,4 +729,311 @@ async fn dm_conversation_participants_returns_workspace_conversation_members() {
         .await
         .expect("missing conversation should return empty vec");
     assert!(missing.is_empty());
+}
+
+#[tokio::test]
+async fn action_lifecycle_uses_expected_endpoints() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    // register
+    Mock::given(method("POST"))
+        .and(path("/v1/actions"))
+        .and(body_json(json!({
+            "name": "deploy",
+            "description": "Deploy the app",
+            "handler_agent": "DeployBot"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "id": "act_1",
+                "name": "deploy",
+                "description": "Deploy the app",
+                "handler_agent": "DeployBot",
+                "input_schema": {},
+                "output_schema": {},
+                "available_to": null,
+                "is_active": true,
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let action = relay
+        .register_action(RegisterActionRequest {
+            name: "deploy".to_string(),
+            description: "Deploy the app".to_string(),
+            handler_agent: "DeployBot".to_string(),
+            input_schema: None,
+            output_schema: None,
+            available_to: None,
+        })
+        .await
+        .expect("register_action failed");
+    assert_eq!(action.name, "deploy");
+    assert!(action.is_active);
+
+    // list
+    Mock::given(method("GET"))
+        .and(path("/v1/actions"))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let actions = relay.list_actions().await.expect("list_actions failed");
+    assert!(actions.is_empty());
+
+    // get
+    Mock::given(method("GET"))
+        .and(path("/v1/actions/deploy"))
+        .respond_with(ok(json!({
+            "id": "act_1",
+            "name": "deploy",
+            "description": "Deploy the app",
+            "handler_agent": "DeployBot",
+            "input_schema": {},
+            "output_schema": {},
+            "available_to": ["BackendAgent"],
+            "is_active": true,
+            "created_at": "2026-01-01T00:00:00.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let fetched = relay.get_action("deploy").await.expect("get_action failed");
+    assert_eq!(
+        fetched.available_to.as_deref(),
+        Some(&["BackendAgent".to_string()][..])
+    );
+
+    // delete (204)
+    Mock::given(method("DELETE"))
+        .and(path("/v1/actions/deploy"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .delete_action("deploy")
+        .await
+        .expect("delete_action failed");
+}
+
+#[tokio::test]
+async fn action_invocation_uses_agent_endpoints() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+    let agent = relay
+        .as_agent("at_live_backend")
+        .expect("failed to create agent client");
+
+    // invoke
+    Mock::given(method("POST"))
+        .and(path("/v1/actions/deploy/invoke"))
+        .and(header("authorization", "Bearer at_live_backend"))
+        .and(body_json(json!({ "input": { "env": "staging" } })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "invocation_id": "inv_1",
+                "action_name": "deploy",
+                "handler_agent_id": "agent_handler",
+                "input": { "env": "staging" },
+                "status": "invoked",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut input = serde_json::Map::new();
+    input.insert("env".to_string(), json!("staging"));
+    let invoked = agent
+        .invoke_action("deploy", Some(input))
+        .await
+        .expect("invoke_action failed");
+    assert_eq!(invoked.invocation_id, "inv_1");
+    assert_eq!(invoked.status, ActionInvocationStatus::Invoked);
+
+    // complete
+    Mock::given(method("POST"))
+        .and(path("/v1/actions/deploy/invocations/inv_1/complete"))
+        .and(body_json(json!({
+            "output": { "url": "https://staging.example.com" },
+            "duration_ms": 1200
+        })))
+        .respond_with(ok(json!({
+            "invocation_id": "inv_1",
+            "action_name": "deploy",
+            "status": "completed",
+            "output": { "url": "https://staging.example.com" },
+            "error": null,
+            "duration_ms": 1200,
+            "completed_at": "2026-01-01T00:00:01.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut output = serde_json::Map::new();
+    output.insert("url".to_string(), json!("https://staging.example.com"));
+    let completed = agent
+        .complete_action_invocation(
+            "deploy",
+            "inv_1",
+            CompleteInvocationRequest {
+                output: Some(output),
+                error: None,
+                duration_ms: Some(1200),
+            },
+        )
+        .await
+        .expect("complete_action_invocation failed");
+    assert_eq!(completed.status, ActionInvocationStatus::Completed);
+
+    // get invocation
+    Mock::given(method("GET"))
+        .and(path("/v1/actions/deploy/invocations/inv_1"))
+        .respond_with(ok(json!({
+            "invocation_id": "inv_1",
+            "action_name": "deploy",
+            "caller_id": "agent_backend",
+            "caller_name": "BackendAgent",
+            "input": { "env": "staging" },
+            "output": { "url": "https://staging.example.com" },
+            "status": "completed",
+            "error": null,
+            "duration_ms": 1200,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "completed_at": "2026-01-01T00:00:01.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let fetched = agent
+        .get_action_invocation("deploy", "inv_1")
+        .await
+        .expect("get_action_invocation failed");
+    assert_eq!(fetched.status, ActionInvocationStatus::Completed);
+    assert_eq!(fetched.caller_name.as_deref(), Some("BackendAgent"));
+}
+
+#[tokio::test]
+async fn agent_session_events_use_expected_endpoints() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/agents/Worker/events"))
+        .and(body_json(json!({ "type": "status.active" })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "id": "evt_1",
+                "agent_id": "agent_1",
+                "type": "status.active",
+                "payload": {},
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let event = relay
+        .emit_agent_event(
+            "Worker",
+            EmitSessionEventRequest {
+                event_type: "status.active".to_string(),
+                payload: None,
+            },
+        )
+        .await
+        .expect("emit_agent_event failed");
+    assert_eq!(event.event_type, "status.active");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/agents/Worker/events"))
+        .and(query_param("type", "status.active"))
+        .and(query_param("limit", "50"))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let events = relay
+        .list_agent_events(
+            "Worker",
+            Some(ListSessionEventsQuery {
+                event_type: Some("status.active".to_string()),
+                limit: Some(50),
+            }),
+        )
+        .await
+        .expect("list_agent_events failed");
+    assert!(events.is_empty());
+}
+
+#[test]
+fn deserializes_action_ws_events() {
+    let invoked: WsEvent = serde_json::from_value(json!({
+        "type": "action.invoked",
+        "invocation_id": "inv_1",
+        "action_name": "deploy",
+        "caller_name": "BackendAgent",
+        "handler_agent_id": "agent_handler"
+    }))
+    .expect("action.invoked should deserialize");
+    match invoked {
+        WsEvent::ActionInvoked(e) => assert_eq!(e.action_name, "deploy"),
+        other => panic!("expected ActionInvoked, got {other:?}"),
+    }
+
+    let completed: WsEvent = serde_json::from_value(json!({
+        "type": "action.completed",
+        "invocation_id": "inv_1",
+        "action_name": "deploy",
+        "status": "completed",
+        "output": { "url": "https://x" },
+        "error": null
+    }))
+    .expect("action.completed should deserialize");
+    match completed {
+        WsEvent::ActionCompleted(e) => assert_eq!(e.action_name, "deploy"),
+        other => panic!("expected ActionCompleted, got {other:?}"),
+    }
+
+    let failed: WsEvent = serde_json::from_value(json!({
+        "type": "action.failed",
+        "invocation_id": "inv_1",
+        "action_name": "deploy",
+        "status": "failed",
+        "output": null,
+        "error": "boom"
+    }))
+    .expect("action.failed should deserialize");
+    match failed {
+        WsEvent::ActionFailed(e) => assert_eq!(e.error.as_deref(), Some("boom")),
+        other => panic!("expected ActionFailed, got {other:?}"),
+    }
+
+    // A mismatched status fails fast (event-specific literal): an action.completed
+    // payload carrying status "invoked" must not deserialize.
+    let bad: Result<WsEvent, _> = serde_json::from_value(json!({
+        "type": "action.completed",
+        "invocation_id": "inv_1",
+        "action_name": "deploy",
+        "status": "invoked"
+    }));
+    assert!(
+        bad.is_err(),
+        "action.completed with status 'invoked' should fail"
+    );
 }

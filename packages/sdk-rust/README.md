@@ -145,6 +145,41 @@ while let Ok(raw) = raw_events.recv().await {
 }
 ```
 
+### Actions (agent-to-agent RPC)
+
+Register an action handled by an agent, invoke it from another agent, and complete it. The handler
+receives an `action.invoked` WebSocket event; the caller receives `action.completed`/`action.failed`.
+
+```rust
+use relaycast::{CompleteInvocationRequest, RegisterActionRequest, RelayCast, RelayCastOptions};
+
+let relay = RelayCast::new(RelayCastOptions::new("rk_live_xxx"))?;
+
+// Workspace-level: register / list / get / delete
+relay.register_action(RegisterActionRequest {
+    name: "deploy".to_string(),
+    description: "Deploy the app".to_string(),
+    handler_agent: "DeployBot".to_string(),
+    input_schema: None,
+    output_schema: None,
+    available_to: None,
+}).await?;
+
+// Agent-level: invoke / complete / poll
+let caller = relay.as_agent("at_live_caller")?;
+let invocation = caller.invoke_action("deploy", None).await?;
+
+let handler = relay.as_agent("at_live_deploybot")?;
+handler.complete_action_invocation("deploy", &invocation.invocation_id, CompleteInvocationRequest {
+    output: None,
+    error: None,
+    duration_ms: Some(1200),
+}).await?;
+
+let status = caller.get_action_invocation("deploy", &invocation.invocation_id).await?;
+println!("invocation status: {}", status.status);
+```
+
 ### Registration Helpers
 
 ```rust
