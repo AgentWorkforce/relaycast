@@ -1,4 +1,4 @@
-import { eq, ne, and, asc, inArray } from 'drizzle-orm';
+import { eq, ne, and, not, asc, isNull, inArray, notInArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -127,10 +127,6 @@ async function getOwnedDelivery(
 // `changed` is true so idempotent retries don't emit duplicate notifications.
 export type TransitionResult = { delivery: ReturnType<typeof serializeDelivery>; changed: boolean };
 
-function unixSeconds(value: Date | null | undefined): number | null {
-  return value ? Math.floor(value.getTime() / 1000) : null;
-}
-
 /**
  * Idempotently transition a delivery to `delivered`. `delivered` is terminal,
  * so repeated acks are no-ops (reported as `changed: false`). Returns null if
@@ -146,10 +142,14 @@ export async function ackDelivery(
   if (!existing) return null;
   if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
 
+  // The `status != 'delivered'` predicate lives in the UPDATE so the DB decides
+  // atomically whether this call transitioned the row. Under concurrent acks
+  // only one update matches (SQLite serializes writes); the loser sees no row
+  // and reports `changed: false`, so the delivered event fires exactly once.
   const [updated] = await db
     .update(deliveries)
     .set({ status: 'delivered', updatedAt: new Date() })
-    .where(eq(deliveries.id, deliveryId))
+    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
     .returning();
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
@@ -175,6 +175,10 @@ export async function failDelivery(
     return { delivery: serializeDelivery(existing), changed: false };
   }
 
+  // Both `delivered` and `failed` are settled, so the UPDATE only matches a
+  // not-yet-settled row. Under concurrent fails the DB lets exactly one win;
+  // the loser matches no row, preserves the first failure's metadata, and
+  // reports `changed: false` (no duplicate event).
   const [updated] = await db
     .update(deliveries)
     .set({
@@ -183,7 +187,7 @@ export async function failDelivery(
       retryable: opts.retryable ?? null,
       updatedAt: new Date(),
     })
-    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
+    .where(and(eq(deliveries.id, deliveryId), notInArray(deliveries.status, ['delivered', 'failed'])))
     .returning();
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
@@ -208,11 +212,18 @@ export async function deferDelivery(
   if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
 
   const targetReason = opts.reason ?? existing.reason;
-  const unchanged = existing.status === 'deferred'
-    && unixSeconds(existing.availableAt) === unixSeconds(opts.availableAt)
-    && existing.reason === targetReason;
-  if (unchanged) return { delivery: serializeDelivery(existing), changed: false };
-
+  const reasonMatches = targetReason === null
+    ? isNull(deliveries.reason)
+    : eq(deliveries.reason, targetReason);
+  // A real change means: not terminal-delivered, and not already deferred to
+  // this exact (available_at, reason). Encoding the no-op predicate in the
+  // UPDATE makes it atomic — identical concurrent defers match no row on the
+  // loser and report `changed: false`, so no duplicate event fires.
+  const isNoop = and(
+    eq(deliveries.status, 'deferred'),
+    eq(deliveries.availableAt, opts.availableAt),
+    reasonMatches,
+  )!;
   const [updated] = await db
     .update(deliveries)
     .set({
@@ -221,7 +232,11 @@ export async function deferDelivery(
       reason: targetReason,
       updatedAt: new Date(),
     })
-    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
+    .where(and(
+      eq(deliveries.id, deliveryId),
+      ne(deliveries.status, 'delivered'),
+      not(isNoop),
+    ))
     .returning();
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }

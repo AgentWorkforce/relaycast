@@ -217,6 +217,27 @@ describe('durable delivery api', () => {
     expect(bobSock.ofType('delivery.delivered')).toHaveLength(1);
   });
 
+  it('does not re-emit delivery.deferred when re-deferred to the same time', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const availableAt = new Date(Date.now() + 60_000).toISOString();
+
+    const bobSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+
+    const deferOnce = () => stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: availableAt }),
+    });
+
+    expect((await deferOnce()).status).toBe(200);
+    // Re-deferring to the identical available_at is a no-op — no second event.
+    expect((await deferOnce()).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bobSock.ofType('delivery.deferred')).toHaveLength(1);
+  });
+
   it('preserves failure metadata across repeated fail calls (idempotent)', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);
