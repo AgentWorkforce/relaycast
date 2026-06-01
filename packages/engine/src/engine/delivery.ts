@@ -141,7 +141,7 @@ export async function ackDelivery(
     .set({ status: 'delivered', updatedAt: new Date() })
     .where(eq(deliveries.id, deliveryId))
     .returning();
-  return serializeDelivery({ ...updated, channelId: existing.channelId });
+  return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
 /**
