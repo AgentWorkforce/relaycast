@@ -1,4 +1,5 @@
-import { describe, it, expectTypeOf } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import { DeliverySchema, DeliveryItemSchema, ServerEventSchema } from '../index.js';
 import type {
   Workspace,
   CreateWorkspaceRequest,
@@ -301,5 +302,60 @@ describe('Type definitions', () => {
       }
     }
     handleEvent({ type: 'pong' });
+  });
+
+  // ============================================
+  // Durable delivery
+  // ============================================
+  it('DeliverySchema validates a delivery record', () => {
+    const parsed = DeliverySchema.safeParse({
+      id: 'del_1',
+      message_id: 'm_1',
+      channel_id: 'c_1',
+      agent_id: 'a_1',
+      status: 'accepted',
+      mode: 'immediate',
+      reason: 'mention',
+      priority: 'normal',
+      retryable: null,
+      error: null,
+      available_at: null,
+      deadline: null,
+      created_at: '2026-06-01T00:00:00.000Z',
+      updated_at: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('DeliverySchema rejects an unknown status', () => {
+    const parsed = DeliverySchema.safeParse({
+      id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
+      status: 'bogus', mode: 'immediate', reason: null, priority: 'normal',
+      retryable: null, error: null, available_at: null, deadline: null,
+      created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('DeliveryItemSchema carries an optional message payload', () => {
+    const parsed = DeliveryItemSchema.safeParse({
+      id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
+      status: 'deferred', mode: 'immediate', reason: null, priority: 'normal',
+      retryable: null, error: null, available_at: '2026-06-01T00:01:00.000Z',
+      deadline: null, created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
+      message: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('ServerEventSchema parses durable delivery events', () => {
+    for (const event of [
+      { type: 'delivery.accepted', delivery_id: 'del_1', message_id: 'm_1', channel_id: 'c_1', reason: 'message' },
+      { type: 'delivery.delivered', delivery_id: 'del_1', message_id: 'm_1' },
+      { type: 'delivery.deferred', delivery_id: 'del_1', message_id: 'm_1', available_at: '2026-06-01T00:01:00.000Z' },
+      { type: 'delivery.failed', delivery_id: 'del_1', message_id: 'm_1', error: 'boom', retryable: true },
+    ]) {
+      expect(ServerEventSchema.safeParse(event).success).toBe(true);
+    }
   });
 });

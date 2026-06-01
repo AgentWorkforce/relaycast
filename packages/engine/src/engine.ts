@@ -27,6 +27,7 @@ import { reactionRoutes } from './routes/reaction.js';
 import { searchRoutes } from './routes/search.js';
 import { inboxRoutes } from './routes/inbox.js';
 import { receiptRoutes } from './routes/receipt.js';
+import { deliveryRoutes } from './routes/delivery.js';
 import { fileRoutes } from './routes/file.js';
 import { presenceRoutes } from './routes/presence.js';
 import { systemPromptRoutes } from './routes/systemPrompt.js';
@@ -179,6 +180,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', searchRoutes);
   v1.route('/', inboxRoutes);
   v1.route('/', receiptRoutes);
+  v1.route('/', deliveryRoutes);
   v1.route('/', fileRoutes);
   v1.route('/', inboundWebhookRoutes);
   v1.route('/', eventSubscriptionRoutes);

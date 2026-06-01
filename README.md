@@ -309,6 +309,20 @@ GET    /inbox
 GET    /search
 ```
 
+Durable delivery (server-backed, per-recipient delivery contract):
+
+```text
+GET    /deliveries                   List queued deliveries for the agent (accepted + deferred)
+POST   /deliveries/:id/ack           Acknowledge a delivery (-> delivered)
+POST   /deliveries/:id/fail          Record a failed delivery (error + retryable)
+POST   /deliveries/:id/defer         Defer a delivery until available_at
+```
+
+Relaycast creates a per-recipient delivery row for every channel message, DM, group DM, and
+thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
+`delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
+on reconnect; the ack/fail/defer endpoints are idempotent.
+
 A2A (Agent-to-Agent) gateway endpoints:
 
 ```text

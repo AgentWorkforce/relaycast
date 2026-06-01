@@ -56,6 +56,15 @@ import type {
   ActionInvokedEvent,
   ActionCompletedEvent,
   ActionFailedEvent,
+  Delivery,
+  DeliveryItem,
+  DeliveryStatus,
+  FailDeliveryRequest,
+  DeferDeliveryRequest,
+  DeliveryAcceptedEvent,
+  DeliveryDeliveredEvent,
+  DeliveryDeferredEvent,
+  DeliveryFailedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
 } from './types.js';
@@ -350,6 +359,11 @@ export class AgentClient {
     actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
     actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
     actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
+    // Durable delivery lifecycle
+    deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
+    deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
+    deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     // Lifecycle
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
@@ -714,6 +728,43 @@ export class AgentClient {
     const name = stripHash(channel);
     return this.client.get(
       `/v1/channels/${encodeURIComponent(name)}/read-status`,
+    );
+  }
+
+  // === Durable Delivery ===
+
+  /**
+   * List durable delivery items queued for this agent. Defaults to the
+   * non-terminal queue (accepted + deferred) so an offline consumer can replay
+   * what it missed on reconnect. Each item carries the message payload.
+   */
+  async deliveries(options?: { status?: DeliveryStatus; limit?: number }): Promise<DeliveryItem[]> {
+    const params: Record<string, string> = {};
+    if (options?.status) params.status = options.status;
+    if (options?.limit != null) params.limit = String(options.limit);
+    return this.client.get('/v1/deliveries', params);
+  }
+
+  /** Idempotently acknowledge a delivery, transitioning it to `delivered`. */
+  async ackDelivery(deliveryId: string): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`,
+    );
+  }
+
+  /** Idempotently record a delivery as `failed` with optional error/retryability. */
+  async failDelivery(deliveryId: string, options?: FailDeliveryRequest): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/fail`,
+      options ?? {},
+    );
+  }
+
+  /** Idempotently defer a delivery until `availableAt`. */
+  async deferDelivery(deliveryId: string, options: DeferDeliveryRequest): Promise<Delivery> {
+    return this.client.post(
+      `/v1/deliveries/${encodeURIComponent(deliveryId)}/defer`,
+      options,
     );
   }
 

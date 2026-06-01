@@ -336,6 +336,78 @@ components:
           items:
             $ref: '#/components/schemas/Message'
 
+    Delivery:
+      type: object
+      description: A per-recipient durable delivery record.
+      properties:
+        id:
+          type: string
+        message_id:
+          type: string
+        channel_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+          enum: [accepted, delivered, deferred, failed]
+        mode:
+          type: string
+        reason:
+          type: string
+          nullable: true
+        priority:
+          type: string
+        retryable:
+          type: boolean
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        available_at:
+          type: string
+          format: date-time
+          nullable: true
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    DeliveryItem:
+      allOf:
+        - $ref: '#/components/schemas/Delivery'
+        - type: object
+          properties:
+            message:
+              nullable: true
+              type: object
+              properties:
+                id:
+                  type: string
+                channel_id:
+                  type: string
+                agent_id:
+                  type: string
+                  nullable: true
+                agent_name:
+                  type: string
+                  nullable: true
+                text:
+                  type: string
+                thread_id:
+                  type: string
+                  nullable: true
+                created_at:
+                  type: string
+                  format: date-time
+
     SearchResult:
       type: object
       properties:
@@ -2174,6 +2246,183 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /deliveries:
+    get:
+      summary: List durable deliveries
+      description: >
+        List durable delivery items queued for the calling agent. Defaults to
+        the non-terminal queue (`accepted` + `deferred`) so an offline consumer
+        can replay what it missed after reconnect, oldest first. Each item
+        carries the message payload.
+      tags:
+        - Deliveries
+      security:
+        - agentToken: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter by a single delivery status.
+          schema:
+            type: string
+            enum: [accepted, delivered, deferred, failed]
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of items to return (1-200, default 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Queued delivery items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DeliveryItem'
+
+  /deliveries/{id}/ack:
+    post:
+      summary: Acknowledge a delivery
+      description: Idempotently transition a delivery to `delivered`.
+      tags:
+        - Deliveries
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Delivery'
+        '404':
+          description: Delivery not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /deliveries/{id}/fail:
+    post:
+      summary: Fail a delivery
+      description: >
+        Idempotently record a delivery as `failed`, capturing error text and
+        whether a retry is sane.
+      tags:
+        - Deliveries
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                error:
+                  type: string
+                retryable:
+                  type: boolean
+      responses:
+        '200':
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Delivery'
+        '404':
+          description: Delivery not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /deliveries/{id}/defer:
+    post:
+      summary: Defer a delivery
+      description: >
+        Idempotently record a delivery as `deferred` with the time it next
+        becomes available for retry.
+      tags:
+        - Deliveries
+      security:
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - available_at
+              properties:
+                available_at:
+                  type: string
+                  format: date-time
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Delivery'
+        '400':
+          description: Invalid available_at
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Delivery not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /files/upload:
     post:
