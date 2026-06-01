@@ -782,6 +782,19 @@ pub struct CommandInvocation {
 
 // === Actions (agent-to-agent RPC) ===
 
+/// Status of an action invocation. `action.completed` always reports
+/// [`ActionInvocationStatus::Completed`] and `action.failed` reports
+/// [`ActionInvocationStatus::Failed`]; `Unknown` is a forward-compatible fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInvocationStatus {
+    Invoked,
+    Completed,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterActionRequest {
     pub name: String,
@@ -824,7 +837,7 @@ pub struct InvokeActionResult {
     pub handler_agent_id: String,
     #[serde(default)]
     pub input: serde_json::Map<String, serde_json::Value>,
-    pub status: String,
+    pub status: ActionInvocationStatus,
     pub created_at: String,
 }
 
@@ -850,7 +863,7 @@ pub struct ActionInvocation {
     pub input: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     pub output: Option<serde_json::Map<String, serde_json::Value>>,
-    pub status: String,
+    pub status: ActionInvocationStatus,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
@@ -1169,7 +1182,7 @@ pub struct ActionInvokedEvent {
 pub struct ActionResultEvent {
     pub invocation_id: String,
     pub action_name: String,
-    pub status: String,
+    pub status: ActionInvocationStatus,
     #[serde(default)]
     pub output: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]

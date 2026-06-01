@@ -1,8 +1,8 @@
 use relaycast::{
-    AgentClient, CompleteInvocationRequest, CreateAgentRequest, CreateChannelRequest,
-    DmConversationSummary, EmitSessionEventRequest, ListSessionEventsQuery, MessageInjectionMode,
-    MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest,
-    SpawnAgentRequest, WsEvent,
+    ActionInvocationStatus, AgentClient, CompleteInvocationRequest, CreateAgentRequest,
+    CreateChannelRequest, DmConversationSummary, EmitSessionEventRequest, ListSessionEventsQuery,
+    MessageInjectionMode, MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions,
+    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -853,7 +853,7 @@ async fn action_invocation_uses_agent_endpoints() {
         .await
         .expect("invoke_action failed");
     assert_eq!(invoked.invocation_id, "inv_1");
-    assert_eq!(invoked.status, "invoked");
+    assert_eq!(invoked.status, ActionInvocationStatus::Invoked);
 
     // complete
     Mock::given(method("POST"))
@@ -889,7 +889,7 @@ async fn action_invocation_uses_agent_endpoints() {
         )
         .await
         .expect("complete_action_invocation failed");
-    assert_eq!(completed.status, "completed");
+    assert_eq!(completed.status, ActionInvocationStatus::Completed);
 
     // get invocation
     Mock::given(method("GET"))
@@ -914,7 +914,7 @@ async fn action_invocation_uses_agent_endpoints() {
         .get_action_invocation("deploy", "inv_1")
         .await
         .expect("get_action_invocation failed");
-    assert_eq!(fetched.status, "completed");
+    assert_eq!(fetched.status, ActionInvocationStatus::Completed);
     assert_eq!(fetched.caller_name.as_deref(), Some("BackendAgent"));
 }
 
@@ -1000,7 +1000,7 @@ fn deserializes_action_ws_events() {
     }))
     .expect("action.completed should deserialize");
     match completed {
-        WsEvent::ActionCompleted(e) => assert_eq!(e.status, "completed"),
+        WsEvent::ActionCompleted(e) => assert_eq!(e.status, ActionInvocationStatus::Completed),
         other => panic!("expected ActionCompleted, got {other:?}"),
     }
 

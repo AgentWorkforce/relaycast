@@ -153,6 +153,7 @@ pub use types::{
     // Actions & session events
     ActionDefinition,
     ActionInvocation,
+    ActionInvocationStatus,
     ActionInvokedEvent,
     ActionResultEvent,
     CompleteInvocationRequest,
