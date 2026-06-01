@@ -199,6 +199,29 @@ describe('durable delivery api', () => {
     expect(((await ack.json()) as { data: { status: string } }).data.status).toBe('delivered');
   });
 
+  it('includes deferred deliveries in the agent detail pending_deliveries', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+
+    const res = await stack.app.request('/v1/agents/bob', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const pending = ((await res.json()) as {
+      data: { pending_deliveries: Array<{ id: string; status: string }> };
+    }).data.pending_deliveries;
+    const deferred = pending.find((d) => d.id === item.id);
+    expect(deferred).toBeDefined();
+    expect(deferred!.status).toBe('deferred');
+  });
+
   it('rejects an invalid defer payload', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);

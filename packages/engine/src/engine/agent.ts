@@ -172,7 +172,9 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
         createdAt: deliveries.createdAt,
       })
       .from(deliveries)
-      .where(and(eq(deliveries.agentId, agent.id), eq(deliveries.status, 'accepted')))
+      // Mirror the GET /v1/deliveries replay queue: accepted + deferred are the
+      // non-terminal, still-pending states.
+      .where(and(eq(deliveries.agentId, agent.id), inArray(deliveries.status, ['accepted', 'deferred'])))
       .orderBy(deliveries.createdAt)
       .limit(50),
   ]);
