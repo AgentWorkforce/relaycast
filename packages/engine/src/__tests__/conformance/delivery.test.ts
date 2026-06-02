@@ -251,6 +251,23 @@ describe('durable delivery api', () => {
     expect(((await res.json()) as { data: { status: string } }).data.status).toBe('failed');
   });
 
+  it('does not inherit the acceptance reason when deferring without a reason', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    // The queued item carries an acceptance reason (e.g. "message").
+    expect(item.reason).toBeTruthy();
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: { status: string; reason: string | null } }).data;
+    expect(data.status).toBe('deferred');
+    expect(data.reason).toBeNull();
+  });
+
   it('rejects an invalid defer payload', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);

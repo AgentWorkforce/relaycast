@@ -211,7 +211,10 @@ export async function deferDelivery(
   if (!existing) return null;
   if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
 
-  const targetReason = opts.reason ?? existing.reason;
+  // The defer reason is its own concept; don't inherit the acceptance reason
+  // (message/mention/dm/...) when the caller omits one, or deferred records and
+  // delivery.deferred events would carry a misleading reason. Default to null.
+  const targetReason = opts.reason ?? null;
   const reasonMatches = targetReason === null
     ? isNull(deliveries.reason)
     : eq(deliveries.reason, targetReason);
