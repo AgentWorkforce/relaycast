@@ -84,8 +84,22 @@ deliveryRoutes.post(
   rateLimit,
   async (c) => {
     try {
-      const raw = await c.req.json().catch(() => ({}));
-      const parsed = FailDeliveryRequestSchema.safeParse(raw ?? {});
+      // The fail body is optional (error/retryable), so an empty body is valid
+      // and defaults to {}. But a non-empty malformed JSON body is a client
+      // error and must 400 — don't silently coerce it and mutate state.
+      const bodyText = await c.req.text();
+      let raw: unknown = {};
+      if (bodyText.trim().length > 0) {
+        try {
+          raw = JSON.parse(bodyText);
+        } catch {
+          return c.json({
+            ok: false,
+            error: { code: 'invalid_request', message: 'Invalid JSON body' },
+          }, 400);
+        }
+      }
+      const parsed = FailDeliveryRequestSchema.safeParse(raw);
       if (!parsed.success) {
         return c.json({
           ok: false,

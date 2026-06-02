@@ -222,6 +222,35 @@ describe('durable delivery api', () => {
     expect(deferred!.status).toBe('deferred');
   });
 
+  it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: '{"error": "boom"', // missing closing brace
+    });
+    expect(res.status).toBe(400);
+
+    // The delivery must remain queued (accepted), not flipped to failed.
+    const queued = await listDeliveries(bob.token);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('accepted');
+  });
+
+  it('accepts an empty fail body (optional metadata)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: { status: string } }).data.status).toBe('failed');
+  });
+
   it('rejects an invalid defer payload', async () => {
     const { bob } = await seed();
     const [item] = await listDeliveries(bob.token);
