@@ -236,6 +236,42 @@ export const ActionFailedEventSchema = z.object({
 });
 export type ActionFailedEvent = z.infer<typeof ActionFailedEventSchema>;
 
+// Durable delivery lifecycle events. Delivered to the recipient agent so an
+// offline consumer can reconcile queued delivery state on reconnect.
+export const DeliveryAcceptedEventSchema = z.object({
+  type: z.literal('delivery.accepted'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  channel_id: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+});
+export type DeliveryAcceptedEvent = z.infer<typeof DeliveryAcceptedEventSchema>;
+
+export const DeliveryDeliveredEventSchema = z.object({
+  type: z.literal('delivery.delivered'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+});
+export type DeliveryDeliveredEvent = z.infer<typeof DeliveryDeliveredEventSchema>;
+
+export const DeliveryDeferredEventSchema = z.object({
+  type: z.literal('delivery.deferred'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  available_at: z.string().nullable(),
+  reason: z.string().nullable().optional(),
+});
+export type DeliveryDeferredEvent = z.infer<typeof DeliveryDeferredEventSchema>;
+
+export const DeliveryFailedEventSchema = z.object({
+  type: z.literal('delivery.failed'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  error: z.string().nullable().optional(),
+  retryable: z.boolean().nullable().optional(),
+});
+export type DeliveryFailedEvent = z.infer<typeof DeliveryFailedEventSchema>;
+
 // WebSocket client events (emitted by WsClient, not from server)
 export const WsOpenEventSchema = z.object({
   type: z.literal('open'),
@@ -290,6 +326,10 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
+  DeliveryAcceptedEventSchema,
+  DeliveryDeliveredEventSchema,
+  DeliveryDeferredEventSchema,
+  DeliveryFailedEventSchema,
   PongEventSchema,
 ]);
 
@@ -332,6 +372,10 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
+  DeliveryAcceptedEventSchema,
+  DeliveryDeliveredEventSchema,
+  DeliveryDeferredEventSchema,
+  DeliveryFailedEventSchema,
   PongEventSchema,
   // Client-only events
   WsOpenEventSchema,

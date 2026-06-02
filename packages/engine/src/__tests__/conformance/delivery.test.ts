@@ -1,0 +1,378 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  makeNodeStack,
+  createWorkspace,
+  registerAgent,
+  FakeSocket,
+  type TestStack,
+} from './harness.js';
+
+/**
+ * Durable delivery API conformance: listing the queued inbox, and the
+ * idempotent ack / fail / defer transitions over the public engine routes.
+ */
+describe('durable delivery api', () => {
+  let stack: TestStack;
+  beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
+  afterEach(() => stack.close());
+
+  /** Stand up a workspace + channel with alice and bob joined, alice posts one message. */
+  async function seed() {
+    const ws = await createWorkspace(stack.app, 'delivery-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const createRes = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(createRes.status).toBeLessThan(300);
+    for (const token of [alice.token, bob.token]) {
+      const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(joinRes.status).toBeLessThan(300);
+    }
+
+    const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'hello bob' }),
+    });
+    expect(postRes.status).toBeLessThan(300);
+    const messageId = ((await postRes.json()) as { data: { id: string } }).data.id;
+
+    return { ws, alice, bob, messageId };
+  }
+
+  async function listDeliveries(token: string, query = '') {
+    const res = await stack.app.request(`/v1/deliveries${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
+  }
+
+  it('lists the queued delivery for a recipient with the message payload', async () => {
+    const { bob, messageId } = await seed();
+
+    const items = await listDeliveries(bob.token);
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item.message_id).toBe(messageId);
+    expect(item.status).toBe('accepted');
+    expect(item.agent_id).toBe(bob.agentId);
+    expect((item.message as { text: string }).text).toBe('hello bob');
+    expect((item.message as { agent_name: string }).agent_name).toBe('alice');
+  });
+
+  it('does not expose deliveries to non-recipients', async () => {
+    const { alice } = await seed();
+    // alice is the sender, so she has no delivery row of her own
+    const items = await listDeliveries(alice.token);
+    expect(items).toHaveLength(0);
+  });
+
+  it('acks a delivery idempotently and removes it from the default queue', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const deliveryId = item.id as string;
+
+    const ack1 = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack1.status).toBe(200);
+    const ack1Data = ((await ack1.json()) as { data: { status: string; channel_id: string } }).data;
+    expect(ack1Data.status).toBe('delivered');
+    // channel_id is populated on the transition response, matching the queued item.
+    expect(ack1Data.channel_id).toBe(item.channel_id);
+    expect(ack1Data.channel_id).not.toBe('');
+
+    // Idempotent: second ack still 200 + delivered.
+    const ack2 = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack2.status).toBe(200);
+    expect(((await ack2.json()) as { data: { status: string } }).data.status).toBe('delivered');
+
+    // Delivered items drop out of the default (accepted+deferred) queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    // But are still listable by explicit status filter.
+    expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
+  });
+
+  it('records a failed delivery with error text and retryability', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'handler threw', retryable: true }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('failed');
+    expect(data.error).toBe('handler threw');
+    expect(data.retryable).toBe(true);
+    expect(data.channel_id).toBe(item.channel_id);
+  });
+
+  it('defers a delivery with available_at and keeps it in the queue', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    // Timestamps are stored at second precision (unixepoch), so align to the second.
+    const availableAt = new Date(Math.floor((Date.now() + 60_000) / 1000) * 1000).toISOString();
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: availableAt, reason: 'busy' }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('deferred');
+    expect(data.available_at).toBe(availableAt);
+    expect(data.reason).toBe('busy');
+    expect(data.channel_id).toBe(item.channel_id);
+
+    // Deferred items remain in the default queue for later retry.
+    const queued = await listDeliveries(bob.token);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('deferred');
+  });
+
+  it('does not resurrect a delivered (terminal) delivery via defer or fail', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+
+    // A late defer must not move a delivered record back into the queue.
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(((await defer.json()) as { data: { status: string } }).data.status).toBe('delivered');
+
+    // Same for a late fail.
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'too late' }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('delivered');
+
+    // Stays out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+  });
+
+  it('allows recovering a failed delivery via ack (retryable failures are not terminal)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const fail = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'transient', retryable: true }),
+    });
+    expect(fail.status).toBe(200);
+    expect(((await fail.json()) as { data: { status: string } }).data.status).toBe('failed');
+
+    // A retry that succeeds can ack the previously-failed delivery.
+    const ack = await stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ack.status).toBe(200);
+    expect(((await ack.json()) as { data: { status: string } }).data.status).toBe('delivered');
+  });
+
+  it('includes deferred deliveries in the agent detail pending_deliveries', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+
+    const res = await stack.app.request('/v1/agents/bob', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(res.status).toBe(200);
+    const pending = ((await res.json()) as {
+      data: { pending_deliveries: Array<{ id: string; status: string }> };
+    }).data.pending_deliveries;
+    const deferred = pending.find((d) => d.id === item.id);
+    expect(deferred).toBeDefined();
+    expect(deferred!.status).toBe('deferred');
+  });
+
+  it('rejects a malformed JSON fail body with 400 (no state change)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: '{"error": "boom"', // missing closing brace
+    });
+    expect(res.status).toBe(400);
+
+    // The delivery must remain queued (accepted), not flipped to failed.
+    const queued = await listDeliveries(bob.token);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('accepted');
+  });
+
+  it('accepts an empty fail body (optional metadata)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: { status: string } }).data.status).toBe('failed');
+  });
+
+  it('does not inherit the acceptance reason when deferring without a reason', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    // The queued item carries an acceptance reason (e.g. "message").
+    expect(item.reason).toBeTruthy();
+
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: { status: string; reason: string | null } }).data;
+    expect(data.status).toBe('deferred');
+    expect(data.reason).toBeNull();
+  });
+
+  it('rejects an invalid defer payload', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const res = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: 'not-a-date' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for an unknown or unowned delivery', async () => {
+    const { alice } = await seed();
+    const res = await stack.app.request('/v1/deliveries/del_does_not_exist/ack', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('emits delivery.delivered once on ack, not on idempotent retries', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const bobSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+
+    const ackOnce = () => stack.app.request(`/v1/deliveries/${item.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+
+    expect((await ackOnce()).status).toBe(200);
+    // A second ack is a no-op and must not re-emit the event.
+    expect((await ackOnce()).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bobSock.ofType('delivery.delivered')).toHaveLength(1);
+  });
+
+  it('does not re-emit delivery.deferred when re-deferred to the same time', async () => {
+    const { ws, bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+    const availableAt = new Date(Date.now() + 60_000).toISOString();
+
+    const bobSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+
+    const deferOnce = () => stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: availableAt }),
+    });
+
+    expect((await deferOnce()).status).toBe(200);
+    // Re-deferring to the identical available_at is a no-op — no second event.
+    expect((await deferOnce()).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bobSock.ofType('delivery.deferred')).toHaveLength(1);
+  });
+
+  it('preserves failure metadata across repeated fail calls (idempotent)', async () => {
+    const { bob } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const first = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'boom', retryable: true }),
+    });
+    expect(first.status).toBe(200);
+
+    // A second fail (even with an empty body) must not null out the recorded
+    // error/retryable — the first failure is preserved.
+    const second = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(second.status).toBe(200);
+    const data = ((await second.json()) as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('failed');
+    expect(data.error).toBe('boom');
+    expect(data.retryable).toBe(true);
+  });
+
+  it('clears a deferred delivery from the replay queue when the message is read', async () => {
+    const { bob, messageId } = await seed();
+    const [item] = await listDeliveries(bob.token);
+
+    const defer = await stack.app.request(`/v1/deliveries/${item.id}/defer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ available_at: new Date(Date.now() + 60_000).toISOString() }),
+    });
+    expect(defer.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+
+    const read = await stack.app.request(`/v1/messages/${messageId}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(read.status).toBe(200);
+
+    // The deferred item is now delivered and out of the default queue.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
+  });
+});

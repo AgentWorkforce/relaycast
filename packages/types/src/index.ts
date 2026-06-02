@@ -5,6 +5,7 @@ export * from './message.js';
 export * from './reaction.js';
 export * from './file.js';
 export * from './receipt.js';
+export * from './delivery.js';
 export * from './dm.js';
 export * from './events.js';
 export * from './api.js';

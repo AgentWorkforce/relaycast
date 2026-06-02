@@ -1,4 +1,4 @@
-import { eq, and, sql, isNull } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import {
   readReceipts,
@@ -55,7 +55,10 @@ export async function markRead(
     .values({ messageId, agentId })
     .onConflictDoNothing();
 
-  // Transition delivery status: accepted → delivered
+  // Transition delivery status to delivered. Reading consumes the message, so
+  // clear both still-queued states (accepted and deferred) — otherwise a
+  // deferred delivery would linger in the durable replay queue after the agent
+  // has already seen the message. `delivered`/`failed` are left untouched.
   await db
     .update(deliveries)
     .set({ status: 'delivered', updatedAt: new Date() })
@@ -63,7 +66,7 @@ export async function markRead(
       and(
         eq(deliveries.messageId, messageId),
         eq(deliveries.agentId, agentId),
-        eq(deliveries.status, 'accepted'),
+        inArray(deliveries.status, ['accepted', 'deferred']),
       ),
     );
 
