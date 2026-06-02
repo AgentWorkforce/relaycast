@@ -1,5 +1,13 @@
 {
   "version": 1,
-  "lastUpdated": "2026-06-01T04:23:22.030Z",
-  "trajectories": {}
+  "lastUpdated": "2026-06-02T11:57:15.658Z",
+  "trajectories": {
+    "traj_1pjavtw1yit2": {
+      "title": "Fix PR merge conflicts",
+      "status": "completed",
+      "startedAt": "2026-06-02T11:53:41.161Z",
+      "completedAt": "2026-06-02T11:57:15.470Z",
+      "path": "/Users/will/Projects/AgentWorkforce/relaycast/.trajectories/completed/2026-06/traj_1pjavtw1yit2.json"
+    }
+  }
 }

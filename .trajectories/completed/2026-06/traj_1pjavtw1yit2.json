@@ -1,0 +1,49 @@
+{
+  "id": "traj_1pjavtw1yit2",
+  "version": 1,
+  "task": {
+    "title": "Fix PR merge conflicts"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-02T11:53:41.161Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [
+    "82a6195",
+    "e52b06e",
+    "066c218",
+    "85f1e21",
+    "8e167e5",
+    "5f36d69",
+    "2620f09",
+    "82a5b8c"
+  ],
+  "filesChanged": [
+    ".github/workflows/publish-engine.yml",
+    ".github/workflows/publish-npm.yml",
+    ".trajectories/index.json",
+    "package-lock.json",
+    "packages/a2a/package.json",
+    "packages/cli/package.json",
+    "packages/engine/package.json",
+    "packages/mcp/package.json",
+    "packages/observer-dashboard/package.json",
+    "packages/openclaw/package.json",
+    "packages/react/package.json",
+    "packages/sdk-typescript/package.json",
+    "packages/types/package.json"
+  ],
+  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3930c7ac108799bb6b1290bb0ed24ac2679c09c3",
+    "endRef": "82a61959d2246ce4a16efb5eda0bfff60d9a046d",
+    "traceId": "f241730b-39b5-4093-91d7-841fb6f27500"
+  },
+  "completedAt": "2026-06-02T11:57:15.470Z",
+  "retrospective": {
+    "summary": "Merged origin/main into PR #155, resolved package version lockfile conflicts, verified GitHub mergeStateStatus is CLEAN, and passed @relaycast/engine tests and build.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  }
+}
