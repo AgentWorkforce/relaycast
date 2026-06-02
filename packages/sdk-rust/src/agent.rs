@@ -845,6 +845,81 @@ impl AgentClient {
             .await
     }
 
+    // === Durable Delivery ===
+
+    /// List durable delivery items queued for this agent.
+    ///
+    /// Defaults to the non-terminal replay queue (`accepted` + `deferred`) when
+    /// no status is provided. Each item carries the associated message payload.
+    pub async fn deliveries(
+        &self,
+        opts: Option<ListDeliveriesOptions>,
+    ) -> Result<Vec<DeliveryItem>> {
+        let opts = opts.unwrap_or_default();
+
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        if let Some(status) = opts.status {
+            query_params.push(("status".to_string(), status.as_str().to_string()));
+        }
+        if let Some(limit) = opts.limit {
+            query_params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let query: Vec<(&str, &str)> = query_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let query_ref = if query.is_empty() {
+            None
+        } else {
+            Some(query.as_slice())
+        };
+
+        self.client.get("/v1/deliveries", query_ref, None).await
+    }
+
+    /// Idempotently acknowledge a delivery, transitioning it to `delivered`.
+    pub async fn ack_delivery(&self, delivery_id: &str) -> Result<Delivery> {
+        self.client
+            .post(
+                &format!("/v1/deliveries/{}/ack", urlencoding::encode(delivery_id)),
+                None::<()>,
+                None,
+            )
+            .await
+    }
+
+    /// Idempotently record a delivery as `failed`.
+    pub async fn fail_delivery(
+        &self,
+        delivery_id: &str,
+        request: Option<FailDeliveryRequest>,
+    ) -> Result<Delivery> {
+        self.client
+            .post(
+                &format!("/v1/deliveries/{}/fail", urlencoding::encode(delivery_id)),
+                Some(request.unwrap_or_default()),
+                None,
+            )
+            .await
+    }
+
+    /// Idempotently defer a delivery until `available_at`.
+    pub async fn defer_delivery(
+        &self,
+        delivery_id: &str,
+        request: DeferDeliveryRequest,
+    ) -> Result<Delivery> {
+        self.client
+            .post(
+                &format!("/v1/deliveries/{}/defer", urlencoding::encode(delivery_id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
     // === Files ===
 
     /// Request a file upload.

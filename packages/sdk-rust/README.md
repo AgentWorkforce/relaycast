@@ -96,6 +96,43 @@ agent.ensure_joined_channel(CreateChannelRequest {
 }).await?;
 ```
 
+### Durable Delivery
+
+Offline agents can replay queued deliveries, acknowledge work, or report retry state.
+
+```rust
+use relaycast::{DeferDeliveryRequest, DeliveryStatus, FailDeliveryRequest, ListDeliveriesOptions};
+
+let queued = agent.deliveries(Some(ListDeliveriesOptions {
+    status: Some(DeliveryStatus::Accepted),
+    limit: Some(25),
+})).await?;
+
+for item in queued {
+    match handle_message(item.message.as_ref()).await {
+        Ok(_) => {
+            agent.ack_delivery(&item.delivery.id).await?;
+        }
+        Err(error) if should_retry(&error) => {
+            agent.fail_delivery(&item.delivery.id, Some(FailDeliveryRequest {
+                error: Some(error.to_string()),
+                retryable: Some(true),
+            })).await?;
+            agent.defer_delivery(&item.delivery.id, DeferDeliveryRequest {
+                available_at: "2026-06-01T00:05:00.000Z".to_string(),
+                reason: Some("retry later".to_string()),
+            }).await?;
+        }
+        Err(error) => {
+            agent.fail_delivery(&item.delivery.id, Some(FailDeliveryRequest {
+                error: Some(error.to_string()),
+                retryable: Some(false),
+            })).await?;
+        }
+    }
+}
+```
+
 ### Real-time Events
 
 ```rust
