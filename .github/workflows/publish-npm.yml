@@ -88,10 +88,12 @@ jobs:
 
       - name: Version all packages
         id: bump
+        env:
+          # Bind workflow inputs through env so free-form custom_version is not
+          # interpolated into the shell script body.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
         run: |
-          CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
-          VERSION_TYPE="${{ github.event.inputs.version }}"
-
           # Read current version from types (canonical source)
           CURRENT_VERSION=$(node -p "require('./packages/types/package.json').version")
           echo "Current version: $CURRENT_VERSION"
@@ -112,28 +114,25 @@ jobs:
           echo "New version: $NEW_VERSION"
 
           # Sync all package versions and internal dependencies
-          node -e "
+          NEW_VERSION="$NEW_VERSION" node <<'NODE'
             const fs = require('fs');
             const path = require('path');
-            const version = '$NEW_VERSION';
+            const version = process.env.NEW_VERSION;
+            if (!version) {
+              throw new Error('NEW_VERSION is required');
+            }
 
             const packagesDir = 'packages';
-            // @relaycast/engine is versioned + published independently
-            // (see publish-engine.yml); never touch it in the lockstep sweep,
-            // and don't rewrite other packages' dependency on it.
-            const SKIP = new Set(['engine']);
             for (const dir of fs.readdirSync(packagesDir)) {
-              if (SKIP.has(dir)) { console.log('skip (independent): ' + dir); continue; }
               const pkgPath = path.join(packagesDir, dir, 'package.json');
               if (fs.existsSync(pkgPath)) {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
                 pkg.version = version;
 
                 // Update @relaycast/* dependencies to exact version
-                // (except @relaycast/engine, which is independently versioned).
                 for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
                   for (const dep of Object.keys(pkg[depType] || {})) {
-                    if (dep.startsWith('@relaycast/') && dep !== '@relaycast/engine') {
+                    if (dep.startsWith('@relaycast/')) {
                       pkg[depType][dep] = version;
                     }
                   }
@@ -146,14 +145,14 @@ jobs:
 
             // Sync package version constants
             const sdkVersionPath = path.join(packagesDir, 'sdk-typescript', 'src', 'version.ts');
-            fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+            fs.writeFileSync(sdkVersionPath, 'export const SDK_VERSION = ' + JSON.stringify(version) + ' as const;\n');
             console.log('SDK_VERSION -> ' + version);
             const cliVersionPath = path.join(packagesDir, 'cli', 'src', 'version.ts');
             if (fs.existsSync(cliVersionPath)) {
-              fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\\n');
+              fs.writeFileSync(cliVersionPath, 'export const CLI_VERSION = ' + JSON.stringify(version) + ' as const;\n');
               console.log('CLI_VERSION -> ' + version);
             }
-          "
+          NODE
 
       - name: Clean reinstall after version bump
         run: |
@@ -166,7 +165,7 @@ jobs:
       - name: Run tests
         run: npx turbo test
         env:
-          DO_NOT_TRACK: '1'
+          DO_NOT_TRACK: "1"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -192,6 +191,7 @@ jobs:
         package:
           - a2a
           - types
+          - engine
           - sdk-typescript
           - cli
           - mcp
@@ -321,6 +321,7 @@ jobs:
             ```bash
             npm install @relaycast/a2a@${{ needs.build.outputs.new_version }}
             npm install @relaycast/sdk@${{ needs.build.outputs.new_version }}
+            npm install @relaycast/engine@${{ needs.build.outputs.new_version }}
             npm install relaycast@${{ needs.build.outputs.new_version }}
             npm install @relaycast/react@${{ needs.build.outputs.new_version }}
             npm install @relaycast/mcp@${{ needs.build.outputs.new_version }}
@@ -332,6 +333,7 @@ jobs:
             |---------|---------|
             | @relaycast/a2a | ${{ needs.build.outputs.new_version }} |
             | @relaycast/types | ${{ needs.build.outputs.new_version }} |
+            | @relaycast/engine | ${{ needs.build.outputs.new_version }} |
             | @relaycast/sdk | ${{ needs.build.outputs.new_version }} |
             | relaycast | ${{ needs.build.outputs.new_version }} |
             | @relaycast/mcp | ${{ needs.build.outputs.new_version }} |
