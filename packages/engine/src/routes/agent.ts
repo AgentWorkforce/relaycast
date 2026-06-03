@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { AgentTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import * as directoryEngine from '../engine/directory.js';
@@ -63,6 +63,60 @@ const releaseAgentSchema = z.object({
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
 });
+
+function canonicalStatus(status: string): 'active' | 'idle' | 'blocked' | 'waiting' | 'offline' | null {
+  if (status === 'online') return 'active';
+  if (status === 'active' || status === 'idle' || status === 'blocked' || status === 'waiting' || status === 'offline') {
+    return status;
+  }
+  return null;
+}
+
+function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent: { id: string; name: string }, status: string, eventId?: string) {
+  const nextStatus = canonicalStatus(status);
+  if (!nextStatus) return;
+  const eventType = `agent.status.${nextStatus}`;
+  const eventData = {
+    agent_id: agent.id,
+    agent_name: agent.name,
+    status: nextStatus,
+    ...(eventId ? { event_id: eventId } : {}),
+  };
+  runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
+  runInBackground(
+    c,
+    c.get('engine').webhookQueue.send({
+      type: eventType,
+      workspaceId: c.get('workspace').id,
+      data: eventData,
+    }),
+    `queue ${eventType}`,
+  );
+}
+
+// GET /v1/agent - resolve the authenticated agent token to its identity
+agentRoutes.get(
+  '/agent',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const authAgent = c.get('agent');
+      const agent = await agentEngine.getAgentByName(db, workspace.id, authAgent!.name);
+      if (!agent) {
+        return c.json({
+          ok: false,
+          error: { code: 'agent_not_found', message: 'Authenticated agent not found' },
+        }, 404);
+      }
+      return c.json({ ok: true, data: agent });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
 
 // POST /v1/agents - register agent (workspace key required)
 agentRoutes.post(
@@ -208,6 +262,9 @@ agentRoutes.patch(
           status: updated.status,
           metadata: updated.metadata ?? {},
         });
+      }
+      if (body.status !== undefined) {
+        fanoutAgentStatus(c, updated, body.status);
       }
       emitServerEvent(c, workspace.id, 'relaycast_server_agent_updated', {
         agent_name: name,
@@ -402,19 +459,39 @@ agentRoutes.post(
         const resolved = sessionEventEngine.resolveStatusFromEvent(type);
         const newStatus = resolved ?? (payload.status as string);
         await agentEngine.updateAgent(db, workspace.id, name, { status: newStatus });
+        const eventType = type === 'status.changed' ? 'agent.status.changed' : `agent.status.${canonicalStatus(newStatus) ?? newStatus}`;
+        const eventData = {
+          agent_id: agentRecord.id,
+          agent_name: name,
+          status: canonicalStatus(newStatus) ?? newStatus,
+          event_id: event.id,
+          payload,
+        };
+        runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
+        runInBackground(
+          c,
+          c.get('engine').webhookQueue.send({
+            type: eventType,
+            workspaceId: workspace.id,
+            data: eventData,
+          }),
+          `queue ${eventType}`,
+        );
       }
 
-      const eventData = { agent_name: name, ...event };
-      runInBackground(c, fanoutToWorkspace(c, `harness.${type}`, eventData), `fanout harness.${type}`);
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: `harness.${type}`,
-          workspaceId: workspace.id,
-          data: eventData,
-        }),
-        `queue harness.${type}`,
-      );
+      if (!type.startsWith('status.')) {
+        const eventData = { agent_name: name, ...event };
+        runInBackground(c, fanoutToWorkspace(c, `harness.${type}`, eventData), `fanout harness.${type}`);
+        runInBackground(
+          c,
+          c.get('engine').webhookQueue.send({
+            type: `harness.${type}`,
+            workspaceId: workspace.id,
+            data: eventData,
+          }),
+          `queue harness.${type}`,
+        );
+      }
 
       return c.json({ ok: true, data: event }, 201);
     } catch (err: unknown) {

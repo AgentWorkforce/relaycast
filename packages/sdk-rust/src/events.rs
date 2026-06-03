@@ -333,10 +333,15 @@ fn parse_inbound_kind(event_type: &str) -> Option<NormalizedEventKind> {
         | "group_dm.new"
         | "group_dm.sent"
         | "group_dm.message.created" => Some(NormalizedEventKind::GroupDmReceived),
-        "agent.online" | "agent.offline" | "user.online" | "user.offline" => {
-            Some(NormalizedEventKind::Presence)
-        }
-        "reaction.added" | "reaction.removed" => Some(NormalizedEventKind::ReactionReceived),
+        "agent.status.changed"
+        | "agent.status.idle"
+        | "agent.status.active"
+        | "agent.status.blocked"
+        | "agent.status.waiting"
+        | "agent.status.offline"
+        | "user.online"
+        | "user.offline" => Some(NormalizedEventKind::Presence),
+        "message.reacted" => Some(NormalizedEventKind::ReactionReceived),
         _ => None,
     }
 }
@@ -793,10 +798,11 @@ mod tests {
     #[test]
     fn normalizes_reaction_with_channel_context() {
         let event = normalize_inbound_event(&json!({
-            "type": "reaction.added",
+            "type": "message.reacted",
             "message_id": "msg_4",
             "agent_name": "alice",
             "emoji": "eyes",
+            "action": "added",
             "channel_name": "general"
         }))
         .expect("reaction should normalize");

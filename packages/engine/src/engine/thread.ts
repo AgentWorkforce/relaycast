@@ -5,6 +5,11 @@ import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
 
+function displayAgentName(metadata: Record<string, unknown> | null | undefined, fallback: string | null | undefined): string {
+  const author = metadata?.author;
+  return typeof author === 'string' && author.length > 0 ? author : (fallback || 'unknown');
+}
+
 export async function postReply(
   db: Db,
   workspaceId: string,
@@ -162,7 +167,7 @@ export async function getThread(
       id: parent.id,
       channel_id: parent.channelId,
       agent_id: parent.agentId,
-      agent_name: parent.agentName || 'unknown',
+      agent_name: displayAgentName(parent.metadata, parent.agentName),
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
       metadata: parent.metadata ?? {},
@@ -175,7 +180,7 @@ export async function getThread(
       id: r.id,
       channel_id: r.channelId,
       agent_id: r.agentId,
-      agent_name: r.agentName || 'unknown',
+      agent_name: displayAgentName(r.metadata, r.agentName),
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,

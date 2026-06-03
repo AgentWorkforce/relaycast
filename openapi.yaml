@@ -33,6 +33,10 @@ components:
       type: http
       scheme: bearer
       description: Agent token (at_live_* or at_test_*)
+    webhookToken:
+      type: http
+      scheme: bearer
+      description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
 
   schemas:
     Workspace:
@@ -96,7 +100,7 @@ components:
           type: string
         status:
           type: string
-          enum: [online, offline]
+          enum: [active, idle, blocked, waiting, offline, online]
         token:
           type: string
           description: Agent token (only returned on registration)
@@ -470,7 +474,12 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a workspace and get an API key when a new workspace is created. This operation is idempotent by workspace name for the same bearer workspace key: if you repeat the call with the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is returned with a `200` response; otherwise a new workspace is created and returned with a `201` response.
+      description: >
+        Create a workspace and get an API key when a new workspace is created. This operation is
+        idempotent by workspace name for the same bearer workspace key: if you repeat the call with
+        the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is
+        returned with a `200` response; otherwise a new workspace is created and returned with a
+        `201` response.
       tags:
         - Workspaces
       security:
@@ -615,10 +624,31 @@ paths:
         '204':
           description: Workspace deleted
 
+  /agent:
+    get:
+      summary: Resolve authenticated agent
+      description: Resolve an agent token to that agent's identity, including channel memberships, callable/provided actions, and pending deliveries. Used by SDK reconnect flows.
+      tags:
+        - Agents
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: Authenticated agent details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+
   /agents:
     post:
       summary: Register agent
-      description: Register a new agent in the workspace
+      description: Register a new agent in the workspace. Agent names are unique per workspace; registering a duplicate name returns `409 agent_already_exists`.
       tags:
         - Agents
       security:
@@ -653,6 +683,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '409':
+          description: Agent name already exists in this workspace
 
     get:
       summary: List agents
@@ -2590,7 +2622,7 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
       summary: List actions
-      description: List all registered actions
+      description: List registered actions. Workspace keys see all actions; agent tokens only see actions whose `available_to` allows that agent, or actions with no `available_to` restriction.
       tags:
         - Actions
       security:
@@ -2647,7 +2679,7 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. Routed to the handler agent for async processing.
+      description: Invoke a registered action. The caller must be allowed by `available_to`; the request returns an async ack containing `invocation_id`, emits `action.invoked` to the handler agent, and emits `action.denied` on denied calls.
       tags:
         - Actions
       security:
@@ -2669,7 +2701,7 @@ paths:
                   type: object
       responses:
         '201':
-          description: Action invocation created
+          description: Action invocation created; response `data` includes `invocation_id`
           content:
             application/json:
               schema:
@@ -2814,7 +2846,12 @@ paths:
   /subscriptions:
     post:
       summary: Create outbound event subscription
-      description: Subscribe external webhook endpoint to workspace events
+      description: |
+        Subscribe an external webhook endpoint to workspace events. Delivery payloads are JSON:
+        `{ type, workspace_id, timestamp, data }`. If `secret` is provided, Relaycast signs the exact
+        JSON request body with HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>` along with
+        `X-Relay-Event` and `X-Relay-Timestamp`. Custom `headers` are included on delivery; Relay's
+        own `Content-Type` and `X-Relay-*` headers take precedence.
       tags:
         - Subscriptions
       security:
@@ -2838,6 +2875,11 @@ paths:
                   type: object
                 url:
                   type: string
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Custom headers to include on outbound delivery requests, such as Authorization.
                 secret:
                   type: string
       responses:
@@ -2906,7 +2948,10 @@ paths:
   /webhooks:
     post:
       summary: Create inbound webhook
-      description: Create inbound webhook that posts to a channel
+      description: >
+        Create an authenticated inbound webhook that posts to a channel. The response includes an
+        absolute `url` and a one-time-visible bearer `token`; callers must send
+        `Authorization: Bearer <token>` to the hook URL.
       tags:
         - Webhooks
       security:
@@ -2918,11 +2963,11 @@ paths:
             schema:
               type: object
               required:
-                - name
                 - channel
               properties:
                 name:
                   type: string
+                  description: Optional display name. Defaults to the generated webhook ID.
                 channel:
                   type: string
       responses:
@@ -2968,9 +3013,11 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Public endpoint to post through a configured inbound webhook
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender.
       tags:
         - Webhooks
+      security:
+        - webhookToken: []
       parameters:
         - name: webhookId
           in: path
@@ -2986,8 +3033,16 @@ paths:
               properties:
                 text:
                   type: string
+                  description: Message text. `message` is also accepted.
+                message:
+                  type: string
+                  description: SDK alias for `text`.
                 source:
                   type: string
+                  description: Source identifier. `author` is also accepted and used as displayed sender.
+                author:
+                  type: string
+                  description: Displayed sender for the resulting channel message.
                 payload:
                   type: object
       responses:

@@ -538,12 +538,14 @@ export const webhooks = sqliteTable(
       .notNull()
       .references(() => channels.id, { onDelete: 'cascade' }),
     createdBy: text('created_by').references(() => agents.id),
+    tokenHash: text('token_hash'),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
     uniqueIndex('webhooks_workspace_name_unique').on(table.workspaceId, table.name),
     index('idx_webhooks_workspace').on(table.workspaceId),
+    index('idx_webhooks_token').on(table.tokenHash),
   ],
 );
 
@@ -560,6 +562,7 @@ export const eventSubscriptions = sqliteTable(
     events: text('events', { mode: 'json' }).notNull().$type<string[]>(),
     filter: text('filter', { mode: 'json' }).$type<{ channel?: string; mentions?: string }>(),
     url: text('url').notNull(),
+    headers: text('headers', { mode: 'json' }).$type<Record<string, string>>(),
     secret: text('secret'),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),

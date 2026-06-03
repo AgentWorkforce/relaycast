@@ -11,7 +11,7 @@ export const WebhookSchema = z.object({
 export type Webhook = z.infer<typeof WebhookSchema>;
 
 export const CreateWebhookRequestSchema = z.object({
-  name: z.string(),
+  name: z.string().optional(),
   channel: z.string(),
 });
 export type CreateWebhookRequest = z.infer<typeof CreateWebhookRequestSchema>;
@@ -21,6 +21,7 @@ export const CreateWebhookResponseSchema = z.object({
   name: z.string(),
   channel: z.string(),
   url: z.string(),
+  token: z.string(),
   is_active: z.boolean(),
   created_at: z.string(),
 });
@@ -28,8 +29,10 @@ export type CreateWebhookResponse = z.infer<typeof CreateWebhookResponseSchema>;
 
 export const WebhookTriggerRequestSchema = z.object({
   text: z.string().optional(),
+  message: z.string().optional(),
   blocks: z.array(z.unknown()).optional(),
   source: z.string().optional(),
+  author: z.string().optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type WebhookTriggerRequest = z.infer<typeof WebhookTriggerRequestSchema>;
@@ -38,6 +41,8 @@ export const WebhookTriggerResponseSchema = z.object({
   message_id: z.string(),
   channel: z.string(),
   text: z.string(),
+  source: z.string().nullable().optional(),
+  author: z.string().nullable().optional(),
   created_at: z.string(),
 });
 export type WebhookTriggerResponse = z.infer<typeof WebhookTriggerResponseSchema>;

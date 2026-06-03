@@ -57,21 +57,20 @@ export const ThreadReplyEventSchema = z.object({
 });
 export type ThreadReplyEvent = z.infer<typeof ThreadReplyEventSchema>;
 
-export const ReactionAddedEventSchema = z.object({
-  type: z.literal('reaction.added'),
+export const MessageReactedEventSchema = z.object({
+  type: z.literal('message.reacted'),
   message_id: z.string(),
   emoji: z.string(),
   agent_name: z.string(),
+  action: z.enum(['added', 'removed']).optional(),
 });
-export type ReactionAddedEvent = z.infer<typeof ReactionAddedEventSchema>;
+export type MessageReactedEvent = z.infer<typeof MessageReactedEventSchema>;
 
-export const ReactionRemovedEventSchema = z.object({
-  type: z.literal('reaction.removed'),
-  message_id: z.string(),
-  emoji: z.string(),
-  agent_name: z.string(),
-});
-export type ReactionRemovedEvent = z.infer<typeof ReactionRemovedEventSchema>;
+export const ReactionAddedEventSchema = MessageReactedEventSchema;
+export type ReactionAddedEvent = MessageReactedEvent;
+
+export const ReactionRemovedEventSchema = MessageReactedEventSchema;
+export type ReactionRemovedEvent = MessageReactedEvent;
 
 export const DmReceivedEventSchema = z.object({
   id: z.string().uuid(),
@@ -89,17 +88,61 @@ export const GroupDmReceivedEventSchema = z.object({
 });
 export type GroupDmReceivedEvent = z.infer<typeof GroupDmReceivedEventSchema>;
 
-export const AgentOnlineEventSchema = z.object({
-  type: z.literal('agent.online'),
+export const AgentStatusActiveEventSchema = z.object({
+  type: z.literal('agent.status.active'),
   agent: z.object({ name: z.string() }),
+  status: z.literal('active'),
 });
-export type AgentOnlineEvent = z.infer<typeof AgentOnlineEventSchema>;
+export type AgentStatusActiveEvent = z.infer<typeof AgentStatusActiveEventSchema>;
 
-export const AgentOfflineEventSchema = z.object({
-  type: z.literal('agent.offline'),
+export const AgentStatusIdleEventSchema = z.object({
+  type: z.literal('agent.status.idle'),
   agent: z.object({ name: z.string() }),
+  status: z.literal('idle'),
 });
-export type AgentOfflineEvent = z.infer<typeof AgentOfflineEventSchema>;
+export type AgentStatusIdleEvent = z.infer<typeof AgentStatusIdleEventSchema>;
+
+export const AgentStatusBlockedEventSchema = z.object({
+  type: z.literal('agent.status.blocked'),
+  agent: z.object({ name: z.string() }),
+  status: z.literal('blocked'),
+});
+export type AgentStatusBlockedEvent = z.infer<typeof AgentStatusBlockedEventSchema>;
+
+export const AgentStatusWaitingEventSchema = z.object({
+  type: z.literal('agent.status.waiting'),
+  agent: z.object({ name: z.string() }),
+  status: z.literal('waiting'),
+});
+export type AgentStatusWaitingEvent = z.infer<typeof AgentStatusWaitingEventSchema>;
+
+export const AgentStatusOfflineEventSchema = z.object({
+  type: z.literal('agent.status.offline'),
+  agent: z.object({ name: z.string() }),
+  status: z.literal('offline'),
+});
+export type AgentStatusOfflineEvent = z.infer<typeof AgentStatusOfflineEventSchema>;
+
+export const AgentStatusChangedEventSchema = z.object({
+  type: z.literal('agent.status.changed'),
+  agent: z.object({ name: z.string() }),
+  status: z.enum(['active', 'idle', 'blocked', 'waiting', 'offline']),
+});
+export type AgentStatusChangedEvent = z.infer<typeof AgentStatusChangedEventSchema>;
+
+export type AgentStatusEvent =
+  | AgentStatusActiveEvent
+  | AgentStatusIdleEvent
+  | AgentStatusBlockedEvent
+  | AgentStatusWaitingEvent
+  | AgentStatusOfflineEvent
+  | AgentStatusChangedEvent;
+
+export const AgentOnlineEventSchema = AgentStatusActiveEventSchema;
+export type AgentOnlineEvent = AgentStatusActiveEvent;
+
+export const AgentOfflineEventSchema = AgentStatusOfflineEventSchema;
+export type AgentOfflineEvent = AgentStatusOfflineEvent;
 
 export const AgentSpawnRequestedEventSchema = z.object({
   type: z.literal('agent.spawn_requested'),
@@ -190,7 +233,12 @@ export const WebhookReceivedEventSchema = z.object({
   type: z.literal('webhook.received'),
   webhook_id: z.string(),
   channel: z.string(),
-  message: z.object({ id: z.string(), text: z.string(), source: z.string().nullable() }),
+  message: z.object({
+    id: z.string(),
+    text: z.string(),
+    source: z.string().nullable(),
+    author: z.string().nullable().optional(),
+  }),
 });
 export type WebhookReceivedEvent = z.infer<typeof WebhookReceivedEventSchema>;
 
@@ -235,6 +283,14 @@ export const ActionFailedEventSchema = z.object({
   error: z.string().nullable(),
 });
 export type ActionFailedEvent = z.infer<typeof ActionFailedEventSchema>;
+
+export const ActionDeniedEventSchema = z.object({
+  type: z.literal('action.denied'),
+  action_name: z.string(),
+  caller_name: z.string().nullable(),
+  error: z.string(),
+});
+export type ActionDeniedEvent = z.infer<typeof ActionDeniedEventSchema>;
 
 // Durable delivery lifecycle events. Delivered to the recipient agent so an
 // offline consumer can reconcile queued delivery state on reconnect.
@@ -304,12 +360,15 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageCreatedEventSchema,
   MessageUpdatedEventSchema,
   ThreadReplyEventSchema,
-  ReactionAddedEventSchema,
-  ReactionRemovedEventSchema,
+  MessageReactedEventSchema,
   DmReceivedEventSchema,
   GroupDmReceivedEventSchema,
-  AgentOnlineEventSchema,
-  AgentOfflineEventSchema,
+  AgentStatusActiveEventSchema,
+  AgentStatusIdleEventSchema,
+  AgentStatusBlockedEventSchema,
+  AgentStatusWaitingEventSchema,
+  AgentStatusOfflineEventSchema,
+  AgentStatusChangedEventSchema,
   AgentSpawnRequestedEventSchema,
   AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
@@ -326,6 +385,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
+  ActionDeniedEventSchema,
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryDeferredEventSchema,
@@ -350,12 +410,15 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   MessageCreatedEventSchema,
   MessageUpdatedEventSchema,
   ThreadReplyEventSchema,
-  ReactionAddedEventSchema,
-  ReactionRemovedEventSchema,
+  MessageReactedEventSchema,
   DmReceivedEventSchema,
   GroupDmReceivedEventSchema,
-  AgentOnlineEventSchema,
-  AgentOfflineEventSchema,
+  AgentStatusActiveEventSchema,
+  AgentStatusIdleEventSchema,
+  AgentStatusBlockedEventSchema,
+  AgentStatusWaitingEventSchema,
+  AgentStatusOfflineEventSchema,
+  AgentStatusChangedEventSchema,
   AgentSpawnRequestedEventSchema,
   AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
@@ -372,6 +435,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
+  ActionDeniedEventSchema,
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryDeferredEventSchema,

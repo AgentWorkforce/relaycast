@@ -4,10 +4,13 @@ export const SubscribableEventTypeSchema = z.enum([
   'message.created',
   'message.updated',
   'thread.reply',
-  'reaction.added',
-  'reaction.removed',
-  'agent.online',
-  'agent.offline',
+  'message.reacted',
+  'agent.status.changed',
+  'agent.status.idle',
+  'agent.status.active',
+  'agent.status.blocked',
+  'agent.status.waiting',
+  'agent.status.offline',
   'channel.created',
   'channel.updated',
   'channel.archived',
@@ -19,6 +22,14 @@ export const SubscribableEventTypeSchema = z.enum([
   'file.uploaded',
   'webhook.received',
   'command.invoked',
+  'delivery.accepted',
+  'delivery.delivered',
+  'delivery.deferred',
+  'delivery.failed',
+  'action.invoked',
+  'action.completed',
+  'action.failed',
+  'action.denied',
 ]);
 export type SubscribableEventType = z.infer<typeof SubscribableEventTypeSchema>;
 
@@ -33,6 +44,7 @@ export const EventSubscriptionSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
+  headers: z.record(z.string(), z.string()).nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });
@@ -42,6 +54,7 @@ export const CreateSubscriptionRequestSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.optional(),
   url: z.string(),
+  headers: z.record(z.string(), z.string()).optional(),
   secret: z.string().optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
@@ -51,6 +64,7 @@ export const CreateSubscriptionResponseSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
+  headers: z.record(z.string(), z.string()).nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });

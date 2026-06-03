@@ -55,7 +55,12 @@ export async function registerAction(
   };
 }
 
-export async function listActions(db: Db, workspaceId: string) {
+function canInvokeAction(availableTo: string[] | null, callerName?: string): boolean {
+  if (!callerName) return true;
+  return !availableTo || availableTo.length === 0 || availableTo.includes(callerName);
+}
+
+export async function listActions(db: Db, workspaceId: string, callerName?: string) {
   const rows = await db
     .select({
       id: actions.id,
@@ -73,7 +78,7 @@ export async function listActions(db: Db, workspaceId: string) {
     .innerJoin(agents, eq(actions.handlerAgentId, agents.id))
     .where(eq(actions.workspaceId, workspaceId));
 
-  return rows.map((r) => ({
+  return rows.filter((r) => canInvokeAction(r.availableTo ?? null, callerName)).map((r) => ({
     id: r.id,
     name: r.name,
     description: r.description,

@@ -234,9 +234,9 @@ describe('handleServerEvent', () => {
     });
   });
 
-  // ─── reaction.added ────────────────────────────────────────────
+  // ─── message.reacted added ─────────────────────────────────────
 
-  describe('reaction.added', () => {
+  describe('message.reacted added', () => {
     it('creates new ReactionGroup if emoji not present', () => {
       const store = createStore();
       store.updateChannelMessages('general', () => ({
@@ -246,10 +246,11 @@ describe('handleServerEvent', () => {
       }));
 
       handleServerEvent(store, {
-        type: 'reaction.added',
+        type: 'message.reacted',
         messageId: 'msg1',
         emoji: 'thumbsup',
         agentName: 'Alice',
+        action: 'added',
       });
 
       const state = store.getState();
@@ -270,10 +271,11 @@ describe('handleServerEvent', () => {
       }));
 
       handleServerEvent(store, {
-        type: 'reaction.added',
+        type: 'message.reacted',
         messageId: 'msg1',
         emoji: 'thumbsup',
         agentName: 'Bob',
+        action: 'added',
       });
 
       const state = store.getState();
@@ -295,10 +297,11 @@ describe('handleServerEvent', () => {
       }));
 
       handleServerEvent(store, {
-        type: 'reaction.added',
+        type: 'message.reacted',
         messageId: 'msg1',
         emoji: 'thumbsup',
         agentName: 'Alice',
+        action: 'added',
       });
 
       const state = store.getState();
@@ -309,9 +312,9 @@ describe('handleServerEvent', () => {
     });
   });
 
-  // ─── reaction.removed ──────────────────────────────────────────
+  // ─── message.reacted removed ───────────────────────────────────
 
-  describe('reaction.removed', () => {
+  describe('message.reacted removed', () => {
     it('decrements count', () => {
       const store = createStore();
       store.updateChannelMessages('general', () => ({
@@ -324,10 +327,11 @@ describe('handleServerEvent', () => {
       }));
 
       handleServerEvent(store, {
-        type: 'reaction.removed',
+        type: 'message.reacted',
         messageId: 'msg1',
         emoji: 'thumbsup',
         agentName: 'Bob',
+        action: 'removed',
       });
 
       const state = store.getState();
@@ -349,10 +353,11 @@ describe('handleServerEvent', () => {
       }));
 
       handleServerEvent(store, {
-        type: 'reaction.removed',
+        type: 'message.reacted',
         messageId: 'msg1',
         emoji: 'thumbsup',
         agentName: 'Alice',
+        action: 'removed',
       });
 
       const state = store.getState();
@@ -361,17 +366,18 @@ describe('handleServerEvent', () => {
     });
   });
 
-  // ─── agent.online / agent.offline ──────────────────────────────
+  // ─── agent.status.active / agent.status.offline ────────────────
 
-  describe('agent.online', () => {
+  describe('agent.status.active', () => {
     it('updates agent status to online', () => {
       const store = createStore();
       const agent = makeAgent({ name: 'Alice', status: 'offline' });
       store.setState({ agents: { data: [agent], loading: false, error: null } });
 
       handleServerEvent(store, {
-        type: 'agent.online',
+        type: 'agent.status.active',
         agent: { name: 'Alice' },
+        status: 'active',
       });
 
       const state = store.getState();
@@ -379,15 +385,16 @@ describe('handleServerEvent', () => {
     });
   });
 
-  describe('agent.offline', () => {
+  describe('agent.status.offline', () => {
     it('updates agent status to offline', () => {
       const store = createStore();
       const agent = makeAgent({ name: 'Alice', status: 'online' });
       store.setState({ agents: { data: [agent], loading: false, error: null } });
 
       handleServerEvent(store, {
-        type: 'agent.offline',
+        type: 'agent.status.offline',
         agent: { name: 'Alice' },
+        status: 'offline',
       });
 
       const state = store.getState();

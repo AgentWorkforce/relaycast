@@ -8,6 +8,11 @@ type Db = ReturnType<typeof getDb>;
 
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
+function displayAgentName(metadata: Record<string, unknown> | null | undefined, fallback: string | null | undefined): string {
+  const author = metadata?.author;
+  return typeof author === 'string' && author.length > 0 ? author : (fallback || 'unknown');
+}
+
 async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
   if (msgIds.length === 0) return map;
@@ -259,7 +264,7 @@ export async function getMessages(
     id: row.id,
     channel_id: row.channelId,
     agent_id: row.agentId,
-    agent_name: row.agentName || 'unknown',
+    agent_name: displayAgentName(row.metadata, row.agentName),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: row.metadata ?? {},
@@ -320,7 +325,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     id: row.id,
     channel_id: row.channelId,
     agent_id: row.agentId,
-    agent_name: row.agentName || 'unknown',
+    agent_name: displayAgentName(row.metadata, row.agentName),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: row.metadata ?? {},

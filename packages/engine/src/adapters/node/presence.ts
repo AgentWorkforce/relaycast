@@ -19,8 +19,8 @@ export interface InProcessPresenceOptions {
 /**
  * Single-process presence tracker replacing PresenceDO. Heartbeats are kept in
  * a per-workspace map; a `setInterval` sweep (mirroring the DO alarm) marks
- * agents offline after the TTL and fans out `agent.offline` events through the
- * realtime bus. Emits `agent.online` on the offline→online transition.
+ * agents offline after the TTL and fans out `agent.status.offline` events through
+ * the realtime bus. Emits `agent.status.active` on the offline→online transition.
  */
 export class InProcessPresence implements PresenceTracker {
   private readonly workspaces = new Map<string, Map<string, PresenceEntry>>();
@@ -64,7 +64,7 @@ export class InProcessPresence implements PresenceTracker {
   }
 
   private buildEvent(
-    type: 'agent.online' | 'agent.offline',
+    type: 'agent.status.active' | 'agent.status.offline',
     agentId: string,
     name: string,
   ): EngineEvent {
@@ -72,6 +72,7 @@ export class InProcessPresence implements PresenceTracker {
       type,
       agent: { name },
       agent_name: name,
+      status: type === 'agent.status.active' ? 'active' : 'offline',
       subject_agent_id: agentId,
       timestamp: new Date().toISOString(),
     };
@@ -92,7 +93,7 @@ export class InProcessPresence implements PresenceTracker {
     map.set(agentId, { ts: Date.now(), name });
 
     if (wasOffline) {
-      const event = this.buildEvent('agent.online', agentId, name);
+      const event = this.buildEvent('agent.status.active', agentId, name);
       await this.broadcast(workspaceId, this.onlineIds(workspaceId), event);
     }
   }
@@ -103,7 +104,7 @@ export class InProcessPresence implements PresenceTracker {
     if (!prev) return;
     const name = agentName?.trim() || prev.name || agentId;
     map.delete(agentId);
-    const event = this.buildEvent('agent.offline', agentId, name);
+    const event = this.buildEvent('agent.status.offline', agentId, name);
     await this.broadcast(workspaceId, this.onlineIds(workspaceId), event);
   }
 
@@ -111,7 +112,7 @@ export class InProcessPresence implements PresenceTracker {
     return this.onlineIds(workspaceId);
   }
 
-  /** Sweep stale agents across all workspaces, emitting `agent.offline`. */
+  /** Sweep stale agents across all workspaces, emitting `agent.status.offline`. */
   async sweep(): Promise<void> {
     const now = Date.now();
     for (const [workspaceId, map] of this.workspaces) {
@@ -125,7 +126,7 @@ export class InProcessPresence implements PresenceTracker {
       for (const s of stale) map.delete(s.id);
       const stillOnline = this.onlineIds(workspaceId);
       for (const s of stale) {
-        await this.broadcast(workspaceId, stillOnline, this.buildEvent('agent.offline', s.id, s.name));
+        await this.broadcast(workspaceId, stillOnline, this.buildEvent('agent.status.offline', s.id, s.name));
       }
       // Reclaim the workspace entry once it has no tracked agents, so the map
       // doesn't grow unbounded with workspace churn.

@@ -98,12 +98,14 @@ describe('Resource subscription integration', () => {
   it('handles agent presence changes', () => {
     manager.subscribe('relay://agents');
     simulateEvent({
-      type: 'agent.online',
+      type: 'agent.status.active',
       agent: { name: 'bot1' },
+      status: 'active',
     } as WsClientEvent);
     simulateEvent({
-      type: 'agent.offline',
+      type: 'agent.status.offline',
       agent: { name: 'bot1' },
+      status: 'offline',
     } as WsClientEvent);
     expect(notified).toEqual(['relay://agents', 'relay://agents']);
   });
@@ -111,16 +113,18 @@ describe('Resource subscription integration', () => {
   it('notifies inbox subscribers on reaction events', () => {
     manager.subscribe('relay://inbox');
     simulateEvent({
-      type: 'reaction.added',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'added',
     } as WsClientEvent);
     simulateEvent({
-      type: 'reaction.removed',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'removed',
     } as WsClientEvent);
     expect(notified).toEqual(['relay://inbox', 'relay://inbox']);
   });

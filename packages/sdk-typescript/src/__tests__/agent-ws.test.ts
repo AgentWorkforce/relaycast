@@ -190,7 +190,7 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
-  it('on.reactionAdded fires with reaction.added event', () => {
+  it('on.reactionAdded fires with message.reacted event', () => {
     const agent = createAgent();
     agent.connect();
     const ws = MockWebSocket.instances[0]!;
@@ -200,15 +200,16 @@ describe('AgentClient WebSocket integration', () => {
     agent.on.reactionAdded(handler);
 
     ws.simulateMessage({
-      type: 'reaction.added',
+      type: 'message.reacted',
       message_id: 'm_1',
       emoji: '👍',
       agent_name: 'Bot',
+      action: 'added',
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'reaction.added', emoji: '👍' }),
+      expect.objectContaining({ type: 'message.reacted', emoji: '👍' }),
     );
   });
 

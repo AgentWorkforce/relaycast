@@ -53,29 +53,29 @@ reactionRoutes.post(
       // Strip internal channel_id/channel_name before sending to client
       const { channel_id, channel_name, ...reactionData } = result;
 
-      const eventData = { ...reactionData, channel_name, agent_name: agent!.name };
+      const eventData = { ...reactionData, channel_name, agent_name: agent!.name, action: 'added' };
       if (channel_id) {
         runInBackground(
           c,
           (async () => {
             const dmAgentIds = await getDmParticipantAgentIds(c, channel_id);
             if (dmAgentIds) {
-              await fanoutToAgents(c, dmAgentIds, 'reaction.added', eventData);
+              await fanoutToAgents(c, dmAgentIds, 'message.reacted', eventData);
             } else {
-              await fanoutToChannel(c, channel_id, 'reaction.added', eventData);
+              await fanoutToChannel(c, channel_id, 'message.reacted', eventData);
             }
           })(),
-          'fanout reaction.added',
+          'fanout message.reacted',
         );
       }
       runInBackground(
         c,
         c.get('engine').webhookQueue.send({
-          type: 'reaction.added',
+          type: 'message.reacted',
           workspaceId: workspace.id,
-          data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name },
+          data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name, action: 'added' },
         }),
-        'queue reaction.added',
+        'queue message.reacted',
       );
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
         message_id: c.req.param('id'),
@@ -119,6 +119,7 @@ reactionRoutes.delete(
         emoji: c.req.param('emoji'),
         agent_id: agent!.id,
         agent_name: agent!.name,
+        action: 'removed',
       };
       try {
         const [row] = await db
@@ -133,12 +134,12 @@ reactionRoutes.delete(
             (async () => {
               const dmAgentIds = await getDmParticipantAgentIds(c, row.channelId);
               if (dmAgentIds) {
-                await fanoutToAgents(c, dmAgentIds, 'reaction.removed', enriched);
+                await fanoutToAgents(c, dmAgentIds, 'message.reacted', enriched);
               } else {
-                await fanoutToChannel(c, row.channelId, 'reaction.removed', enriched);
+                await fanoutToChannel(c, row.channelId, 'message.reacted', enriched);
               }
             })(),
-            'fanout reaction.removed',
+            'fanout message.reacted',
           );
         }
       } catch {
@@ -148,11 +149,11 @@ reactionRoutes.delete(
       runInBackground(
         c,
         c.get('engine').webhookQueue.send({
-          type: 'reaction.removed',
+          type: 'message.reacted',
           workspaceId: workspace.id,
           data: eventData,
         }),
-        'queue reaction.removed',
+        'queue message.reacted',
       );
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_removed', {
         message_id: c.req.param('id'),

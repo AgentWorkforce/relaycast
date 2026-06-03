@@ -101,17 +101,18 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.subscription.create', {
     title: 'Create Event Subscription',
-    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
+    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, message.reacted, agent.status.active, and more. Optionally filter events by channel or agent mentions, attach delivery headers, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
-      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
+      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "message.reacted", "agent.status.active"])'),
       url: z.string().describe('HTTPS endpoint URL that will receive POST requests with event payloads'),
+      headers: z.record(z.string(), z.string()).optional().describe('Optional custom headers to include on outbound delivery requests'),
       filter_channel: z.string().optional().describe('Only fire events that occur in this specific channel'),
       filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
       secret: z.string().optional().describe('Shared secret used to generate HMAC-SHA256 signatures for payload verification'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
+  }, async ({ events, url, headers, filter_channel, filter_mentions, secret }) => {
     const relay = getRelay();
     const filter = (filter_channel || filter_mentions)
       ? { channel: filter_channel, mentions: filter_mentions }
@@ -119,6 +120,7 @@ export function registerProgrammabilityTools(
     const result = await relay.subscriptions.create({
       events,
       url,
+      headers,
       filter,
       secret,
     });

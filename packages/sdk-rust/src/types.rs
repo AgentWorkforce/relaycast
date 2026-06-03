@@ -1069,18 +1069,24 @@ pub enum WsEvent {
     MessageUpdated(MessageUpdatedEvent),
     #[serde(rename = "thread.reply")]
     ThreadReply(ThreadReplyEvent),
-    #[serde(rename = "reaction.added")]
+    #[serde(rename = "message.reacted")]
     ReactionAdded(ReactionAddedEvent),
-    #[serde(rename = "reaction.removed")]
-    ReactionRemoved(ReactionRemovedEvent),
     #[serde(rename = "dm.received")]
     DmReceived(DmReceivedEvent),
     #[serde(rename = "group_dm.received")]
     GroupDmReceived(GroupDmReceivedEvent),
-    #[serde(rename = "agent.online")]
+    #[serde(rename = "agent.status.active")]
     AgentOnline(AgentOnlineEvent),
-    #[serde(rename = "agent.offline")]
+    #[serde(rename = "agent.status.idle")]
+    AgentStatusIdle(AgentStatusEvent),
+    #[serde(rename = "agent.status.blocked")]
+    AgentStatusBlocked(AgentStatusEvent),
+    #[serde(rename = "agent.status.waiting")]
+    AgentStatusWaiting(AgentStatusEvent),
+    #[serde(rename = "agent.status.offline")]
     AgentOffline(AgentOfflineEvent),
+    #[serde(rename = "agent.status.changed")]
+    AgentStatusChanged(AgentStatusEvent),
     #[serde(rename = "agent.spawn_requested")]
     AgentSpawnRequested(AgentSpawnRequestedEvent),
     #[serde(rename = "agent.release_requested")]
@@ -1144,18 +1150,16 @@ pub struct ThreadReplyEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactionAddedEvent {
+pub struct MessageReactedEvent {
     pub message_id: String,
     pub emoji: String,
     pub agent_name: String,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactionRemovedEvent {
-    pub message_id: String,
-    pub emoji: String,
-    pub agent_name: String,
-}
+pub type ReactionAddedEvent = MessageReactedEvent;
+pub type ReactionRemovedEvent = MessageReactedEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmReceivedEvent {
@@ -1170,14 +1174,13 @@ pub struct GroupDmReceivedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOnlineEvent {
+pub struct AgentStatusEvent {
     pub agent: AgentEventPayload,
+    pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOfflineEvent {
-    pub agent: AgentEventPayload,
-}
+pub type AgentOnlineEvent = AgentStatusEvent;
+pub type AgentOfflineEvent = AgentStatusEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpawnRequestedEvent {

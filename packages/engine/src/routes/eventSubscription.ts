@@ -16,6 +16,7 @@ const createSubscriptionSchema = z.object({
     mentions: z.string().optional(),
   }).nullable().optional(),
   url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
   secret: z.string().nullable().optional(),
 });
 
@@ -38,12 +39,12 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
         error: { code: 'invalid_request', message },
       }, 400);
     }
-    const { events, filter, url, secret } = parsed.data;
+    const { events, filter, url, headers, secret } = parsed.data;
 
     const result = await eventSubscriptionEngine.createSubscription(
       db,
       workspace.id,
-      { events, filter, url, secret: secret ?? undefined },
+      { events, filter, url, headers, secret: secret ?? undefined },
     );
     emitServerEvent(c, workspace.id, 'relaycast_server_subscription_created', {
       subscription_id: result.id,

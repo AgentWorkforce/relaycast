@@ -43,21 +43,22 @@ function summarizeEvent(event: WsClientEvent): string {
       const agent = getString(message.agentName) ?? 'unknown';
       return `${agent} replied in thread`;
     }
-    case 'reaction.added': {
+    case 'message.reacted': {
       const agent = getString(record.agentName) ?? 'unknown';
       const emoji = getString(record.emoji) ?? '?';
-      return `${agent} reacted ${emoji}`;
+      const action = getString(record.action) === 'removed' ? 'removed' : 'reacted';
+      return `${agent} ${action} ${emoji}`;
     }
-    case 'reaction.removed': {
-      const agent = getString(record.agentName) ?? 'unknown';
-      const emoji = getString(record.emoji) ?? '?';
-      return `${agent} removed ${emoji}`;
-    }
-    case 'agent.online':
-    case 'agent.offline': {
+    case 'agent.status.active':
+    case 'agent.status.idle':
+    case 'agent.status.blocked':
+    case 'agent.status.waiting':
+    case 'agent.status.offline':
+    case 'agent.status.changed': {
       const agentObj = (record.agent as Record<string, unknown> | undefined) ?? {};
       const name = getString(agentObj.name) ?? 'unknown';
-      return `${name} ${type === 'agent.online' ? 'online' : 'offline'}`;
+      const status = getString(record.status) ?? type.replace('agent.status.', '');
+      return `${name} ${status}`;
     }
     case 'dm.received': {
       const message = (record.message as Record<string, unknown> | undefined) ?? {};

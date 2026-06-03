@@ -1,0 +1,57 @@
+{
+  "id": "traj_wk1125s10i5v",
+  "version": 1,
+  "task": {
+    "title": "Satisfy GitHub issue #158",
+    "source": {
+      "system": "plain",
+      "id": "#158"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-06-03T02:07:56.702Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-03T02:23:50.787Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_0v2fgifpjwkb",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-03T02:23:50.787Z",
+      "events": [
+        {
+          "ts": 1780453430788,
+          "type": "decision",
+          "content": "Implemented SDK v8 contract in engine and event vocabulary: Implemented SDK v8 contract in engine and event vocabulary",
+          "raw": {
+            "question": "Implemented SDK v8 contract in engine and event vocabulary",
+            "chosen": "Implemented SDK v8 contract in engine and event vocabulary",
+            "alternatives": [],
+            "reasoning": "Issue #158 requires agent-token reconnect, duplicate rejection confirmation, action available_to enforcement/discovery, authenticated inbound webhooks, subscription headers/HMAC docs, and canonical dotted event names across realtime and subscriptions."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-06-03T02:25:01.301Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "4d5d1b7455ce5a26a2bfcbc29a5ad91cd1efde4a",
+    "endRef": "4d5d1b7455ce5a26a2bfcbc29a5ad91cd1efde4a"
+  },
+  "completedAt": "2026-06-03T02:25:01.301Z",
+  "retrospective": {
+    "summary": "Implemented issue #158 SDK v8 service contract: agent self lookup, action available_to filtering/enforcement and events, authenticated inbound webhooks with message/author support, subscription headers/HMAC docs, and canonical realtime/subscription event names across SDK consumers.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  }
+}

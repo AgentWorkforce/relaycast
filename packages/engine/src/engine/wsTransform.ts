@@ -58,20 +58,13 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         },
       };
 
-    case 'reaction.added':
+    case 'message.reacted':
       return {
-        type: 'reaction.added',
+        type: 'message.reacted',
         message_id: d.message_id as string,
         emoji: d.emoji as string,
         agent_name: d.agent_name as string,
-      };
-
-    case 'reaction.removed':
-      return {
-        type: 'reaction.removed',
-        message_id: d.message_id as string,
-        emoji: d.emoji as string,
-        agent_name: d.agent_name as string,
+        action: (d.action as string | undefined) ?? 'added',
       };
 
     case 'dm.received': {
@@ -112,16 +105,28 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       };
     }
 
-    case 'agent.online':
+    case 'agent.status.active':
       return {
-        type: 'agent.online',
+        type: 'agent.status.active',
         agent: { name: d.agent_name as string },
+        status: 'active',
       };
 
-    case 'agent.offline':
+    case 'agent.status.offline':
       return {
-        type: 'agent.offline',
+        type: 'agent.status.offline',
         agent: { name: d.agent_name as string },
+        status: 'offline',
+      };
+
+    case 'agent.status.changed':
+    case 'agent.status.idle':
+    case 'agent.status.blocked':
+    case 'agent.status.waiting':
+      return {
+        type: event.type,
+        agent: { name: d.agent_name as string },
+        status: d.status as string,
       };
 
     case 'agent.spawn_requested':
@@ -203,6 +208,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           id: d.message_id as string,
           text: d.text as string,
           source: (d.source as string | null) ?? null,
+          author: (d.author as string | null) ?? null,
         },
       };
 

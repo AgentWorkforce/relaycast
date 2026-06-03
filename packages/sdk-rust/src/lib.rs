@@ -55,7 +55,7 @@
 //!                 println!("New message: {}", e.message.text);
 //!             }
 //!             WsEvent::AgentOnline(e) => {
-//!                 println!("Agent online: {}", e.agent.name);
+//!                 println!("Agent active: {}", e.agent.name);
 //!             }
 //!             _ => {}
 //!         }
@@ -166,6 +166,7 @@ pub use types::{
     AgentOfflineEvent,
     AgentOnlineEvent,
     AgentPresenceInfo,
+    AgentStatusEvent,
     // Channels
     Channel,
     ChannelArchivedEvent,
@@ -234,6 +235,7 @@ pub use types::{
     MessageInjectionMode,
     MessageListQuery,
     MessageReadEvent,
+    MessageReactedEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
     PostMessageRequest,

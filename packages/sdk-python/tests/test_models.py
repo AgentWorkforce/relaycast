@@ -342,17 +342,17 @@ def test_ws_thread_reply_event_model():
 
 def test_ws_reaction_added_event_model():
     ev = ReactionAddedEvent.model_validate(
-        {"type": "reaction.added", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha"}
+        {"type": "message.reacted", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha", "action": "added"}
     )
-    assert ev.type == "reaction.added"
+    assert ev.type == "message.reacted"
     assert ev.emoji == ":+1:"
 
 
 def test_ws_reaction_removed_event_model():
     ev = ReactionRemovedEvent.model_validate(
-        {"type": "reaction.removed", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha"}
+        {"type": "message.reacted", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha", "action": "removed"}
     )
-    assert ev.type == "reaction.removed"
+    assert ev.type == "message.reacted"
     assert ev.message_id == "m_1"
 
 
@@ -377,14 +377,14 @@ def test_ws_group_dm_received_event_model():
 
 
 def test_ws_agent_online_event_model():
-    ev = AgentOnlineEvent.model_validate({"type": "agent.online", "agent": {"name": "Alpha"}})
-    assert ev.type == "agent.online"
+    ev = AgentOnlineEvent.model_validate({"type": "agent.status.active", "agent": {"name": "Alpha"}, "status": "active"})
+    assert ev.type == "agent.status.active"
     assert ev.agent.name == "Alpha"
 
 
 def test_ws_agent_offline_event_model():
-    ev = AgentOfflineEvent.model_validate({"type": "agent.offline", "agent": {"name": "Alpha"}})
-    assert ev.type == "agent.offline"
+    ev = AgentOfflineEvent.model_validate({"type": "agent.status.offline", "agent": {"name": "Alpha"}, "status": "offline"})
+    assert ev.type == "agent.status.offline"
     assert ev.agent.name == "Alpha"
 
 

@@ -11,6 +11,7 @@ export function signPayload(payload: string, secret: string): Promise<string> {
 interface DeliveryTarget {
   url: string;
   secret: string | null;
+  headers: Record<string, string> | null;
   filter: { channel?: string; mentions?: string } | null;
 }
 
@@ -93,6 +94,7 @@ export async function deliverEvent(
     subscriptions = rows.map((r) => ({
       url: r.url,
       secret: r.secret,
+      headers: (r.headers as Record<string, string> | null) ?? null,
       filter: r.filter as { channel?: string; mentions?: string } | null,
     }));
   } catch (err) {
@@ -124,6 +126,7 @@ export async function deliverEvent(
   const deliveryResults = await Promise.all(
     filteredSubscriptions.map(async (sub) => {
       const headers: Record<string, string> = {
+        ...(sub.headers ?? {}),
         'Content-Type': 'application/json',
         'X-Relay-Event': eventType,
         'X-Relay-Timestamp': timestamp,

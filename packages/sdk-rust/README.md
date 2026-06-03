@@ -262,7 +262,7 @@ let webhook = relay.create_webhook(CreateWebhookRequest {
 // Create an event subscription
 let subscription = relay.create_subscription(CreateSubscriptionRequest {
     url: "https://example.com/webhook".to_string(),
-    events: vec!["message.created".to_string(), "agent.online".to_string()],
+    events: vec!["message.created".to_string(), "agent.status.active".to_string()],
     secret: Some("webhook_secret".to_string()),
 }).await?;
 ```
