@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::error::{RelayError, Result};
+use crate::harness::sanitize_harness;
 use crate::types::WsEvent;
 
 const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
@@ -35,6 +36,9 @@ pub struct WsClientOptions {
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
     pub origin_version: Option<String>,
+    /// User-Agent-style harness identifier, forwarded as the `harness` query
+    /// param (browsers can't set custom WS headers). Invalid values are dropped.
+    pub harness: Option<String>,
     /// Maximum reconnect attempts before giving up (default: 10).
     pub max_reconnect_attempts: Option<u32>,
     /// Maximum reconnect delay in milliseconds (default: 30000).
@@ -51,6 +55,7 @@ impl WsClientOptions {
             origin_surface: None,
             origin_client: None,
             origin_version: None,
+            harness: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
         }
@@ -78,6 +83,12 @@ impl WsClientOptions {
         self.origin_surface = Some(origin_surface.into());
         self.origin_client = Some(origin_client.into());
         self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    /// Set the harness identifier forwarded as the `harness` query param.
+    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
+        self.harness = Some(harness.into());
         self
     }
 
@@ -118,6 +129,7 @@ pub struct WsClient {
     origin_surface: String,
     origin_client: String,
     origin_version: String,
+    harness: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
     event_tx: broadcast::Sender<WsEvent>,
@@ -159,6 +171,7 @@ impl WsClient {
             origin_version: options
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
+            harness: sanitize_harness(options.harness),
             max_reconnect_attempts: options
                 .max_reconnect_attempts
                 .unwrap_or(DEFAULT_MAX_RECONNECT_ATTEMPTS),
@@ -212,6 +225,9 @@ impl WsClient {
             query.append_pair("origin_surface", &self.origin_surface);
             query.append_pair("origin_client", &self.origin_client);
             query.append_pair("origin_version", &self.origin_version);
+            if let Some(ref harness) = self.harness {
+                query.append_pair("harness", harness);
+            }
         }
 
         let (ws_stream, _) = connect_async(url.as_str()).await?;
@@ -229,6 +245,7 @@ impl WsClient {
         let origin_surface = self.origin_surface.clone();
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
+        let harness = self.harness.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
 
@@ -260,6 +277,9 @@ impl WsClient {
                         query.append_pair("origin_surface", &origin_surface);
                         query.append_pair("origin_client", &origin_client);
                         query.append_pair("origin_version", &origin_version);
+                        if let Some(ref harness) = harness {
+                            query.append_pair("harness", harness);
+                        }
                     }
 
                     match connect_async(reconnect_url.as_str()).await {

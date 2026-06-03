@@ -306,6 +306,15 @@ let options = RelayCastOptions::new("rk_live_xxx")
 let relay = RelayCast::new(options)?;
 ```
 
+```rust
+// Identify the harness driving requests for server-side telemetry.
+// Sent as the `X-Relaycast-Harness` header; a User-Agent-style string is fine.
+let options = RelayCastOptions::new("rk_live_xxx")
+    .with_harness("claude-code/2.3 (model=opus-4.8)");
+
+let relay = RelayCast::new(options)?;
+```
+
 Self-hosting:
 
 By default, the Rust SDK talks to the hosted engine at `https://gateway.relaycast.dev`.

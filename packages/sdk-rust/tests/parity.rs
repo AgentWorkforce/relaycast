@@ -515,6 +515,35 @@ async fn create_workspace_sends_origin_headers() {
 }
 
 #[tokio::test]
+async fn client_sends_sanitized_harness_header() {
+    let server = MockServer::start().await;
+
+    // The harness is supplied mixed-case; it should arrive lowercased.
+    Mock::given(method("GET"))
+        .and(path("/v1/channels"))
+        .and(header(
+            "x-relaycast-harness",
+            "claude-code/2.3 (model=opus-4.8)",
+        ))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let relay = RelayCast::new(
+        RelayCastOptions::new("rk_live_test")
+            .with_base_url(server.uri())
+            .with_harness("Claude-Code/2.3 (model=Opus-4.8)"),
+    )
+    .expect("failed to create RelayCast client");
+
+    relay
+        .list_channels(false)
+        .await
+        .expect("list_channels failed");
+}
+
+#[tokio::test]
 async fn agent_heartbeat_uses_presence_endpoint() {
     let server = MockServer::start().await;
 

@@ -24,6 +24,11 @@ pub struct RelayCastOptions {
     /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
     /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
+    /// User-Agent-style identifier for the harness driving requests
+    /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
+    /// the `X-Relaycast-Harness` header so server-side telemetry can attribute
+    /// traffic. Invalid values are dropped.
+    pub harness: Option<String>,
 }
 
 impl RelayCastOptions {
@@ -32,12 +37,19 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
+            harness: None,
         }
     }
 
     /// Set a custom base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the harness identifier sent as the `X-Relaycast-Harness` header.
+    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
+        self.harness = Some(harness.into());
         self
     }
 }
@@ -63,6 +75,9 @@ impl RelayCast {
 
         let mut client_options = ClientOptions::new(options.api_key);
         client_options = client_options.with_base_url(base_url);
+        if let Some(harness) = options.harness {
+            client_options = client_options.with_harness(harness);
+        }
         let client = HttpClient::new(client_options)?;
         Ok(Self { client })
     }

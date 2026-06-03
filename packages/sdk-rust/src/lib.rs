@@ -118,6 +118,7 @@ pub mod credentials;
 pub mod dm_participants;
 pub mod error;
 pub mod events;
+pub mod harness;
 pub mod identity;
 pub mod registration;
 pub mod relay;
@@ -137,6 +138,7 @@ pub use events::{
     NormalizedCommandInvocation, NormalizedEventKind, NormalizedInboundEvent, RelayPriority,
     SenderKind,
 };
+pub use harness::{sanitize_harness, HARNESS_HEADER};
 pub use identity::{agent_name_eq, is_self_name};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
