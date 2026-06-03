@@ -160,10 +160,14 @@ components:
           type: string
         channel_id:
           type: string
-        from_id:
+        channel_name:
           type: string
-        from_name:
+          description: Present on thread reply creation responses.
+        agent_id:
           type: string
+        agent_name:
+          type: string
+          description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -172,24 +176,37 @@ components:
           type: string
         blocks:
           type: array
+          nullable: true
           items:
             type: object
         attachments:
           type: array
           items:
-            type: object
-        data:
+            $ref: '#/components/schemas/FileAttachment'
+        metadata:
           type: object
-        content_type:
-          type: string
+          description: User message metadata. Internal `__relaycast_*` keys are stripped from public responses and caller metadata cannot override `agent_name`.
+        has_attachments:
+          type: boolean
         injection_mode:
           type: string
           enum: [wait, steer]
           description: Delivery/injection mode used when the message was sent
         thread_id:
           type: string
+          nullable: true
         reply_count:
           type: integer
+        reactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReactionGroup'
+        read_by_count:
+          type: integer
+        mentions:
+          type: array
+          items:
+            type: string
         created_at:
           type: string
           format: date-time
@@ -305,8 +322,21 @@ components:
     Reaction:
       type: object
       properties:
+        id:
+          type: string
         message_id:
           type: string
+        emoji:
+          type: string
+        agent_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ReactionGroup:
+      type: object
+      properties:
         emoji:
           type: string
         count:
@@ -314,12 +344,7 @@ components:
         agents:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-              name:
-                type: string
+            type: string
 
     Inbox:
       type: object
@@ -1383,9 +1408,10 @@ paths:
                 attachments:
                   type: array
                   items:
-                    type: object
+                    type: string
                 data:
                   type: object
+                  description: User metadata stored with the message. Internal `__relaycast_*` keys are stripped and cannot override sender identity.
                 content_type:
                   type: string
                 mode:
@@ -1510,6 +1536,13 @@ paths:
               properties:
                 text:
                   type: string
+                blocks:
+                  type: array
+                  items:
+                    type: object
+                data:
+                  type: object
+                  description: User metadata stored with the reply. Internal `__relaycast_*` keys are stripped and cannot override sender identity.
       responses:
         '201':
           description: Reply posted
@@ -1634,7 +1667,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Reaction'
+                      $ref: '#/components/schemas/ReactionGroup'
 
   /messages/{id}/reactions/{emoji}:
     delete:
@@ -2679,7 +2712,7 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. The caller must be allowed by `available_to`; the request returns an async ack containing `invocation_id`, emits `action.invoked` to the handler agent, and emits `action.denied` on denied calls.
+      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, emits `action.invoked` to the handler agent, and emits `action.denied` to the calling agent on denied calls.
       tags:
         - Actions
       security:
@@ -2706,6 +2739,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Agent token required, or caller is not allowed to invoke this action. Denied agent callers receive an `action.denied` event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /actions/{name}/invocations/{id}/complete:
     post:
