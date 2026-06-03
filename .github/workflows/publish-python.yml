@@ -122,8 +122,8 @@ jobs:
           }
 
           if [ -n "$CUSTOM_VERSION" ]; then
-            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([abrc.][0-9A-Za-z.]*)?$ ]]; then
-              echo "Invalid custom_version (must be PEP 440): $CUSTOM_VERSION"
+            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(b[0-9]+)?$ ]]; then
+              echo "Invalid custom_version (must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCHbN): $CUSTOM_VERSION"
               exit 1
             fi
             NEW_VERSION="$CUSTOM_VERSION"
@@ -165,13 +165,13 @@ jobs:
         run: uvx twine check dist/*
 
       - name: Publish to PyPI
-        if: github.event.inputs.dry_run != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/sdk-python/dist
 
       - name: Commit and tag
-        if: github.event.inputs.dry_run != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
         working-directory: ${{ github.workspace }}
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
@@ -189,7 +189,7 @@ jobs:
           git push origin "sdk-python-v${NEW_VERSION}"
 
       - name: Create GitHub Release
-        if: github.event.inputs.dry_run != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: sdk-python-v${{ steps.bump.outputs.new_version }}
@@ -215,6 +215,8 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "Dry run completed. Built and checked dist, but did not publish or tag." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "Build and checks completed on a non-main ref; publish, tag, and release were skipped." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Published to PyPI and created tag \`sdk-python-v${{ steps.bump.outputs.new_version }}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
