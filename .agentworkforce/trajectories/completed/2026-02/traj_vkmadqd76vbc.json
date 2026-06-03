@@ -21,7 +21,7 @@
     "packages/sdk-typescript/src/ws.ts",
     "packages/types/src/events.ts"
   ],
-  "projectId": "/Users/khaliqgant/Projects/agent-workforce/relaycast",
+  "projectId": "relaycast",
   "tags": [],
   "_trace": {
     "startRef": "091b5ad65f18fb8628324569c65a9d974a56f235",

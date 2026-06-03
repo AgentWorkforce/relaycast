@@ -1124,7 +1124,7 @@ async fn inbound_webhook_helpers_use_token_and_author_contract() {
                 "name": "dev",
                 "channel": "dev",
                 "url": format!("{}/v1/hooks/wh_1", server.uri()),
-                "token": "whsec_1",
+                "token": "wh_live_1",
                 "is_active": true,
                 "created_at": "2026-01-01T00:00:00.000Z"
             }
@@ -1140,12 +1140,12 @@ async fn inbound_webhook_helpers_use_token_and_author_contract() {
         })
         .await
         .expect("create_inbound_webhook failed");
-    assert_eq!(created.token, "whsec_1");
+    assert_eq!(created.token, "wh_live_1");
     assert!(created.is_active);
 
     Mock::given(method("POST"))
         .and(path("/v1/hooks/wh_1"))
-        .and(header("authorization", "Bearer whsec_1"))
+        .and(header("authorization", "Bearer wh_live_1"))
         .and(body_json(json!({
             "message": "build failed",
             "author": "GitHub"
@@ -1163,7 +1163,7 @@ async fn inbound_webhook_helpers_use_token_and_author_contract() {
         .await;
 
     let response = relay
-        .trigger_webhook_with_token(
+        .trigger_webhook(
             "wh_1",
             WebhookTriggerRequest {
                 text: None,
@@ -1173,10 +1173,10 @@ async fn inbound_webhook_helpers_use_token_and_author_contract() {
                 author: Some("GitHub".to_string()),
                 payload: None,
             },
-            "whsec_1",
+            "wh_live_1",
         )
         .await
-        .expect("trigger_webhook_with_token failed");
+        .expect("trigger_webhook failed");
     assert_eq!(response.author.as_deref(), Some("GitHub"));
 }
 

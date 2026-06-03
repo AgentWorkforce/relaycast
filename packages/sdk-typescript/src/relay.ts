@@ -564,10 +564,9 @@ export class RelayCast {
     trigger: (
       webhookId: string,
       data: WebhookTriggerRequest,
-      token?: string,
+      token: string,
     ): Promise<WebhookTriggerResponse> => {
-      const client = token ? this.client.withApiKey(token) : this.client;
-      return client.post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data);
+      return this.client.withApiKey(token).post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data);
     },
   };
 

@@ -47,7 +47,7 @@
     "packages/sdk-rust/src/types.rs",
     "packages/sdk-rust/tests/parity.rs"
   ],
-  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "projectId": "relaycast",
   "tags": [],
   "_trace": {
     "startRef": "8756a6d1fb3d70cf338fb24916bd1a00c54592b3",

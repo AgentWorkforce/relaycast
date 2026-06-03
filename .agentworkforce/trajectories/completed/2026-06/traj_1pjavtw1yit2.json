@@ -33,7 +33,7 @@
     "packages/sdk-typescript/package.json",
     "packages/types/package.json"
   ],
-  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "projectId": "relaycast",
   "tags": [],
   "_trace": {
     "startRef": "3930c7ac108799bb6b1290bb0ed24ac2679c09c3",

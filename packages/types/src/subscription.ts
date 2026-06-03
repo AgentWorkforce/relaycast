@@ -39,12 +39,16 @@ export const SubscriptionFilterSchema = z.object({
 });
 export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
+const HeaderNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
+const HeaderValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
+const SubscriptionHeadersSchema = z.record(HeaderNameSchema, HeaderValueSchema);
+
 export const EventSubscriptionSchema = z.object({
   id: z.string(),
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
-  headers: z.record(z.string(), z.string()).nullable().optional(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });
@@ -54,7 +58,7 @@ export const CreateSubscriptionRequestSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.optional(),
   url: z.string(),
-  headers: z.record(z.string(), z.string()).optional(),
+  headers: SubscriptionHeadersSchema.optional(),
   secret: z.string().optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
@@ -64,7 +68,7 @@ export const CreateSubscriptionResponseSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
-  headers: z.record(z.string(), z.string()).nullable().optional(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });

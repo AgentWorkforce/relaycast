@@ -122,12 +122,6 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
     const token = extractBearerToken(c.req.header('Authorization'));
-    if (!token) {
-      return c.json({
-        ok: false,
-        error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' },
-      }, 401);
-    }
     const parsed = triggerInboundWebhookSchema.safeParse(await c.req.json());
     if (!parsed.success) {
       return c.json({
@@ -142,7 +136,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       token,
       {
         text: text ?? message,
-        source: source ?? author,
+        source,
         author: author ?? source,
         payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
       },

@@ -1,5 +1,6 @@
 const INTERNAL_METADATA_PREFIX = '__relaycast_';
 const WEBHOOK_ORIGIN = 'inbound_webhook';
+const LEGACY_WEBHOOK_AGENT_NAME = '__relay_webhook__';
 
 export function sanitizeUserMessageMetadata(
   metadata: Record<string, unknown> | null | undefined,
@@ -47,5 +48,15 @@ export function displayAgentName(
   ) {
     return author;
   }
+
+  const legacyAuthor = metadata?.author;
+  if (
+    fallback === LEGACY_WEBHOOK_AGENT_NAME
+    && typeof legacyAuthor === 'string'
+    && legacyAuthor.length > 0
+  ) {
+    return legacyAuthor;
+  }
+
   return fallback || 'unknown';
 }

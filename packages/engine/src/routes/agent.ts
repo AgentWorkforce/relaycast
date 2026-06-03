@@ -480,7 +480,8 @@ agentRoutes.post(
       }
 
       if (!type.startsWith('status.')) {
-        const eventData = { agent_name: name, ...event };
+        const { type: _sessionEventType, ...eventWithoutType } = event;
+        const eventData = { agent_name: name, ...eventWithoutType };
         runInBackground(c, fanoutToWorkspace(c, `harness.${type}`, eventData), `fanout harness.${type}`);
         runInBackground(
           c,

@@ -152,7 +152,7 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
 export async function triggerWebhook(
   db: Db,
   webhookId: string,
-  token: string,
+  token: string | null,
   data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
 ) {
   // Look up webhook
@@ -162,12 +162,14 @@ export async function triggerWebhook(
     .where(and(eq(webhooks.id, webhookId), eq(webhooks.isActive, true)));
 
   if (!webhook) return null;
-  if (!webhook.tokenHash) {
-    throw codedError('Webhook bearer token required', 'webhook_token_required', 401);
-  }
-  const tokenHash = await sha256Hex(token);
-  if (tokenHash !== webhook.tokenHash) {
-    throw codedError('Invalid webhook bearer token', 'webhook_token_invalid', 401);
+  if (webhook.tokenHash) {
+    if (!token) {
+      throw codedError('Webhook bearer token required', 'webhook_token_required', 401);
+    }
+    const tokenHash = await sha256Hex(token);
+    if (tokenHash !== webhook.tokenHash) {
+      throw codedError('Invalid webhook bearer token', 'webhook_token_invalid', 401);
+    }
   }
 
   // Build message text from payload or text

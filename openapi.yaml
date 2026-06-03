@@ -2655,7 +2655,7 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
       summary: List actions
-      description: List registered actions. Workspace keys see all actions; agent tokens only see actions whose `available_to` allows that agent, or actions with no `available_to` restriction.
+      description: List registered actions. Restricted actions are visible only when the caller is an agent allowed by `available_to`; actions with no `available_to` restriction are visible to any authenticated caller.
       tags:
         - Actions
       security:
@@ -2672,7 +2672,7 @@ paths:
   /actions/{name}:
     get:
       summary: Get action
-      description: Get a single registered action by name
+      description: Get a single registered action by name. Returns not found when the action is restricted by `available_to` and the caller is not an allowed agent.
       tags:
         - Actions
       security:
@@ -2890,7 +2890,9 @@ paths:
         `{ type, workspace_id, timestamp, data }`. If `secret` is provided, Relaycast signs the exact
         JSON request body with HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>` along with
         `X-Relay-Event` and `X-Relay-Timestamp`. Custom `headers` are included on delivery; Relay's
-        own `Content-Type` and `X-Relay-*` headers take precedence.
+        own `Content-Type` and `X-Relay-*` headers take precedence. Header names must be valid
+        HTTP field names, values cannot contain CR/LF, and stored custom header values are redacted
+        from subscription create/list/get responses.
       tags:
         - Subscriptions
       security:
@@ -2918,7 +2920,7 @@ paths:
                   type: object
                   additionalProperties:
                     type: string
-                  description: Custom headers to include on outbound delivery requests, such as Authorization.
+                  description: Custom headers to include on outbound delivery requests, such as Authorization. Values are redacted in API responses.
                 secret:
                   type: string
       responses:
@@ -3052,7 +3054,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
       tags:
         - Webhooks
       security:
@@ -3078,7 +3080,7 @@ paths:
                   description: SDK alias for `text`.
                 source:
                   type: string
-                  description: Source identifier. `author` is also accepted and used as displayed sender.
+                  description: Origin source identifier for the webhook event.
                 author:
                   type: string
                   description: Displayed sender for the resulting channel message.

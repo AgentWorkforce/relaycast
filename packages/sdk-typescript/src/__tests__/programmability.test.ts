@@ -42,7 +42,7 @@ describe('Programmability SDK', () => {
           name: 'GitHub',
           channel: 'dev',
           url: 'https://...',
-          token: 'whsec_1',
+          token: 'wh_live_1',
           is_active: true,
           created_at: '2025-01-01',
         }),
@@ -53,7 +53,7 @@ describe('Programmability SDK', () => {
       expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'GitHub', channel: 'dev' }));
-      expect(created.token).toBe('whsec_1');
+      expect(created.token).toBe('wh_live_1');
     });
 
     it('createInbound() aliases webhook creation for inbound SDK contract', async () => {
@@ -66,7 +66,7 @@ describe('Programmability SDK', () => {
           name: 'dev',
           channel: 'dev',
           url: 'https://gateway.relaycast.dev/v1/hooks/wh_1',
-          token: 'whsec_1',
+          token: 'wh_live_1',
           is_active: true,
           created_at: '2025-01-01',
         }),
@@ -117,12 +117,12 @@ describe('Programmability SDK', () => {
           created_at: '2025-01-01',
         }),
       );
-      await relay.webhooks.trigger('wh_1', { message: 'alert', author: 'GitHub' }, 'whsec_1');
+      await relay.webhooks.trigger('wh_1', { message: 'alert', author: 'GitHub' }, 'wh_live_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://gateway.relaycast.dev/v1/hooks/wh_1');
       expect(init.method).toBe('POST');
-      expect(init.headers.Authorization).toBe('Bearer whsec_1');
+      expect(init.headers.Authorization).toBe('Bearer wh_live_1');
       expect(init.body).toBe(JSON.stringify({ message: 'alert', author: 'GitHub' }));
     });
   });

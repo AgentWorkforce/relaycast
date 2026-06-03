@@ -120,13 +120,31 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       };
 
     case 'agent.status.changed':
-    case 'agent.status.idle':
-    case 'agent.status.blocked':
-    case 'agent.status.waiting':
       return {
-        type: event.type,
+        type: 'agent.status.changed',
         agent: { name: d.agent_name as string },
         status: d.status as string,
+      };
+
+    case 'agent.status.idle':
+      return {
+        type: 'agent.status.idle',
+        agent: { name: d.agent_name as string },
+        status: 'idle',
+      };
+
+    case 'agent.status.blocked':
+      return {
+        type: 'agent.status.blocked',
+        agent: { name: d.agent_name as string },
+        status: 'blocked',
+      };
+
+    case 'agent.status.waiting':
+      return {
+        type: 'agent.status.waiting',
+        agent: { name: d.agent_name as string },
+        status: 'waiting',
       };
 
     case 'agent.spawn_requested':

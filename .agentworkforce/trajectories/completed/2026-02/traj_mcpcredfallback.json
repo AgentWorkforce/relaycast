@@ -61,7 +61,7 @@
   "filesChanged": [
     "packages/mcp/src/stdio.ts"
   ],
-  "projectId": "/Users/khaliqgant/Projects/agent-workforce/relaycast",
+  "projectId": "relaycast",
   "tags": ["mcp", "credentials", "codex-compat"],
   "_trace": {
     "startRef": "02e619b2d726b069915a41d57ce246dbad22a552",

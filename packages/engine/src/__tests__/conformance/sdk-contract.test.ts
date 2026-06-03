@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
+import { webhooks } from '../../db/schema.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 
 describe('SDK v8 service contract', () => {
@@ -66,6 +68,27 @@ describe('SDK v8 service contract', () => {
     const deniedBody = await deniedActions.json() as { data: Array<{ name: string }> };
     expect(deniedBody.data).toEqual([]);
 
+    const workspaceActions = await stack.app.request('/v1/actions', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const workspaceBody = await workspaceActions.json() as { data: Array<{ name: string }> };
+    expect(workspaceBody.data).toEqual([]);
+
+    const callerGet = await stack.app.request('/v1/actions/summarize', {
+      headers: { authorization: `Bearer ${caller.token}` },
+    });
+    expect(callerGet.status).toBe(200);
+
+    const deniedGet = await stack.app.request('/v1/actions/summarize', {
+      headers: { authorization: `Bearer ${denied.token}` },
+    });
+    expect(deniedGet.status).toBe(404);
+
+    const workspaceGet = await stack.app.request('/v1/actions/summarize', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(workspaceGet.status).toBe(404);
+
     const handlerSock = new FakeSocket();
     stack.runtime.realtime.attachAgentSocket(ws.workspaceId, handler.agentId, handlerSock);
     const invoke = await stack.app.request('/v1/actions/summarize/invoke', {
@@ -119,14 +142,25 @@ describe('SDK v8 service contract', () => {
     });
     expect(wrongAuth.status).toBe(401);
 
+    await stack.runtime.deps.db
+      .update(webhooks)
+      .set({ tokenHash: null })
+      .where(eq(webhooks.id, created.data.webhook_id));
+    const legacyTrigger = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'legacy deploy started', author: 'CI' }),
+    });
+    expect(legacyTrigger.status).toBe(201);
+
     const trigger = await stack.app.request(`/v1/hooks/${created.data.webhook_id}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${created.data.token}` },
       body: JSON.stringify({ message: 'deploy started', author: 'CI' }),
     });
     expect(trigger.status).toBe(201);
-    const triggered = await trigger.json() as { data: { text: string; author: string } };
-    expect(triggered.data).toMatchObject({ text: 'deploy started', author: 'CI' });
+    const triggered = await trigger.json() as { data: { text: string; source: string | null; author: string } };
+    expect(triggered.data).toMatchObject({ text: 'deploy started', source: null, author: 'CI' });
 
     const messages = await stack.app.request('/v1/channels/general/messages', {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
@@ -197,6 +231,25 @@ describe('SDK v8 service contract', () => {
 
   it('passes subscription headers and signs delivery payloads with HMAC-SHA256', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-subscription-ws');
+    const expectRedactedHeaders = (headers: Record<string, string>) => {
+      expect(headers.Authorization).toBe('[redacted]');
+      expect(headers['Content-Type']).toBe('[redacted]');
+      expect(headers['x-relay-event']).toBe('[redacted]');
+      expect(headers['X-Relay-Timestamp']).toBe('[redacted]');
+      expect(Object.values(headers)).toSatisfy((values) => values.every((value) => value === '[redacted]'));
+    };
+
+    const invalidHeaders = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        events: ['message.created'],
+        url: 'https://example.test/relay',
+        headers: { 'Bad Header': 'x' },
+      }),
+    });
+    expect(invalidHeaders.status).toBe(400);
+
     const create = await stack.app.request('/v1/subscriptions', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
@@ -213,6 +266,21 @@ describe('SDK v8 service contract', () => {
       }),
     });
     expect(create.status).toBe(201);
+    const created = await create.json() as { data: { id: string; headers: Record<string, string> } };
+    expectRedactedHeaders(created.data.headers);
+
+    const list = await stack.app.request('/v1/subscriptions', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const listBody = await list.json() as { data: Array<{ id: string; headers: Record<string, string> }> };
+    expect(listBody.data).toHaveLength(1);
+    expectRedactedHeaders(listBody.data[0].headers);
+
+    const get = await stack.app.request(`/v1/subscriptions/${created.data.id}`, {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const getBody = await get.json() as { data: { headers: Record<string, string> } };
+    expectRedactedHeaders(getBody.data.headers);
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
     await deliverEvent(stack.runtime.deps.db, ws.workspaceId, 'message.created', { text: 'hello' });
@@ -226,6 +294,32 @@ describe('SDK v8 service contract', () => {
     expect(headers['x-relay-event']).toBeUndefined();
     expect(headers['X-Relay-Timestamp']).not.toBe('spoofed');
     expect(headers['X-Relay-Signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
+  });
+
+  it('keeps harness session event envelope types canonical', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-harness-ws');
+    await registerAgent(stack.app, ws.workspaceKey, 'runner');
+    const workspaceSock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, workspaceSock);
+
+    const emit = await stack.app.request('/v1/agents/runner/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        type: 'tool.called',
+        payload: { type: 'inner.tool', tool: 'build' },
+      }),
+    });
+    expect(emit.status).toBe(201);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(workspaceSock.ofType('harness.tool.called')).toHaveLength(1);
+    expect(workspaceSock.ofType('inner.tool')).toHaveLength(0);
+    expect(workspaceSock.ofType('harness.tool.called')[0]).toMatchObject({
+      type: 'harness.tool.called',
+      agent_name: 'runner',
+      payload: { type: 'inner.tool', tool: 'build' },
+    });
   });
 
   it('emits canonical message.reacted events for reactions', async () => {

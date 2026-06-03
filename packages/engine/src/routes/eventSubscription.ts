@@ -9,6 +9,9 @@ import { errorResponse } from '../lib/httpError.js';
 
 export const eventSubscriptionRoutes = new Hono<AppEnv>();
 
+const headerNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
+const headerValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
+
 const createSubscriptionSchema = z.object({
   events: z.array(z.string()).min(1),
   filter: z.object({
@@ -16,7 +19,7 @@ const createSubscriptionSchema = z.object({
     mentions: z.string().optional(),
   }).nullable().optional(),
   url: z.string().min(1),
-  headers: z.record(z.string(), z.string()).optional(),
+  headers: z.record(headerNameSchema, headerValueSchema).optional(),
   secret: z.string().nullable().optional(),
 });
 

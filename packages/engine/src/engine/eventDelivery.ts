@@ -64,6 +64,12 @@ async function attemptDelivery(
   headers: Record<string, string>,
   retries: number = 3,
 ): Promise<AttemptDeliveryResult> {
+  try {
+    new Headers(headers);
+  } catch {
+    return { ok: false, retryable: false };
+  }
+
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await globalThis.fetch(url, {

@@ -23,7 +23,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.webhook.create', {
     title: 'Create Webhook',
-    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL that accepts POST requests with a JSON body.',
+    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL and one-time-visible bearer token for POST requests.',
     inputSchema: {
       name: z.string().describe('Human-readable webhook name to identify its purpose (e.g. "GitHub Alerts", "CI Pipeline")'),
       channel: z.string().describe('Name of the target channel where webhook messages will be delivered'),
@@ -83,14 +83,15 @@ export function registerProgrammabilityTools(
     description: 'Manually trigger an inbound webhook to post a message into its target channel. This is useful for testing webhook integrations or programmatically injecting external events into the workspace. Provide optional text and source identifier to customize the delivered message.',
     inputSchema: {
       webhook_id: z.string().describe('Unique identifier of the webhook to trigger, obtained from list_webhooks or create_webhook'),
+      token: z.string().describe('Bearer token returned by create_webhook for this webhook'),
       text: z.string().optional().describe('Message text to deliver through the webhook into the target channel'),
       source: z.string().optional().describe('Source identifier for the webhook payload (e.g. "github", "jenkins", "datadog")'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ webhook_id, text, source }) => {
+  }, async ({ webhook_id, token, text, source }) => {
     const relay = getRelay();
-    const result = await relay.webhooks.trigger(webhook_id, { text, source });
+    const result = await relay.webhooks.trigger(webhook_id, { text, source }, token);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,

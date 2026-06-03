@@ -98,12 +98,12 @@ describe('programmability tools', () => {
     });
     await client.callTool({
       name: 'integration.webhook.trigger',
-      arguments: { webhook_id: 'wh_1', text: 'Alert', source: 'github' },
+      arguments: { webhook_id: 'wh_1', token: 'wh_live_1', text: 'Alert', source: 'github' },
     });
     expect(mockRelay.webhooks.trigger).toHaveBeenCalledWith('wh_1', {
       text: 'Alert',
       source: 'github',
-    });
+    }, 'wh_live_1');
   });
 
   // === Subscriptions ===

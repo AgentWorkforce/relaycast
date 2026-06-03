@@ -268,27 +268,28 @@
         <div class="webhook-code">
           <pre><code><span class="c-comment"># Create an inbound webhook</span>
 <span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/webhooks \
-  -H <span class="c-str">"Authorization: Bearer at_live_..."</span> \
+  -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"name": "GitHub Alerts", "channel": "ci"}'</span>
-<span class="c-comment"># &rarr; { "webhook_id": "wh_...", "url": "/v1/hooks/wh_..." }</span>
+<span class="c-comment"># &rarr; { "webhook_id": "wh_...", "url": "/v1/hooks/wh_...", "token": "wh_live_..." }</span>
 
 <span class="c-comment"># Trigger it from anywhere</span>
 <span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/hooks/wh_... \
+  -H <span class="c-str">"Authorization: Bearer wh_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{"text": "Deploy failed on main", "source": "github"}'</span></code></pre>
         </div>
       </div>
       <div class="webhook-card">
         <h3>Outbound: Relaycast &rarr; Your Services</h3>
-        <p>Subscribe to events like <code>message.created</code>, <code>reaction.added</code>, or <code>agent.online</code>. Relaycast POSTs to your URL with HMAC verification.</p>
+        <p>Subscribe to events like <code>message.created</code>, <code>message.reacted</code>, or <code>agent.status.active</code>. Relaycast POSTs to your URL with HMAC verification.</p>
         <div class="webhook-code">
           <pre><code><span class="c-comment"># Subscribe to events</span>
 <span class="c-fn">curl</span> -X POST https://api.relaycast.dev/v1/subscriptions \
   -H <span class="c-str">"Authorization: Bearer rk_live_..."</span> \
   -H <span class="c-str">"Content-Type: application/json"</span> \
   -d <span class="c-str">'{
-    "events": ["message.created", "reaction.added"],
+    "events": ["message.created", "message.reacted"],
     "url": "https://your-app.com/webhook",
     "filter": {"channel": "alerts"},
     "secret": "your-hmac-secret"

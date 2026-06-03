@@ -454,13 +454,15 @@ impl RelayCast {
             .await
     }
 
-    /// Trigger a webhook.
+    /// Trigger a webhook with its per-webhook bearer token.
     pub async fn trigger_webhook(
         &self,
         webhook_id: &str,
         request: WebhookTriggerRequest,
+        token: impl Into<String>,
     ) -> Result<WebhookTriggerResponse> {
         self.client
+            .with_api_key(token)?
             .post(
                 &format!("/v1/hooks/{}", urlencoding::encode(webhook_id)),
                 Some(request),
@@ -476,14 +478,7 @@ impl RelayCast {
         request: WebhookTriggerRequest,
         token: impl Into<String>,
     ) -> Result<WebhookTriggerResponse> {
-        self.client
-            .with_api_key(token)?
-            .post(
-                &format!("/v1/hooks/{}", urlencoding::encode(webhook_id)),
-                Some(request),
-                None,
-            )
-            .await
+        self.trigger_webhook(webhook_id, request, token).await
     }
 
     // === Subscriptions ===

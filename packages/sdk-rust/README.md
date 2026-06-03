@@ -259,7 +259,7 @@ let webhook = relay.create_inbound_webhook(CreateWebhookRequest {
     channel: "general".to_string(),
 }).await?;
 
-relay.trigger_webhook_with_token(
+relay.trigger_webhook(
     &webhook.webhook_id,
     WebhookTriggerRequest {
         message: Some("Deploy finished".to_string()),
