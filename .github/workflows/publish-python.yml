@@ -52,6 +52,15 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Validate publish ref
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Publishing is only allowed from main; current ref is $GITHUB_REF"
+            exit 1
+          fi
+
       - name: Determine and set version
         id: bump
         shell: bash
@@ -120,8 +129,8 @@ jobs:
           }
 
           if [ -n "$CUSTOM_VERSION" ]; then
-            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([abrc.][0-9A-Za-z.]*)?$ ]]; then
-              echo "Invalid custom_version (must be PEP 440): $CUSTOM_VERSION"
+            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+              echo "Invalid custom_version (expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH{a|b|rc}N): $CUSTOM_VERSION"
               exit 1
             fi
             NEW_VERSION="$CUSTOM_VERSION"
