@@ -2,7 +2,7 @@
   "id": "traj_sak83ludpz21",
   "version": 1,
   "task": {
-    "title": "Address PR 157 review comments"
+    "title": "Address automated PR 157 review comments"
   },
   "status": "completed",
   "startedAt": "2026-06-03T01:43:27.237Z",
@@ -18,7 +18,7 @@
   },
   "completedAt": "2026-06-03T01:46:06.389Z",
   "retrospective": {
-    "summary": "Addressed PR 157 review comments for the Rust SDK: skipped unknown delivery statuses in queries, clarified README placeholders, added retryable false parity coverage, and cleaned trajectory metadata.",
+    "summary": "Addressed automated PR 157 review comments for the Rust SDK: skipped unknown delivery statuses in queries, clarified README placeholders, added retryable false parity coverage, and cleaned trajectory metadata.",
     "approach": "Standard approach",
     "confidence": 0.9
   }
