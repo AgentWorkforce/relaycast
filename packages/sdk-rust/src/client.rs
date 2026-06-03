@@ -5,6 +5,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
 use crate::error::{RelayError, Result};
+use crate::harness::{sanitize_harness, HARNESS_HEADER};
 use crate::types::ApiResponse;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -26,6 +27,10 @@ pub struct ClientOptions {
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
     pub origin_version: Option<String>,
+    /// User-Agent-style identifier for the harness driving requests
+    /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
+    /// the `X-Relaycast-Harness` header; invalid values are dropped.
+    pub harness: Option<String>,
 }
 
 impl ClientOptions {
@@ -37,6 +42,7 @@ impl ClientOptions {
             origin_surface: None,
             origin_client: None,
             origin_version: None,
+            harness: None,
         }
     }
 
@@ -56,6 +62,12 @@ impl ClientOptions {
         self.origin_surface = Some(origin_surface.into());
         self.origin_client = Some(origin_client.into());
         self.origin_version = Some(origin_version.into());
+        self
+    }
+
+    /// Set the harness identifier sent as the `X-Relaycast-Harness` header.
+    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
+        self.harness = Some(harness.into());
         self
     }
 }
@@ -88,6 +100,7 @@ pub struct HttpClient {
     origin_surface: String,
     origin_client: String,
     origin_version: String,
+    harness: Option<String>,
 }
 
 impl HttpClient {
@@ -110,6 +123,7 @@ impl HttpClient {
             origin_version: options
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
+            harness: sanitize_harness(options.harness),
         })
     }
 
@@ -138,17 +152,24 @@ impl HttpClient {
         &self.origin_version
     }
 
+    /// Get the sanitized harness identifier, if one was supplied.
+    pub fn harness(&self) -> Option<&str> {
+        self.harness.as_deref()
+    }
+
     /// Return a cloned client with a different API key while preserving base URL and origin metadata.
     pub fn with_api_key(&self, api_key: impl Into<String>) -> Result<Self> {
-        HttpClient::new(
-            ClientOptions::new(api_key)
-                .with_base_url(self.base_url.clone())
-                .with_origin(
-                    self.origin_surface.clone(),
-                    self.origin_client.clone(),
-                    self.origin_version.clone(),
-                ),
-        )
+        let mut options = ClientOptions::new(api_key)
+            .with_base_url(self.base_url.clone())
+            .with_origin(
+                self.origin_surface.clone(),
+                self.origin_client.clone(),
+                self.origin_version.clone(),
+            );
+        if let Some(harness) = &self.harness {
+            options = options.with_harness(harness.clone());
+        }
+        HttpClient::new(options)
     }
 
     /// Make a request to the API.
@@ -220,6 +241,10 @@ impl HttpClient {
             .header("X-Relaycast-Origin-Surface", &self.origin_surface)
             .header("X-Relaycast-Origin-Client", &self.origin_client)
             .header("X-Relaycast-Origin-Version", &self.origin_version);
+
+        if let Some(ref harness) = self.harness {
+            request = request.header(HARNESS_HEADER, harness);
+        }
 
         if let Some(ref key) = options.idempotency_key {
             request = request.header("Idempotency-Key", key);

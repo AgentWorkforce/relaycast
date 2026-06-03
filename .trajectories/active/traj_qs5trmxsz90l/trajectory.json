@@ -6,8 +6,35 @@
   },
   "status": "active",
   "startedAt": "2026-06-03T03:22:36.933Z",
-  "agents": [],
-  "chapters": [],
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-03T09:01:33.714Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_qolb24dyiy0e",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-03T09:01:33.714Z",
+      "events": [
+        {
+          "ts": 1780477293714,
+          "type": "decision",
+          "content": "Added focused Rust SDK harness parity tests: Added focused Rust SDK harness parity tests",
+          "raw": {
+            "question": "Added focused Rust SDK harness parity tests",
+            "chosen": "Added focused Rust SDK harness parity tests",
+            "alternatives": [],
+            "reasoning": "PR adds Rust harness support but only covered HTTP constructor stamping; API-key rotation and WebSocket query propagation are explicit contract claims and needed local regression coverage."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
   "commits": [],
   "filesChanged": [],
   "projectId": "relaycast",
