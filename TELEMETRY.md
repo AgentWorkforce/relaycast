@@ -23,7 +23,7 @@ Telemetry is designed to avoid sensitive data:
 
 Telemetry is sent to PostHog.
 
-Default host: `https://us.i.posthog.com`
+Default host: `https://i.agentrelay.com`
 
 Host and authentication can be configured through environment settings.
 

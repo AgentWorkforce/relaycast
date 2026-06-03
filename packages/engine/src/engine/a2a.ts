@@ -73,6 +73,19 @@ export type {
 
 export type RelayDM = z.infer<typeof RelayDMSchema>;
 
+type ParsedA2aPart =
+  | { kind: 'text'; text: string }
+  | {
+      kind: 'file';
+      file: {
+        name: string;
+        mime_type?: string;
+        uri?: string;
+        bytes?: number;
+      };
+    }
+  | { kind: 'data'; data: Record<string, unknown> };
+
 export interface RegisterA2aAgentInput {
   agentCardUrl?: string;
   agentCard?: A2aAgentCard;
@@ -145,6 +158,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseA2aParts(parts: unknown[]): ParsedA2aPart[] {
+  return A2aPartSchema.array().parse(parts) as ParsedA2aPart[];
+}
+
 export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard> {
   if (!isSafeExternalUrl(agentCardUrl)) {
     const err = new Error(`Refusing to fetch agent card from non-public URL: ${agentCardUrl}`);
@@ -167,8 +184,8 @@ export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard
   return A2aAgentCardSchema.parse(payload);
 }
 
-function extractTextFromParts(parts: A2aPart[]): string {
-  return parts
+function extractTextFromParts(parts: unknown[]): string {
+  return parseA2aParts(parts)
     .map((part) => {
       if (part.kind === 'text') return part.text;
       if (part.kind === 'file') return `[file] ${part.file.name}`;
@@ -178,10 +195,10 @@ function extractTextFromParts(parts: A2aPart[]): string {
     .trim();
 }
 
-function extractAttachmentsFromParts(parts: A2aPart[]): FileAttachment[] {
+function extractAttachmentsFromParts(parts: unknown[]): FileAttachment[] {
   const attachments: FileAttachment[] = [];
 
-  for (const part of parts) {
+  for (const part of parseA2aParts(parts)) {
     if (part.kind === 'file') {
       attachments.push({
         file_id: part.file.uri ?? randomUuid(),
@@ -500,7 +517,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
   const parsedResponse = JsonRpcResponseSchema.parse(jsonRpc);
   const task = parsedResponse.result?.task;
   const responseMessage = parsedResponse.result?.message ?? task?.history?.at(-1);
-  const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact) => artifact.parts) ?? [];
+  const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact: { parts: unknown[] }) => artifact.parts) ?? [];
 
   return {
     id: String(parsedResponse.id ?? task?.id ?? randomUuid()),
