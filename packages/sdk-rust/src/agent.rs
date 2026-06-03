@@ -859,7 +859,9 @@ impl AgentClient {
 
         let mut query_params: Vec<(String, String)> = Vec::new();
         if let Some(status) = opts.status {
-            query_params.push(("status".to_string(), status.as_str().to_string()));
+            if let Some(status) = status.as_query_value() {
+                query_params.push(("status".to_string(), status.to_string()));
+            }
         }
         if let Some(limit) = opts.limit {
             query_params.push(("limit".to_string(), limit.to_string()));

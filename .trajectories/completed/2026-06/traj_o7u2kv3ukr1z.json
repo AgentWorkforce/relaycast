@@ -23,7 +23,7 @@
         {
           "ts": 1780412198026,
           "type": "decision",
-          "content": "Added typed Rust delivery REST methods plus websocket delivery event variants: Added typed Rust delivery REST methods plus websocket delivery event variants",
+          "content": "Added typed Rust delivery REST methods plus websocket delivery event variants",
           "raw": {
             "question": "Added typed Rust delivery REST methods plus websocket delivery event variants",
             "chosen": "Added typed Rust delivery REST methods plus websocket delivery event variants",

@@ -593,6 +593,47 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .expect("fail_delivery failed");
     assert_eq!(failed.status, DeliveryStatus::Failed);
     assert_eq!(failed.error.as_deref(), Some("boom"));
+    assert_eq!(failed.retryable, Some(true));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/fail"))
+        .and(body_json(json!({
+            "error": "boom",
+            "retryable": false
+        })))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "failed",
+            "mode": "wait",
+            "reason": null,
+            "priority": "normal",
+            "retryable": false,
+            "error": "boom",
+            "available_at": null,
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:02.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failed = agent
+        .fail_delivery(
+            "del_1",
+            Some(FailDeliveryRequest {
+                error: Some("boom".to_string()),
+                retryable: Some(false),
+            }),
+        )
+        .await
+        .expect("fail_delivery retryable false failed");
+    assert_eq!(failed.status, DeliveryStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("boom"));
+    assert_eq!(failed.retryable, Some(false));
 
     Mock::given(method("POST"))
         .and(path("/v1/deliveries/del_1/fail"))

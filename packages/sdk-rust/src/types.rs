@@ -608,14 +608,14 @@ pub enum DeliveryStatus {
 }
 
 impl DeliveryStatus {
-    /// Return the API wire value for this status.
-    pub fn as_str(self) -> &'static str {
+    /// Return the accepted API query value for this status.
+    pub fn as_query_value(self) -> Option<&'static str> {
         match self {
-            DeliveryStatus::Accepted => "accepted",
-            DeliveryStatus::Delivered => "delivered",
-            DeliveryStatus::Deferred => "deferred",
-            DeliveryStatus::Failed => "failed",
-            DeliveryStatus::Unknown => "unknown",
+            DeliveryStatus::Accepted => Some("accepted"),
+            DeliveryStatus::Delivered => Some("delivered"),
+            DeliveryStatus::Deferred => Some("deferred"),
+            DeliveryStatus::Failed => Some("failed"),
+            DeliveryStatus::Unknown => None,
         }
     }
 }

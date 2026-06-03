@@ -28,7 +28,7 @@ Added Rust SDK durable delivery support: typed delivery models, AgentClient deli
 ### 1. Work
 *Agent: default*
 
-- Added typed Rust delivery REST methods plus websocket delivery event variants: Added typed Rust delivery REST methods plus websocket delivery event variants
+- Added typed Rust delivery REST methods plus websocket delivery event variants
 
 ---
 

@@ -103,6 +103,8 @@ Offline agents can replay queued deliveries, acknowledge work, or report retry s
 ```rust
 use relaycast::{DeferDeliveryRequest, DeliveryStatus, FailDeliveryRequest, ListDeliveriesOptions};
 
+// Placeholder: `agent` is your AgentClient.
+// Placeholder: `handle_message` and `should_retry` are application helpers.
 let queued = agent.deliveries(Some(ListDeliveriesOptions {
     status: Some(DeliveryStatus::Accepted),
     limit: Some(25),
@@ -119,7 +121,8 @@ for item in queued {
                 retryable: Some(true),
             })).await?;
             agent.defer_delivery(&item.delivery.id, DeferDeliveryRequest {
-                available_at: "2026-06-01T00:05:00.000Z".to_string(),
+                // Replace with a real future RFC3339/ISO-8601 timestamp.
+                available_at: "<FUTURE_ISO8601_TIMESTAMP>".to_string(),
                 reason: Some("retry later".to_string()),
             }).await?;
         }
