@@ -213,6 +213,7 @@ export class AgentClient {
         surface: this.client.originSurface,
         client: this.client.originClient,
         version: this.client.originVersion,
+        ...(this.client.agentRelayAnonymousId ? { anonymousId: this.client.agentRelayAnonymousId } : {}),
         ...(this.client.originHarness ? { harness: this.client.originHarness } : {}),
       },
     ));

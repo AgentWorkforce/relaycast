@@ -56,7 +56,9 @@ export function extractHarness(request: Request): string {
 export function extractAgentRelayAnonymousId(
   request: Request,
 ): string | undefined {
-  const raw = request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER);
+  const raw =
+    request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER) ??
+    new URL(request.url).searchParams.get("agent_relay_anonymous_id");
   if (!raw) return undefined;
 
   const trimmed = raw.trim();

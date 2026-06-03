@@ -7,7 +7,12 @@ import type {
   WsCloseEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
-import { SDK_ORIGIN, sanitizeHarness, type InternalOrigin } from './origin.js';
+import {
+  SDK_ORIGIN,
+  sanitizeAgentRelayAnonymousId,
+  sanitizeHarness,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
@@ -76,6 +81,7 @@ export class WsClient {
   private originClient: string;
   private originVersion: string;
   private originHarness?: string;
+  private agentRelayAnonymousId?: string;
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -100,6 +106,7 @@ export class WsClient {
     this.originClient = origin.client;
     this.originVersion = origin.version;
     this.originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    this.agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(origin.anonymousId);
   }
 
   connect(): void {
@@ -114,6 +121,9 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
     if (this.originHarness) {
       wsUrl.searchParams.set('harness', this.originHarness);
+    }
+    if (this.agentRelayAnonymousId) {
+      wsUrl.searchParams.set('agent_relay_anonymous_id', this.agentRelayAnonymousId);
     }
 
     const ws = new WebSocket(wsUrl.toString());

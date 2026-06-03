@@ -146,16 +146,17 @@ export function createRelayMcpServer(options: McpServerOptions): McpServer {
     agentToken: options.agentToken ?? null,
     agentName: options.agentName ?? null,
   });
+  const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION, {
+    originSurface: 'mcp',
+    originClient: '@relaycast/mcp',
+    originVersion: MCP_VERSION,
+  });
   const mcpOrigin = {
     surface: 'mcp' as const,
     client: '@relaycast/mcp',
     version: MCP_VERSION,
+    anonymousId: telemetry.anonymousId,
   };
-  const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION, {
-    originSurface: mcpOrigin.surface,
-    originClient: mcpOrigin.client,
-    originVersion: mcpOrigin.version,
-  });
 
   const mcpServer = new McpServer(
     { name: 'agent-relay', version: MCP_VERSION },

@@ -124,6 +124,16 @@ describe('createMcpTelemetry', () => {
     expect(body.properties.origin_version).toBe('1.0.0');
   });
 
+  it('exposes the persisted anonymous id for Relaycast API telemetry headers', () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
+
+    const telemetry = createMcpTelemetry('1.0.0', {
+      posthogApiKey: 'phc_example',
+    });
+
+    expect(telemetry.anonymousId).toBe('anon-123');
+  });
+
   it('prefers fetch transport when worker globals are present', async () => {
     const originalFetch = globalThis.fetch;
     const originalWebSocketPair = (globalThis as { WebSocketPair?: unknown }).WebSocketPair;

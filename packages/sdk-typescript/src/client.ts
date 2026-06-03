@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN, HARNESS_HEADER, sanitizeHarness, type InternalOrigin } from './origin.js';
+import {
+  AGENT_RELAY_ANONYMOUS_ID_HEADER,
+  SDK_ORIGIN,
+  HARNESS_HEADER,
+  sanitizeAgentRelayAnonymousId,
+  sanitizeHarness,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 
@@ -133,6 +140,7 @@ export class HttpClient {
   private _originClient: string;
   private _originVersion: string;
   private _originHarness?: string;
+  private _agentRelayAnonymousId?: string;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -145,6 +153,7 @@ export class HttpClient {
     // A wrapping host's internal origin is authoritative about the harness;
     // fall back to the public `harness` option for plain consumers.
     this._originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    this._agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(origin.anonymousId);
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -173,6 +182,11 @@ export class HttpClient {
     return this._originHarness;
   }
 
+  /** Sanitized Agent Relay anonymous id, or `undefined` when none was supplied. */
+  get agentRelayAnonymousId(): string | undefined {
+    return this._agentRelayAnonymousId;
+  }
+
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
   }
@@ -184,6 +198,7 @@ export class HttpClient {
         surface: this._originSurface,
         client: this._originClient,
         version: this._originVersion,
+        ...(this._agentRelayAnonymousId ? { anonymousId: this._agentRelayAnonymousId } : {}),
         ...(this._originHarness ? { harness: this._originHarness } : {}),
       },
     ));
@@ -210,6 +225,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
       ...(this._originHarness ? { [HARNESS_HEADER]: this._originHarness } : {}),
+      ...(this._agentRelayAnonymousId ? { [AGENT_RELAY_ANONYMOUS_ID_HEADER]: this._agentRelayAnonymousId } : {}),
       ...(options?.headers || {}),
     };
 

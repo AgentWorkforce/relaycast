@@ -24,6 +24,7 @@ export interface McpTelemetryOptions {
 }
 
 export interface McpTelemetry {
+  anonymousId: string;
   capture: (event: ClientTelemetryEventName, properties?: Record<string, unknown>) => void;
   flush: (timeoutMs?: number) => Promise<void>;
 }
@@ -265,5 +266,5 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
     ]);
   };
 
-  return { capture, flush };
+  return { anonymousId: state.anonymousId, capture, flush };
 }

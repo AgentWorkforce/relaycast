@@ -21,13 +21,17 @@ const mcpOrigin = {
 async function bootstrapOneWorkspace(
   ws: McpWorkspaceConfig,
   baseUrl?: string,
+  anonymousId?: string,
   timeoutMs = 5_000,
 ): Promise<McpWorkspaceConfig> {
   const doBootstrap = async (): Promise<McpWorkspaceConfig> => {
     const relay = createInternalRelayCast({
       apiKey: ws.api_key,
       baseUrl,
-    }, mcpOrigin);
+    }, {
+      ...mcpOrigin,
+      ...(anonymousId ? { anonymousId } : {}),
+    });
 
     let token = ws.agent_token;
     const agentName = ws.agent_name ?? ws.workspace_alias ?? ws.workspace_id;
@@ -95,9 +99,10 @@ async function bootstrapOneWorkspace(
 async function bootstrapWorkspaces(
   workspaces: McpWorkspaceConfig[],
   baseUrl?: string,
+  anonymousId?: string,
 ): Promise<McpWorkspaceConfig[]> {
   const results = await Promise.allSettled(
-    workspaces.map(ws => bootstrapOneWorkspace(ws, baseUrl)),
+    workspaces.map(ws => bootstrapOneWorkspace(ws, baseUrl, anonymousId)),
   );
 
   return results.map((result, i) => {
@@ -114,7 +119,16 @@ async function bootstrapWorkspaces(
  * Reads from stdin, writes to stdout.
  */
 export async function startStdio(options: McpServerOptions): Promise<void> {
-  let effectiveOptions = { ...options, telemetryTransport: 'stdio' as const };
+  const telemetry = options.telemetry ?? createMcpTelemetry(MCP_VERSION, {
+    originSurface: 'mcp',
+    originClient: '@relaycast/mcp',
+    originVersion: MCP_VERSION,
+  });
+  let effectiveOptions = {
+    ...options,
+    telemetry,
+    telemetryTransport: 'stdio' as const,
+  };
 
   const hasAgentToken = Boolean(options.agentToken);
   const hasWorkspaces = Boolean(options.workspaces?.length);
@@ -139,7 +153,11 @@ export async function startStdio(options: McpServerOptions): Promise<void> {
     } else {
       // CLI user with RELAY_WORKSPACES_JSON — bootstrap is needed but now
       // runs all workspaces concurrently (with per-workspace timeouts).
-      const bootstrapped = await bootstrapWorkspaces(options.workspaces!, options.baseUrl);
+      const bootstrapped = await bootstrapWorkspaces(
+        options.workspaces!,
+        options.baseUrl,
+        telemetry.anonymousId,
+      );
       effectiveOptions = { ...effectiveOptions, workspaces: bootstrapped };
 
       // Set the default workspace's api key/token/name as the primary session

@@ -10,7 +10,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sanitizeHarness } from '../origin.js';
+import {
+  AGENT_RELAY_ANONYMOUS_ID_HEADER,
+  sanitizeAgentRelayAnonymousId,
+  sanitizeHarness,
+} from '../origin.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -26,6 +30,11 @@ function jsonOk(data: unknown) {
 function harnessHeaderFromLastCall(): string | undefined {
   const [, init] = mockFetch.mock.calls.at(-1)!;
   return (init.headers as Record<string, string>)['X-Relaycast-Harness'];
+}
+
+function anonymousIdHeaderFromLastCall(): string | undefined {
+  const [, init] = mockFetch.mock.calls.at(-1)!;
+  return (init.headers as Record<string, string>)[AGENT_RELAY_ANONYMOUS_ID_HEADER];
 }
 
 describe('sanitizeHarness', () => {
@@ -59,6 +68,21 @@ describe('sanitizeHarness', () => {
 
   it('caps at 120 characters', () => {
     expect(sanitizeHarness('a'.repeat(200))).toBe('a'.repeat(120));
+  });
+});
+
+describe('sanitizeAgentRelayAnonymousId', () => {
+  it('keeps a well-formed Agent Relay anonymous id', () => {
+    expect(sanitizeAgentRelayAnonymousId(' anon_123:abc-def ')).toBe('anon_123:abc-def');
+  });
+
+  it('drops empty or malformed values', () => {
+    expect(sanitizeAgentRelayAnonymousId('')).toBeUndefined();
+    expect(sanitizeAgentRelayAnonymousId('abc<script>')).toBeUndefined();
+  });
+
+  it('caps at 128 characters', () => {
+    expect(sanitizeAgentRelayAnonymousId('a'.repeat(200))).toBe('a'.repeat(128));
   });
 });
 
@@ -142,6 +166,39 @@ describe('harness — HTTP', () => {
 
     expect(harnessHeaderFromLastCall()).toBe('claude-code');
   });
+
+  it('stamps an Agent Relay anonymous id from the internal origin', async () => {
+    const { createInternalRelayCast } = await import('../internal.js');
+    const relay = createInternalRelayCast(
+      { apiKey: 'rk_live_test' },
+      {
+        surface: 'mcp',
+        client: '@relaycast/mcp',
+        version: '6.0.0',
+        anonymousId: 'anon-123',
+      },
+    );
+
+    mockFetch.mockImplementation(() => jsonOk([]));
+    await relay.activity();
+
+    expect(anonymousIdHeaderFromLastCall()).toBe('anon-123');
+  });
+
+  it('preserves the Agent Relay anonymous id across withApiKey()', async () => {
+    const { HttpClient, withInternalOrigin } = await import('../client.js');
+    const client = new HttpClient(withInternalOrigin(
+      { apiKey: 'rk_live_test' },
+      { surface: 'mcp', client: '@relaycast/mcp', version: '6.0.0', anonymousId: 'anon-123' },
+    ));
+    const rotated = client.withApiKey('rk_live_other');
+
+    expect(rotated.agentRelayAnonymousId).toBe('anon-123');
+
+    mockFetch.mockImplementation(() => jsonOk([]));
+    await rotated.get('/v1/activity');
+    expect(anonymousIdHeaderFromLastCall()).toBe('anon-123');
+  });
 });
 
 describe('harness — WS', () => {
@@ -194,5 +251,34 @@ describe('harness — WS', () => {
 
     const url = new URL(constructed[0]!);
     expect(url.searchParams.has('harness')).toBe(false);
+  });
+
+  it('forwards the Agent Relay anonymous id as a query param from the internal origin', async () => {
+    const constructed: string[] = [];
+    class MockWs {
+      static readonly OPEN = 1;
+      onopen: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+      constructor(url: string) {
+        constructed.push(url);
+      }
+    }
+    vi.stubGlobal('WebSocket', MockWs);
+
+    const { createInternalWsClient } = await import('../internal.js');
+    const ws = createInternalWsClient(
+      { token: 'at_live_test' },
+      { surface: 'mcp', client: '@relaycast/mcp', version: '6.0.0', anonymousId: 'anon-123' },
+    );
+    ws.connect();
+    ws.disconnect();
+
+    expect(constructed).toHaveLength(1);
+    const url = new URL(constructed[0]!);
+    expect(url.searchParams.get('agent_relay_anonymous_id')).toBe('anon-123');
   });
 });

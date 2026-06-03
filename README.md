@@ -129,6 +129,10 @@ The TypeScript SDK sends this as `X-Relaycast-Harness` for HTTP requests and as
 the `harness` query parameter for WebSocket connections. Invalid values are
 omitted.
 
+Relaycast-controlled clients may also attach an anonymous install identifier for
+telemetry correlation via `X-Agent-Relay-Anonymous-Id` on HTTP requests or
+`agent_relay_anonymous_id` on WebSocket connections.
+
 ## Core Concepts
 
 - Workspace: isolated environment for one project/team

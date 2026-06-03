@@ -6,10 +6,18 @@ import {
 } from "../origin.js";
 
 function req(
-  init: { agentRelayId?: string; header?: string; query?: string } = {},
+  init: {
+    agentRelayId?: string;
+    agentRelayQueryId?: string;
+    header?: string;
+    query?: string;
+  } = {},
 ): Request {
   const url = new URL("https://gateway.relaycast.dev/v1/activity");
   if (init.query !== undefined) url.searchParams.set("harness", init.query);
+  if (init.agentRelayQueryId !== undefined) {
+    url.searchParams.set("agent_relay_anonymous_id", init.agentRelayQueryId);
+  }
   const headers = new Headers();
   if (init.header !== undefined)
     headers.set("X-Relaycast-Harness", init.header);
@@ -74,6 +82,20 @@ describe("extractAgentRelayAnonymousId", () => {
     expect(
       extractAgentRelayAnonymousId(req({ agentRelayId: "abc123def4567890" })),
     ).toBe("abc123def4567890");
+  });
+
+  it("falls back to the Agent Relay anonymous id query param for WebSockets", () => {
+    expect(
+      extractAgentRelayAnonymousId(req({ agentRelayQueryId: "anon-123" })),
+    ).toBe("anon-123");
+  });
+
+  it("prefers the Agent Relay anonymous id header over the query param", () => {
+    expect(
+      extractAgentRelayAnonymousId(
+        req({ agentRelayId: "anon-header", agentRelayQueryId: "anon-query" }),
+      ),
+    ).toBe("anon-header");
   });
 
   it("rejects empty or malformed ids", () => {

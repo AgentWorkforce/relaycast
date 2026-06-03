@@ -13,7 +13,10 @@ info:
 
     Clients may include `X-Relaycast-Harness` on HTTP requests to attribute
     traffic in server telemetry. WebSocket clients that cannot send custom
-    headers may use the `harness` query parameter instead.
+    headers may use the `harness` query parameter instead. Relaycast-controlled
+    clients may also attach an anonymous install identifier for telemetry
+    correlation via `X-Agent-Relay-Anonymous-Id` or the
+    `agent_relay_anonymous_id` WebSocket query parameter.
   version: 1.0.0
   contact:
     name: Relaycast

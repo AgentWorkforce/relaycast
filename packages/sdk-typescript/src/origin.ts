@@ -5,6 +5,11 @@ export interface InternalOrigin {
   client: string;
   version: string;
   /**
+   * Optional stable install/client identifier for Agent Relay surfaces. This is
+   * internal-only metadata used for server telemetry correlation.
+   */
+  anonymousId?: string;
+  /**
    * Optional User-Agent-style identifier for the harness driving the process
    * (e.g. `claude-code/2.3 (model=opus-4.8; fast)`, `codex`, `human`). Wrapping
    * hosts set this so server-side telemetry can attribute requests to a harness.
@@ -25,6 +30,7 @@ export const SDK_ORIGIN: InternalOrigin = Object.freeze({
  * `@relaycast/engine`'s `extractHarness`.
  */
 export const HARNESS_HEADER = 'X-Relaycast-Harness';
+export const AGENT_RELAY_ANONYMOUS_ID_HEADER = 'X-Agent-Relay-Anonymous-Id';
 
 /** Upper bound on the harness identifier — generous enough for a UA-style token. */
 const HARNESS_MAX_LENGTH = 120;
@@ -36,6 +42,7 @@ const HARNESS_MAX_LENGTH = 120;
  * upstream value from smuggling a header injection past the relaycast WAF.
  */
 const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
+const AGENT_RELAY_ANONYMOUS_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
 
 /**
  * Normalize a caller-supplied harness identifier to the wire contract.
@@ -50,4 +57,12 @@ export function sanitizeHarness(raw: string | undefined): string | undefined {
   if (!trimmed) return undefined;
   if (!HARNESS_ALLOWED.test(trimmed)) return undefined;
   return trimmed.slice(0, HARNESS_MAX_LENGTH).toLowerCase();
+}
+
+export function sanitizeAgentRelayAnonymousId(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (!AGENT_RELAY_ANONYMOUS_ID_ALLOWED.test(trimmed)) return undefined;
+  return trimmed.slice(0, 128);
 }
