@@ -1,4 +1,4 @@
-"""Relay SDK — Python client for Relay Transport."""
+"""Relay SDK — Python client for Relaycast."""
 
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient, SDK_VERSION
