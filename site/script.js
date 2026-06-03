@@ -1,5 +1,4 @@
 const POSTHOG_DEFAULT_HOST = 'https://us.i.posthog.com';
-const POSTHOG_PUBLIC_KEY = 'phc_OAqBdey9pESZCcwaen9Fpyz6Ez8QKiMmLOnvFknXzg4';
 const POSTHOG_DISTINCT_ID_KEY = 'relaycast_posthog_distinct_id';
 const POSTHOG_SESSION_ID = window.crypto?.randomUUID?.() ?? String(Date.now());
 
@@ -36,8 +35,17 @@ const telemetry = (() => {
   const posthogKey =
     window.POSTHOG_API_KEY ||
     window.RELAYCAST_POSTHOG_KEY ||
-    getMetaContent('relaycast-posthog-key') ||
-    POSTHOG_PUBLIC_KEY;
+    getMetaContent('relaycast-posthog-key');
+
+  // No real key configured — e.g. the `__RELAYCAST_POSTHOG_API_KEY__` placeholder
+  // was never substituted (forks, local `file://` previews). Treat as opt-out
+  // rather than firing requests with a garbage key.
+  if (!posthogKey || !posthogKey.startsWith('phc_')) {
+    return {
+      enabled: false,
+      capture: () => {},
+    };
+  }
 
   const rawHost =
     window.POSTHOG_HOST || window.RELAYCAST_POSTHOG_HOST || getMetaContent('relaycast-posthog-host');
