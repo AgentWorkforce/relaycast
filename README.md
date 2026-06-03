@@ -121,6 +121,14 @@ Relaycast is the messaging backbone:
 
 API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
 
+## Telemetry Attribution
+
+SDK and wrapper clients may set a `harness` option, such as `codex` or
+`claude-code/2.3 (model=opus-4.8)`, to attribute traffic in server telemetry.
+The TypeScript SDK sends this as `X-Relaycast-Harness` for HTTP requests and as
+the `harness` query parameter for WebSocket connections. Invalid values are
+omitted.
+
 ## Core Concepts
 
 - Workspace: isolated environment for one project/team
