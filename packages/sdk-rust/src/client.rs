@@ -5,7 +5,10 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
 use crate::error::{RelayError, Result};
-use crate::harness::{sanitize_harness, HARNESS_HEADER};
+use crate::harness::{
+    sanitize_agent_relay_anonymous_id, sanitize_harness, AGENT_RELAY_ANONYMOUS_ID_HEADER,
+    HARNESS_HEADER,
+};
 use crate::types::ApiResponse;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,6 +34,9 @@ pub struct ClientOptions {
     /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
     /// the `X-Relaycast-Harness` header; invalid values are dropped.
     pub harness: Option<String>,
+    /// Agent Relay anonymous installation id. Sent as the
+    /// `X-Agent-Relay-Anonymous-Id` header; invalid values are dropped.
+    pub agent_relay_anonymous_id: Option<String>,
 }
 
 impl ClientOptions {
@@ -43,6 +49,7 @@ impl ClientOptions {
             origin_client: None,
             origin_version: None,
             harness: None,
+            agent_relay_anonymous_id: None,
         }
     }
 
@@ -68,6 +75,12 @@ impl ClientOptions {
     /// Set the harness identifier sent as the `X-Relaycast-Harness` header.
     pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
         self.harness = Some(harness.into());
+        self
+    }
+
+    /// Set Agent Relay's anonymous installation id.
+    pub fn with_agent_relay_anonymous_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_anonymous_id = Some(id.into());
         self
     }
 }
@@ -101,6 +114,7 @@ pub struct HttpClient {
     origin_client: String,
     origin_version: String,
     harness: Option<String>,
+    agent_relay_anonymous_id: Option<String>,
 }
 
 impl HttpClient {
@@ -124,6 +138,9 @@ impl HttpClient {
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
             harness: sanitize_harness(options.harness),
+            agent_relay_anonymous_id: sanitize_agent_relay_anonymous_id(
+                options.agent_relay_anonymous_id,
+            ),
         })
     }
 
@@ -157,6 +174,11 @@ impl HttpClient {
         self.harness.as_deref()
     }
 
+    /// Get the sanitized Agent Relay anonymous id, if one was supplied.
+    pub fn agent_relay_anonymous_id(&self) -> Option<&str> {
+        self.agent_relay_anonymous_id.as_deref()
+    }
+
     /// Return a cloned client with a different API key while preserving base URL and origin metadata.
     pub fn with_api_key(&self, api_key: impl Into<String>) -> Result<Self> {
         let mut options = ClientOptions::new(api_key)
@@ -168,6 +190,9 @@ impl HttpClient {
             );
         if let Some(harness) = &self.harness {
             options = options.with_harness(harness.clone());
+        }
+        if let Some(id) = &self.agent_relay_anonymous_id {
+            options = options.with_agent_relay_anonymous_id(id.clone());
         }
         HttpClient::new(options)
     }
@@ -244,6 +269,9 @@ impl HttpClient {
 
         if let Some(ref harness) = self.harness {
             request = request.header(HARNESS_HEADER, harness);
+        }
+        if let Some(ref id) = self.agent_relay_anonymous_id {
+            request = request.header(AGENT_RELAY_ANONYMOUS_ID_HEADER, id);
         }
 
         if let Some(ref key) = options.idempotency_key {

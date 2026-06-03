@@ -1,0 +1,25 @@
+{
+  "id": "traj_kgjircgbl4ix",
+  "version": 1,
+  "task": {
+    "title": "Update SDKs to forward Agent Relay anonymous identity"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-03T10:28:43.564Z",
+  "completedAt": "2026-06-03T10:37:19.633Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Added sanitized Agent Relay anonymous id propagation across TypeScript, Python, and Rust SDK HTTP/WS surfaces, plus engine WS query extraction and focused tests.",
+    "approach": "Standard approach",
+    "confidence": 0.91
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "dc6cd7097b39da0c62a42b4caf95815f9abef4f9",
+    "endRef": "dc6cd7097b39da0c62a42b4caf95815f9abef4f9"
+  }
+}

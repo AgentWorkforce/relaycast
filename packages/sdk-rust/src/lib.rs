@@ -138,7 +138,10 @@ pub use events::{
     NormalizedCommandInvocation, NormalizedEventKind, NormalizedInboundEvent, RelayPriority,
     SenderKind,
 };
-pub use harness::{sanitize_harness, HARNESS_HEADER};
+pub use harness::{
+    sanitize_agent_relay_anonymous_id, sanitize_harness, AGENT_RELAY_ANONYMOUS_ID_HEADER,
+    AGENT_RELAY_ANONYMOUS_ID_QUERY, HARNESS_HEADER,
+};
 pub use identity::{agent_name_eq, is_self_name};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,

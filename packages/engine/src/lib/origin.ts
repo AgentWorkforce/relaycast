@@ -11,6 +11,7 @@ export type OriginInfo = Partial<TelemetryOrigin>;
  */
 export const HARNESS_HEADER = "X-Relaycast-Harness";
 export const AGENT_RELAY_ANONYMOUS_ID_HEADER = "X-Agent-Relay-Anonymous-Id";
+export const AGENT_RELAY_ANONYMOUS_ID_QUERY = "agent_relay_anonymous_id";
 
 /** Fallback value when the harness is missing or invalid. */
 export const UNKNOWN_HARNESS = "unknown";
@@ -56,7 +57,9 @@ export function extractHarness(request: Request): string {
 export function extractAgentRelayAnonymousId(
   request: Request,
 ): string | undefined {
-  const raw = request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER);
+  const raw =
+    request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER) ??
+    new URL(request.url).searchParams.get(AGENT_RELAY_ANONYMOUS_ID_QUERY);
   if (!raw) return undefined;
 
   const trimmed = raw.trim();

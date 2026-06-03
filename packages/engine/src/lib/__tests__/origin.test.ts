@@ -6,10 +6,18 @@ import {
 } from "../origin.js";
 
 function req(
-  init: { agentRelayId?: string; header?: string; query?: string } = {},
+  init: {
+    agentRelayId?: string;
+    agentRelayQuery?: string;
+    header?: string;
+    query?: string;
+  } = {},
 ): Request {
   const url = new URL("https://gateway.relaycast.dev/v1/activity");
   if (init.query !== undefined) url.searchParams.set("harness", init.query);
+  if (init.agentRelayQuery !== undefined) {
+    url.searchParams.set("agent_relay_anonymous_id", init.agentRelayQuery);
+  }
   const headers = new Headers();
   if (init.header !== undefined)
     headers.set("X-Relaycast-Harness", init.header);
@@ -76,6 +84,25 @@ describe("extractAgentRelayAnonymousId", () => {
     ).toBe("abc123def4567890");
   });
 
+  it("falls back to the Agent Relay anonymous id query param", () => {
+    expect(
+      extractAgentRelayAnonymousId(
+        req({ agentRelayQuery: "abc123def4567890" }),
+      ),
+    ).toBe("abc123def4567890");
+  });
+
+  it("prefers the Agent Relay anonymous id header over the query param", () => {
+    expect(
+      extractAgentRelayAnonymousId(
+        req({
+          agentRelayId: "from-header",
+          agentRelayQuery: "from-query",
+        }),
+      ),
+    ).toBe("from-header");
+  });
+
   it("rejects empty or malformed ids", () => {
     expect(extractAgentRelayAnonymousId(req())).toBeUndefined();
     expect(
@@ -83,6 +110,11 @@ describe("extractAgentRelayAnonymousId", () => {
     ).toBeUndefined();
     expect(
       extractAgentRelayAnonymousId(req({ agentRelayId: "abc<script>" })),
+    ).toBeUndefined();
+    expect(
+      extractAgentRelayAnonymousId(
+        req({ agentRelayQuery: "evil\r\nX-Inject: bad" }),
+      ),
     ).toBeUndefined();
   });
 

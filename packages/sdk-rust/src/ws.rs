@@ -10,7 +10,9 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::error::{RelayError, Result};
-use crate::harness::sanitize_harness;
+use crate::harness::{
+    sanitize_agent_relay_anonymous_id, sanitize_harness, AGENT_RELAY_ANONYMOUS_ID_QUERY,
+};
 use crate::types::WsEvent;
 
 const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
@@ -39,6 +41,9 @@ pub struct WsClientOptions {
     /// User-Agent-style harness identifier, forwarded as the `harness` query
     /// param (browsers can't set custom WS headers). Invalid values are dropped.
     pub harness: Option<String>,
+    /// Agent Relay anonymous installation id, forwarded as the
+    /// `agent_relay_anonymous_id` query param. Invalid values are dropped.
+    pub agent_relay_anonymous_id: Option<String>,
     /// Maximum reconnect attempts before giving up (default: 10).
     pub max_reconnect_attempts: Option<u32>,
     /// Maximum reconnect delay in milliseconds (default: 30000).
@@ -56,6 +61,7 @@ impl WsClientOptions {
             origin_client: None,
             origin_version: None,
             harness: None,
+            agent_relay_anonymous_id: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
         }
@@ -89,6 +95,12 @@ impl WsClientOptions {
     /// Set the harness identifier forwarded as the `harness` query param.
     pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
         self.harness = Some(harness.into());
+        self
+    }
+
+    /// Set Agent Relay's anonymous installation id for WebSocket handshakes.
+    pub fn with_agent_relay_anonymous_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_anonymous_id = Some(id.into());
         self
     }
 
@@ -130,6 +142,7 @@ pub struct WsClient {
     origin_client: String,
     origin_version: String,
     harness: Option<String>,
+    agent_relay_anonymous_id: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
     event_tx: broadcast::Sender<WsEvent>,
@@ -172,6 +185,9 @@ impl WsClient {
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
             harness: sanitize_harness(options.harness),
+            agent_relay_anonymous_id: sanitize_agent_relay_anonymous_id(
+                options.agent_relay_anonymous_id,
+            ),
             max_reconnect_attempts: options
                 .max_reconnect_attempts
                 .unwrap_or(DEFAULT_MAX_RECONNECT_ATTEMPTS),
@@ -228,6 +244,9 @@ impl WsClient {
             if let Some(ref harness) = self.harness {
                 query.append_pair("harness", harness);
             }
+            if let Some(ref id) = self.agent_relay_anonymous_id {
+                query.append_pair(AGENT_RELAY_ANONYMOUS_ID_QUERY, id);
+            }
         }
 
         let (ws_stream, _) = connect_async(url.as_str()).await?;
@@ -246,6 +265,7 @@ impl WsClient {
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
         let harness = self.harness.clone();
+        let agent_relay_anonymous_id = self.agent_relay_anonymous_id.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
 
@@ -279,6 +299,9 @@ impl WsClient {
                         query.append_pair("origin_version", &origin_version);
                         if let Some(ref harness) = harness {
                             query.append_pair("harness", harness);
+                        }
+                        if let Some(ref id) = agent_relay_anonymous_id {
+                            query.append_pair(AGENT_RELAY_ANONYMOUS_ID_QUERY, id);
                         }
                     }
 
