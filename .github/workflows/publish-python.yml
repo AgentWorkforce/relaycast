@@ -151,7 +151,9 @@ jobs:
           echo "New version: $NEW_VERSION"
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: |
+          uv lock
+          uv sync --all-extras --locked
 
       - name: Run tests
         run: uv run python -m pytest
@@ -177,7 +179,7 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          git add packages/sdk-python/pyproject.toml packages/sdk-python/src/relay_sdk/client.py
+          git add packages/sdk-python/pyproject.toml packages/sdk-python/uv.lock packages/sdk-python/src/relay_sdk/client.py
           if ! git diff --staged --quiet; then
             git commit -m "chore(sdk-python): v${NEW_VERSION}"
             git push origin HEAD:main
