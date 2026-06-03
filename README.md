@@ -155,6 +155,19 @@ me.subscribe(['general', '@self'], (event) => {
 
 await me.send('#general', 'Hello from Relaycast');
 
+// Workspace-key clients can observe the workspace stream directly.
+await relay.workspace.stream.set(true);
+relay.connect();
+relay.on.messageCreated((event) => {
+  console.log(`[workspace] ${event.channel}: ${event.message.text}`);
+});
+relay.on.actionCompleted((event) => {
+  console.log(`[workspace] ${event.actionName} ${event.status}`);
+});
+relay.on.any((event) => {
+  console.log(`[workspace] ${event.type}`);
+});
+
 // Convenience identity helpers
 const { token: systemToken } = await relay.system({ name: 'System' });
 ```

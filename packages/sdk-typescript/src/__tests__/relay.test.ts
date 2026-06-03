@@ -1,8 +1,46 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock global fetch once for this file.
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+class MockWebSocket {
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+
+  url: string;
+  readyState = MockWebSocket.OPEN;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  send = vi.fn();
+  close = vi.fn(() => {
+    this.readyState = MockWebSocket.CLOSED;
+  });
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  simulateOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.();
+  }
+
+  simulateMessage(data: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(data) });
+  }
+
+  simulateClose(): void {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
+  }
+}
+
+vi.stubGlobal('WebSocket', MockWebSocket);
 
 function mockResponse(data: unknown, apiOk = true, status = 200) {
   return Promise.resolve({
@@ -16,12 +54,218 @@ function mockResponse(data: unknown, apiOk = true, status = 200) {
 describe('RelayCast', () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    MockWebSocket.instances = [];
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
     vi.useRealTimers();
   });
 
   it('requires apiKey', async () => {
     const { RelayCast } = await import('../relay.js');
     expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');
+  });
+
+  describe('workspace realtime', () => {
+    it('connect() opens /v1/ws with the workspace key and SDK origin metadata', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        baseUrl: 'http://localhost:8080',
+        ws: {
+          token: 'rk_live_wrong',
+          baseUrl: 'https://wrong.example',
+        } as any,
+      });
+
+      relay.connect();
+
+      expect(MockWebSocket.instances).toHaveLength(1);
+      const url = new URL(MockWebSocket.instances[0]!.url);
+      expect(url.origin).toBe('ws://localhost:8080');
+      expect(url.pathname).toBe('/v1/ws');
+      expect(url.searchParams.get('token')).toBe('rk_live_test123');
+      expect(url.searchParams.get('origin_surface')).toBe('sdk');
+      expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
+      expect(url.searchParams.get('origin_version')).toBeDefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      relay.disconnect();
+    });
+
+    it('connect() is idempotent and disconnect() allows a fresh workspace socket with existing handlers', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
+      relay.on.messageCreated(handler);
+
+      relay.connect();
+      relay.connect();
+      expect(MockWebSocket.instances).toHaveLength(1);
+
+      const ws1 = MockWebSocket.instances[0]!;
+      relay.disconnect();
+      expect(ws1.close).toHaveBeenCalled();
+
+      relay.connect();
+      expect(MockWebSocket.instances).toHaveLength(2);
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+      ws2.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      relay.disconnect();
+    });
+
+    it('on.messageCreated fires with camelized workspace stream events', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
+      relay.on.messageCreated(handler);
+
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      ws.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'message.created',
+          channel: 'general',
+          message: expect.objectContaining({ agentName: 'Bot' }),
+        }),
+      );
+
+      relay.disconnect();
+    });
+
+    it('connect() restarts the workspace stream after permanent disconnection', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+      });
+      const permanentlyDisconnected = vi.fn();
+      relay.on.permanentlyDisconnected(permanentlyDisconnected);
+
+      relay.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateClose();
+
+      expect(permanentlyDisconnected).toHaveBeenCalledWith(0);
+
+      relay.connect();
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      relay.disconnect();
+    });
+
+    it('on.actionCompleted fires with camelized action completion events', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      const handler = vi.fn();
+      relay.on.actionCompleted(handler);
+
+      ws.simulateMessage({
+        type: 'action.completed',
+        invocation_id: 'inv_1',
+        action_name: 'deploy',
+        status: 'completed',
+        output: { ok: true },
+        error: null,
+      });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'action.completed',
+          invocationId: 'inv_1',
+          actionName: 'deploy',
+        }),
+      );
+
+      relay.disconnect();
+    });
+
+    it('on.any returns an unsubscribe function for workspace events', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      const handler = vi.fn();
+      const unsubscribe = relay.on.any(handler);
+
+      ws.simulateMessage({ type: 'pong' });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      ws.simulateMessage({ type: 'pong' });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      relay.disconnect();
+    });
+
+    it('on.reconnecting exposes the reconnect attempt number', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        ws: { reconnectJitter: false },
+      });
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      const handler = vi.fn();
+      relay.on.reconnecting(handler);
+
+      ws.simulateClose();
+      expect(handler).toHaveBeenCalledWith(1);
+
+      relay.disconnect();
+    });
+
+    it('allows registering event handlers before connect()', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
+
+      expect(() => relay.on.messageCreated(handler)).not.toThrow();
+
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+      ws.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      relay.disconnect();
+    });
   });
 
   describe('workspace', () => {

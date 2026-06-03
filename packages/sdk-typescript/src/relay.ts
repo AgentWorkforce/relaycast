@@ -25,9 +25,14 @@ import type {
   EventSubscription,
   ActivityItem,
   DmMessage,
+  DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
   MessageListQuery,
+  MessageCreatedEvent,
+  MessageReadEvent,
+  MessageReactedEvent,
+  MessageUpdatedEvent,
   MessageWithMeta,
   ReactionGroup,
   SpawnAgentRequest,
@@ -68,10 +73,36 @@ import type {
   ConsoleAgentStatsQuery,
   ConsoleWindowQuery,
   ConsoleCostStats,
+  ThreadReplyEvent,
+  WsClientEvent,
+  AgentStatusActiveEvent,
+  AgentStatusChangedEvent,
+  AgentStatusOfflineEvent,
+  ChannelCreatedEvent,
+  ChannelUpdatedEvent,
+  ChannelArchivedEvent,
+  MemberJoinedEvent,
+  MemberLeftEvent,
+  ChannelMutedEvent,
+  ChannelUnmutedEvent,
+  FileUploadedEvent,
+  WebhookReceivedEvent,
+  ActionInvokedEvent,
+  ActionCompletedEvent,
+  ActionDeniedEvent,
+  ActionFailedEvent,
+  DeliveryAcceptedEvent,
+  DeliveryDeliveredEvent,
+  DeliveryDeferredEvent,
+  DeliveryFailedEvent,
+  GroupDmReceivedEvent,
+  WsReconnectingEvent,
+  WsPermanentlyDisconnectedEvent,
 } from './types.js';
 import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
+import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 import {
   appendLegacySuffix,
@@ -89,6 +120,7 @@ export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
   /**
    * Optional User-Agent-style identifier for the harness driving requests
    * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
@@ -134,6 +166,7 @@ function resolveWorkspaceBootstrapOptions(
 
 export class RelayCast {
   private client: HttpClient;
+  private ws: WsClient;
   private identityHint: { agentId: string; name: string } | null = null;
   private workspaceIdHint: string | null = null;
 
@@ -145,7 +178,71 @@ export class RelayCast {
     // Preserve hidden internal-origin metadata on options when created via
     // createInternalRelayCast() so downstream requests use the correct origin headers.
     this.client = new HttpClient(options);
+    this.ws = new WsClient(withInternalWsOrigin(
+      {
+        ...(options.ws ?? {}),
+        token: this.client.apiKey,
+        baseUrl: this.client.baseUrl,
+      },
+      {
+        surface: this.client.originSurface,
+        client: this.client.originClient,
+        version: this.client.originVersion,
+        ...(this.client.originHarness ? { harness: this.client.originHarness } : {}),
+      },
+    ));
   }
+
+  connect(): void {
+    this.ws.connect();
+  }
+
+  disconnect(): void {
+    this.ws.disconnect();
+  }
+
+  private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
+    return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
+  }
+
+  on = {
+    messageCreated:  (handler: (e: MessageCreatedEvent) => void): (() => void)  => this.onEvent('message.created', handler),
+    messageUpdated:  (handler: (e: MessageUpdatedEvent) => void): (() => void)  => this.onEvent('message.updated', handler),
+    threadReply:     (handler: (e: ThreadReplyEvent) => void): (() => void)     => this.onEvent('thread.reply', handler),
+    messageRead:     (handler: (e: MessageReadEvent) => void): (() => void)     => this.onEvent('message.read', handler),
+    messageReacted:  (handler: (e: MessageReactedEvent) => void): (() => void)  => this.onEvent('message.reacted', handler),
+    dmReceived:      (handler: (e: DmReceivedEvent) => void): (() => void)      => this.onEvent('dm.received', handler),
+    groupDmReceived: (handler: (e: GroupDmReceivedEvent) => void): (() => void) => this.onEvent('group_dm.received', handler),
+    agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
+    agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
+    agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
+    channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
+    channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
+    channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
+    memberJoined:    (handler: (e: MemberJoinedEvent) => void): (() => void)    => this.onEvent('member.joined', handler),
+    memberLeft:      (handler: (e: MemberLeftEvent) => void): (() => void)      => this.onEvent('member.left', handler),
+    channelMuted:    (handler: (e: ChannelMutedEvent) => void): (() => void)    => this.onEvent('member.channel_muted', handler),
+    channelUnmuted:  (handler: (e: ChannelUnmutedEvent) => void): (() => void)  => this.onEvent('member.channel_unmuted', handler),
+    fileUploaded:    (handler: (e: FileUploadedEvent) => void): (() => void)    => this.onEvent('file.uploaded', handler),
+    webhookReceived: (handler: (e: WebhookReceivedEvent) => void): (() => void) => this.onEvent('webhook.received', handler),
+    actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
+    actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
+    actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
+    actionDenied:    (handler: (e: ActionDeniedEvent) => void): (() => void)    => this.onEvent('action.denied', handler),
+    deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
+    deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
+    deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
+    connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
+    disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
+    error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ws.on('*', handler),
+  };
 
   static async createWorkspace(
     name: string,
