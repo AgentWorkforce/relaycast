@@ -33,9 +33,20 @@ export async function POST(request: NextRequest) {
     // Always probe the server-configured candidates (prevents SSRF). The first
     // engine that accepts the key wins; gateway is tried before legacy api.
     const candidates = resolveRelayServerCandidatesFromRequest(request);
-    const { baseUrl: relayServer } = await selectEngineForKey(candidates, apiKey);
+    const {
+      baseUrl: relayServer,
+      rejectedAny,
+      inconclusiveAny,
+    } = await selectEngineForKey(candidates, apiKey);
 
     if (!relayServer) {
+      if (!rejectedAny || inconclusiveAny) {
+        return NextResponse.json(
+          { success: false, error: 'Unable to validate API key' },
+          { status: 503 }
+        );
+      }
+
       return NextResponse.json(
         { success: false, error: 'Invalid API key' },
         { status: 401 }

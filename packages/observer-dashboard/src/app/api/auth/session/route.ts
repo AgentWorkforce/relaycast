@@ -37,12 +37,23 @@ export async function GET(request: NextRequest) {
     cookieStore.get(ENGINE_COOKIE_NAME)?.value,
     candidates
   );
-  const { baseUrl } = await selectEngineForKey(
+  const {
+    baseUrl,
+    rejectedAny,
+    inconclusiveAny,
+  } = await selectEngineForKey(
     orderByRemembered(candidates, remembered),
     apiKey
   );
 
   if (!baseUrl) {
+    if (!rejectedAny || inconclusiveAny) {
+      return NextResponse.json(
+        { authenticated: false, error: 'Unable to validate session' },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
       { authenticated: false },
       { status: 401 }

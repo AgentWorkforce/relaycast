@@ -121,33 +121,46 @@ export interface EngineSelection {
   baseUrl: string | null;
   /** True if at least one candidate responded (even to reject the key). */
   reachedAny: boolean;
+  /** True if at least one candidate definitively rejected the key. */
+  rejectedAny: boolean;
+  /** True if at least one candidate could not definitively validate the key. */
+  inconclusiveAny: boolean;
 }
 
 /**
  * Probe the candidate engines in order and return the first whose
- * `/v1/workspace` accepts the workspace key. A candidate that is unreachable
- * (network/DNS error) is skipped; one that responds with a non-OK status counts
- * as reached but not authenticated.
+ * `/v1/workspace` accepts the workspace key. Auth failures (401/403) are
+ * conclusive rejections; network failures and other statuses are inconclusive.
  */
 export async function selectEngineForKey(
   candidates: string[],
   apiKey: string
 ): Promise<EngineSelection> {
   let reachedAny = false;
+  let rejectedAny = false;
+  let inconclusiveAny = false;
   for (const baseUrl of candidates) {
     try {
-      const res = await fetch(`${baseUrl}/v1/workspace`, {
+      const url = new URL('/v1/workspace', baseUrl);
+      const res = await fetch(url.toString(), {
         headers: { Authorization: `Bearer ${apiKey}` },
+        cache: 'no-store',
       });
       reachedAny = true;
       if (res.ok) {
-        return { baseUrl, reachedAny };
+        return { baseUrl, reachedAny, rejectedAny, inconclusiveAny };
+      }
+      if (res.status === 401 || res.status === 403) {
+        rejectedAny = true;
+      } else {
+        inconclusiveAny = true;
       }
     } catch {
+      inconclusiveAny = true;
       // Unreachable engine — fall through to the next candidate.
     }
   }
-  return { baseUrl: null, reachedAny };
+  return { baseUrl: null, reachedAny, rejectedAny, inconclusiveAny };
 }
 
 /**

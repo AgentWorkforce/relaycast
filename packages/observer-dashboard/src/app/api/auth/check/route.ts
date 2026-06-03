@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     cookieStore.get(ENGINE_COOKIE_NAME)?.value,
     candidates
   );
-  const { baseUrl, reachedAny } = await selectEngineForKey(
+  const { baseUrl, rejectedAny, inconclusiveAny } = await selectEngineForKey(
     orderByRemembered(candidates, remembered),
     cookie.value
   );
@@ -53,8 +53,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ authenticated: true });
   }
 
-  if (reachedAny) {
-    // An engine responded and rejected the key — it is revoked or invalid.
+  if (rejectedAny && !inconclusiveAny) {
+    // Every reachable engine rejected the key — it is revoked or invalid.
     cookieStore.delete(COOKIE_NAME);
     cookieStore.delete(AGENT_COOKIE_NAME);
     cookieStore.delete(ENGINE_COOKIE_NAME);
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // No engine reachable — allow the session to continue
+  // Validation was inconclusive — allow the session to continue
   // (downstream API calls will fail with proper errors).
   return NextResponse.json({ authenticated: true });
 }
