@@ -201,17 +201,13 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
     const error = asCodedError(err);
     if (error.code === 'action_denied') {
       const workspace = c.get('workspace');
-      const agent = c.get('agent');
+      const agent = c.get('agent')!;
       const eventData = {
         action_name: c.req.param('name'),
-        caller_name: agent?.name ?? null,
+        caller_name: agent.name,
         error: error.message,
       };
-      if (agent) {
-        runInBackground(c, fanoutToAgents(c, [agent.id], 'action.denied', eventData), 'fanout action.denied');
-      } else {
-        runInBackground(c, fanoutToWorkspace(c, 'action.denied', eventData), 'fanout action.denied');
-      }
+      runInBackground(c, fanoutToAgents(c, [agent.id], 'action.denied', eventData), 'fanout action.denied');
       runInBackground(
         c,
         c.get('engine').webhookQueue.send({
