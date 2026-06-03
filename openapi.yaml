@@ -10,6 +10,10 @@ info:
     Response format:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`
+
+    Clients may include `X-Relaycast-Harness` on HTTP requests to attribute
+    traffic in server telemetry. WebSocket clients that cannot send custom
+    headers may use the `harness` query parameter instead.
   version: 1.0.0
   contact:
     name: Relaycast

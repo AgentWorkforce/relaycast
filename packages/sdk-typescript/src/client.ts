@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { SDK_ORIGIN, HARNESS_HEADER, sanitizeHarness, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 
@@ -9,6 +9,13 @@ export interface ClientOptions {
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
+  /**
+   * Optional User-Agent-style identifier for the harness driving requests
+   * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
+   * the `X-Relaycast-Harness` header; invalid values are dropped. See
+   * {@link sanitizeHarness}.
+   */
+  harness?: string;
 }
 
 export interface RequestOptions {
@@ -125,6 +132,7 @@ export class HttpClient {
   private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
+  private _originHarness?: string;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -134,6 +142,9 @@ export class HttpClient {
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
+    // A wrapping host's internal origin is authoritative about the harness;
+    // fall back to the public `harness` option for plain consumers.
+    this._originHarness = sanitizeHarness(origin.harness ?? options.harness);
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -157,6 +168,11 @@ export class HttpClient {
     return this._originVersion;
   }
 
+  /** Sanitized harness identifier, or `undefined` when none was supplied. */
+  get originHarness(): string | undefined {
+    return this._originHarness;
+  }
+
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
   }
@@ -168,6 +184,7 @@ export class HttpClient {
         surface: this._originSurface,
         client: this._originClient,
         version: this._originVersion,
+        ...(this._originHarness ? { harness: this._originHarness } : {}),
       },
     ));
   }
@@ -192,6 +209,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Surface': this._originSurface,
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
+      ...(this._originHarness ? { [HARNESS_HEADER]: this._originHarness } : {}),
       ...(options?.headers || {}),
     };
 

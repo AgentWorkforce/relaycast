@@ -29,6 +29,7 @@ export { AgentClient } from './agent.js';
 export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
+export { HARNESS_HEADER, sanitizeHarness } from './origin.js';
 export {
   relayErrorFromApi,
   normalizeRelayErrorCode,

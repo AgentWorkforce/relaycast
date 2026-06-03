@@ -8,36 +8,43 @@ export type OriginInfo = Partial<TelemetryOrigin>;
  */
 export const HARNESS_HEADER = 'X-Relaycast-Harness';
 
-/** Fallback value when the header is missing or invalid. */
+/** Fallback value when the harness is missing or invalid. */
 export const UNKNOWN_HARNESS = 'unknown';
 
-/** Sanity-cap on the header value — long enough for any reasonable identifier. */
-const HARNESS_MAX_LENGTH = 40;
+/** Upper bound on the harness value — generous enough for a UA-style token. */
+const HARNESS_MAX_LENGTH = 120;
 
 /**
- * Read and sanitize the `X-Relaycast-Harness` header from a request.
- *
- * Returns a lowercase identifier (kebab-case by convention, e.g. `claude-code`,
- * `cursor`, `codex`). We intentionally do NOT enforce an enum here — accepting
- * any well-formed value lets us discover new harnesses without shipping a
- * relaycast release first. Segmentation/normalization happens downstream in
- * the analytics layer.
- *
- * Drops empty, oversized, or non-ASCII values to `'unknown'`.
+ * Characters permitted in a harness identifier. Deliberately broad enough for a
+ * User-Agent-style token (`name/version (model=...; setting)`) while excluding
+ * CR/LF and other control characters — rejecting those is what keeps a buggy
+ * upstream caller from smuggling a header injection past the relaycast WAF.
  */
-export function extractHarness(headers: Headers): string {
-  const raw = headers.get(HARNESS_HEADER);
+const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
+
+/**
+ * Read and sanitize the harness identifier from a request.
+ *
+ * Read from the `X-Relaycast-Harness` header, falling back to the `harness`
+ * query param (WebSocket upgrades from browsers can't set custom headers, so
+ * the SDK forwards it on the query string — mirrors how origin fields work).
+ *
+ * Returns a lowercase, UA-style identifier (e.g. `claude-code`, `codex`,
+ * `claude-code/2.3 (model=opus-4.8; fast)`). We intentionally do NOT enforce an
+ * enum here — accepting any well-formed value lets us discover new harnesses
+ * without shipping a relaycast release first; segmentation happens downstream
+ * in the analytics layer. Drops empty or malformed values to `'unknown'`.
+ */
+export function extractHarness(request: Request): string {
+  const raw = request.headers.get(HARNESS_HEADER)
+    ?? new URL(request.url).searchParams.get('harness');
   if (!raw) return UNKNOWN_HARNESS;
 
   const trimmed = raw.trim();
   if (!trimmed) return UNKNOWN_HARNESS;
-  if (trimmed.length > HARNESS_MAX_LENGTH) return UNKNOWN_HARNESS;
-  // Restrict to printable ASCII to keep PostHog property values clean. Allow
-  // letters, digits, and the small set of separators harness names tend to
-  // use. Anything else falls back to `unknown`.
-  if (!/^[a-zA-Z0-9._-]+$/.test(trimmed)) return UNKNOWN_HARNESS;
+  if (!HARNESS_ALLOWED.test(trimmed)) return UNKNOWN_HARNESS;
 
-  return trimmed.toLowerCase();
+  return trimmed.slice(0, HARNESS_MAX_LENGTH).toLowerCase();
 }
 
 function sanitizeOriginPart(value: string | null | undefined, maxLen: number): string | undefined {

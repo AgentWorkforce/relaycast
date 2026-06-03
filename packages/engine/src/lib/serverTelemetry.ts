@@ -36,7 +36,7 @@ export function emitServerEvent(
   // Prefer the value stashed by the logger middleware. Fall back to reading the
   // header directly so emitters that bypass middleware still get a sane value.
   const harness = c.get('harness')
-    ?? extractHarness(c.req.raw.headers)
+    ?? extractHarness(c.req.raw)
     ?? UNKNOWN_HARNESS;
 
   const origin = requiredOriginInfo(c.req.raw);
