@@ -154,8 +154,8 @@ pub use ws::{
 pub use types::{
     // Actions & session events
     ActionCompletedEvent,
-    ActionDeniedEvent,
     ActionDefinition,
+    ActionDeniedEvent,
     ActionFailedEvent,
     ActionInvocation,
     ActionInvocationStatus,

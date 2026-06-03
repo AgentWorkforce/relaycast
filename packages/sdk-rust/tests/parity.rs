@@ -1,12 +1,17 @@
 use relaycast::{
-    ActionInvocationStatus, AgentClient, CompleteInvocationRequest, CreateAgentRequest,
-    CreateChannelRequest, CreateSubscriptionRequest, CreateWebhookRequest, DeferDeliveryRequest,
-    DeliveryStatus, DmConversationSummary, EmitSessionEventRequest, FailDeliveryRequest,
-    ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
-    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest,
-    WebhookTriggerRequest, WsEvent,
+    ActionInvocationStatus, AgentClient, ClientOptions, CompleteInvocationRequest,
+    CreateAgentRequest, CreateChannelRequest, CreateSubscriptionRequest, CreateWebhookRequest,
+    DeferDeliveryRequest, DeliveryStatus, DmConversationSummary, EmitSessionEventRequest,
+    FailDeliveryRequest, HttpClient, ListDeliveriesOptions, ListSessionEventsQuery,
+    MessageInjectionMode, MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions,
+    ReleaseAgentRequest, SpawnAgentRequest, WebhookTriggerRequest, WsClient, WsClientOptions,
+    WsEvent,
 };
 use serde_json::json;
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::time::Duration;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -541,6 +546,82 @@ async fn client_sends_sanitized_harness_header() {
         .list_channels(false)
         .await
         .expect("list_channels failed");
+}
+
+#[tokio::test]
+async fn client_preserves_harness_across_api_key_rotation() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/channels"))
+        .and(header("authorization", "Bearer at_live_rotated"))
+        .and(header("x-relaycast-harness", "cursor"))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new(
+        ClientOptions::new("rk_live_test")
+            .with_base_url(server.uri())
+            .with_harness("Cursor"),
+    )
+    .expect("failed to create HTTP client");
+    let rotated = client
+        .with_api_key("at_live_rotated")
+        .expect("failed to rotate API key");
+
+    rotated
+        .get::<Vec<serde_json::Value>>("/v1/channels", None, None)
+        .await
+        .expect("list channels failed");
+}
+
+#[tokio::test]
+async fn ws_client_forwards_sanitized_harness_query_param() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test WS server");
+    let addr = listener.local_addr().expect("failed to read listener addr");
+    let (uri_tx, uri_rx) = mpsc::channel();
+
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("failed to accept WS connection");
+        let callback = |request: &Request, response: Response| {
+            uri_tx
+                .send(request.uri().to_string())
+                .expect("failed to send captured request URI");
+            Ok(response)
+        };
+        let _websocket = tokio_tungstenite::tungstenite::accept_hdr(stream, callback)
+            .expect("failed to accept WS handshake");
+    });
+
+    let mut ws = WsClient::new(
+        WsClientOptions::new("at_live_test")
+            .with_base_url(format!("http://{addr}"))
+            .with_harness("Claude-Code/2.3"),
+    );
+    ws.connect().await.expect("WS connect failed");
+
+    let uri = uri_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("test WS server did not capture a request URI");
+    let url = url::Url::parse(&format!("http://localhost{uri}")).expect("invalid captured URI");
+    assert_eq!(url.path(), "/v1/ws");
+    assert_eq!(
+        url.query_pairs()
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.into_owned()),
+        Some("at_live_test".to_string())
+    );
+    assert_eq!(
+        url.query_pairs()
+            .find(|(key, _)| key == "harness")
+            .map(|(_, value)| value.into_owned()),
+        Some("claude-code/2.3".to_string())
+    );
+
+    ws.disconnect().await;
+    server.join().expect("test WS server panicked");
 }
 
 #[tokio::test]
