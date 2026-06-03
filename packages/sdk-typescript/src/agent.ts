@@ -29,6 +29,7 @@ import type {
   UploadResponse,
   CompleteUploadResponse,
   FileInfo,
+  Agent,
   InvokeActionResult,
   CompleteInvocationRequest,
   ActionInvocation,
@@ -37,13 +38,13 @@ import type {
   MessageUpdatedEvent,
   ThreadReplyEvent,
   MessageReadEvent,
-  ReactionAddedEvent,
-  ReactionRemovedEvent,
+  MessageReactedEvent,
   DmReceivedEvent,
   GroupDmReceivedEvent,
   RelaycastMessageEvent,
-  AgentOnlineEvent,
-  AgentOfflineEvent,
+  AgentStatusActiveEvent,
+  AgentStatusChangedEvent,
+  AgentStatusOfflineEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -55,6 +56,7 @@ import type {
   WebhookReceivedEvent,
   ActionInvokedEvent,
   ActionCompletedEvent,
+  ActionDeniedEvent,
   ActionFailedEvent,
   Delivery,
   DeliveryItem,
@@ -340,12 +342,12 @@ export class AgentClient {
     messageUpdated:  (handler: (e: MessageUpdatedEvent) => void): (() => void)  => this.onEvent('message.updated', handler),
     threadReply:     (handler: (e: ThreadReplyEvent) => void): (() => void)     => this.onEvent('thread.reply', handler),
     messageRead:     (handler: (e: MessageReadEvent) => void): (() => void)     => this.onEvent('message.read', handler),
-    reactionAdded:   (handler: (e: ReactionAddedEvent) => void): (() => void)   => this.onEvent('reaction.added', handler),
-    reactionRemoved: (handler: (e: ReactionRemovedEvent) => void): (() => void) => this.onEvent('reaction.removed', handler),
+    messageReacted:  (handler: (e: MessageReactedEvent) => void): (() => void)  => this.onEvent('message.reacted', handler),
     dmReceived:      (handler: (e: DmReceivedEvent) => void): (() => void)      => this.onEvent('dm.received', handler),
     groupDmReceived: (handler: (e: GroupDmReceivedEvent) => void): (() => void) => this.onEvent('group_dm.received', handler),
-    agentOnline:     (handler: (e: AgentOnlineEvent) => void): (() => void)     => this.onEvent('agent.online', handler),
-    agentOffline:    (handler: (e: AgentOfflineEvent) => void): (() => void)    => this.onEvent('agent.offline', handler),
+    agentStatusChanged: (handler: (e: AgentStatusChangedEvent) => void): (() => void) => this.onEvent('agent.status.changed', handler),
+    agentActive:     (handler: (e: AgentStatusActiveEvent) => void): (() => void)  => this.onEvent('agent.status.active', handler),
+    agentOffline:    (handler: (e: AgentStatusOfflineEvent) => void): (() => void) => this.onEvent('agent.status.offline', handler),
     channelCreated:  (handler: (e: ChannelCreatedEvent) => void): (() => void)  => this.onEvent('channel.created', handler),
     channelUpdated:  (handler: (e: ChannelUpdatedEvent) => void): (() => void)  => this.onEvent('channel.updated', handler),
     channelArchived: (handler: (e: ChannelArchivedEvent) => void): (() => void) => this.onEvent('channel.archived', handler),
@@ -359,6 +361,7 @@ export class AgentClient {
     actionInvoked:   (handler: (e: ActionInvokedEvent) => void): (() => void)   => this.onEvent('action.invoked', handler),
     actionCompleted: (handler: (e: ActionCompletedEvent) => void): (() => void) => this.onEvent('action.completed', handler),
     actionFailed:    (handler: (e: ActionFailedEvent) => void): (() => void)    => this.onEvent('action.failed', handler),
+    actionDenied:    (handler: (e: ActionDeniedEvent) => void): (() => void)    => this.onEvent('action.denied', handler),
     // Durable delivery lifecycle
     deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
@@ -391,6 +394,10 @@ export class AgentClient {
   };
 
   // === Messages ===
+
+  async me(): Promise<Agent> {
+    return this.client.get('/v1/agent');
+  }
 
   async send(
     channel: string,

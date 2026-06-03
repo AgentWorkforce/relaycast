@@ -102,6 +102,11 @@ export interface WorkspaceBootstrapOptions {
   baseUrl?: string;
 }
 
+export interface AgentReconnectOptions {
+  apiToken: string;
+  agent?: AgentClientOptions;
+}
+
 export type EnsureWorkspaceResponse = { existed: boolean; name: string } & CreateWorkspaceResponse;
 
 interface ChannelListOptions {
@@ -336,6 +341,13 @@ export class RelayCast {
     return this.resolveIdentityInternal();
   }
 
+  async reconnect(data: AgentReconnectOptions, options?: AgentClientOptions): Promise<AgentClient> {
+    const agentClient = this.as(data.apiToken, data.agent ?? options);
+    const agent = await agentClient.me();
+    this.rememberIdentity(agent.id, agent.name);
+    return agentClient;
+  }
+
   agent(data: RegisterTypedIdentityInput): Promise<CreateAgentResponse> {
     return this.registerTypedIdentity('agent', data);
   }
@@ -433,6 +445,8 @@ export class RelayCast {
 
   workspace = {
     info: (): Promise<Workspace> => this.client.get('/v1/workspace'),
+    reconnect: (data: AgentReconnectOptions, options?: AgentClientOptions): Promise<AgentClient> =>
+      this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
@@ -496,6 +510,8 @@ export class RelayCast {
     },
     get: (name: string): Promise<Agent> =>
       this.client.get(`/v1/agents/${encodeURIComponent(name)}`),
+    me: (apiToken?: string): Promise<Agent> =>
+      (apiToken ? this.client.withApiKey(apiToken) : this.client).get('/v1/agent'),
     rotateToken: (name: string): Promise<TokenRotateResponse> =>
       this.client.post(`/v1/agents/${encodeURIComponent(name)}/rotate-token`, {}),
     update: (name: string, data: UpdateAgentRequest): Promise<Agent> =>
@@ -536,14 +552,22 @@ export class RelayCast {
     create: (data: CreateWebhookRequest): Promise<CreateWebhookResponse> =>
       this.client.post('/v1/webhooks', data),
 
+    createInbound: (data: CreateWebhookRequest): Promise<CreateWebhookResponse> =>
+      this.client.post('/v1/webhooks', data),
+
     list: (): Promise<Webhook[]> =>
       this.client.get('/v1/webhooks'),
 
     delete: (id: string): Promise<void> =>
       this.client.delete(`/v1/webhooks/${encodeURIComponent(id)}`),
 
-    trigger: (webhookId: string, data: WebhookTriggerRequest): Promise<WebhookTriggerResponse> =>
-      this.client.post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data),
+    trigger: (
+      webhookId: string,
+      data: WebhookTriggerRequest,
+      token: string,
+    ): Promise<WebhookTriggerResponse> => {
+      return this.client.withApiKey(token).post(`/v1/hooks/${encodeURIComponent(webhookId)}`, data);
+    },
   };
 
   subscriptions = {

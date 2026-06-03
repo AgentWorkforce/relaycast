@@ -1,0 +1,53 @@
+{
+  "id": "traj_uqiizlbcq7az",
+  "version": 1,
+  "task": {
+    "title": "Enable workspace stream on observer login and disable on logout"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T00:13:30.751Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T00:14:59.581Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_zxw9b9vb5p2x",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T00:14:59.581Z",
+      "events": [
+        {
+          "ts": 1771460099584,
+          "type": "decision",
+          "content": "Disable workspace stream during dashboard logout using the current workspace key: Disable workspace stream during dashboard logout using the current workspace key",
+          "raw": {
+            "question": "Disable workspace stream during dashboard logout using the current workspace key",
+            "chosen": "Disable workspace stream during dashboard logout using the current workspace key",
+            "alternatives": [],
+            "reasoning": "Ensures debug stream is only active while an observer session is logged in; logout remains reliable by treating disable call as best-effort"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T00:15:08.136Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-19T00:15:08.136Z",
+  "retrospective": {
+    "summary": "Observer auth now enables stream on login (already present) and disables it on logout before clearing cookies.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

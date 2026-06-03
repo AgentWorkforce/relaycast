@@ -6,9 +6,9 @@ import type { ActivityEvent, ActivityEventType } from '../types/dashboard';
 import type {
   MessageCreatedEvent,
   ThreadReplyEvent,
-  ReactionAddedEvent,
-  AgentOnlineEvent,
-  AgentOfflineEvent,
+  MessageReactedEvent,
+  AgentStatusActiveEvent,
+  AgentStatusOfflineEvent,
   DmReceivedEvent,
   GroupDmReceivedEvent,
 } from '@relaycast/sdk';
@@ -43,20 +43,20 @@ export function useActivityFeed(): ActivityEvent[] {
     pushLiveEvent('thread_reply', `${e.message.agentName} replied in a thread`, e.message.agentName);
   });
 
-  useEvent('reaction.added', (evt) => {
-    const e = evt as ReactionAddedEvent;
+  useEvent('message.reacted', (evt) => {
+    const e = evt as MessageReactedEvent;
     pushLiveEvent('reaction', `${e.agentName} reacted ${e.emoji}`, e.agentName);
   });
 
-  useEvent('agent.online', (evt) => {
-    const e = evt as AgentOnlineEvent;
+  useEvent('agent.status.active', (evt) => {
+    const e = evt as AgentStatusActiveEvent;
     if (!e.agent.name.startsWith('_dashboard_')) {
       pushLiveEvent('connection', `${e.agent.name} is online`, e.agent.name);
     }
   });
 
-  useEvent('agent.offline', (evt) => {
-    const e = evt as AgentOfflineEvent;
+  useEvent('agent.status.offline', (evt) => {
+    const e = evt as AgentStatusOfflineEvent;
     if (!e.agent.name.startsWith('_dashboard_')) {
       pushLiveEvent('agent_idle', `${e.agent.name} went offline`, e.agent.name);
     }

@@ -4,10 +4,13 @@ export const SubscribableEventTypeSchema = z.enum([
   'message.created',
   'message.updated',
   'thread.reply',
-  'reaction.added',
-  'reaction.removed',
-  'agent.online',
-  'agent.offline',
+  'message.reacted',
+  'agent.status.changed',
+  'agent.status.idle',
+  'agent.status.active',
+  'agent.status.blocked',
+  'agent.status.waiting',
+  'agent.status.offline',
   'channel.created',
   'channel.updated',
   'channel.archived',
@@ -19,6 +22,14 @@ export const SubscribableEventTypeSchema = z.enum([
   'file.uploaded',
   'webhook.received',
   'command.invoked',
+  'delivery.accepted',
+  'delivery.delivered',
+  'delivery.deferred',
+  'delivery.failed',
+  'action.invoked',
+  'action.completed',
+  'action.failed',
+  'action.denied',
 ]);
 export type SubscribableEventType = z.infer<typeof SubscribableEventTypeSchema>;
 
@@ -28,11 +39,16 @@ export const SubscriptionFilterSchema = z.object({
 });
 export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
+const HeaderNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
+const HeaderValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
+const SubscriptionHeadersSchema = z.record(HeaderNameSchema, HeaderValueSchema);
+
 export const EventSubscriptionSchema = z.object({
   id: z.string(),
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });
@@ -42,6 +58,7 @@ export const CreateSubscriptionRequestSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.optional(),
   url: z.string(),
+  headers: SubscriptionHeadersSchema.optional(),
   secret: z.string().optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
@@ -51,6 +68,7 @@ export const CreateSubscriptionResponseSchema = z.object({
   events: z.array(SubscribableEventTypeSchema),
   filter: SubscriptionFilterSchema.nullable(),
   url: z.string(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
   is_active: z.boolean(),
   created_at: z.string(),
 });

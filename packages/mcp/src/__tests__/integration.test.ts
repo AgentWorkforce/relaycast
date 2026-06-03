@@ -559,9 +559,10 @@ describe('MCP → SDK → HTTP integration', () => {
   });
 
   it('integration.webhook.trigger → POST /v1/hooks/:id', async () => {
-    await client.callTool({ name: 'integration.webhook.trigger', arguments: { webhook_id: 'wh_1', text: 'test' } });
+    await client.callTool({ name: 'integration.webhook.trigger', arguments: { webhook_id: 'wh_1', token: 'wh_live_1', text: 'test' } });
     const req = findReq((r) => r.url.includes('/hooks/wh_1') && r.method === 'POST');
     expect(req).toBeDefined();
+    expect(req?.headers.authorization).toBe('Bearer wh_live_1');
   });
 
   it('integration.subscription.create → POST /v1/subscriptions', async () => {

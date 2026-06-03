@@ -13,15 +13,26 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
 const createInboundWebhookSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1).optional(),
   channel: z.string().min(1),
 });
 
 const triggerInboundWebhookSchema = z.object({
   text: z.string().optional(),
+  message: z.string().optional(),
   source: z.string().optional(),
+  author: z.string().optional(),
   payload: z.unknown().optional(),
 }).passthrough();
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  return authHeader.slice(7);
+}
+
+function hookUrl(requestUrl: string, webhookId: string): string {
+  return new URL(`/v1/hooks/${webhookId}`, requestUrl).toString();
+}
 
 // POST /v1/webhooks - create an inbound webhook
 inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c) => {
@@ -30,11 +41,8 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
     const workspace = c.get('workspace');
     const parsed = createInboundWebhookSchema.safeParse(await c.req.json());
     if (!parsed.success) {
-      const hasNameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'name');
       const hasChannelIssue = parsed.error.issues.some((issue) => issue.path[0] === 'channel');
-      const message = hasNameIssue
-        ? 'name is required'
-        : hasChannelIssue
+      const message = hasChannelIssue
           ? 'channel is required'
           : 'invalid webhook body';
       return c.json({
@@ -63,7 +71,7 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
       webhook_id: result.webhook_id,
       channel_name: channel,
     });
-    return c.json({ ok: true, data: result }, 201);
+    return c.json({ ok: true, data: { ...result, url: hookUrl(c.req.url, result.webhook_id) } }, 201);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -75,7 +83,10 @@ inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await inboundWebhookEngine.listWebhooks(db, workspace.id);
-    return c.json({ ok: true, data: result });
+    return c.json({
+      ok: true,
+      data: result.map((webhook) => ({ ...webhook, url: hookUrl(c.req.url, webhook.id) })),
+    });
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -110,6 +121,7 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
 inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
+    const token = extractBearerToken(c.req.header('Authorization'));
     const parsed = triggerInboundWebhookSchema.safeParse(await c.req.json());
     if (!parsed.success) {
       return c.json({
@@ -117,11 +129,17 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         error: { code: 'invalid_request', message: 'invalid webhook payload' },
       }, 400);
     }
-    const { text, source, payload } = parsed.data;
+    const { text, message, source, author, payload } = parsed.data;
     const result = await inboundWebhookEngine.triggerWebhook(
       db,
       c.req.param('webhookId'),
-      { text, source, payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined },
+      token,
+      {
+        text: text ?? message,
+        source,
+        author: author ?? source,
+        payload: (payload && typeof payload === 'object') ? payload as Record<string, unknown> : undefined,
+      },
     );
     if (!result) {
       return c.json({
@@ -152,7 +170,8 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       webhook_id: result.webhook_id,
       message_id: result.message_id,
       channel_id,
-      source: source ?? null,
+      source: result.source ?? null,
+      author: result.author ?? null,
     });
 
     return c.json({ ok: true, data: responseData }, 201);

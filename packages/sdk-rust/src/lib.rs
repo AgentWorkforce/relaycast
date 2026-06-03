@@ -54,8 +54,8 @@
 //!             WsEvent::MessageCreated(e) => {
 //!                 println!("New message: {}", e.message.text);
 //!             }
-//!             WsEvent::AgentOnline(e) => {
-//!                 println!("Agent online: {}", e.agent.name);
+//!             WsEvent::AgentStatusActive(e) => {
+//!                 println!("Agent active: {}", e.agent.name);
 //!             }
 //!             _ => {}
 //!         }
@@ -152,6 +152,7 @@ pub use ws::{
 pub use types::{
     // Actions & session events
     ActionCompletedEvent,
+    ActionDeniedEvent,
     ActionDefinition,
     ActionFailedEvent,
     ActionInvocation,
@@ -163,9 +164,8 @@ pub use types::{
     // Commands
     AgentCommand,
     AgentListQuery,
-    AgentOfflineEvent,
-    AgentOnlineEvent,
     AgentPresenceInfo,
+    AgentStatusEvent,
     // Channels
     Channel,
     ChannelArchivedEvent,
@@ -233,14 +233,13 @@ pub use types::{
     MessageCreatedEvent,
     MessageInjectionMode,
     MessageListQuery,
+    MessageReactedEvent,
     MessageReadEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
     PostMessageRequest,
-    ReactionAddedEvent,
     // Reactions
     ReactionGroup,
-    ReactionRemovedEvent,
     ReaderInfo,
     RegisterActionRequest,
     ReleaseAgentRequest,

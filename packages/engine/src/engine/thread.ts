@@ -2,6 +2,7 @@ import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, channelMembers, deliveries } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -30,6 +31,7 @@ export async function postReply(
   const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
 
   const replyId = generateId();
+  const metadata = sanitizeUserMessageMetadata(data.data);
   const [reply] = await db
     .insert(messages)
     .values({
@@ -40,7 +42,7 @@ export async function postReply(
       threadId,
       body: data.text,
       blocks: data.blocks || null,
-      metadata: data.data || {},
+      metadata,
       hasAttachments: false,
     })
     .returning();
@@ -79,7 +81,7 @@ export async function postReply(
     thread_id: reply.threadId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
-    metadata: reply.metadata ?? {},
+    metadata: publicMessageMetadata(reply.metadata),
     has_attachments: reply.hasAttachments,
     created_at: reply.createdAt.toISOString(),
     // Internal: delivery records for recipients — stripped by route before response
@@ -162,10 +164,10 @@ export async function getThread(
       id: parent.id,
       channel_id: parent.channelId,
       agent_id: parent.agentId,
-      agent_name: parent.agentName || 'unknown',
+      agent_name: displayAgentName(parent.metadata, parent.agentName),
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
-      metadata: parent.metadata ?? {},
+      metadata: publicMessageMetadata(parent.metadata),
       has_attachments: parent.hasAttachments,
       thread_id: parent.threadId,
       created_at: parent.createdAt.toISOString(),
@@ -175,11 +177,11 @@ export async function getThread(
       id: r.id,
       channel_id: r.channelId,
       agent_id: r.agentId,
-      agent_name: r.agentName || 'unknown',
+      agent_name: displayAgentName(r.metadata, r.agentName),
       thread_id: r.threadId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,
-      metadata: r.metadata ?? {},
+      metadata: publicMessageMetadata(r.metadata),
       has_attachments: r.hasAttachments,
       created_at: r.createdAt.toISOString(),
     })),

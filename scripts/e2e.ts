@@ -537,7 +537,7 @@ ${B}${CYAN}╔══════════════════════
     for (const [name, client] of Object.entries(agentMap)) {
       client.on.messageCreated((e) => { wsEvents++; ws(name, 'message.created', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
       client.on.dmReceived((e) => { wsEvents++; ws(name, 'dm.received', `from ${B}${e.message.agentName}${R}: "${e.message.text}"`); });
-      client.on.reactionAdded((e) => { wsEvents++; ws(name, 'reaction.added', `${e.emoji}`); });
+      client.on.messageReacted((e) => { wsEvents++; ws(name, 'message.reacted', `${e.emoji}`); });
       client.on.channelUpdated(() => { wsEvents++; ws(name, 'channel.updated', ''); });
     }
 
@@ -1243,12 +1243,14 @@ ${B}${CYAN}╔══════════════════════
   step('Inbound Webhooks');
 
   let webhookId = '';
+  let webhookToken = '';
   await run('Create inbound webhook', async () => {
     const wh = await relay.webhooks.create({
       name: 'CI Pipeline',
       channel: channelName,
     });
     webhookId = wh.webhookId;
+    webhookToken = wh.token;
     log('🔗', `Created webhook ${B}${wh.webhookId}${R} → #${channelName}`);
   });
   await pause();
@@ -1263,7 +1265,7 @@ ${B}${CYAN}╔══════════════════════
     await relay.webhooks.trigger(webhookId, {
       text: 'Build #142 passed — all tests green',
       source: 'github-actions',
-    });
+    }, webhookToken);
     log('📥', `Triggered webhook with CI notification`);
   });
   await pause();
@@ -1280,11 +1282,11 @@ ${B}${CYAN}╔══════════════════════
   let subId = '';
   await run('Create subscription', async () => {
     const sub = await relay.subscriptions.create({
-      events: ['message.created', 'reaction.added'],
+      events: ['message.created', 'message.reacted'],
       url: 'https://httpbin.org/post',
     });
     subId = sub.id;
-    log('📡', `Created subscription ${B}${sub.id}${R} for message.created, reaction.added`);
+    log('📡', `Created subscription ${B}${sub.id}${R} for message.created, message.reacted`);
   });
   await pause();
 

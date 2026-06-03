@@ -1,0 +1,53 @@
+{
+  "id": "traj_2oo0sn6nipt4",
+  "version": 1,
+  "task": {
+    "title": "Fix stale online status in dashboard activity feed after disconnect"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-18T02:22:06.916Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-18T02:22:10.009Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_je3ze3xxlpsl",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-18T02:22:10.009Z",
+      "events": [
+        {
+          "ts": 1771381330009,
+          "type": "decision",
+          "content": "Activity poller should source status from relay.agents.presence() instead of relay.agents.list(): Activity poller should source status from relay.agents.presence() instead of relay.agents.list()",
+          "raw": {
+            "question": "Activity poller should source status from relay.agents.presence() instead of relay.agents.list()",
+            "chosen": "Activity poller should source status from relay.agents.presence() instead of relay.agents.list()",
+            "alternatives": [],
+            "reasoning": "agents.list() reflects DB status and can lag real disconnect state; presence endpoint is DO-backed real-time truth used by e2e disconnect checks."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-18T02:22:12.963Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cac5fa95b1272602710c9e891ae25bba6836f3",
+    "endRef": "d9cac5fa95b1272602710c9e891ae25bba6836f3"
+  },
+  "completedAt": "2026-02-18T02:22:12.963Z",
+  "retrospective": {
+    "summary": "Updated dashboard /api/activity to derive online/offline from relay.agents.presence() (with fallback to list status), eliminating stale 'is online' activity entries after disconnect. Verified with next build.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  }
+}

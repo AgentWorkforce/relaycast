@@ -102,7 +102,7 @@ describe('node adapter conformance', () => {
   });
 
   describe('presence', () => {
-    it('emits agent.online on connect and agent.offline on sweep', async () => {
+    it('emits agent.status.active on connect and agent.status.offline on sweep', async () => {
       const rt = stack.runtime.realtime;
       const presence = stack.runtime.presence;
       const aSock = new FakeSocket();
@@ -113,8 +113,8 @@ describe('node adapter conformance', () => {
       await presence.heartbeat('w1', 'a', 'A');
       await presence.heartbeat('w1', 'b', 'B');
       expect(await presence.getOnline('w1')).toEqual(expect.arrayContaining(['a', 'b']));
-      // 'b' should have learned 'a' (and itself) came online.
-      expect(bSock.ofType('agent.online').length).toBeGreaterThanOrEqual(1);
+      // 'b' should have learned 'a' (and itself) became active.
+      expect(bSock.ofType('agent.status.active').length).toBeGreaterThanOrEqual(1);
 
       // Let 'a' go stale (ttl 1s) and sweep.
       await new Promise((r) => setTimeout(r, 1100));
@@ -123,7 +123,7 @@ describe('node adapter conformance', () => {
       await presence.sweep();
 
       expect(await presence.getOnline('w1')).toEqual(['b']);
-      const offline = bSock.ofType('agent.offline');
+      const offline = bSock.ofType('agent.status.offline');
       expect(offline.length).toBeGreaterThanOrEqual(1);
       expect(offline[0]).toMatchObject({ subject_agent_id: 'a' });
     });

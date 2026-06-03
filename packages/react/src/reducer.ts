@@ -3,10 +3,8 @@ import type {
   MessageCreatedEvent,
   MessageUpdatedEvent,
   ThreadReplyEvent,
-  ReactionAddedEvent,
-  ReactionRemovedEvent,
-  AgentOnlineEvent,
-  AgentOfflineEvent,
+  MessageReactedEvent,
+  AgentStatusEvent,
   ChannelCreatedEvent,
   ChannelUpdatedEvent,
   ChannelArchivedEvent,
@@ -28,14 +26,15 @@ export function handleServerEvent(store: RelayStore, event: WsClientEvent): void
     case 'thread.reply':
       handleThreadReply(store, event);
       break;
-    case 'reaction.added':
-      handleReactionAdded(store, event);
+    case 'message.reacted':
+      handleMessageReacted(store, event);
       break;
-    case 'reaction.removed':
-      handleReactionRemoved(store, event);
-      break;
-    case 'agent.online':
-    case 'agent.offline':
+    case 'agent.status.active':
+    case 'agent.status.idle':
+    case 'agent.status.blocked':
+    case 'agent.status.waiting':
+    case 'agent.status.offline':
+    case 'agent.status.changed':
       handlePresenceChange(store, event);
       break;
     case 'channel.created':
@@ -158,7 +157,15 @@ function updateReactionsOnMessage(
   return updated;
 }
 
-function handleReactionAdded(store: RelayStore, event: ReactionAddedEvent): void {
+function handleMessageReacted(store: RelayStore, event: MessageReactedEvent): void {
+  if (event.action === 'removed') {
+    handleReactionRemoved(store, event);
+    return;
+  }
+  handleReactionAdded(store, event);
+}
+
+function handleReactionAdded(store: RelayStore, event: MessageReactedEvent): void {
   const state = store.getState();
 
   // Update in channel messages
@@ -217,7 +224,7 @@ function handleReactionAdded(store: RelayStore, event: ReactionAddedEvent): void
   }
 }
 
-function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): void {
+function handleReactionRemoved(store: RelayStore, event: MessageReactedEvent): void {
   const state = store.getState();
 
   for (const channel of Object.keys(state.channelMessages)) {
@@ -262,9 +269,9 @@ function handleReactionRemoved(store: RelayStore, event: ReactionRemovedEvent): 
   }
 }
 
-function handlePresenceChange(store: RelayStore, event: AgentOnlineEvent | AgentOfflineEvent): void {
+function handlePresenceChange(store: RelayStore, event: AgentStatusEvent): void {
   const state = store.getState();
-  const newStatus = event.type === 'agent.online' ? 'online' : 'offline';
+  const newStatus = event.status === 'active' ? 'online' : event.status;
   const exists = state.agents.data.some((a) => a.name === event.agent.name);
 
   if (exists) {
@@ -272,7 +279,7 @@ function handlePresenceChange(store: RelayStore, event: AgentOnlineEvent | Agent
       a.name === event.agent.name ? { ...a, status: newStatus as typeof a.status } : a,
     );
     store.setState({ agents: { ...state.agents, data: updated } });
-  } else if (event.type === 'agent.online') {
+  } else if (event.status === 'active') {
     // Agent came online but wasn't in the initial fetch — add a stub entry
     const stub = {
       id: '',

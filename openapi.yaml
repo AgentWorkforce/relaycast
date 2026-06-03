@@ -33,6 +33,10 @@ components:
       type: http
       scheme: bearer
       description: Agent token (at_live_* or at_test_*)
+    webhookToken:
+      type: http
+      scheme: bearer
+      description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
 
   schemas:
     Workspace:
@@ -96,7 +100,7 @@ components:
           type: string
         status:
           type: string
-          enum: [online, offline]
+          enum: [active, idle, blocked, waiting, offline, online]
         token:
           type: string
           description: Agent token (only returned on registration)
@@ -156,10 +160,14 @@ components:
           type: string
         channel_id:
           type: string
-        from_id:
+        channel_name:
           type: string
-        from_name:
+          description: Present on thread reply creation responses.
+        agent_id:
           type: string
+        agent_name:
+          type: string
+          description: Authenticated sender name, or trusted inbound webhook display author for webhook-originated messages.
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -168,24 +176,37 @@ components:
           type: string
         blocks:
           type: array
+          nullable: true
           items:
             type: object
         attachments:
           type: array
           items:
-            type: object
-        data:
+            $ref: '#/components/schemas/FileAttachment'
+        metadata:
           type: object
-        content_type:
-          type: string
+          description: User message metadata. Internal `__relaycast_*` keys are stripped from public responses and caller metadata cannot override `agent_name`.
+        has_attachments:
+          type: boolean
         injection_mode:
           type: string
           enum: [wait, steer]
           description: Delivery/injection mode used when the message was sent
         thread_id:
           type: string
+          nullable: true
         reply_count:
           type: integer
+        reactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReactionGroup'
+        read_by_count:
+          type: integer
+        mentions:
+          type: array
+          items:
+            type: string
         created_at:
           type: string
           format: date-time
@@ -301,8 +322,21 @@ components:
     Reaction:
       type: object
       properties:
+        id:
+          type: string
         message_id:
           type: string
+        emoji:
+          type: string
+        agent_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ReactionGroup:
+      type: object
+      properties:
         emoji:
           type: string
         count:
@@ -310,12 +344,7 @@ components:
         agents:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-              name:
-                type: string
+            type: string
 
     Inbox:
       type: object
@@ -470,7 +499,12 @@ paths:
   /workspaces:
     post:
       summary: Create workspace
-      description: Create a workspace and get an API key when a new workspace is created. This operation is idempotent by workspace name for the same bearer workspace key: if you repeat the call with the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is returned with a `200` response; otherwise a new workspace is created and returned with a `201` response.
+      description: >
+        Create a workspace and get an API key when a new workspace is created. This operation is
+        idempotent by workspace name for the same bearer workspace key: if you repeat the call with
+        the same name and the same `Authorization: Bearer rk_*` key, the existing workspace is
+        returned with a `200` response; otherwise a new workspace is created and returned with a
+        `201` response.
       tags:
         - Workspaces
       security:
@@ -615,10 +649,31 @@ paths:
         '204':
           description: Workspace deleted
 
+  /agent:
+    get:
+      summary: Resolve authenticated agent
+      description: Resolve an agent token to that agent's identity, including channel memberships, callable/provided actions, and pending deliveries. Used by SDK reconnect flows.
+      tags:
+        - Agents
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: Authenticated agent details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+
   /agents:
     post:
       summary: Register agent
-      description: Register a new agent in the workspace
+      description: Register a new agent in the workspace. Agent names are unique per workspace; registering a duplicate name returns `409 agent_already_exists`.
       tags:
         - Agents
       security:
@@ -653,6 +708,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '409':
+          description: Agent name already exists in this workspace
 
     get:
       summary: List agents
@@ -1351,9 +1408,10 @@ paths:
                 attachments:
                   type: array
                   items:
-                    type: object
+                    type: string
                 data:
                   type: object
+                  description: User metadata stored with the message. Internal `__relaycast_*` keys are stripped and cannot override sender identity.
                 content_type:
                   type: string
                 mode:
@@ -1478,6 +1536,13 @@ paths:
               properties:
                 text:
                   type: string
+                blocks:
+                  type: array
+                  items:
+                    type: object
+                data:
+                  type: object
+                  description: User metadata stored with the reply. Internal `__relaycast_*` keys are stripped and cannot override sender identity.
       responses:
         '201':
           description: Reply posted
@@ -1602,7 +1667,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Reaction'
+                      $ref: '#/components/schemas/ReactionGroup'
 
   /messages/{id}/reactions/{emoji}:
     delete:
@@ -2590,7 +2655,7 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
       summary: List actions
-      description: List all registered actions
+      description: List registered actions. Restricted actions are visible only when the caller is an agent allowed by `available_to`; actions with no `available_to` restriction are visible to any authenticated caller.
       tags:
         - Actions
       security:
@@ -2607,7 +2672,7 @@ paths:
   /actions/{name}:
     get:
       summary: Get action
-      description: Get a single registered action by name
+      description: Get a single registered action by name. Returns not found when the action is restricted by `available_to` and the caller is not an allowed agent.
       tags:
         - Actions
       security:
@@ -2647,7 +2712,7 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. Routed to the handler agent for async processing.
+      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, emits `action.invoked` to the handler agent, and emits `action.denied` to the calling agent on denied calls.
       tags:
         - Actions
       security:
@@ -2669,11 +2734,17 @@ paths:
                   type: object
       responses:
         '201':
-          description: Action invocation created
+          description: Action invocation created; response `data` includes `invocation_id`
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Agent token required, or caller is not allowed to invoke this action. Denied agent callers receive an `action.denied` event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /actions/{name}/invocations/{id}/complete:
     post:
@@ -2814,7 +2885,14 @@ paths:
   /subscriptions:
     post:
       summary: Create outbound event subscription
-      description: Subscribe external webhook endpoint to workspace events
+      description: |
+        Subscribe an external webhook endpoint to workspace events. Delivery payloads are JSON:
+        `{ type, workspace_id, timestamp, data }`. If `secret` is provided, Relaycast signs the exact
+        JSON request body with HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>` along with
+        `X-Relay-Event` and `X-Relay-Timestamp`. Custom `headers` are included on delivery; Relay's
+        own `Content-Type` and `X-Relay-*` headers take precedence. Header names must be valid
+        HTTP field names, values cannot contain CR/LF, and stored custom header values are redacted
+        from subscription create/list/get responses.
       tags:
         - Subscriptions
       security:
@@ -2838,6 +2916,11 @@ paths:
                   type: object
                 url:
                   type: string
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Custom headers to include on outbound delivery requests, such as Authorization. Values are redacted in API responses.
                 secret:
                   type: string
       responses:
@@ -2906,7 +2989,10 @@ paths:
   /webhooks:
     post:
       summary: Create inbound webhook
-      description: Create inbound webhook that posts to a channel
+      description: >
+        Create an authenticated inbound webhook that posts to a channel. The response includes an
+        absolute `url` and a one-time-visible bearer `token`; callers must send
+        `Authorization: Bearer <token>` to the hook URL.
       tags:
         - Webhooks
       security:
@@ -2918,11 +3004,11 @@ paths:
             schema:
               type: object
               required:
-                - name
                 - channel
               properties:
                 name:
                   type: string
+                  description: Optional display name. Defaults to the generated webhook ID.
                 channel:
                   type: string
       responses:
@@ -2968,9 +3054,11 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Public endpoint to post through a configured inbound webhook
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`.
       tags:
         - Webhooks
+      security:
+        - webhookToken: []
       parameters:
         - name: webhookId
           in: path
@@ -2986,8 +3074,16 @@ paths:
               properties:
                 text:
                   type: string
+                  description: Message text. `message` is also accepted.
+                message:
+                  type: string
+                  description: SDK alias for `text`.
                 source:
                   type: string
+                  description: Origin source identifier for the webhook event.
+                author:
+                  type: string
+                  description: Displayed sender for the resulting channel message.
                 payload:
                   type: object
       responses:

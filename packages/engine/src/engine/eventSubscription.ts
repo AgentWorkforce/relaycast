@@ -5,6 +5,11 @@ import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
 
+function redactHeaders(headers: Record<string, string> | null | undefined): Record<string, string> | null {
+  if (!headers) return null;
+  return Object.fromEntries(Object.keys(headers).map((name) => [name, '[redacted]']));
+}
+
 export async function createSubscription(
   db: Db,
   workspaceId: string,
@@ -12,6 +17,7 @@ export async function createSubscription(
     events: string[];
     filter?: { channel?: string; mentions?: string } | null;
     url: string;
+    headers?: Record<string, string>;
     secret?: string;
   },
 ) {
@@ -25,6 +31,7 @@ export async function createSubscription(
       events: data.events,
       filter: data.filter || null,
       url: data.url,
+      headers: data.headers ?? null,
       secret: data.secret || null,
     })
     .returning();
@@ -34,6 +41,7 @@ export async function createSubscription(
     events: sub.events as string[],
     filter: sub.filter as { channel?: string; mentions?: string } | null,
     url: sub.url,
+    headers: redactHeaders(sub.headers as Record<string, string> | null),
     is_active: sub.isActive,
     created_at: sub.createdAt.toISOString(),
   };
@@ -50,6 +58,7 @@ export async function listSubscriptions(db: Db, workspaceId: string) {
     events: r.events as string[],
     filter: r.filter as { channel?: string; mentions?: string } | null,
     url: r.url,
+    headers: redactHeaders(r.headers as Record<string, string> | null),
     is_active: r.isActive,
     created_at: r.createdAt.toISOString(),
   }));
@@ -73,6 +82,7 @@ export async function getSubscription(db: Db, workspaceId: string, subId: string
     events: row.events as string[],
     filter: row.filter as { channel?: string; mentions?: string } | null,
     url: row.url,
+    headers: redactHeaders(row.headers as Record<string, string> | null),
     is_active: row.isActive,
     created_at: row.createdAt.toISOString(),
   };

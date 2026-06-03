@@ -1,0 +1,53 @@
+{
+  "id": "traj_nck4ip3pfbfz",
+  "version": 1,
+  "task": {
+    "title": "Update Python SDK WebSocket endpoint to /v1/ws"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T14:14:09.112Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T14:14:18.841Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_cfpp72xul54u",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T14:14:18.841Z",
+      "events": [
+        {
+          "ts": 1771596858842,
+          "type": "decision",
+          "content": "Switch Python SDK websocket endpoint to /v1/ws: Switch Python SDK websocket endpoint to /v1/ws",
+          "raw": {
+            "question": "Switch Python SDK websocket endpoint to /v1/ws",
+            "chosen": "Switch Python SDK websocket endpoint to /v1/ws",
+            "alternatives": [],
+            "reasoning": "Server route is /v1/ws and /v1/stream returns 404 Route not found"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T14:15:19.338Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e08d637cf6e6311c9a2c30e5c88c07ad4622903a",
+    "endRef": "e08d637cf6e6311c9a2c30e5c88c07ad4622903a"
+  },
+  "completedAt": "2026-02-20T14:15:19.338Z",
+  "retrospective": {
+    "summary": "Updated Python SDK websocket endpoint to /v1/ws and added regression assertion in ws tests",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

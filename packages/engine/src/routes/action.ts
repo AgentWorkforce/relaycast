@@ -8,6 +8,7 @@ import * as actionEngine from '../engine/action.js';
 import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { asCodedError } from '../lib/httpError.js';
 
 export const actionRoutes = new Hono<AppEnv>();
 
@@ -82,7 +83,8 @@ actionRoutes.get('/actions', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await actionEngine.listActions(db, workspace.id);
+    const agent = c.get('agent');
+    const result = await actionEngine.listActions(db, workspace.id, agent?.name);
     return c.json({ ok: true, data: result });
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -94,7 +96,8 @@ actionRoutes.get('/actions/:name', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await actionEngine.getAction(db, workspace.id, c.req.param('name'));
+    const agent = c.get('agent');
+    const result = await actionEngine.getAction(db, workspace.id, c.req.param('name'), agent?.name);
     if (!result) {
       return c.json(
         { ok: false, error: { code: 'action_not_found', message: 'Action not found' } },
@@ -176,7 +179,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
 
     runInBackground(
       c,
-      fanoutToWorkspace(c, 'action.invoked', eventData),
+      fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
       'fanout action.invoked',
     );
     runInBackground(
@@ -196,7 +199,27 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
 
     return c.json({ ok: true, data: result }, 201);
   } catch (err: unknown) {
-    return errorResponse(c, err);
+    const error = asCodedError(err);
+    if (error.code === 'action_denied') {
+      const workspace = c.get('workspace');
+      const agent = c.get('agent')!;
+      const eventData = {
+        action_name: c.req.param('name'),
+        caller_name: agent.name,
+        error: error.message,
+      };
+      runInBackground(c, fanoutToAgents(c, [agent.id], 'action.denied', eventData), 'fanout action.denied');
+      runInBackground(
+        c,
+        c.get('engine').webhookQueue.send({
+          type: 'action.denied',
+          workspaceId: workspace.id,
+          data: eventData,
+        }),
+        'queue action.denied',
+      );
+    }
+    return errorResponse(c, error);
   }
 });
 

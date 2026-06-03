@@ -34,8 +34,12 @@ export function eventToResourceUris(event: WsClientEvent): string[] {
         ? ['relay://inbox', `relay://dm/${conversationId}`]
         : ['relay://inbox'];
     }
-    case 'agent.online':
-    case 'agent.offline':
+    case 'agent.status.active':
+    case 'agent.status.idle':
+    case 'agent.status.blocked':
+    case 'agent.status.waiting':
+    case 'agent.status.offline':
+    case 'agent.status.changed':
       return ['relay://agents'];
     case 'channel.created':
     case 'channel.updated':
@@ -52,8 +56,7 @@ export function eventToResourceUris(event: WsClientEvent): string[] {
       return [];
     case 'file.uploaded':
       return [];
-    case 'reaction.added':
-    case 'reaction.removed':
+    case 'message.reacted':
       // Reactions are informational activity: surface them as a soft inbox
       // signal so agents can observe updates without implying a required reply.
       return ['relay://inbox'];

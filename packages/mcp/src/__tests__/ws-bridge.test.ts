@@ -128,18 +128,20 @@ describe('eventToResourceUris', () => {
     ]);
   });
 
-  it('maps agent.online to agents resource', () => {
+  it('maps agent.status.active to agents resource', () => {
     const event = {
-      type: 'agent.online',
+      type: 'agent.status.active',
       agent: { name: 'bot1' },
+      status: 'active',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://agents']);
   });
 
-  it('maps agent.offline to agents resource', () => {
+  it('maps agent.status.offline to agents resource', () => {
     const event = {
-      type: 'agent.offline',
+      type: 'agent.status.offline',
       agent: { name: 'bot1' },
+      status: 'offline',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://agents']);
   });
@@ -216,22 +218,24 @@ describe('eventToResourceUris', () => {
     expect(eventToResourceUris(event)).toEqual([]);
   });
 
-  it('maps reaction.added to inbox as a soft notification signal', () => {
+  it('maps message.reacted to inbox as a soft notification signal', () => {
     const event = {
-      type: 'reaction.added',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'added',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
   });
 
-  it('maps reaction.removed to inbox as a soft notification signal', () => {
+  it('maps removed message.reacted to inbox as a soft notification signal', () => {
     const event = {
-      type: 'reaction.removed',
+      type: 'message.reacted',
       messageId: 'm1',
       emoji: 'thumbsup',
       agentName: 'bot',
+      action: 'removed',
     } as WsClientEvent;
     expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
   });

@@ -417,18 +417,12 @@ class ThreadReplyEvent(BaseModel):
     message: ThreadReplyPayload
 
 
-class ReactionAddedEvent(BaseModel):
-    type: Literal["reaction.added"]
+class MessageReactedEvent(BaseModel):
+    type: Literal["message.reacted"]
     message_id: str
     emoji: str
     agent_name: str
-
-
-class ReactionRemovedEvent(BaseModel):
-    type: Literal["reaction.removed"]
-    message_id: str
-    emoji: str
-    agent_name: str
+    action: Literal["added", "removed"] | None = None
 
 
 class DmReceivedEvent(BaseModel):
@@ -443,14 +437,17 @@ class GroupDmReceivedEvent(BaseModel):
     message: DmEventPayload
 
 
-class AgentOnlineEvent(BaseModel):
-    type: Literal["agent.online"]
+class AgentStatusEvent(BaseModel):
+    type: Literal[
+        "agent.status.changed",
+        "agent.status.idle",
+        "agent.status.active",
+        "agent.status.blocked",
+        "agent.status.waiting",
+        "agent.status.offline",
+    ]
     agent: AgentEventPayload
-
-
-class AgentOfflineEvent(BaseModel):
-    type: Literal["agent.offline"]
-    agent: AgentEventPayload
+    status: Literal["active", "idle", "blocked", "waiting", "offline"]
 
 
 class ChannelCreatedEvent(BaseModel):
@@ -483,12 +480,10 @@ ServerEvent = (
     MessageCreatedEvent
     | MessageUpdatedEvent
     | ThreadReplyEvent
-    | ReactionAddedEvent
-    | ReactionRemovedEvent
+    | MessageReactedEvent
     | DmReceivedEvent
     | GroupDmReceivedEvent
-    | AgentOnlineEvent
-    | AgentOfflineEvent
+    | AgentStatusEvent
     | ChannelCreatedEvent
     | ChannelArchivedEvent
     | MessageReadEvent
@@ -500,12 +495,15 @@ ServerEventType = Literal[
     "message.created",
     "message.updated",
     "thread.reply",
-    "reaction.added",
-    "reaction.removed",
+    "message.reacted",
     "dm.received",
     "group_dm.received",
-    "agent.online",
-    "agent.offline",
+    "agent.status.changed",
+    "agent.status.idle",
+    "agent.status.active",
+    "agent.status.blocked",
+    "agent.status.waiting",
+    "agent.status.offline",
     "channel.created",
     "channel.archived",
     "message.read",

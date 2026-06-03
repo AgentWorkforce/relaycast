@@ -1,0 +1,53 @@
+{
+  "id": "traj_l19f3hem4xev",
+  "version": 1,
+  "task": {
+    "title": "Normalize SDK parameter casing style"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T19:30:59.030Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T19:32:32.610Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_fqwbfnr0dlgq",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T19:32:32.610Z",
+      "events": [
+        {
+          "ts": 1771615952611,
+          "type": "decision",
+          "content": "Standardize SDK request inputs to camelCase while preserving snake_case aliases: Standardize SDK request inputs to camelCase while preserving snake_case aliases",
+          "raw": {
+            "question": "Standardize SDK request inputs to camelCase while preserving snake_case aliases",
+            "chosen": "Standardize SDK request inputs to camelCase while preserving snake_case aliases",
+            "alternatives": [],
+            "reasoning": "JS/TS ergonomics should be consistent at call sites, but existing users rely on snake_case; normalize in SDK adapter layer and keep API payloads snake_case"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T19:34:19.537Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade",
+    "endRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade"
+  },
+  "completedAt": "2026-02-20T19:34:19.537Z",
+  "retrospective": {
+    "summary": "Normalized SDK request inputs to camelCase across channels/files/commands/billing while keeping snake_case aliases; updated tests and verified with sdk tests + tsc build",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  }
+}

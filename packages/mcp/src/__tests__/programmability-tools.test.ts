@@ -98,12 +98,12 @@ describe('programmability tools', () => {
     });
     await client.callTool({
       name: 'integration.webhook.trigger',
-      arguments: { webhook_id: 'wh_1', text: 'Alert', source: 'github' },
+      arguments: { webhook_id: 'wh_1', token: 'wh_live_1', text: 'Alert', source: 'github' },
     });
     expect(mockRelay.webhooks.trigger).toHaveBeenCalledWith('wh_1', {
       text: 'Alert',
       source: 'github',
-    });
+    }, 'wh_live_1');
   });
 
   // === Subscriptions ===
@@ -126,6 +126,7 @@ describe('programmability tools', () => {
       events: ['message.created'],
       url: 'https://example.com/hook',
       filter: { channel: 'general', mentions: undefined },
+      headers: undefined,
       secret: undefined,
     });
   });
@@ -135,14 +136,15 @@ describe('programmability tools', () => {
     await client.callTool({
       name: 'integration.subscription.create',
       arguments: {
-        events: ['reaction.added'],
+        events: ['message.reacted'],
         url: 'https://example.com/hook2',
       },
     });
     expect(mockRelay.subscriptions.create).toHaveBeenCalledWith({
-      events: ['reaction.added'],
+      events: ['message.reacted'],
       url: 'https://example.com/hook2',
       filter: undefined,
+      headers: undefined,
       secret: undefined,
     });
   });

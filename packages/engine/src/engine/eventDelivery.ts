@@ -11,6 +11,7 @@ export function signPayload(payload: string, secret: string): Promise<string> {
 interface DeliveryTarget {
   url: string;
   secret: string | null;
+  headers: Record<string, string> | null;
   filter: { channel?: string; mentions?: string } | null;
 }
 
@@ -24,6 +25,16 @@ export interface EventDeliverySummary {
   succeeded: number;
   failed: number;
   retryableFailures: number;
+}
+
+function publicDeliveryHeaders(headers: Record<string, string> | null): Record<string, string> {
+  if (!headers) return {};
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => {
+      const lower = name.toLowerCase();
+      return lower !== 'content-type' && !lower.startsWith('x-relay-');
+    }),
+  );
 }
 
 function matchesFilter(
@@ -53,6 +64,12 @@ async function attemptDelivery(
   headers: Record<string, string>,
   retries: number = 3,
 ): Promise<AttemptDeliveryResult> {
+  try {
+    new Headers(headers);
+  } catch {
+    return { ok: false, retryable: false };
+  }
+
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await globalThis.fetch(url, {
@@ -93,6 +110,7 @@ export async function deliverEvent(
     subscriptions = rows.map((r) => ({
       url: r.url,
       secret: r.secret,
+      headers: (r.headers as Record<string, string> | null) ?? null,
       filter: r.filter as { channel?: string; mentions?: string } | null,
     }));
   } catch (err) {
@@ -124,6 +142,7 @@ export async function deliverEvent(
   const deliveryResults = await Promise.all(
     filteredSubscriptions.map(async (sub) => {
       const headers: Record<string, string> = {
+        ...publicDeliveryHeaders(sub.headers),
         'Content-Type': 'application/json',
         'X-Relay-Event': eventType,
         'X-Relay-Timestamp': timestamp,

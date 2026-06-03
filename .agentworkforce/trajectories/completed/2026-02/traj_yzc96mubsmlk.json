@@ -1,0 +1,25 @@
+{
+  "id": "traj_yzc96mubsmlk",
+  "version": 1,
+  "task": {
+    "title": "Remove scheduled handler entirely"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T03:09:49.629Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "5bd6534246e00751ddea167c4dfc290e730a0227",
+    "endRef": "5bd6534246e00751ddea167c4dfc290e730a0227"
+  },
+  "completedAt": "2026-02-20T03:10:02.043Z",
+  "retrospective": {
+    "summary": "Deleted scheduled handler and scheduled export from worker; queue/fetch paths unchanged",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  }
+}

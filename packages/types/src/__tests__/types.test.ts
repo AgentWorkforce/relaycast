@@ -46,8 +46,8 @@ import type {
   ClientEvent,
   ServerEvent,
   MessageCreatedEvent,
-  ReactionAddedEvent,
-  AgentOnlineEvent,
+  MessageReactedEvent,
+  AgentStatusActiveEvent,
   PongEvent,
 } from '../index.js';
 
@@ -291,11 +291,11 @@ describe('Type definitions', () => {
       if (event.type === 'message.created') {
         expectTypeOf(event).toMatchTypeOf<MessageCreatedEvent>();
       }
-      if (event.type === 'reaction.added') {
-        expectTypeOf(event).toMatchTypeOf<ReactionAddedEvent>();
+      if (event.type === 'message.reacted') {
+        expectTypeOf(event).toMatchTypeOf<MessageReactedEvent>();
       }
-      if (event.type === 'agent.online') {
-        expectTypeOf(event).toMatchTypeOf<AgentOnlineEvent>();
+      if (event.type === 'agent.status.active') {
+        expectTypeOf(event).toMatchTypeOf<AgentStatusActiveEvent>();
       }
       if (event.type === 'pong') {
         expectTypeOf(event).toMatchTypeOf<PongEvent>();

@@ -1,0 +1,65 @@
+{
+  "id": "traj_j2pyo7fuxivt",
+  "version": 1,
+  "task": {
+    "title": "Fix CI test failures after snake_case to camelCase normalization"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-21T00:04:52.187Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-21T00:06:09.644Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_az1mdgh4b5ln",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-21T00:06:09.644Z",
+      "events": [
+        {
+          "ts": 1771632369645,
+          "type": "decision",
+          "content": "Pinned missing Vitest transitive deps at repo root: Pinned missing Vitest transitive deps at repo root",
+          "raw": {
+            "question": "Pinned missing Vitest transitive deps at repo root",
+            "chosen": "Pinned missing Vitest transitive deps at repo root",
+            "alternatives": [],
+            "reasoning": "CI lockfile state omitted loupe and related packages required by Vitest v3 in openclaw/react, causing ERR_MODULE_NOT_FOUND in GitHub Actions despite local partial cache hits."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771632369690,
+          "type": "decision",
+          "content": "Normalized test fixtures/assertions to camelCase internal SDK contracts: Normalized test fixtures/assertions to camelCase internal SDK contracts",
+          "raw": {
+            "question": "Normalized test fixtures/assertions to camelCase internal SDK contracts",
+            "chosen": "Normalized test fixtures/assertions to camelCase internal SDK contracts",
+            "alternatives": [],
+            "reasoning": "Runtime contracts were migrated to camelCase but several mcp/react tests still asserted snake_case internal payloads, producing false failures."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-21T00:06:09.735Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "9a1c8f8ee96b38cb690626f2b66c4ed4beb48d08",
+    "endRef": "9a1c8f8ee96b38cb690626f2b66c4ed4beb48d08"
+  },
+  "completedAt": "2026-02-21T00:06:09.735Z",
+  "retrospective": {
+    "summary": "Fixed CI test failures by upgrading sdk Vitest, adding required root dev deps for Vitest v3 packages, and updating mcp/react tests to current camelCase contracts; full turbo test now passes.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  }
+}

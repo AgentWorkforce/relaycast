@@ -1,0 +1,25 @@
+{
+  "id": "traj_v99y9f14ixs6",
+  "version": 1,
+  "task": {
+    "title": "Finalize direct PostHog telemetry switch"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T00:38:21.608Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924",
+    "endRef": "d9cc4f186d0ba5f79c278a0147c581ed383b6924"
+  },
+  "completedAt": "2026-02-20T00:38:21.678Z",
+  "retrospective": {
+    "summary": "Finalized direct PostHog telemetry from CLI/MCP and removed server ingestion route.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

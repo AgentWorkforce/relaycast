@@ -133,10 +133,11 @@ export async function replayMissedEvents(
       emoji: row.emoji,
       agent_name: row.agent_name,
       channel_name: row.channel_name,
+      action: 'added',
     } as Record<string, unknown>;
     events.push({
       ts: (row.created_at as number) * 1000,
-      payload: { ...buildEvent('reaction.added', data, row.channel_id as string | undefined), replayed: true },
+      payload: { ...buildEvent('message.reacted', data, row.channel_id as string | undefined), replayed: true },
     });
   }
 

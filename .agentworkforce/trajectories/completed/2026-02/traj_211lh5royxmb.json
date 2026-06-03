@@ -1,0 +1,53 @@
+{
+  "id": "traj_211lh5royxmb",
+  "version": 1,
+  "task": {
+    "title": "Audit server package casing consistency (snake_case)"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T20:11:19.970Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T20:16:35.683Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_nanocojv1968",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T20:16:35.683Z",
+      "events": [
+        {
+          "ts": 1771618595684,
+          "type": "decision",
+          "content": "Remove camelCase input fallback from channel invite route: Remove camelCase input fallback from channel invite route",
+          "raw": {
+            "question": "Remove camelCase input fallback from channel invite route",
+            "chosen": "Remove camelCase input fallback from channel invite route",
+            "alternatives": [],
+            "reasoning": "Enforce consistent snake_case-only API contract at server boundaries; callers will be updated rather than supporting dual casing"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T20:16:43.661Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade",
+    "endRef": "3bdbad9ee6a236830c928cbb54fc6bab47c07ade"
+  },
+  "completedAt": "2026-02-20T20:16:43.661Z",
+  "retrospective": {
+    "summary": "Removed camelCase request fallback from server channel invite route to enforce snake_case-only API input at boundary; validated with full server test suite",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

@@ -55,7 +55,12 @@ export async function registerAction(
   };
 }
 
-export async function listActions(db: Db, workspaceId: string) {
+function isActionVisibleToCaller(availableTo: string[] | null, callerName?: string): boolean {
+  if (!availableTo || availableTo.length === 0) return true;
+  return !!callerName && availableTo.includes(callerName);
+}
+
+export async function listActions(db: Db, workspaceId: string, callerName?: string) {
   const rows = await db
     .select({
       id: actions.id,
@@ -73,20 +78,22 @@ export async function listActions(db: Db, workspaceId: string) {
     .innerJoin(agents, eq(actions.handlerAgentId, agents.id))
     .where(eq(actions.workspaceId, workspaceId));
 
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    description: r.description,
-    handler_agent: r.handlerAgentName,
-    input_schema: r.inputSchema,
-    output_schema: r.outputSchema,
-    available_to: r.availableTo ?? null,
-    is_active: r.isActive,
-    created_at: r.createdAt.toISOString(),
-  }));
+  return rows
+    .filter((r) => isActionVisibleToCaller(r.availableTo ?? null, callerName))
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      handler_agent: r.handlerAgentName,
+      input_schema: r.inputSchema,
+      output_schema: r.outputSchema,
+      available_to: r.availableTo ?? null,
+      is_active: r.isActive,
+      created_at: r.createdAt.toISOString(),
+    }));
 }
 
-export async function getAction(db: Db, workspaceId: string, name: string) {
+export async function getAction(db: Db, workspaceId: string, name: string, callerName?: string) {
   const [row] = await db
     .select({
       id: actions.id,
@@ -104,7 +111,7 @@ export async function getAction(db: Db, workspaceId: string, name: string) {
     .innerJoin(agents, eq(actions.handlerAgentId, agents.id))
     .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
 
-  if (!row) return null;
+  if (!row || !isActionVisibleToCaller(row.availableTo ?? null, callerName)) return null;
 
   return {
     id: row.id,

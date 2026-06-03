@@ -1137,5 +1137,31 @@ describe('RelayCast', () => {
       const [, init] = mockFetch.mock.calls[0]!;
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
     });
+
+    it('reconnect() resolves the authenticated agent before returning an AgentClient', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const { AgentClient } = await import('../agent.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({
+          id: 'agent_1',
+          name: 'Worker',
+          type: 'agent',
+          status: 'online',
+          persona: null,
+          metadata: {},
+          last_seen: '2025-01-01',
+          channels: [],
+        }),
+      );
+      const agentClient = await relay.reconnect({ apiToken: 'at_live_agent123' });
+
+      expect(agentClient).toBeInstanceOf(AgentClient);
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/agent');
+      expect(init.method).toBe('GET');
+      expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
+    });
   });
 });

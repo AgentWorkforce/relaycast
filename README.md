@@ -299,6 +299,7 @@ Core endpoints:
 
 ```text
 POST   /workspaces
+GET    /agent                       Resolve the authenticated agent token
 POST   /agents
 POST   /channels
 POST   /channels/:name/messages
@@ -322,6 +323,27 @@ Relaycast creates a per-recipient delivery row for every channel message, DM, gr
 thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
 on reconnect; the ack/fail/defer endpoints are idempotent.
+
+Canonical realtime/subscription event names are dotted and shared across WebSocket
+and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,
+`delivery.accepted`, `delivery.delivered`, `delivery.deferred`, `delivery.failed`,
+`agent.status.changed`, `agent.status.active`, `agent.status.idle`,
+`agent.status.blocked`, `agent.status.waiting`, `agent.status.offline`,
+`action.invoked`, `action.completed`, `action.failed`, and `action.denied`.
+
+Actions are async fire-and-forget: invoking an action returns an ack with
+`invocation_id`, emits `action.invoked` to the handler agent, and completion emits
+`action.completed` or `action.failed` to listeners and subscriptions. Action discovery
+is filtered by `available_to` for agent-token callers, workspace-key callers do not see
+restricted actions without an agent identity, and invoke enforces the same rule.
+
+Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External callers
+must post to `url` with `Authorization: Bearer <token>` and may send either
+`{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`
+shape. Outbound subscriptions accept custom delivery `headers`; when a `secret` is set,
+deliveries include `X-Relay-Signature: sha256=<hex>`, an HMAC-SHA256 over the exact JSON
+request body, plus `X-Relay-Event` and `X-Relay-Timestamp`. Stored custom header values
+are redacted from subscription create/list/get responses.
 
 Realtime-first usage with the TypeScript SDK — react to delivery events live, and replay the
 durable queue on reconnect instead of polling:

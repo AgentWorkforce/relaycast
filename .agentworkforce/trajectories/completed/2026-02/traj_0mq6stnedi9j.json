@@ -1,0 +1,65 @@
+{
+  "id": "traj_0mq6stnedi9j",
+  "version": 1,
+  "task": {
+    "title": "Clean up repository: remove stale markdown, one-time scripts, and old code for better startup clarity"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T16:46:10.853Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T16:48:57.881Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_9odf7jo3eede",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T16:48:57.881Z",
+      "events": [
+        {
+          "ts": 1771606137882,
+          "type": "decision",
+          "content": "Archived stale product/spec markdown instead of deleting: Archived stale product/spec markdown instead of deleting",
+          "raw": {
+            "question": "Archived stale product/spec markdown instead of deleting",
+            "chosen": "Archived stale product/spec markdown instead of deleting",
+            "alternatives": [],
+            "reasoning": "Preserve historical context while keeping active onboarding surfaces focused"
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771606140734,
+          "type": "decision",
+          "content": "Archived one-time Stripe setup script: Archived one-time Stripe setup script",
+          "raw": {
+            "question": "Archived one-time Stripe setup script",
+            "chosen": "Archived one-time Stripe setup script",
+            "alternatives": [],
+            "reasoning": "Script is unreferenced in package tasks and onboarding docs, but retained under scripts/archive for optional recovery"
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T16:49:04.709Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "85fa8cad78650cbb35305c0283ea48e810c99b16",
+    "endRef": "85fa8cad78650cbb35305c0283ea48e810c99b16"
+  },
+  "completedAt": "2026-02-20T16:49:04.709Z",
+  "retrospective": {
+    "summary": "Archived stale onboarding-irrelevant docs and one-time script; added active docs/scripts indexes; updated README/TELEMETRY links; verified with lint",
+    "approach": "Standard approach",
+    "confidence": 0.89
+  }
+}

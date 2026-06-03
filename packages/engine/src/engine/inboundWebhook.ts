@@ -4,6 +4,7 @@ import { webhooks, channels, messages, agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
+import { inboundWebhookMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -50,10 +51,12 @@ export async function createWebhook(
   db: Db,
   workspaceId: string,
   channelId: string,
-  data: { name: string },
+  data: { name?: string },
   createdBy?: string,
 ) {
   const id = `wh_${generateId()}`;
+  const token = `wh_live_${randomHex(24)}`;
+  const tokenHash = await sha256Hex(token);
   const postingAgentId = createdBy ?? await ensureWebhookAgent(db, workspaceId);
 
   const [webhook] = await db
@@ -62,8 +65,9 @@ export async function createWebhook(
       id,
       workspaceId,
       channelId,
-      name: data.name,
+      name: data.name ?? id,
       createdBy: postingAgentId,
+      tokenHash,
     })
     .returning();
 
@@ -78,6 +82,7 @@ export async function createWebhook(
     name: webhook.name,
     channel: channel?.name || '',
     url: `/v1/hooks/${webhook.id}`,
+    token,
     is_active: webhook.isActive,
     created_at: webhook.createdAt.toISOString(),
   };
@@ -147,7 +152,8 @@ export async function deleteWebhook(db: Db, workspaceId: string, webhookId: stri
 export async function triggerWebhook(
   db: Db,
   webhookId: string,
-  data: { text?: string; source?: string; payload?: Record<string, unknown> },
+  token: string | null,
+  data: { text?: string; source?: string; author?: string; payload?: Record<string, unknown> },
 ) {
   // Look up webhook
   const [webhook] = await db
@@ -156,6 +162,15 @@ export async function triggerWebhook(
     .where(and(eq(webhooks.id, webhookId), eq(webhooks.isActive, true)));
 
   if (!webhook) return null;
+  if (webhook.tokenHash) {
+    if (!token) {
+      throw codedError('Webhook bearer token required', 'webhook_token_required', 401);
+    }
+    const tokenHash = await sha256Hex(token);
+    if (tokenHash !== webhook.tokenHash) {
+      throw codedError('Invalid webhook bearer token', 'webhook_token_invalid', 401);
+    }
+  }
 
   // Build message text from payload or text
   const text =
@@ -163,6 +178,7 @@ export async function triggerWebhook(
     (data.payload
       ? `Webhook ${webhook.name}: ${JSON.stringify(data.payload)}`
       : `Webhook event from ${data.source || 'external'}`);
+  const author = data.author || data.source || webhook.name;
 
   // Webhook must have a creator agent to post messages
   if (!webhook.createdBy) {
@@ -179,6 +195,12 @@ export async function triggerWebhook(
       channelId: webhook.channelId,
       agentId: webhook.createdBy,
       body: text,
+      metadata: inboundWebhookMessageMetadata({
+        webhookId: webhook.id,
+        webhookName: webhook.name,
+        source: data.source ?? null,
+        author,
+      }),
     })
     .returning();
 
@@ -196,6 +218,7 @@ export async function triggerWebhook(
     channel: channel?.name || '',
     text: message.body,
     source: data.source || null,
+    author,
     created_at: message.createdAt.toISOString(),
   };
 }

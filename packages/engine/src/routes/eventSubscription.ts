@@ -9,6 +9,9 @@ import { errorResponse } from '../lib/httpError.js';
 
 export const eventSubscriptionRoutes = new Hono<AppEnv>();
 
+const headerNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
+const headerValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
+
 const createSubscriptionSchema = z.object({
   events: z.array(z.string()).min(1),
   filter: z.object({
@@ -16,6 +19,7 @@ const createSubscriptionSchema = z.object({
     mentions: z.string().optional(),
   }).nullable().optional(),
   url: z.string().min(1),
+  headers: z.record(headerNameSchema, headerValueSchema).optional(),
   secret: z.string().nullable().optional(),
 });
 
@@ -38,12 +42,12 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
         error: { code: 'invalid_request', message },
       }, 400);
     }
-    const { events, filter, url, secret } = parsed.data;
+    const { events, filter, url, headers, secret } = parsed.data;
 
     const result = await eventSubscriptionEngine.createSubscription(
       db,
       workspace.id,
-      { events, filter, url, secret: secret ?? undefined },
+      { events, filter, url, headers, secret: secret ?? undefined },
     );
     emitServerEvent(c, workspace.id, 'relaycast_server_subscription_created', {
       subscription_id: result.id,

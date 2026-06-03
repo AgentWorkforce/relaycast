@@ -1,6 +1,7 @@
 export { SDK_VERSION } from './version.js';
 export { RelayCast } from './relay.js';
 export type {
+  AgentReconnectOptions,
   RelayCastOptions,
   EnsureWorkspaceResponse,
 } from './relay.js';

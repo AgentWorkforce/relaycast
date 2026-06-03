@@ -1,0 +1,53 @@
+{
+  "id": "traj_vjm560a3god4",
+  "version": 1,
+  "task": {
+    "title": "Add runtime API toggle for workspace stream"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T00:07:01.505Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T00:09:37.132Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_v9rgzfisaobh",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-19T00:09:37.132Z",
+      "events": [
+        {
+          "ts": 1771459777133,
+          "type": "decision",
+          "content": "Add per-workspace runtime stream toggle via KV-backed API: Add per-workspace runtime stream toggle via KV-backed API",
+          "raw": {
+            "question": "Add per-workspace runtime stream toggle via KV-backed API",
+            "chosen": "Add per-workspace runtime stream toggle via KV-backed API",
+            "alternatives": [],
+            "reasoning": "Environment-only flags are too coarse. A workspace-scoped toggle endpoint allows enabling observer websocket stream only when needed, keeping default production cost path unchanged."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T00:09:45.937Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e",
+    "endRef": "a7c6e6400ed4039a2445b93abef1d52af37f5c2e"
+  },
+  "completedAt": "2026-02-19T00:09:45.937Z",
+  "retrospective": {
+    "summary": "Implemented runtime workspace stream toggle API (GET/PUT /v1/workspace/stream) backed by KV override + cache, and wired worker/fanout/presence to honor per-workspace toggle.",
+    "approach": "Standard approach",
+    "confidence": 0.93
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "id": "traj_mcpcredfallback",
+  "version": 1,
+  "task": {
+    "title": "Add credential file fallback to MCP stdio entry point"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-19T17:00:00.000Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-19T17:00:00.000Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_mcpcred001",
+      "title": "Investigation",
+      "agentName": "default",
+      "startedAt": "2026-02-19T17:00:00.000Z",
+      "events": [
+        {
+          "ts": 1771538400000,
+          "type": "decision",
+          "content": "Identified that codex filters RELAY_API_KEY from .mcp.json env vars, causing MCP server to start without workspace credentials",
+          "raw": {
+            "question": "Why does codex's Relaycast MCP fail to authenticate?",
+            "chosen": "Codex strips env vars matching API key patterns from .mcp.json before passing to MCP subprocesses",
+            "alternatives": ["MCP server bug", "Wrong workspace key", "Race condition"],
+            "reasoning": "codex mcp get --json showed RELAY_API_KEY missing from env despite being in .mcp.json. RELAY_BASE_URL was preserved. codex filters secret-like env vars as a security measure."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T17:10:00.000Z"
+    },
+    {
+      "id": "chap_mcpcred002",
+      "title": "Implementation",
+      "agentName": "default",
+      "startedAt": "2026-02-19T17:10:00.000Z",
+      "events": [
+        {
+          "ts": 1771539000000,
+          "type": "decision",
+          "content": "Use relaycast.json credential file as canonical source instead of env vars in .mcp.json",
+          "raw": {
+            "question": "How should the MCP server resolve the workspace API key?",
+            "chosen": "Read from .agent-relay/relaycast.json (per-project then global) with RELAY_API_KEY env var as override",
+            "alternatives": ["Use codex mcp add to set env vars globally", "Use a non-filtered env var name", "Require agents to call set_workspace_key manually"],
+            "reasoning": "relaycast.json is the canonical credential store already used by the Rust broker and TS SDK. Reading from it directly avoids dependency on CLI-specific env var handling."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-19T17:15:00.000Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [
+    "packages/mcp/src/stdio.ts"
+  ],
+  "projectId": "relaycast",
+  "tags": ["mcp", "credentials", "codex-compat"],
+  "_trace": {
+    "startRef": "02e619b2d726b069915a41d57ce246dbad22a552",
+    "endRef": ""
+  },
+  "completedAt": "2026-02-19T17:15:00.000Z",
+  "retrospective": {
+    "summary": "MCP stdio entry now resolves API key from .agent-relay/relaycast.json when RELAY_API_KEY env var is not set, fixing workspace auth for CLI tools like codex that filter API keys from .mcp.json",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

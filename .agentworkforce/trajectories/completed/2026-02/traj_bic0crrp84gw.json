@@ -1,0 +1,65 @@
+{
+  "id": "traj_bic0crrp84gw",
+  "version": 1,
+  "task": {
+    "title": "Remove billing SDK surface from Python SDK"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-21T00:55:51.809Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-21T00:57:30.021Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_28a3xfxxbwta",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-21T00:57:30.021Z",
+      "events": [
+        {
+          "ts": 1771635450021,
+          "type": "decision",
+          "content": "Removed billing from Python SDK public surface: Removed billing from Python SDK public surface",
+          "raw": {
+            "question": "Removed billing from Python SDK public surface",
+            "chosen": "Removed billing from Python SDK public surface",
+            "alternatives": [],
+            "reasoning": "Billing is inactive and should not appear in SDK APIs. Removed relay.billing namespaces, billing module exports, and billing data models to avoid confusion."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1771635450066,
+          "type": "decision",
+          "content": "Pruned billing-specific tests instead of preserving stubs: Pruned billing-specific tests instead of preserving stubs",
+          "raw": {
+            "question": "Pruned billing-specific tests instead of preserving stubs",
+            "chosen": "Pruned billing-specific tests instead of preserving stubs",
+            "alternatives": [],
+            "reasoning": "Keeping stubs would imply supported functionality. Deleting billing tests enforces that billing is no longer part of supported SDK behavior."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-21T00:57:30.112Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "519a54d2ceaf8daf316ce9cdf14630dfa153953a",
+    "endRef": "519a54d2ceaf8daf316ce9cdf14630dfa153953a"
+  },
+  "completedAt": "2026-02-21T00:57:30.112Z",
+  "retrospective": {
+    "summary": "Removed billing SDK support from packages/sdk-python by deleting billing client/module and related models, updating Relay/AsyncRelay and package exports, and removing billing-related tests. Python SDK test suite passes.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  }
+}

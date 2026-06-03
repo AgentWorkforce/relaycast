@@ -1,0 +1,54 @@
+{
+  "id": "traj_i7rxdq93vs61",
+  "version": 1,
+  "task": {
+    "title": "Fix e2e create workspace undefined workspace key after billing cleanup"
+  },
+  "status": "completed",
+  "startedAt": "2026-02-20T20:59:18.440Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-02-20T21:00:55.619Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_p2lnmxnkyz4c",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-02-20T21:00:55.619Z",
+      "events": [
+        {
+          "ts": 1771621255620,
+          "type": "decision",
+          "content": "Updated scripts/e2e.ts to use SDK camelCase fields only: Updated scripts/e2e.ts to use SDK camelCase fields only",
+          "raw": {
+            "question": "Updated scripts/e2e.ts to use SDK camelCase fields only",
+            "chosen": "Updated scripts/e2e.ts to use SDK camelCase fields only",
+            "alternatives": [],
+            "reasoning": "SDK now normalizes API responses to camelCase; e2e was still reading snake_case fields like api_key which caused undefined.slice crashes."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-02-20T21:00:58.456Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "648b5b391234cc6b35b674ad92c489964fb5e417",
+    "endRef": "408a4595facfbe405fff48ae340265a269d6b3f1",
+    "traceId": "trace_sjhgtjrjm0kb"
+  },
+  "completedAt": "2026-02-20T21:00:58.456Z",
+  "retrospective": {
+    "summary": "Fixed e2e runtime crash by replacing stale snake_case SDK field usage in scripts/e2e.ts with camelCase (apiKey, agentName, webhookId, handlerAgent, includeArchived). Verified script type-checks.",
+    "approach": "Standard approach",
+    "confidence": 0.96
+  }
+}

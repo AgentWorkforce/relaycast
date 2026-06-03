@@ -23,7 +23,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.webhook.create', {
     title: 'Create Webhook',
-    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL that accepts POST requests with a JSON body.',
+    description: 'Create an inbound webhook that external services can POST to, delivering messages into a specified channel. Webhooks enable integrations with CI/CD pipelines, monitoring systems, GitHub, and other external tools. Each webhook gets a unique URL and one-time-visible bearer token for POST requests.',
     inputSchema: {
       name: z.string().describe('Human-readable webhook name to identify its purpose (e.g. "GitHub Alerts", "CI Pipeline")'),
       channel: z.string().describe('Name of the target channel where webhook messages will be delivered'),
@@ -83,14 +83,15 @@ export function registerProgrammabilityTools(
     description: 'Manually trigger an inbound webhook to post a message into its target channel. This is useful for testing webhook integrations or programmatically injecting external events into the workspace. Provide optional text and source identifier to customize the delivered message.',
     inputSchema: {
       webhook_id: z.string().describe('Unique identifier of the webhook to trigger, obtained from list_webhooks or create_webhook'),
+      token: z.string().describe('Bearer token returned by create_webhook for this webhook'),
       text: z.string().optional().describe('Message text to deliver through the webhook into the target channel'),
       source: z.string().optional().describe('Source identifier for the webhook payload (e.g. "github", "jenkins", "datadog")'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ webhook_id, text, source }) => {
+  }, async ({ webhook_id, token, text, source }) => {
     const relay = getRelay();
-    const result = await relay.webhooks.trigger(webhook_id, { text, source });
+    const result = await relay.webhooks.trigger(webhook_id, { text, source }, token);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       structuredContent: result as unknown as Record<string, unknown>,
@@ -101,17 +102,18 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.subscription.create', {
     title: 'Create Event Subscription',
-    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, reaction.added, agent.online, and more. Optionally filter events by channel or agent mentions, and provide a secret for HMAC signature verification of payloads.',
+    description: 'Create an outbound event subscription that POSTs real-time webhook notifications to an external URL when matching events occur. Supported events include message.created, message.reacted, agent.status.active, and more. Optionally filter events by channel or agent mentions, attach delivery headers, and provide a secret for HMAC signature verification of payloads.',
     inputSchema: {
-      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "reaction.added", "agent.online"])'),
+      events: z.array(SubscribableEventTypeSchema).describe('Array of event types to subscribe to (e.g. ["message.created", "message.reacted", "agent.status.active"])'),
       url: z.string().describe('HTTPS endpoint URL that will receive POST requests with event payloads'),
+      headers: z.record(z.string(), z.string()).optional().describe('Optional custom headers to include on outbound delivery requests'),
       filter_channel: z.string().optional().describe('Only fire events that occur in this specific channel'),
       filter_mentions: z.string().optional().describe('Only fire events where this agent name is @mentioned in the message'),
       secret: z.string().optional().describe('Shared secret used to generate HMAC-SHA256 signatures for payload verification'),
     },
     outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ events, url, filter_channel, filter_mentions, secret }) => {
+  }, async ({ events, url, headers, filter_channel, filter_mentions, secret }) => {
     const relay = getRelay();
     const filter = (filter_channel || filter_mentions)
       ? { channel: filter_channel, mentions: filter_mentions }
@@ -119,6 +121,7 @@ export function registerProgrammabilityTools(
     const result = await relay.subscriptions.create({
       events,
       url,
+      headers,
       filter,
       secret,
     });
