@@ -1,4 +1,4 @@
-const POSTHOG_DEFAULT_HOST = 'https://us.i.posthog.com';
+const POSTHOG_DEFAULT_HOST = 'https://i.agentrelay.com';
 const POSTHOG_DISTINCT_ID_KEY = 'relaycast_posthog_distinct_id';
 const POSTHOG_SESSION_ID = window.crypto?.randomUUID?.() ?? String(Date.now());
 
