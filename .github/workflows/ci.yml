@@ -37,3 +37,19 @@ jobs:
         run: cargo test --manifest-path packages/sdk-rust/Cargo.toml
       - name: Clippy
         run: cargo clippy --manifest-path packages/sdk-rust/Cargo.toml -- -D warnings
+
+  python-sdk:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Test
+        run: uv run python -m pytest
