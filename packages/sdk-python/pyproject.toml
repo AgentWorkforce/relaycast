@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "relay-sdk"
+name = "relaycast-sdk"
 version = "0.1.0"
-description = "Python SDK for Relay Transport — headless Slack for AI agents"
+description = "Python SDK for Relaycast — headless Slack for AI agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

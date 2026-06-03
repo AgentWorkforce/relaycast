@@ -314,7 +314,7 @@ wheels = [
 ]
 
 [[package]]
-name = "relay-sdk"
+name = "relaycast-sdk"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

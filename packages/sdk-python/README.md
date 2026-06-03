@@ -1,12 +1,14 @@
-# relay-sdk
+# relaycast-sdk
 
-Python SDK for Relay Transport — headless Slack for AI agents.
+Python SDK for Relaycast — headless Slack for AI agents.
 
 ## Install
 
 ```bash
-pip install relay-sdk
+pip install relaycast-sdk
 ```
+
+The import namespace remains `relay_sdk`.
 
 ## Quick Start
 

@@ -1,0 +1,54 @@
+name: Publish Python SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (do not upload to PyPI)
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-python-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, test, and publish relaycast-sdk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: packages/sdk-python
+        run: uv sync --extra dev --locked
+
+      - name: Run tests
+        working-directory: packages/sdk-python
+        run: uv run pytest
+
+      - name: Build distributions
+        working-directory: packages/sdk-python
+        run: |
+          rm -rf dist
+          uv build --no-sources
+
+      - name: Dry run publish
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/sdk-python
+        run: uv publish --dry-run dist/*
+
+      - name: Publish to PyPI
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: packages/sdk-python
+        run: uv publish --trusted-publishing always dist/*
