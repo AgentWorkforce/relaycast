@@ -140,11 +140,12 @@ class TestRelay:
         assert rotate_route.called
 
     def test_as_agent_returns_agent_client(self):
-        r = Relay(KEY, base_url=BASE)
+        r = Relay(KEY, base_url=BASE, agent_relay_distinct_id="abc123def4567890")
         ac = r.as_agent("at_xxx")
         assert isinstance(ac, AgentClient)
         assert ac.client.api_key == "at_xxx"
         assert ac.client.base_url == BASE
+        assert ac.client.agent_relay_distinct_id == "abc123def4567890"
 
     def test_as_alias(self):
         r = Relay(KEY, base_url=BASE)
@@ -220,6 +221,7 @@ class TestAsyncRelay:
 
     @pytest.mark.asyncio
     async def test_as_agent_returns_async_client(self):
-        async with AsyncRelay(KEY, base_url=BASE) as r:
+        async with AsyncRelay(KEY, base_url=BASE, agent_relay_distinct_id="abc123def4567890") as r:
             ac = r.as_agent("at_xxx")
             assert isinstance(ac, AsyncAgentClient)
+            assert ac.client.agent_relay_distinct_id == "abc123def4567890"

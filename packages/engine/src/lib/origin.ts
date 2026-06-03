@@ -10,7 +10,8 @@ export type OriginInfo = Partial<TelemetryOrigin>;
  * themselves to the relaycast server. See relay#881.
  */
 export const HARNESS_HEADER = "X-Relaycast-Harness";
-export const AGENT_RELAY_ANONYMOUS_ID_HEADER = "X-Agent-Relay-Anonymous-Id";
+export const AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id";
+export const AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id";
 
 /** Fallback value when the harness is missing or invalid. */
 export const UNKNOWN_HARNESS = "unknown";
@@ -25,7 +26,7 @@ const HARNESS_MAX_LENGTH = 120;
  * upstream caller from smuggling a header injection past the relaycast WAF.
  */
 const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
-const AGENT_RELAY_ANONYMOUS_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
+const AGENT_RELAY_DISTINCT_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
 
 /**
  * Read and sanitize the harness identifier from a request.
@@ -53,15 +54,17 @@ export function extractHarness(request: Request): string {
   return trimmed.slice(0, HARNESS_MAX_LENGTH).toLowerCase();
 }
 
-export function extractAgentRelayAnonymousId(
+export function extractAgentRelayDistinctId(
   request: Request,
 ): string | undefined {
-  const raw = request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER);
+  const raw =
+    request.headers.get(AGENT_RELAY_DISTINCT_ID_HEADER) ??
+    new URL(request.url).searchParams.get(AGENT_RELAY_DISTINCT_ID_QUERY);
   if (!raw) return undefined;
 
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  if (!AGENT_RELAY_ANONYMOUS_ID_ALLOWED.test(trimmed)) return undefined;
+  if (!AGENT_RELAY_DISTINCT_ID_ALLOWED.test(trimmed)) return undefined;
 
   return trimmed.slice(0, 128);
 }

@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
-import { SDK_ORIGIN, HARNESS_HEADER, sanitizeHarness, type InternalOrigin } from './origin.js';
+import {
+  AGENT_RELAY_DISTINCT_ID_HEADER,
+  HARNESS_HEADER,
+  SDK_ORIGIN,
+  sanitizeAgentRelayDistinctId,
+  sanitizeHarness,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
 import { RelayError, relayErrorFromApi } from './errors.js';
 
@@ -16,6 +23,13 @@ export interface ClientOptions {
    * {@link sanitizeHarness}.
    */
   harness?: string;
+  /**
+   * Optional Agent Relay distinct telemetry id. Sent as the
+   * `X-Agent-Relay-Distinct-Id` header so Relaycast telemetry can be joined to
+   * Agent Relay CLI telemetry without sending user-identifying data. Invalid
+   * values are dropped.
+   */
+  agentRelayDistinctId?: string;
 }
 
 export interface RequestOptions {
@@ -133,6 +147,7 @@ export class HttpClient {
   private _originClient: string;
   private _originVersion: string;
   private _originHarness?: string;
+  private _agentRelayDistinctId?: string;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -145,6 +160,9 @@ export class HttpClient {
     // A wrapping host's internal origin is authoritative about the harness;
     // fall back to the public `harness` option for plain consumers.
     this._originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    this._agentRelayDistinctId = sanitizeAgentRelayDistinctId(
+      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
+    );
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -173,6 +191,11 @@ export class HttpClient {
     return this._originHarness;
   }
 
+  /** Sanitized Agent Relay distinct id, or `undefined` when none was supplied. */
+  get agentRelayDistinctId(): string | undefined {
+    return this._agentRelayDistinctId;
+  }
+
   get retryPolicy(): RetryPolicy {
     return this._retryPolicy;
   }
@@ -185,6 +208,7 @@ export class HttpClient {
         client: this._originClient,
         version: this._originVersion,
         ...(this._originHarness ? { harness: this._originHarness } : {}),
+        ...(this._agentRelayDistinctId ? { agentRelayDistinctId: this._agentRelayDistinctId } : {}),
       },
     ));
   }
@@ -210,6 +234,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
       ...(this._originHarness ? { [HARNESS_HEADER]: this._originHarness } : {}),
+      ...(this._agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: this._agentRelayDistinctId } : {}),
       ...(options?.headers || {}),
     };
 

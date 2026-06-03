@@ -7,7 +7,13 @@ import type {
   WsCloseEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
-import { SDK_ORIGIN, sanitizeHarness, type InternalOrigin } from './origin.js';
+import {
+  AGENT_RELAY_DISTINCT_ID_QUERY,
+  SDK_ORIGIN,
+  sanitizeAgentRelayDistinctId,
+  sanitizeHarness,
+  type InternalOrigin,
+} from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
@@ -27,6 +33,12 @@ export interface WsClientOptions {
    * query param (browsers can't set custom WS headers). See {@link sanitizeHarness}.
    */
   harness?: string;
+  /**
+   * Optional Agent Relay distinct telemetry id, forwarded as the
+   * `agent_relay_distinct_id` query param (browsers can't set custom WS
+   * headers). Invalid values are dropped.
+   */
+  agentRelayDistinctId?: string;
 }
 
 const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
@@ -76,6 +88,7 @@ export class WsClient {
   private originClient: string;
   private originVersion: string;
   private originHarness?: string;
+  private agentRelayDistinctId?: string;
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -100,6 +113,9 @@ export class WsClient {
     this.originClient = origin.client;
     this.originVersion = origin.version;
     this.originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    this.agentRelayDistinctId = sanitizeAgentRelayDistinctId(
+      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
+    );
   }
 
   connect(): void {
@@ -114,6 +130,9 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
     if (this.originHarness) {
       wsUrl.searchParams.set('harness', this.originHarness);
+    }
+    if (this.agentRelayDistinctId) {
+      wsUrl.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, this.agentRelayDistinctId);
     }
 
     const ws = new WebSocket(wsUrl.toString());

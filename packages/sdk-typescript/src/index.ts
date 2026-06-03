@@ -3,6 +3,8 @@ export { RelayCast } from './relay.js';
 export type {
   AgentReconnectOptions,
   RelayCastOptions,
+  WorkspaceBootstrapOptions,
+  WorkspaceLookupOptions,
   EnsureWorkspaceResponse,
 } from './relay.js';
 export { Relay } from './communicate/relay.js';
@@ -29,7 +31,13 @@ export { AgentClient } from './agent.js';
 export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
-export { HARNESS_HEADER, sanitizeHarness } from './origin.js';
+export {
+  AGENT_RELAY_DISTINCT_ID_HEADER,
+  AGENT_RELAY_DISTINCT_ID_QUERY,
+  HARNESS_HEADER,
+  sanitizeAgentRelayDistinctId,
+  sanitizeHarness,
+} from './origin.js';
 export {
   relayErrorFromApi,
   normalizeRelayErrorCode,

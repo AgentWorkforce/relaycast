@@ -155,3 +155,23 @@ class TestWsClientOriginParams:
         assert "origin_surface=sdk" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
         assert "origin_version=0.1.0" in url
+
+    @pytest.mark.asyncio
+    async def test_connect_url_includes_agent_relay_distinct_id_query_param(self):
+        ws = WsClient(token="at_xxx", agent_relay_distinct_id="abc123def4567890")
+        with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
+            with pytest.raises(RuntimeError):
+                await ws._connect_once()
+
+        url = connect_mock.call_args.args[0]
+        assert "agent_relay_distinct_id=abc123def4567890" in url
+
+    @pytest.mark.asyncio
+    async def test_connect_url_omits_invalid_agent_relay_distinct_id_query_param(self):
+        ws = WsClient(token="at_xxx", agent_relay_distinct_id="evil\r\nX-Inject: bad")
+        with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
+            with pytest.raises(RuntimeError):
+                await ws._connect_once()
+
+        url = connect_mock.call_args.args[0]
+        assert "agent_relay_distinct_id=" not in url

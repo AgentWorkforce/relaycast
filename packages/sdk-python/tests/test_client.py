@@ -4,7 +4,13 @@ import httpx
 import pytest
 import respx
 
-from relay_sdk.client import AsyncHttpClient, HttpClient, SDK_VERSION
+from relay_sdk.client import (
+    AGENT_RELAY_DISTINCT_ID_HEADER,
+    AsyncHttpClient,
+    HttpClient,
+    SDK_VERSION,
+    sanitize_agent_relay_distinct_id,
+)
 from relay_sdk.errors import RelayError
 
 from .conftest import API_KEY, BASE_URL, error_response, ok_response
@@ -26,6 +32,16 @@ def test_http_client_constructor_default_base_url_is_set_and_stripped():
     c = HttpClient(api_key=API_KEY)
     assert c.api_key == API_KEY
     assert c.base_url == "https://gateway.relaycast.dev"
+
+
+def test_sanitize_agent_relay_distinct_id():
+    assert sanitize_agent_relay_distinct_id("  AgentRelay.abc_123:XYZ-9  ") == "AgentRelay.abc_123:XYZ-9"
+    assert sanitize_agent_relay_distinct_id("") is None
+    assert sanitize_agent_relay_distinct_id("   ") is None
+    assert sanitize_agent_relay_distinct_id(None) is None
+    assert sanitize_agent_relay_distinct_id("evil\r\nX-Inject: bad") is None
+    assert sanitize_agent_relay_distinct_id("a/b") is None
+    assert sanitize_agent_relay_distinct_id("a" * 200) == "a" * 128
 
 
 @respx.mock
@@ -55,6 +71,38 @@ def test_http_client_sends_x_sdk_version_header():
     assert req.headers["X-Relaycast-Origin-Surface"] == "sdk"
     assert req.headers["X-Relaycast-Origin-Client"] == "@relaycast/python-sdk"
     assert req.headers["X-Relaycast-Origin-Version"] == SDK_VERSION
+
+
+@respx.mock
+def test_http_client_sends_agent_relay_distinct_id_header():
+    route = respx.get(f"{BASE_URL}/v1/version").mock(
+        return_value=httpx.Response(200, json=ok_response({"ok": True}))
+    )
+    c = HttpClient(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        agent_relay_distinct_id="abc123def4567890",
+    )
+    c.get("/v1/version")
+
+    req = route.calls[0].request
+    assert req.headers[AGENT_RELAY_DISTINCT_ID_HEADER] == "abc123def4567890"
+
+
+@respx.mock
+def test_http_client_omits_invalid_agent_relay_distinct_id_header():
+    route = respx.get(f"{BASE_URL}/v1/version").mock(
+        return_value=httpx.Response(200, json=ok_response({"ok": True}))
+    )
+    c = HttpClient(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        agent_relay_distinct_id="evil\r\nX-Inject: bad",
+    )
+    c.get("/v1/version")
+
+    req = route.calls[0].request
+    assert AGENT_RELAY_DISTINCT_ID_HEADER not in req.headers
 
 
 @respx.mock
@@ -265,6 +313,23 @@ async def test_async_http_client_sends_x_sdk_version_header():
     assert req.headers["X-Relaycast-Origin-Surface"] == "sdk"
     assert req.headers["X-Relaycast-Origin-Client"] == "@relaycast/python-sdk"
     assert req.headers["X-Relaycast-Origin-Version"] == SDK_VERSION
+    await c.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_http_client_sends_agent_relay_distinct_id_header():
+    route = respx.get(f"{BASE_URL}/v1/version").mock(
+        return_value=httpx.Response(200, json=ok_response({"ok": True}))
+    )
+    c = AsyncHttpClient(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        agent_relay_distinct_id="abc123def4567890",
+    )
+    await c.get("/v1/version")
+    req = route.calls[0].request
+    assert req.headers[AGENT_RELAY_DISTINCT_ID_HEADER] == "abc123def4567890"
     await c.close()
 
 

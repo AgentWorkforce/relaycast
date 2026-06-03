@@ -11,7 +11,7 @@ from urllib.parse import quote
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from .client import SDK_VERSION
+from .client import AGENT_RELAY_DISTINCT_ID_QUERY, SDK_VERSION, sanitize_agent_relay_distinct_id
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class WsClient:
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
+        agent_relay_distinct_id: str | None = None,
     ) -> None:
         self._token = token
         base = (base_url or "https://gateway.relaycast.dev").rstrip("/")
@@ -47,6 +48,7 @@ class WsClient:
         self._origin_surface = (origin_surface or "sdk").strip()[:32]
         self._origin_client = (origin_client or "@relaycast/python-sdk").strip()[:80]
         self._origin_version = (origin_version or SDK_VERSION).strip()[:48]
+        self._agent_relay_distinct_id = sanitize_agent_relay_distinct_id(agent_relay_distinct_id)
         self._ws: ClientConnection | None = None
         self._handlers: dict[str, set[EventHandler]] = {}
         self._reconnect_attempt = 0
@@ -79,6 +81,11 @@ class WsClient:
             f"&origin_client={quote(self._origin_client, safe='')}"
             f"&origin_version={quote(self._origin_version, safe='')}"
         )
+        if self._agent_relay_distinct_id:
+            url += (
+                f"&{AGENT_RELAY_DISTINCT_ID_QUERY}="
+                f"{quote(self._agent_relay_distinct_id, safe='')}"
+            )
         async with websockets.connect(url) as ws:
             self._ws = ws
             self._reconnect_attempt = 0
