@@ -1,4 +1,7 @@
-import { normalizeTelemetryOrigin, type TelemetryOrigin } from '@relaycast/types';
+import {
+  normalizeTelemetryOrigin,
+  type TelemetryOrigin,
+} from "@relaycast/types";
 
 export type OriginInfo = Partial<TelemetryOrigin>;
 
@@ -6,10 +9,11 @@ export type OriginInfo = Partial<TelemetryOrigin>;
  * HTTP header used by harnesses (Claude Code, Cursor, etc.) to identify
  * themselves to the relaycast server. See relay#881.
  */
-export const HARNESS_HEADER = 'X-Relaycast-Harness';
+export const HARNESS_HEADER = "X-Relaycast-Harness";
+export const AGENT_RELAY_ANONYMOUS_ID_HEADER = "X-Agent-Relay-Anonymous-Id";
 
 /** Fallback value when the harness is missing or invalid. */
-export const UNKNOWN_HARNESS = 'unknown';
+export const UNKNOWN_HARNESS = "unknown";
 
 /** Upper bound on the harness value — generous enough for a UA-style token. */
 const HARNESS_MAX_LENGTH = 120;
@@ -21,6 +25,7 @@ const HARNESS_MAX_LENGTH = 120;
  * upstream caller from smuggling a header injection past the relaycast WAF.
  */
 const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
+const AGENT_RELAY_ANONYMOUS_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
 
 /**
  * Read and sanitize the harness identifier from a request.
@@ -36,8 +41,9 @@ const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
  * in the analytics layer. Drops empty or malformed values to `'unknown'`.
  */
 export function extractHarness(request: Request): string {
-  const raw = request.headers.get(HARNESS_HEADER)
-    ?? new URL(request.url).searchParams.get('harness');
+  const raw =
+    request.headers.get(HARNESS_HEADER) ??
+    new URL(request.url).searchParams.get("harness");
   if (!raw) return UNKNOWN_HARNESS;
 
   const trimmed = raw.trim();
@@ -47,7 +53,23 @@ export function extractHarness(request: Request): string {
   return trimmed.slice(0, HARNESS_MAX_LENGTH).toLowerCase();
 }
 
-function sanitizeOriginPart(value: string | null | undefined, maxLen: number): string | undefined {
+export function extractAgentRelayAnonymousId(
+  request: Request,
+): string | undefined {
+  const raw = request.headers.get(AGENT_RELAY_ANONYMOUS_ID_HEADER);
+  if (!raw) return undefined;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (!AGENT_RELAY_ANONYMOUS_ID_ALLOWED.test(trimmed)) return undefined;
+
+  return trimmed.slice(0, 128);
+}
+
+function sanitizeOriginPart(
+  value: string | null | undefined,
+  maxLen: number,
+): string | undefined {
   if (!value) return undefined;
   const normalized = value.trim();
   if (!normalized) return undefined;
@@ -55,39 +77,45 @@ function sanitizeOriginPart(value: string | null | undefined, maxLen: number): s
 }
 
 export function deriveClientName(headers: Headers): string | undefined {
-  const explicit = headers.get('x-client-name') ?? headers.get('x-relaycast-client');
+  const explicit =
+    headers.get("x-client-name") ?? headers.get("x-relaycast-client");
   if (explicit) return explicit.trim().slice(0, 80);
 
-  const ua = headers.get('user-agent');
+  const ua = headers.get("user-agent");
   if (!ua) return undefined;
   const family = ua.split(/[\/\s;]/)[0];
   return family ? family.trim().slice(0, 80) : undefined;
 }
 
-export function extractOriginInfo(request: Request, fallbackClientName?: string): OriginInfo {
+export function extractOriginInfo(
+  request: Request,
+  fallbackClientName?: string,
+): OriginInfo {
   const headers = request.headers;
   const url = new URL(request.url);
 
-  const querySurface = url.searchParams.get('origin_surface');
-  const queryClient = url.searchParams.get('origin_client');
-  const queryVersion = url.searchParams.get('origin_version');
+  const querySurface = url.searchParams.get("origin_surface");
+  const queryClient = url.searchParams.get("origin_client");
+  const queryVersion = url.searchParams.get("origin_version");
 
   const originSurface = sanitizeOriginPart(
-    headers.get('x-relaycast-origin-surface') ?? headers.get('x-origin-surface') ?? querySurface,
+    headers.get("x-relaycast-origin-surface") ??
+      headers.get("x-origin-surface") ??
+      querySurface,
     32,
   );
   const originClient = sanitizeOriginPart(
-    headers.get('x-relaycast-origin-client')
-      ?? headers.get('x-origin-client')
-      ?? queryClient
-      ?? fallbackClientName,
+    headers.get("x-relaycast-origin-client") ??
+      headers.get("x-origin-client") ??
+      queryClient ??
+      fallbackClientName,
     80,
   );
   const originVersion = sanitizeOriginPart(
-    headers.get('x-relaycast-origin-version')
-      ?? headers.get('x-origin-version')
-      ?? queryVersion
-      ?? headers.get('x-sdk-version'),
+    headers.get("x-relaycast-origin-version") ??
+      headers.get("x-origin-version") ??
+      queryVersion ??
+      headers.get("x-sdk-version"),
     48,
   );
 
@@ -98,6 +126,11 @@ export function extractOriginInfo(request: Request, fallbackClientName?: string)
   };
 }
 
-export function requiredOriginInfo(request: Request, fallbackClientName?: string): TelemetryOrigin {
-  return normalizeTelemetryOrigin(extractOriginInfo(request, fallbackClientName));
+export function requiredOriginInfo(
+  request: Request,
+  fallbackClientName?: string,
+): TelemetryOrigin {
+  return normalizeTelemetryOrigin(
+    extractOriginInfo(request, fallbackClientName),
+  );
 }
