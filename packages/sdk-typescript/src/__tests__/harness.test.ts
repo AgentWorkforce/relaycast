@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sanitizeAgentRelayAnonymousId, sanitizeHarness } from '../origin.js';
+import { sanitizeAgentRelayDistinctId, sanitizeHarness } from '../origin.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -28,9 +28,9 @@ function harnessHeaderFromLastCall(): string | undefined {
   return (init.headers as Record<string, string>)['X-Relaycast-Harness'];
 }
 
-function agentRelayIdHeaderFromLastCall(): string | undefined {
+function agentRelayDistinctIdHeaderFromLastCall(): string | undefined {
   const [, init] = mockFetch.mock.calls.at(-1)!;
-  return (init.headers as Record<string, string>)['X-Agent-Relay-Anonymous-Id'];
+  return (init.headers as Record<string, string>)['X-Agent-Relay-Distinct-Id'];
 }
 
 describe('sanitizeHarness', () => {
@@ -38,10 +38,10 @@ describe('sanitizeHarness', () => {
     const sdk = await import('../index.js');
 
     expect(sdk.HARNESS_HEADER).toBe('X-Relaycast-Harness');
-    expect(sdk.AGENT_RELAY_ANONYMOUS_ID_HEADER).toBe('X-Agent-Relay-Anonymous-Id');
-    expect(sdk.AGENT_RELAY_ANONYMOUS_ID_QUERY).toBe('agent_relay_anonymous_id');
+    expect(sdk.AGENT_RELAY_DISTINCT_ID_HEADER).toBe('X-Agent-Relay-Distinct-Id');
+    expect(sdk.AGENT_RELAY_DISTINCT_ID_QUERY).toBe('agent_relay_distinct_id');
     expect(sdk.sanitizeHarness('Codex')).toBe('codex');
-    expect(sdk.sanitizeAgentRelayAnonymousId('abc123def4567890')).toBe('abc123def4567890');
+    expect(sdk.sanitizeAgentRelayDistinctId('abc123def4567890')).toBe('abc123def4567890');
   });
 
   it('keeps a UA-style token, lowercased', () => {
@@ -70,28 +70,28 @@ describe('sanitizeHarness', () => {
   });
 });
 
-describe('sanitizeAgentRelayAnonymousId', () => {
+describe('sanitizeAgentRelayDistinctId', () => {
   it('keeps a well-formed id without lowercasing', () => {
-    expect(sanitizeAgentRelayAnonymousId('AgentRelay.abc_123:XYZ-9')).toBe('AgentRelay.abc_123:XYZ-9');
+    expect(sanitizeAgentRelayDistinctId('AgentRelay.abc_123:XYZ-9')).toBe('AgentRelay.abc_123:XYZ-9');
   });
 
   it('trims surrounding whitespace', () => {
-    expect(sanitizeAgentRelayAnonymousId('  abc123def4567890  ')).toBe('abc123def4567890');
+    expect(sanitizeAgentRelayDistinctId('  abc123def4567890  ')).toBe('abc123def4567890');
   });
 
   it('drops empty / whitespace-only input', () => {
-    expect(sanitizeAgentRelayAnonymousId('')).toBeUndefined();
-    expect(sanitizeAgentRelayAnonymousId('   ')).toBeUndefined();
-    expect(sanitizeAgentRelayAnonymousId(undefined)).toBeUndefined();
+    expect(sanitizeAgentRelayDistinctId('')).toBeUndefined();
+    expect(sanitizeAgentRelayDistinctId('   ')).toBeUndefined();
+    expect(sanitizeAgentRelayDistinctId(undefined)).toBeUndefined();
   });
 
   it('drops CRLF / control characters rather than sending garbage', () => {
-    expect(sanitizeAgentRelayAnonymousId('evil\r\nX-Inject: bad')).toBeUndefined();
-    expect(sanitizeAgentRelayAnonymousId('a/b')).toBeUndefined();
+    expect(sanitizeAgentRelayDistinctId('evil\r\nX-Inject: bad')).toBeUndefined();
+    expect(sanitizeAgentRelayDistinctId('a/b')).toBeUndefined();
   });
 
   it('caps at 128 characters', () => {
-    expect(sanitizeAgentRelayAnonymousId('a'.repeat(200))).toBe('a'.repeat(128));
+    expect(sanitizeAgentRelayDistinctId('a'.repeat(200))).toBe('a'.repeat(128));
   });
 });
 
@@ -176,20 +176,20 @@ describe('harness — HTTP', () => {
     expect(harnessHeaderFromLastCall()).toBe('claude-code');
   });
 
-  it('stamps X-Agent-Relay-Anonymous-Id from the public constructor option', async () => {
+  it('stamps X-Agent-Relay-Distinct-Id from the public constructor option', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({
       apiKey: 'rk_live_test',
-      agentRelayAnonymousId: 'abc123def4567890',
+      agentRelayDistinctId: 'abc123def4567890',
     });
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
-    expect(agentRelayIdHeaderFromLastCall()).toBe('abc123def4567890');
+    expect(agentRelayDistinctIdHeaderFromLastCall()).toBe('abc123def4567890');
   });
 
-  it('stamps X-Agent-Relay-Anonymous-Id from the internal origin', async () => {
+  it('stamps X-Agent-Relay-Distinct-Id from the internal origin', async () => {
     const { createInternalRelayCast } = await import('../internal.js');
     const relay = createInternalRelayCast(
       { apiKey: 'rk_live_test' },
@@ -197,44 +197,44 @@ describe('harness — HTTP', () => {
         surface: 'mcp',
         client: '@agent-relay/relaycast-mcp',
         version: '6.0.0',
-        agentRelayAnonymousId: 'abc123def4567890',
+        agentRelayDistinctId: 'abc123def4567890',
       },
     );
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
-    expect(agentRelayIdHeaderFromLastCall()).toBe('abc123def4567890');
+    expect(agentRelayDistinctIdHeaderFromLastCall()).toBe('abc123def4567890');
   });
 
-  it('drops an invalid Agent Relay anonymous id rather than sending garbage', async () => {
+  it('drops an invalid Agent Relay distinct id rather than sending garbage', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({
       apiKey: 'rk_live_test',
-      agentRelayAnonymousId: 'evil\r\nX-Inject: bad',
+      agentRelayDistinctId: 'evil\r\nX-Inject: bad',
     });
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
     const [, init] = mockFetch.mock.calls.at(-1)!;
-    expect('X-Agent-Relay-Anonymous-Id' in (init.headers as Record<string, string>)).toBe(false);
+    expect('X-Agent-Relay-Distinct-Id' in (init.headers as Record<string, string>)).toBe(false);
   });
 
-  it('preserves the Agent Relay anonymous id across withApiKey()', async () => {
+  it('preserves the Agent Relay distinct id across withApiKey()', async () => {
     const { HttpClient } = await import('../client.js');
     const client = new HttpClient({
       apiKey: 'rk_live_test',
-      agentRelayAnonymousId: 'abc123def4567890',
+      agentRelayDistinctId: 'abc123def4567890',
     });
     const rotated = client.withApiKey('rk_live_other');
 
     expect(rotated.apiKey).toBe('rk_live_other');
-    expect(rotated.agentRelayAnonymousId).toBe('abc123def4567890');
+    expect(rotated.agentRelayDistinctId).toBe('abc123def4567890');
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await rotated.get('/v1/activity');
-    expect(agentRelayIdHeaderFromLastCall()).toBe('abc123def4567890');
+    expect(agentRelayDistinctIdHeaderFromLastCall()).toBe('abc123def4567890');
   });
 });
 
@@ -290,7 +290,7 @@ describe('harness — WS', () => {
     expect(url.searchParams.has('harness')).toBe(false);
   });
 
-  it('forwards the Agent Relay anonymous id as a query param on connect', async () => {
+  it('forwards the Agent Relay distinct id as a query param on connect', async () => {
     const constructed: string[] = [];
     class MockWs {
       static readonly OPEN = 1;
@@ -309,13 +309,13 @@ describe('harness — WS', () => {
     const { WsClient } = await import('../ws.js');
     const ws = new WsClient({
       token: 'at_live_test',
-      agentRelayAnonymousId: 'abc123def4567890',
+      agentRelayDistinctId: 'abc123def4567890',
     });
     ws.connect();
     ws.disconnect();
 
     expect(constructed).toHaveLength(1);
     const url = new URL(constructed[0]!);
-    expect(url.searchParams.get('agent_relay_anonymous_id')).toBe('abc123def4567890');
+    expect(url.searchParams.get('agent_relay_distinct_id')).toBe('abc123def4567890');
   });
 });

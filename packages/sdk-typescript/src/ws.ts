@@ -8,9 +8,9 @@ import type {
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import {
-  AGENT_RELAY_ANONYMOUS_ID_QUERY,
+  AGENT_RELAY_DISTINCT_ID_QUERY,
   SDK_ORIGIN,
-  sanitizeAgentRelayAnonymousId,
+  sanitizeAgentRelayDistinctId,
   sanitizeHarness,
   type InternalOrigin,
 } from './origin.js';
@@ -34,11 +34,11 @@ export interface WsClientOptions {
    */
   harness?: string;
   /**
-   * Optional Agent Relay anonymous installation id, forwarded as the
-   * `agent_relay_anonymous_id` query param (browsers can't set custom WS
+   * Optional Agent Relay distinct telemetry id, forwarded as the
+   * `agent_relay_distinct_id` query param (browsers can't set custom WS
    * headers). Invalid values are dropped.
    */
-  agentRelayAnonymousId?: string;
+  agentRelayDistinctId?: string;
 }
 
 const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
@@ -88,7 +88,7 @@ export class WsClient {
   private originClient: string;
   private originVersion: string;
   private originHarness?: string;
-  private agentRelayAnonymousId?: string;
+  private agentRelayDistinctId?: string;
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -113,8 +113,8 @@ export class WsClient {
     this.originClient = origin.client;
     this.originVersion = origin.version;
     this.originHarness = sanitizeHarness(origin.harness ?? options.harness);
-    this.agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(
-      origin.agentRelayAnonymousId ?? options.agentRelayAnonymousId,
+    this.agentRelayDistinctId = sanitizeAgentRelayDistinctId(
+      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
     );
   }
 
@@ -131,8 +131,8 @@ export class WsClient {
     if (this.originHarness) {
       wsUrl.searchParams.set('harness', this.originHarness);
     }
-    if (this.agentRelayAnonymousId) {
-      wsUrl.searchParams.set(AGENT_RELAY_ANONYMOUS_ID_QUERY, this.agentRelayAnonymousId);
+    if (this.agentRelayDistinctId) {
+      wsUrl.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, this.agentRelayDistinctId);
     }
 
     const ws = new WebSocket(wsUrl.toString());

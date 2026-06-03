@@ -734,7 +734,7 @@ describe('RelayCast', () => {
       expect(url).toBe('http://localhost:3000/v1/workspaces');
     });
 
-    it('sends Agent Relay anonymous id when supplied', async () => {
+    it('sends Agent Relay distinct id when supplied', async () => {
       const { RelayCast } = await import('../relay.js');
 
       mockFetch.mockImplementation(() =>
@@ -751,11 +751,11 @@ describe('RelayCast', () => {
 
       await RelayCast.createWorkspace('Test', {
         baseUrl: 'http://localhost:3000',
-        agentRelayAnonymousId: 'abc123def4567890',
+        agentRelayDistinctId: 'abc123def4567890',
       });
 
       const [, init] = mockFetch.mock.calls[0]!;
-      expect(init.headers['X-Agent-Relay-Anonymous-Id']).toBe('abc123def4567890');
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('abc123def4567890');
     });
 
     it('returns an existing workspace on idempotent duplicate create', async () => {
@@ -829,7 +829,7 @@ describe('RelayCast', () => {
       await expect(RelayCast.lookupWorkspace('Missing')).resolves.toBeNull();
     });
 
-    it('sends Agent Relay anonymous id when supplied', async () => {
+    it('sends Agent Relay distinct id when supplied', async () => {
       const { RelayCast } = await import('../relay.js');
 
       mockFetch.mockImplementation(() =>
@@ -846,12 +846,12 @@ describe('RelayCast', () => {
 
       await RelayCast.lookupWorkspace('My Workspace', {
         baseUrl: 'http://localhost:3000',
-        agentRelayAnonymousId: 'abc123def4567890',
+        agentRelayDistinctId: 'abc123def4567890',
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('http://localhost:3000/v1/workspaces/by-name/My%20Workspace');
-      expect(init.headers['X-Agent-Relay-Anonymous-Id']).toBe('abc123def4567890');
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('abc123def4567890');
     });
   });
 

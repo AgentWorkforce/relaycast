@@ -139,8 +139,8 @@ pub use events::{
     SenderKind,
 };
 pub use harness::{
-    sanitize_agent_relay_anonymous_id, sanitize_harness, AGENT_RELAY_ANONYMOUS_ID_HEADER,
-    AGENT_RELAY_ANONYMOUS_ID_QUERY, HARNESS_HEADER,
+    sanitize_agent_relay_distinct_id, sanitize_harness, AGENT_RELAY_DISTINCT_ID_HEADER,
+    AGENT_RELAY_DISTINCT_ID_QUERY, HARNESS_HEADER,
 };
 pub use identity::{agent_name_eq, is_self_name};
 pub use registration::{

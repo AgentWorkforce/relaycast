@@ -32,10 +32,10 @@ export type { AgentClientOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
 export {
-  AGENT_RELAY_ANONYMOUS_ID_HEADER,
-  AGENT_RELAY_ANONYMOUS_ID_QUERY,
+  AGENT_RELAY_DISTINCT_ID_HEADER,
+  AGENT_RELAY_DISTINCT_ID_QUERY,
   HARNESS_HEADER,
-  sanitizeAgentRelayAnonymousId,
+  sanitizeAgentRelayDistinctId,
   sanitizeHarness,
 } from './origin.js';
 export {

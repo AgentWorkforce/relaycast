@@ -121,7 +121,7 @@ class Relay:
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
-        agent_relay_anonymous_id: str | None = None,
+        agent_relay_distinct_id: str | None = None,
     ) -> None:
         if not api_key or not api_key.strip():
             raise ValueError("Relay api_key is required")
@@ -132,7 +132,7 @@ class Relay:
             origin_surface=origin_surface,
             origin_client=origin_client,
             origin_version=origin_version,
-            agent_relay_anonymous_id=agent_relay_anonymous_id,
+            agent_relay_distinct_id=agent_relay_distinct_id,
         )
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
@@ -144,7 +144,7 @@ class Relay:
             origin_surface=self._client.origin_surface,
             origin_client=self._client.origin_client,
             origin_version=self._client.origin_version,
-            agent_relay_anonymous_id=self._client.agent_relay_anonymous_id,
+            agent_relay_distinct_id=self._client.agent_relay_distinct_id,
         )
         return AgentClient(agent_client)
 
@@ -266,7 +266,7 @@ class AsyncRelay:
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
-        agent_relay_anonymous_id: str | None = None,
+        agent_relay_distinct_id: str | None = None,
     ) -> None:
         if not api_key or not api_key.strip():
             raise ValueError("Relay api_key is required")
@@ -277,7 +277,7 @@ class AsyncRelay:
             origin_surface=origin_surface,
             origin_client=origin_client,
             origin_version=origin_version,
-            agent_relay_anonymous_id=agent_relay_anonymous_id,
+            agent_relay_distinct_id=agent_relay_distinct_id,
         )
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
@@ -289,7 +289,7 @@ class AsyncRelay:
             origin_surface=self._client.origin_surface,
             origin_client=self._client.origin_client,
             origin_version=self._client.origin_version,
-            agent_relay_anonymous_id=self._client.agent_relay_anonymous_id,
+            agent_relay_distinct_id=self._client.agent_relay_distinct_id,
         )
         return AsyncAgentClient(agent_client)
 

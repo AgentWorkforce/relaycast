@@ -2,7 +2,7 @@
   "id": "traj_kgjircgbl4ix",
   "version": 1,
   "task": {
-    "title": "Update SDKs to forward Agent Relay anonymous identity"
+    "title": "Update SDKs to forward Agent Relay distinct identity"
   },
   "status": "completed",
   "startedAt": "2026-06-03T10:28:43.564Z",
@@ -10,7 +10,7 @@
   "agents": [],
   "chapters": [],
   "retrospective": {
-    "summary": "Added sanitized Agent Relay anonymous id propagation across TypeScript, Python, and Rust SDK HTTP/WS surfaces, plus engine WS query extraction and focused tests.",
+    "summary": "Added sanitized Agent Relay distinct id propagation across TypeScript, Python, and Rust SDK HTTP/WS surfaces, plus engine WS query extraction and focused tests.",
     "approach": "Standard approach",
     "confidence": 0.91
   },

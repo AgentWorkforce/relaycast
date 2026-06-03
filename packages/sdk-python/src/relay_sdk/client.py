@@ -12,24 +12,24 @@ import httpx
 from .errors import RelayError
 
 SDK_VERSION = "0.1.0"
-AGENT_RELAY_ANONYMOUS_ID_HEADER = "X-Agent-Relay-Anonymous-Id"
-AGENT_RELAY_ANONYMOUS_ID_QUERY = "agent_relay_anonymous_id"
+AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id"
+AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id"
 
 _DEFAULT_BASE_URL = "https://gateway.relaycast.dev"
 _RETRY_BACKOFFS = [0.2, 0.4, 0.8]
 _DEFAULT_ORIGIN_SURFACE = "sdk"
 _DEFAULT_ORIGIN_CLIENT = "@relaycast/python-sdk"
-_AGENT_RELAY_ANONYMOUS_ID_ALLOWED = re.compile(r"^[a-z0-9._:-]+$", re.IGNORECASE)
+_AGENT_RELAY_DISTINCT_ID_ALLOWED = re.compile(r"^[a-z0-9._:-]+$", re.IGNORECASE)
 
 
-def sanitize_agent_relay_anonymous_id(raw: str | None) -> str | None:
-    """Return a sanitized Agent Relay anonymous id, or None when invalid."""
+def sanitize_agent_relay_distinct_id(raw: str | None) -> str | None:
+    """Return a sanitized Agent Relay distinct id, or None when invalid."""
     if not raw:
         return None
     trimmed = raw.strip()
     if not trimmed:
         return None
-    if not _AGENT_RELAY_ANONYMOUS_ID_ALLOWED.fullmatch(trimmed):
+    if not _AGENT_RELAY_DISTINCT_ID_ALLOWED.fullmatch(trimmed):
         return None
     return trimmed[:128]
 
@@ -45,14 +45,14 @@ class HttpClient:
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
-        agent_relay_anonymous_id: str | None = None,
+        agent_relay_distinct_id: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
         self.origin_surface = (origin_surface or _DEFAULT_ORIGIN_SURFACE).strip()[:32]
         self.origin_client = (origin_client or _DEFAULT_ORIGIN_CLIENT).strip()[:80]
         self.origin_version = (origin_version or SDK_VERSION).strip()[:48]
-        self.agent_relay_anonymous_id = sanitize_agent_relay_anonymous_id(agent_relay_anonymous_id)
+        self.agent_relay_distinct_id = sanitize_agent_relay_distinct_id(agent_relay_distinct_id)
         self._client = httpx.Client(timeout=30.0)
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
@@ -63,8 +63,8 @@ class HttpClient:
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
-        if self.agent_relay_anonymous_id:
-            headers[AGENT_RELAY_ANONYMOUS_ID_HEADER] = self.agent_relay_anonymous_id
+        if self.agent_relay_distinct_id:
+            headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:
             headers["Content-Type"] = "application/json"
         return headers
@@ -147,14 +147,14 @@ class AsyncHttpClient:
         origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
-        agent_relay_anonymous_id: str | None = None,
+        agent_relay_distinct_id: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
         self.origin_surface = (origin_surface or _DEFAULT_ORIGIN_SURFACE).strip()[:32]
         self.origin_client = (origin_client or _DEFAULT_ORIGIN_CLIENT).strip()[:80]
         self.origin_version = (origin_version or SDK_VERSION).strip()[:48]
-        self.agent_relay_anonymous_id = sanitize_agent_relay_anonymous_id(agent_relay_anonymous_id)
+        self.agent_relay_distinct_id = sanitize_agent_relay_distinct_id(agent_relay_distinct_id)
         self._client = httpx.AsyncClient(timeout=30.0)
 
     def _headers(self, with_body: bool = False) -> dict[str, str]:
@@ -165,8 +165,8 @@ class AsyncHttpClient:
             "X-Relaycast-Origin-Client": self.origin_client,
             "X-Relaycast-Origin-Version": self.origin_version,
         }
-        if self.agent_relay_anonymous_id:
-            headers[AGENT_RELAY_ANONYMOUS_ID_HEADER] = self.agent_relay_anonymous_id
+        if self.agent_relay_distinct_id:
+            headers[AGENT_RELAY_DISTINCT_ID_HEADER] = self.agent_relay_distinct_id
         if with_body:
             headers["Content-Type"] = "application/json"
         return headers

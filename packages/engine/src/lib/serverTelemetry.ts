@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../env.js";
 import {
-  extractAgentRelayAnonymousId,
+  extractAgentRelayDistinctId,
   extractHarness,
   requiredOriginInfo,
   UNKNOWN_HARNESS,
@@ -55,15 +55,15 @@ export function emitServerEvent(
     c.get("harness") ?? extractHarness(c.req.raw) ?? UNKNOWN_HARNESS;
 
   const origin = requiredOriginInfo(c.req.raw);
-  const clientAnonymousId = extractAgentRelayAnonymousId(c.req.raw);
+  const clientDistinctId = extractAgentRelayDistinctId(c.req.raw);
   c.get("engine").telemetry.capture({
     name: event,
-    distinctId: clientAnonymousId ?? workspaceId,
+    distinctId: clientDistinctId ?? workspaceId,
     properties: {
       app: "relaycast-server",
       surface: "cloud",
       workspace_id: workspaceId,
-      ...(clientAnonymousId ? { client_anonymous_id: clientAnonymousId } : {}),
+      ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
       harness,
       origin_surface: origin.origin_surface,
       origin_client: origin.origin_client,

@@ -214,7 +214,7 @@ export class AgentClient {
         client: this.client.originClient,
         version: this.client.originVersion,
         ...(this.client.originHarness ? { harness: this.client.originHarness } : {}),
-        ...(this.client.agentRelayAnonymousId ? { agentRelayAnonymousId: this.client.agentRelayAnonymousId } : {}),
+        ...(this.client.agentRelayDistinctId ? { agentRelayDistinctId: this.client.agentRelayDistinctId } : {}),
       },
     ));
     this.ws.on('open', () => {

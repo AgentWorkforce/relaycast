@@ -2,10 +2,10 @@ import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import {
-  AGENT_RELAY_ANONYMOUS_ID_HEADER,
+  AGENT_RELAY_DISTINCT_ID_HEADER,
   HARNESS_HEADER,
   SDK_ORIGIN,
-  sanitizeAgentRelayAnonymousId,
+  sanitizeAgentRelayDistinctId,
   sanitizeHarness,
   type InternalOrigin,
 } from './origin.js';
@@ -24,12 +24,12 @@ export interface ClientOptions {
    */
   harness?: string;
   /**
-   * Optional Agent Relay anonymous installation id. Sent as the
-   * `X-Agent-Relay-Anonymous-Id` header so Relaycast telemetry can be joined to
+   * Optional Agent Relay distinct telemetry id. Sent as the
+   * `X-Agent-Relay-Distinct-Id` header so Relaycast telemetry can be joined to
    * Agent Relay CLI telemetry without sending user-identifying data. Invalid
    * values are dropped.
    */
-  agentRelayAnonymousId?: string;
+  agentRelayDistinctId?: string;
 }
 
 export interface RequestOptions {
@@ -147,7 +147,7 @@ export class HttpClient {
   private _originClient: string;
   private _originVersion: string;
   private _originHarness?: string;
-  private _agentRelayAnonymousId?: string;
+  private _agentRelayDistinctId?: string;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -160,8 +160,8 @@ export class HttpClient {
     // A wrapping host's internal origin is authoritative about the harness;
     // fall back to the public `harness` option for plain consumers.
     this._originHarness = sanitizeHarness(origin.harness ?? options.harness);
-    this._agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(
-      origin.agentRelayAnonymousId ?? options.agentRelayAnonymousId,
+    this._agentRelayDistinctId = sanitizeAgentRelayDistinctId(
+      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
     );
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
@@ -191,9 +191,9 @@ export class HttpClient {
     return this._originHarness;
   }
 
-  /** Sanitized Agent Relay anonymous id, or `undefined` when none was supplied. */
-  get agentRelayAnonymousId(): string | undefined {
-    return this._agentRelayAnonymousId;
+  /** Sanitized Agent Relay distinct id, or `undefined` when none was supplied. */
+  get agentRelayDistinctId(): string | undefined {
+    return this._agentRelayDistinctId;
   }
 
   get retryPolicy(): RetryPolicy {
@@ -208,7 +208,7 @@ export class HttpClient {
         client: this._originClient,
         version: this._originVersion,
         ...(this._originHarness ? { harness: this._originHarness } : {}),
-        ...(this._agentRelayAnonymousId ? { agentRelayAnonymousId: this._agentRelayAnonymousId } : {}),
+        ...(this._agentRelayDistinctId ? { agentRelayDistinctId: this._agentRelayDistinctId } : {}),
       },
     ));
   }
@@ -234,7 +234,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
       ...(this._originHarness ? { [HARNESS_HEADER]: this._originHarness } : {}),
-      ...(this._agentRelayAnonymousId ? { [AGENT_RELAY_ANONYMOUS_ID_HEADER]: this._agentRelayAnonymousId } : {}),
+      ...(this._agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: this._agentRelayDistinctId } : {}),
       ...(options?.headers || {}),
     };
 

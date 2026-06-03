@@ -1,4 +1,4 @@
-# Trajectory: Update SDKs to forward Agent Relay anonymous identity
+# Trajectory: Update SDKs to forward Agent Relay distinct identity
 
 > **Status:** ✅ Completed
 > **Confidence:** 91%
@@ -9,6 +9,6 @@
 
 ## Summary
 
-Added sanitized Agent Relay anonymous id propagation across TypeScript, Python, and Rust SDK HTTP/WS surfaces, plus engine WS query extraction and focused tests.
+Added sanitized Agent Relay distinct id propagation across TypeScript, Python, and Rust SDK HTTP/WS surfaces, plus engine WS query extraction and focused tests.
 
 **Approach:** Standard approach

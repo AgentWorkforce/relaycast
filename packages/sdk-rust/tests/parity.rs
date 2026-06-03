@@ -549,12 +549,12 @@ async fn client_sends_sanitized_harness_header() {
 }
 
 #[tokio::test]
-async fn client_sends_agent_relay_anonymous_id_header() {
+async fn client_sends_agent_relay_distinct_id_header() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/v1/channels"))
-        .and(header("x-agent-relay-anonymous-id", "abc123def4567890"))
+        .and(header("x-agent-relay-distinct-id", "abc123def4567890"))
         .respond_with(ok(json!([])))
         .expect(1)
         .mount(&server)
@@ -563,7 +563,7 @@ async fn client_sends_agent_relay_anonymous_id_header() {
     let relay = RelayCast::new(
         RelayCastOptions::new("rk_live_test")
             .with_base_url(server.uri())
-            .with_agent_relay_anonymous_id("abc123def4567890"),
+            .with_agent_relay_distinct_id("abc123def4567890"),
     )
     .expect("failed to create RelayCast client");
 
@@ -603,13 +603,13 @@ async fn client_preserves_harness_across_api_key_rotation() {
 }
 
 #[tokio::test]
-async fn client_preserves_agent_relay_anonymous_id_across_api_key_rotation() {
+async fn client_preserves_agent_relay_distinct_id_across_api_key_rotation() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/v1/channels"))
         .and(header("authorization", "Bearer at_live_rotated"))
-        .and(header("x-agent-relay-anonymous-id", "abc123def4567890"))
+        .and(header("x-agent-relay-distinct-id", "abc123def4567890"))
         .respond_with(ok(json!([])))
         .expect(1)
         .mount(&server)
@@ -618,7 +618,7 @@ async fn client_preserves_agent_relay_anonymous_id_across_api_key_rotation() {
     let client = HttpClient::new(
         ClientOptions::new("rk_live_test")
             .with_base_url(server.uri())
-            .with_agent_relay_anonymous_id("abc123def4567890"),
+            .with_agent_relay_distinct_id("abc123def4567890"),
     )
     .expect("failed to create HTTP client");
     let rotated = client
@@ -679,7 +679,7 @@ async fn ws_client_forwards_sanitized_harness_query_param() {
 }
 
 #[tokio::test]
-async fn ws_client_forwards_agent_relay_anonymous_id_query_param() {
+async fn ws_client_forwards_agent_relay_distinct_id_query_param() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test WS server");
     let addr = listener.local_addr().expect("failed to read listener addr");
     let (uri_tx, uri_rx) = mpsc::channel();
@@ -699,7 +699,7 @@ async fn ws_client_forwards_agent_relay_anonymous_id_query_param() {
     let mut ws = WsClient::new(
         WsClientOptions::new("at_live_test")
             .with_base_url(format!("http://{addr}"))
-            .with_agent_relay_anonymous_id("abc123def4567890"),
+            .with_agent_relay_distinct_id("abc123def4567890"),
     );
     ws.connect().await.expect("WS connect failed");
 
@@ -710,7 +710,7 @@ async fn ws_client_forwards_agent_relay_anonymous_id_query_param() {
     assert_eq!(url.path(), "/v1/ws");
     assert_eq!(
         url.query_pairs()
-            .find(|(key, _)| key == "agent_relay_anonymous_id")
+            .find(|(key, _)| key == "agent_relay_distinct_id")
             .map(|(_, value)| value.into_owned()),
         Some("abc123def4567890".to_string())
     );

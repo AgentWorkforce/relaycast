@@ -99,8 +99,8 @@ impl AgentClient {
         if let Some(harness) = self.client.harness() {
             options = options.with_harness(harness);
         }
-        if let Some(id) = self.client.agent_relay_anonymous_id() {
-            options = options.with_agent_relay_anonymous_id(id);
+        if let Some(id) = self.client.agent_relay_distinct_id() {
+            options = options.with_agent_relay_distinct_id(id);
         }
         let mut ws = WsClient::new(options);
         ws.connect().await?;

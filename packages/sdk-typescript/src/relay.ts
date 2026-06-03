@@ -82,7 +82,7 @@ import {
   type ResolvedIdentity,
 } from './identity.js';
 import { SDK_VERSION } from './version.js';
-import { AGENT_RELAY_ANONYMOUS_ID_HEADER, SDK_ORIGIN, sanitizeAgentRelayAnonymousId } from './origin.js';
+import { AGENT_RELAY_DISTINCT_ID_HEADER, SDK_ORIGIN, sanitizeAgentRelayDistinctId } from './origin.js';
 import { camelizeKeys } from './casing.js';
 
 export interface RelayCastOptions {
@@ -97,11 +97,11 @@ export interface RelayCastOptions {
    */
   harness?: string;
   /**
-   * Optional Agent Relay anonymous installation id. Sent as
-   * `X-Agent-Relay-Anonymous-Id` on HTTP requests so Relaycast telemetry can be
+   * Optional Agent Relay distinct telemetry id. Sent as
+   * `X-Agent-Relay-Distinct-Id` on HTTP requests so Relaycast telemetry can be
    * joined to Agent Relay CLI telemetry without sending user-identifying data.
    */
-  agentRelayAnonymousId?: string;
+  agentRelayDistinctId?: string;
 }
 
 export interface WorkspaceStreamConfig {
@@ -113,12 +113,12 @@ export interface WorkspaceStreamConfig {
 export interface WorkspaceBootstrapOptions {
   apiKey?: string;
   baseUrl?: string;
-  agentRelayAnonymousId?: string;
+  agentRelayDistinctId?: string;
 }
 
 export interface WorkspaceLookupOptions {
   baseUrl?: string;
-  agentRelayAnonymousId?: string;
+  agentRelayDistinctId?: string;
 }
 
 export interface AgentReconnectOptions {
@@ -180,10 +180,10 @@ export class RelayCast {
     name: string,
     options?: string | WorkspaceBootstrapOptions,
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
-    const { apiKey, baseUrl, agentRelayAnonymousId: rawAgentRelayAnonymousId } =
+    const { apiKey, baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
       resolveWorkspaceBootstrapOptions(options);
     const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
-    const agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(rawAgentRelayAnonymousId);
+    const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -195,7 +195,7 @@ export class RelayCast {
         'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
-        ...(agentRelayAnonymousId ? { [AGENT_RELAY_ANONYMOUS_ID_HEADER]: agentRelayAnonymousId } : {}),
+        ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),
       },
       body: JSON.stringify({ name }),
     });
@@ -234,10 +234,10 @@ export class RelayCast {
     name: string,
     options?: string | WorkspaceLookupOptions,
   ): Promise<WorkspaceLookup | null> {
-    const { baseUrl, agentRelayAnonymousId: rawAgentRelayAnonymousId } =
+    const { baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
       resolveWorkspaceLookupOptions(options);
     const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
-    const agentRelayAnonymousId = sanitizeAgentRelayAnonymousId(rawAgentRelayAnonymousId);
+    const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
 
     const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);
     const res = await fetch(url.toString(), {
@@ -248,7 +248,7 @@ export class RelayCast {
         'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
-        ...(agentRelayAnonymousId ? { [AGENT_RELAY_ANONYMOUS_ID_HEADER]: agentRelayAnonymousId } : {}),
+        ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),
       },
     });
 

@@ -29,9 +29,9 @@ pub struct RelayCastOptions {
     /// the `X-Relaycast-Harness` header so server-side telemetry can attribute
     /// traffic. Invalid values are dropped.
     pub harness: Option<String>,
-    /// Agent Relay anonymous installation id. Sent as
-    /// `X-Agent-Relay-Anonymous-Id` on HTTP requests; invalid values are dropped.
-    pub agent_relay_anonymous_id: Option<String>,
+    /// Agent Relay distinct telemetry id. Sent as
+    /// `X-Agent-Relay-Distinct-Id` on HTTP requests; invalid values are dropped.
+    pub agent_relay_distinct_id: Option<String>,
 }
 
 impl RelayCastOptions {
@@ -41,7 +41,7 @@ impl RelayCastOptions {
             api_key: api_key.into(),
             base_url: None,
             harness: None,
-            agent_relay_anonymous_id: None,
+            agent_relay_distinct_id: None,
         }
     }
 
@@ -57,9 +57,9 @@ impl RelayCastOptions {
         self
     }
 
-    /// Set Agent Relay's anonymous installation id.
-    pub fn with_agent_relay_anonymous_id(mut self, id: impl Into<String>) -> Self {
-        self.agent_relay_anonymous_id = Some(id.into());
+    /// Set Agent Relay's distinct telemetry id.
+    pub fn with_agent_relay_distinct_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_distinct_id = Some(id.into());
         self
     }
 }
@@ -88,8 +88,8 @@ impl RelayCast {
         if let Some(harness) = options.harness {
             client_options = client_options.with_harness(harness);
         }
-        if let Some(id) = options.agent_relay_anonymous_id {
-            client_options = client_options.with_agent_relay_anonymous_id(id);
+        if let Some(id) = options.agent_relay_distinct_id {
+            client_options = client_options.with_agent_relay_distinct_id(id);
         }
         let client = HttpClient::new(client_options)?;
         Ok(Self { client })

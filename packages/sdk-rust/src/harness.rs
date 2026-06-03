@@ -8,14 +8,14 @@
 
 /// HTTP header used to tell the relaycast server which harness drives a request.
 pub const HARNESS_HEADER: &str = "X-Relaycast-Harness";
-/// HTTP header used to forward Agent Relay's anonymous installation id.
-pub const AGENT_RELAY_ANONYMOUS_ID_HEADER: &str = "X-Agent-Relay-Anonymous-Id";
-/// WebSocket query param used to forward Agent Relay's anonymous installation id.
-pub const AGENT_RELAY_ANONYMOUS_ID_QUERY: &str = "agent_relay_anonymous_id";
+/// HTTP header used to forward Agent Relay's distinct telemetry id.
+pub const AGENT_RELAY_DISTINCT_ID_HEADER: &str = "X-Agent-Relay-Distinct-Id";
+/// WebSocket query param used to forward Agent Relay's distinct telemetry id.
+pub const AGENT_RELAY_DISTINCT_ID_QUERY: &str = "agent_relay_distinct_id";
 
 /// Upper bound on the harness value — generous enough for a UA-style token.
 const HARNESS_MAX_LENGTH: usize = 120;
-const AGENT_RELAY_ANONYMOUS_ID_MAX_LENGTH: usize = 128;
+const AGENT_RELAY_DISTINCT_ID_MAX_LENGTH: usize = 128;
 
 /// Characters permitted in a harness identifier. Deliberately broad enough for a
 /// User-Agent-style token (`name/version (model=...; setting)`) while excluding
@@ -28,7 +28,7 @@ fn is_allowed(c: char) -> bool {
         )
 }
 
-fn is_allowed_agent_relay_anonymous_id(c: char) -> bool {
+fn is_allowed_agent_relay_distinct_id(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-')
 }
 
@@ -55,24 +55,24 @@ pub fn sanitize_harness(raw: Option<impl AsRef<str>>) -> Option<String> {
     )
 }
 
-/// Normalize an Agent Relay anonymous installation id to the wire contract.
+/// Normalize an Agent Relay distinct telemetry id to the wire contract.
 ///
 /// Returns a trimmed, length-capped id, or `None` when the input is empty or
 /// contains disallowed characters. Unlike harness values, this preserves case
 /// because the id is an opaque token.
-pub fn sanitize_agent_relay_anonymous_id(raw: Option<impl AsRef<str>>) -> Option<String> {
+pub fn sanitize_agent_relay_distinct_id(raw: Option<impl AsRef<str>>) -> Option<String> {
     let raw = raw?;
     let trimmed = raw.as_ref().trim();
     if trimmed.is_empty() {
         return None;
     }
-    if !trimmed.chars().all(is_allowed_agent_relay_anonymous_id) {
+    if !trimmed.chars().all(is_allowed_agent_relay_distinct_id) {
         return None;
     }
     Some(
         trimmed
             .chars()
-            .take(AGENT_RELAY_ANONYMOUS_ID_MAX_LENGTH)
+            .take(AGENT_RELAY_DISTINCT_ID_MAX_LENGTH)
             .collect::<String>(),
     )
 }
@@ -117,29 +117,29 @@ mod tests {
     }
 
     #[test]
-    fn keeps_agent_relay_anonymous_id_without_lowercasing() {
+    fn keeps_agent_relay_distinct_id_without_lowercasing() {
         assert_eq!(
-            sanitize_agent_relay_anonymous_id(Some("  AgentRelay.abc_123:XYZ-9  ")),
+            sanitize_agent_relay_distinct_id(Some("  AgentRelay.abc_123:XYZ-9  ")),
             Some("AgentRelay.abc_123:XYZ-9".to_string())
         );
     }
 
     #[test]
-    fn drops_invalid_agent_relay_anonymous_ids() {
-        assert_eq!(sanitize_agent_relay_anonymous_id(Some("")), None);
-        assert_eq!(sanitize_agent_relay_anonymous_id(Some("   ")), None);
+    fn drops_invalid_agent_relay_distinct_ids() {
+        assert_eq!(sanitize_agent_relay_distinct_id(Some("")), None);
+        assert_eq!(sanitize_agent_relay_distinct_id(Some("   ")), None);
         assert_eq!(
-            sanitize_agent_relay_anonymous_id(Some("evil\r\nX-Inject: bad")),
+            sanitize_agent_relay_distinct_id(Some("evil\r\nX-Inject: bad")),
             None
         );
-        assert_eq!(sanitize_agent_relay_anonymous_id(Some("a/b")), None);
+        assert_eq!(sanitize_agent_relay_distinct_id(Some("a/b")), None);
     }
 
     #[test]
-    fn caps_agent_relay_anonymous_id_at_128_characters() {
+    fn caps_agent_relay_distinct_id_at_128_characters() {
         let long = "a".repeat(200);
         assert_eq!(
-            sanitize_agent_relay_anonymous_id(Some(&long)),
+            sanitize_agent_relay_distinct_id(Some(&long)),
             Some("a".repeat(128))
         );
     }

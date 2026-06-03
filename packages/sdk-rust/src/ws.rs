@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::error::{RelayError, Result};
 use crate::harness::{
-    sanitize_agent_relay_anonymous_id, sanitize_harness, AGENT_RELAY_ANONYMOUS_ID_QUERY,
+    sanitize_agent_relay_distinct_id, sanitize_harness, AGENT_RELAY_DISTINCT_ID_QUERY,
 };
 use crate::types::WsEvent;
 
@@ -41,9 +41,9 @@ pub struct WsClientOptions {
     /// User-Agent-style harness identifier, forwarded as the `harness` query
     /// param (browsers can't set custom WS headers). Invalid values are dropped.
     pub harness: Option<String>,
-    /// Agent Relay anonymous installation id, forwarded as the
-    /// `agent_relay_anonymous_id` query param. Invalid values are dropped.
-    pub agent_relay_anonymous_id: Option<String>,
+    /// Agent Relay distinct telemetry id, forwarded as the
+    /// `agent_relay_distinct_id` query param. Invalid values are dropped.
+    pub agent_relay_distinct_id: Option<String>,
     /// Maximum reconnect attempts before giving up (default: 10).
     pub max_reconnect_attempts: Option<u32>,
     /// Maximum reconnect delay in milliseconds (default: 30000).
@@ -61,7 +61,7 @@ impl WsClientOptions {
             origin_client: None,
             origin_version: None,
             harness: None,
-            agent_relay_anonymous_id: None,
+            agent_relay_distinct_id: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
         }
@@ -98,9 +98,9 @@ impl WsClientOptions {
         self
     }
 
-    /// Set Agent Relay's anonymous installation id for WebSocket handshakes.
-    pub fn with_agent_relay_anonymous_id(mut self, id: impl Into<String>) -> Self {
-        self.agent_relay_anonymous_id = Some(id.into());
+    /// Set Agent Relay's distinct telemetry id for WebSocket handshakes.
+    pub fn with_agent_relay_distinct_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_relay_distinct_id = Some(id.into());
         self
     }
 
@@ -142,7 +142,7 @@ pub struct WsClient {
     origin_client: String,
     origin_version: String,
     harness: Option<String>,
-    agent_relay_anonymous_id: Option<String>,
+    agent_relay_distinct_id: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
     event_tx: broadcast::Sender<WsEvent>,
@@ -185,8 +185,8 @@ impl WsClient {
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
             harness: sanitize_harness(options.harness),
-            agent_relay_anonymous_id: sanitize_agent_relay_anonymous_id(
-                options.agent_relay_anonymous_id,
+            agent_relay_distinct_id: sanitize_agent_relay_distinct_id(
+                options.agent_relay_distinct_id,
             ),
             max_reconnect_attempts: options
                 .max_reconnect_attempts
@@ -244,8 +244,8 @@ impl WsClient {
             if let Some(ref harness) = self.harness {
                 query.append_pair("harness", harness);
             }
-            if let Some(ref id) = self.agent_relay_anonymous_id {
-                query.append_pair(AGENT_RELAY_ANONYMOUS_ID_QUERY, id);
+            if let Some(ref id) = self.agent_relay_distinct_id {
+                query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
             }
         }
 
@@ -265,7 +265,7 @@ impl WsClient {
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
         let harness = self.harness.clone();
-        let agent_relay_anonymous_id = self.agent_relay_anonymous_id.clone();
+        let agent_relay_distinct_id = self.agent_relay_distinct_id.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
 
@@ -300,8 +300,8 @@ impl WsClient {
                         if let Some(ref harness) = harness {
                             query.append_pair("harness", harness);
                         }
-                        if let Some(ref id) = agent_relay_anonymous_id {
-                            query.append_pair(AGENT_RELAY_ANONYMOUS_ID_QUERY, id);
+                        if let Some(ref id) = agent_relay_distinct_id {
+                            query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
                         }
                     }
 
