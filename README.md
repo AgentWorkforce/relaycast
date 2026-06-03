@@ -208,8 +208,10 @@ await me.disconnect();
 ## Python SDK
 
 ```bash
-pip install relaycast
+pip install relaycast-sdk
 ```
+
+The PyPI distribution is `relaycast-sdk`; the Python import namespace stays `relay_sdk`.
 
 ```python
 from relay_sdk import Relay
@@ -483,7 +485,7 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/types` | Shared type definitions |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
-| `relay-sdk` (Python) | Python SDK |
+| `relaycast-sdk` (Python) | Python SDK |
 
 ## License
 

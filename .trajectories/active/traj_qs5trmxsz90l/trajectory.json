@@ -31,6 +31,30 @@
             "reasoning": "PR adds Rust harness support but only covered HTTP constructor stamping; API-key rotation and WebSocket query propagation are explicit contract claims and needed local regression coverage."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1780484799848,
+          "type": "decision",
+          "content": "Review scope starts from .workforce/pr.diff and traces Python SDK publishing/package-name impacts: Review scope starts from .workforce/pr.diff and traces Python SDK publishing/package-name impacts",
+          "raw": {
+            "question": "Review scope starts from .workforce/pr.diff and traces Python SDK publishing/package-name impacts",
+            "chosen": "Review scope starts from .workforce/pr.diff and traces Python SDK publishing/package-name impacts",
+            "alternatives": [],
+            "reasoning": "PR changes are confined to Python SDK distribution metadata, docs, lockfile, and a new GitHub Actions workflow."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1780484881856,
+          "type": "decision",
+          "content": "Stage uv.lock in Python SDK publish commits: Stage uv.lock in Python SDK publish commits",
+          "raw": {
+            "question": "Stage uv.lock in Python SDK publish commits",
+            "chosen": "Stage uv.lock in Python SDK publish commits",
+            "alternatives": [],
+            "reasoning": "The workflow changes pyproject.toml version before uv sync; uv.lock must be refreshed and committed so release tags do not leave the Python SDK lockfile at the previous version."
+          },
+          "significance": "high"
         }
       ]
     }

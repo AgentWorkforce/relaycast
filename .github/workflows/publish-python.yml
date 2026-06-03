@@ -1,0 +1,222 @@
+name: Publish Python SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+      custom_version:
+        description: "Custom version (optional, overrides version type)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (do not actually publish)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-python-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, Test & Publish sdk-python
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-python
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Determine and set version
+        id: bump
+        shell: bash
+        env:
+          # Bind inputs through env so free-form custom_version is never
+          # interpolated into the shell script body.
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          VERSION_TYPE: ${{ github.event.inputs.version }}
+        run: |
+          PYPROJECT="pyproject.toml"
+          CLIENT="src/relay_sdk/client.py"
+
+          CURRENT_VERSION=$(awk -F '"' '/^version = / { print $2; exit }' "$PYPROJECT")
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "Unable to read current version from $PYPROJECT"
+            exit 1
+          fi
+          echo "Current version: $CURRENT_VERSION"
+
+          bump_semver() {
+            local current="$1"
+            local kind="$2"
+
+            # PEP 440 release with optional beta prerelease: MAJOR.MINOR.PATCH[bN]
+            if [[ ! "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(b([0-9]+))?$ ]]; then
+              echo "Invalid version (expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCHbN): $current" >&2
+              return 1
+            fi
+
+            local major="${BASH_REMATCH[1]}"
+            local minor="${BASH_REMATCH[2]}"
+            local patch="${BASH_REMATCH[3]}"
+            local pre_num="${BASH_REMATCH[5]}"
+
+            case "$kind" in
+              patch)
+                patch=$((patch + 1)); pre_num="" ;;
+              minor)
+                minor=$((minor + 1)); patch=0; pre_num="" ;;
+              major)
+                major=$((major + 1)); minor=0; patch=0; pre_num="" ;;
+              prepatch)
+                patch=$((patch + 1)); pre_num="0" ;;
+              preminor)
+                minor=$((minor + 1)); patch=0; pre_num="0" ;;
+              premajor)
+                major=$((major + 1)); minor=0; patch=0; pre_num="0" ;;
+              prerelease)
+                if [[ -n "$pre_num" ]]; then
+                  pre_num=$((pre_num + 1))
+                else
+                  patch=$((patch + 1)); pre_num="0"
+                fi
+                ;;
+              *)
+                echo "Unsupported version bump type: $kind" >&2
+                return 1 ;;
+            esac
+
+            # PEP 440 prerelease marker: beta segment is "bN".
+            if [ -n "$pre_num" ]; then
+              echo "${major}.${minor}.${patch}b${pre_num}"
+            else
+              echo "${major}.${minor}.${patch}"
+            fi
+          }
+
+          if [ -n "$CUSTOM_VERSION" ]; then
+            if [[ ! "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(b[0-9]+)?$ ]]; then
+              echo "Invalid custom_version (must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCHbN): $CUSTOM_VERSION"
+              exit 1
+            fi
+            NEW_VERSION="$CUSTOM_VERSION"
+            echo "Using custom version: $NEW_VERSION"
+          else
+            NEW_VERSION=$(bump_semver "$CURRENT_VERSION" "$VERSION_TYPE")
+            echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
+          fi
+
+          # Update pyproject.toml [project] version (first match only).
+          awk -v v="$NEW_VERSION" '
+            !done && /^version = / { print "version = \"" v "\""; done=1; next }
+            { print }
+            END { if (!done) { print "Failed to update version in pyproject.toml" > "/dev/stderr"; exit 1 } }
+          ' "$PYPROJECT" > "$PYPROJECT.tmp" && mv "$PYPROJECT.tmp" "$PYPROJECT"
+
+          # Keep the SDK_VERSION constant in lockstep with the package version.
+          awk -v v="$NEW_VERSION" '
+            !done && /^SDK_VERSION = / { print "SDK_VERSION = \"" v "\""; done=1; next }
+            { print }
+            END { if (!done) { print "Failed to update SDK_VERSION in client.py" > "/dev/stderr"; exit 1 } }
+          ' "$CLIENT" > "$CLIENT.tmp" && mv "$CLIENT.tmp" "$CLIENT"
+
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION"
+
+      - name: Install dependencies
+        run: |
+          uv lock
+          uv sync --all-extras --locked
+
+      - name: Run tests
+        run: uv run python -m pytest
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
+      - name: Publish to PyPI
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/sdk-python/dist
+
+      - name: Commit and tag
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
+        working-directory: ${{ github.workspace }}
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add packages/sdk-python/pyproject.toml packages/sdk-python/uv.lock packages/sdk-python/src/relay_sdk/client.py
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(sdk-python): v${NEW_VERSION}"
+            git push origin HEAD:main
+          fi
+
+          git tag -a "sdk-python-v${NEW_VERSION}" -m "sdk-python v${NEW_VERSION}"
+          git push origin "sdk-python-v${NEW_VERSION}"
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: sdk-python-v${{ steps.bump.outputs.new_version }}
+          name: sdk-python-v${{ steps.bump.outputs.new_version }}
+          body: |
+            ## Python SDK v${{ steps.bump.outputs.new_version }}
+
+            ### Install
+            ```bash
+            pip install relaycast-sdk==${{ steps.bump.outputs.new_version }}
+            ```
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Python SDK Publish Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version**: \`${{ steps.bump.outputs.new_version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Dry Run**: \`${{ github.event.inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Dry run completed. Built and checked dist, but did not publish or tag." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "Build and checks completed on a non-main ref; publish, tag, and release were skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Published to PyPI and created tag \`sdk-python-v${{ steps.bump.outputs.new_version }}\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
