@@ -29,6 +29,13 @@ function harnessHeaderFromLastCall(): string | undefined {
 }
 
 describe('sanitizeHarness', () => {
+  it('is available from the package root', async () => {
+    const sdk = await import('../index.js');
+
+    expect(sdk.HARNESS_HEADER).toBe('X-Relaycast-Harness');
+    expect(sdk.sanitizeHarness('Codex')).toBe('codex');
+  });
+
   it('keeps a UA-style token, lowercased', () => {
     expect(sanitizeHarness('Claude-Code/2.3 (model=Opus-4.8; fast)')).toBe(
       'claude-code/2.3 (model=opus-4.8; fast)',
