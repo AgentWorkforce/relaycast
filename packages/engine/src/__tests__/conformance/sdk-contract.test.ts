@@ -203,7 +203,12 @@ describe('SDK v8 service contract', () => {
       body: JSON.stringify({
         events: ['message.created'],
         url: 'https://example.test/relay',
-        headers: { Authorization: 'Bearer downstream' },
+        headers: {
+          Authorization: 'Bearer downstream',
+          'Content-Type': 'text/plain',
+          'x-relay-event': 'spoofed',
+          'X-Relay-Timestamp': 'spoofed',
+        },
         secret: 'shared-secret',
       }),
     });
@@ -216,7 +221,10 @@ describe('SDK v8 service contract', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Bearer downstream');
+    expect(headers['Content-Type']).toBe('application/json');
     expect(headers['X-Relay-Event']).toBe('message.created');
+    expect(headers['x-relay-event']).toBeUndefined();
+    expect(headers['X-Relay-Timestamp']).not.toBe('spoofed');
     expect(headers['X-Relay-Signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 

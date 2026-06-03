@@ -27,6 +27,16 @@ export interface EventDeliverySummary {
   retryableFailures: number;
 }
 
+function publicDeliveryHeaders(headers: Record<string, string> | null): Record<string, string> {
+  if (!headers) return {};
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => {
+      const lower = name.toLowerCase();
+      return lower !== 'content-type' && !lower.startsWith('x-relay-');
+    }),
+  );
+}
+
 function matchesFilter(
   filter: { channel?: string; mentions?: string } | null,
   payload: Record<string, unknown>,
@@ -126,7 +136,7 @@ export async function deliverEvent(
   const deliveryResults = await Promise.all(
     filteredSubscriptions.map(async (sub) => {
       const headers: Record<string, string> = {
-        ...(sub.headers ?? {}),
+        ...publicDeliveryHeaders(sub.headers),
         'Content-Type': 'application/json',
         'X-Relay-Event': eventType,
         'X-Relay-Timestamp': timestamp,
