@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast, RelayError } from '@relaycast/sdk';
-import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
+import {
+  resolveRelayServerCandidatesFromRequest,
+  selectEngineForKey,
+} from '../../../../lib/relay-server';
 
 export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
+const ENGINE_COOKIE_NAME = 'relaycast_engine';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 /**
  * POST /api/auth/login
- * Validates the API key and sets httpOnly cookies.
- * WebSocket stream authenticates directly with workspace key.
+ * Validates the API key against the candidate engines (gateway first, api
+ * fallback), remembers the resolved engine, and sets httpOnly cookies.
+ * WebSocket stream authenticates directly with the workspace key.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -25,19 +30,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Always validate against the server-configured relay URL (prevents SSRF)
-    const relayServer = resolveRelayServerUrlFromRequest(request);
-    const relay = new RelayCast({ apiKey, baseUrl: relayServer });
+    // Always probe the server-configured candidates (prevents SSRF). The first
+    // engine that accepts the key wins; gateway is tried before legacy api.
+    const candidates = resolveRelayServerCandidatesFromRequest(request);
+    const { baseUrl: relayServer } = await selectEngineForKey(candidates, apiKey);
 
-    // Validate key by fetching workspace
-    try {
-      await relay.workspace.info();
-    } catch {
+    if (!relayServer) {
       return NextResponse.json(
         { success: false, error: 'Invalid API key' },
         { status: 401 }
       );
     }
+
+    const relay = new RelayCast({ apiKey, baseUrl: relayServer });
 
     // Enable workspace stream for this workspace so observer dashboard
     // receives realtime event fanout.
@@ -60,24 +65,23 @@ export async function POST(request: NextRequest) {
     }
 
     const cookieStore = await cookies();
-
-    cookieStore.set(COOKIE_NAME, apiKey, {
+    const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'lax' as const,
       path: '/',
       maxAge: COOKIE_MAX_AGE,
-    });
+    };
+
+    cookieStore.set(COOKIE_NAME, apiKey, cookieOptions);
 
     // Agent cookie remains for compatibility with existing client shape.
     // Workspace keys are accepted by read-only endpoints used in dashboard.
-    cookieStore.set(AGENT_COOKIE_NAME, apiKey, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: COOKIE_MAX_AGE,
-    });
+    cookieStore.set(AGENT_COOKIE_NAME, apiKey, cookieOptions);
+
+    // Remember the resolved engine so session/check/logout target it directly
+    // without re-probing both engines on every request.
+    cookieStore.set(ENGINE_COOKIE_NAME, relayServer, cookieOptions);
 
     return NextResponse.json({
       success: true,

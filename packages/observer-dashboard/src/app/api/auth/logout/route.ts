@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { RelayCast, RelayError } from '@relaycast/sdk';
-import { resolveRelayServerUrlFromRequest } from '../../../../lib/relay-server';
+import {
+  orderByRemembered,
+  pickRememberedEngine,
+  resolveRelayServerCandidatesFromRequest,
+  selectEngineForKey,
+} from '../../../../lib/relay-server';
 
 export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
+const ENGINE_COOKIE_NAME = 'relaycast_engine';
 
 /**
  * POST /api/auth/logout
@@ -17,7 +23,17 @@ export async function POST(request: NextRequest) {
   const apiKey = cookieStore.get(COOKIE_NAME)?.value;
 
   if (apiKey?.startsWith('rk_live_')) {
-    const relayServer = resolveRelayServerUrlFromRequest(request);
+    const candidates = resolveRelayServerCandidatesFromRequest(request);
+    const remembered = pickRememberedEngine(
+      cookieStore.get(ENGINE_COOKIE_NAME)?.value,
+      candidates
+    );
+    // Disable the stream on the engine the workspace actually lives on.
+    const { baseUrl } = await selectEngineForKey(
+      orderByRemembered(candidates, remembered),
+      apiKey
+    );
+    const relayServer = baseUrl ?? remembered ?? candidates[0]!;
     const relay = new RelayCast({ apiKey, baseUrl: relayServer });
     try {
       await relay.workspace.stream.set(false);
@@ -39,5 +55,6 @@ export async function POST(request: NextRequest) {
 
   cookieStore.delete(COOKIE_NAME);
   cookieStore.delete(AGENT_COOKIE_NAME);
+  cookieStore.delete(ENGINE_COOKIE_NAME);
   return NextResponse.json({ success: true });
 }
