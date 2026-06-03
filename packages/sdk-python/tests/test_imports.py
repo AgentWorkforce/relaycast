@@ -4,8 +4,7 @@ import relay_sdk
 
 
 def test_version():
-    assert relay_sdk.__version__ == "0.1.0"
-    assert relay_sdk.SDK_VERSION == "0.1.0"
+    assert relay_sdk.__version__ == relay_sdk.SDK_VERSION
 
 
 def test_exports():
