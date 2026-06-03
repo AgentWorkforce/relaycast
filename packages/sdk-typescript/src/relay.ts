@@ -318,9 +318,7 @@ export class RelayCast {
     }
 
     emitCompatibilityTelemetry('agents.registerAgent.legacy_suffix', {
-      requested_name: typeof (data as { name?: unknown }).name === 'string'
-        ? (data as { name: string }).name
-        : '',
+      requested_name: data.name,
     });
     return this.registerWithLegacySuffix(request);
   }

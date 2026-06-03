@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
+import { AgentTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -23,11 +24,10 @@ const skillSchema = z.object({
 });
 
 const capabilitiesSchema = z.record(z.string(), z.unknown());
-const agentTypeSchema = z.enum(['agent', 'human', 'system']);
 
 const registerAgentSchema = z.object({
   name: z.string().min(1),
-  type: agentTypeSchema.optional(),
+  type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   skills: z.array(skillSchema).optional(),

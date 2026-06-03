@@ -32,23 +32,6 @@ type Db = ReturnType<typeof getDb>;
 const RETRY_DELAYS_MS = [250, 750] as const;
 const DEFAULT_WEBHOOK_BASE_PATH = '/a2a/webhook';
 
-type RelayA2aPart =
-  | { kind: 'text'; text: string }
-  | {
-      kind: 'file';
-      file: {
-        name: string;
-        mime_type?: string;
-        uri?: string;
-        bytes?: number;
-      };
-    }
-  | { kind: 'data'; data: Record<string, unknown> };
-
-type RelayA2aArtifact = {
-  parts?: unknown;
-};
-
 const RelayFileAttachmentSchema = z.object({
   file_id: z.string(),
   filename: z.string(),
@@ -184,11 +167,7 @@ export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard
   return A2aAgentCardSchema.parse(payload);
 }
 
-function asRelayA2aParts(parts: unknown): RelayA2aPart[] {
-  return Array.isArray(parts) ? (parts as RelayA2aPart[]) : [];
-}
-
-function extractTextFromParts(parts: RelayA2aPart[]): string {
+function extractTextFromParts(parts: A2aPart[]): string {
   return parts
     .map((part) => {
       if (part.kind === 'text') return part.text;
@@ -199,7 +178,7 @@ function extractTextFromParts(parts: RelayA2aPart[]): string {
     .trim();
 }
 
-function extractAttachmentsFromParts(parts: RelayA2aPart[]): FileAttachment[] {
+function extractAttachmentsFromParts(parts: A2aPart[]): FileAttachment[] {
   const attachments: FileAttachment[] = [];
 
   for (const part of parts) {
@@ -508,25 +487,20 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
 
   if (parsedRequest.success && parsedRequest.data.params?.message) {
     const message = parsedRequest.data.params.message;
-    const parts = asRelayA2aParts(message.parts);
     return {
       id: String(parsedRequest.data.id ?? message.message_id),
       agent_id: 'external',
       agent_name: 'external',
-      text: extractTextFromParts(parts),
+      text: extractTextFromParts(message.parts),
       thread_id: message.context_id ?? null,
-      attachments: extractAttachmentsFromParts(parts),
+      attachments: extractAttachmentsFromParts(message.parts),
     };
   }
 
   const parsedResponse = JsonRpcResponseSchema.parse(jsonRpc);
   const task = parsedResponse.result?.task;
   const responseMessage = parsedResponse.result?.message ?? task?.history?.at(-1);
-  const parts = asRelayA2aParts(
-    responseMessage?.parts
-    ?? (task?.artifacts as RelayA2aArtifact[] | undefined)?.flatMap((artifact) => asRelayA2aParts(artifact.parts))
-    ?? [],
-  );
+  const parts = responseMessage?.parts ?? task?.artifacts?.flatMap((artifact) => artifact.parts) ?? [];
 
   return {
     id: String(parsedResponse.id ?? task?.id ?? randomUuid()),

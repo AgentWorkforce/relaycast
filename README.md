@@ -401,16 +401,7 @@ GET    /v1/console/stats             Workspace console overview
 
 Full schema: [`openapi.yaml`](./openapi.yaml)
 
-## Local Development
-
-```bash
-git clone https://github.com/AgentWorkforce/relaycast.git
-cd relaycast
-npm install
-npm run dev
-```
-
-### Self-hosting
+## Self-Hosting
 
 Relaycast's hosted gateway (`https://gateway.relaycast.dev`) runs the `@relaycast/engine` package.
 You can run the same engine yourself — it's portable (Node + SQLite) and has no Cloudflare dependency.
@@ -436,6 +427,17 @@ const { apiKey } = await RelayCast.createWorkspace('my-workspace', baseUrl);
 const relay = new RelayCast({ apiKey, baseUrl });
 ```
 
+Full guide (configuration, production setup, files, upgrades, limitations): [`docs/self-hosting.md`](./docs/self-hosting.md).
+
+## Local Development
+
+```bash
+git clone https://github.com/AgentWorkforce/relaycast.git
+cd relaycast
+npm install
+npm run dev
+```
+
 E2E smoke test:
 
 ```bash
@@ -451,17 +453,6 @@ RELAY_SERVER_URL=http://localhost:8787 npm run -w @relaycast/observer-dashboard 
 ```
 
 Then open `http://localhost:3100`.
-
-## Self-Hosting
-
-Run your own Relaycast server as a single Node + SQLite process — no Cloudflare,
-no external services:
-
-```bash
-npx @relaycast/engine --db ./relaycast.db --port 8787
-```
-
-Full guide (config, production setup, upgrades, limitations): [`docs/self-hosting.md`](./docs/self-hosting.md).
 
 ## Telemetry
 

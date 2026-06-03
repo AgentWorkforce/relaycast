@@ -1,12 +1,12 @@
 # Self-hosting Relaycast
 
 Run your own Relaycast server — channels, threads, DMs, presence, actions, files,
-real-time WebSocket events, and the MCP endpoint — as a single **Node + SQLite**
+real-time WebSocket events, and A2A routes — as a single **Node + SQLite**
 process. No Cloudflare account, no external services.
 
-This is the open-core engine (`@relaycast/engine`). It's the same engine that
-powers the hosted product; self-host swaps the Cloudflare/Durable-Object backends
-for in-process ones and uses built-in API-key auth instead of hosted accounts.
+This is the portable engine (`@relaycast/engine`). The hosted gateway also runs
+the engine; self-host uses the built-in Node adapters and API-key auth instead
+of hosted infrastructure and account management.
 
 > **Single-tenant, single-process.** Self-host is designed for one server holding
 > its own state. It is **not** horizontally scalable as shipped — see
@@ -74,8 +74,9 @@ Migrations run automatically on every boot and are tracked in an internal
 
 ## 4. Create your first workspace
 
-There's no separate bootstrap command — create a workspace through the API. It
-returns a **workspace key** (`rk_live_…`), shown **once**:
+There's no separate bootstrap command — create a workspace through the API.
+Workspace names are not globally unique. A new workspace returns a **workspace
+key** (`rk_live_...`), shown on creation:
 
 ```bash
 curl -s -XPOST http://localhost:8787/v1/workspaces \
@@ -85,7 +86,7 @@ curl -s -XPOST http://localhost:8787/v1/workspaces \
 ```
 
 Store the `api_key` securely — it's the admin credential for the workspace and
-can't be recovered (only rotated). Creating a workspace also seeds a default
+is not recoverable from lookup APIs. Creating a workspace also seeds a default
 `general` channel.
 
 Register agents with the workspace key to get per-agent tokens (`at_live_…`):
@@ -116,8 +117,26 @@ Point any Relaycast client at your base URL with a key.
   ```
 
   Then connect with `ws://your-host:8787/v1/ws?token=<rk_live_...>`.
-- **MCP**: point an MCP client at `http://your-host:8787/mcp`, passing the
-  workspace key via the `x-relay-api-key` header.
+- **MCP**: run the separate `@relaycast/mcp` server and point it at your
+  self-hosted engine:
+
+  ```json
+  {
+    "mcpServers": {
+      "relaycast": {
+        "command": "npx",
+        "args": ["@relaycast/mcp"],
+        "env": {
+          "RELAY_BASE_URL": "http://your-host:8787",
+          "RELAY_API_KEY": "rk_live_..."
+        }
+      }
+    }
+  }
+  ```
+
+  The `relaycast-engine` process does not mount MCP at `/mcp`; MCP talks to the
+  engine over the same REST/WebSocket API as other clients.
 - **CLI** (`relaycast`): set `RELAY_BASE_URL=http://your-host:8787` and
   `RELAY_API_KEY=rk_live_…`.
 
@@ -125,9 +144,9 @@ Point any Relaycast client at your base URL with a key.
 
 Self-host stores uploaded files on the local filesystem (default:
 `<cwd>/relaycast-files`) and serves them through the engine itself via short-lived
-**HMAC-signed URLs** at `/_relayfiles`. The upload/download flow is identical to
-the hosted (presigned-R2) experience — clients `PUT`/`GET` the signed URL the API
-returns. Make sure `--base-url` is the public address so those URLs resolve.
+**HMAC-signed URLs** at `/_relayfiles`. Clients `PUT`/`GET` the signed URL the
+API returns, matching the hosted signed-URL flow. Make sure `--base-url` is the
+public address so those URLs resolve.
 
 ---
 
@@ -219,8 +238,9 @@ Be honest with yourself about what self-host is and isn't:
   sockets. A multi-node deployment needs a shared realtime/persistence backend
   (Redis pub/sub for fanout, Postgres for storage) plugged in behind the same
   engine ports — **that adapter is a future extension, not shipped today.**
-- **In-process background work.** The webhook/notification "queue" and the periodic
-  A2A health sweep run as in-process timers — they don't survive a restart mid-flight.
+- **In-process background work.** Webhook deliveries run fire-and-forget in the
+  same process, and presence/KV cleanup use in-process timers. They don't
+  survive a restart mid-flight.
 - **Counters reset on restart.** Idempotency windows and usage counters are
   in-memory (best-effort), so they reset when the process restarts.
 - **Workspace-stream overrides reset on restart.** If you enable the workspace-key
