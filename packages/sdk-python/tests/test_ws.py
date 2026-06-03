@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import relay_sdk
 from relay_sdk.ws import WsClient
 
 
@@ -154,7 +155,7 @@ class TestWsClientOriginParams:
         assert "token=at_xxx" in url
         assert "origin_surface=sdk" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
-        assert "origin_version=0.1.0" in url
+        assert f"origin_version={relay_sdk.SDK_VERSION}" in url
 
     @pytest.mark.asyncio
     async def test_connect_url_includes_agent_relay_distinct_id_query_param(self):
