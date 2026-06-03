@@ -1091,13 +1091,13 @@ pub enum WsEvent {
     #[serde(rename = "thread.reply")]
     ThreadReply(ThreadReplyEvent),
     #[serde(rename = "message.reacted")]
-    ReactionAdded(ReactionAddedEvent),
+    MessageReacted(MessageReactedEvent),
     #[serde(rename = "dm.received")]
     DmReceived(DmReceivedEvent),
     #[serde(rename = "group_dm.received")]
     GroupDmReceived(GroupDmReceivedEvent),
     #[serde(rename = "agent.status.active")]
-    AgentOnline(AgentOnlineEvent),
+    AgentStatusActive(AgentStatusEvent),
     #[serde(rename = "agent.status.idle")]
     AgentStatusIdle(AgentStatusEvent),
     #[serde(rename = "agent.status.blocked")]
@@ -1105,7 +1105,7 @@ pub enum WsEvent {
     #[serde(rename = "agent.status.waiting")]
     AgentStatusWaiting(AgentStatusEvent),
     #[serde(rename = "agent.status.offline")]
-    AgentOffline(AgentOfflineEvent),
+    AgentStatusOffline(AgentStatusEvent),
     #[serde(rename = "agent.status.changed")]
     AgentStatusChanged(AgentStatusEvent),
     #[serde(rename = "agent.spawn_requested")]
@@ -1181,9 +1181,6 @@ pub struct MessageReactedEvent {
     pub action: Option<String>,
 }
 
-pub type ReactionAddedEvent = MessageReactedEvent;
-pub type ReactionRemovedEvent = MessageReactedEvent;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmReceivedEvent {
     pub conversation_id: String,
@@ -1201,9 +1198,6 @@ pub struct AgentStatusEvent {
     pub agent: AgentEventPayload,
     pub status: String,
 }
-
-pub type AgentOnlineEvent = AgentStatusEvent;
-pub type AgentOfflineEvent = AgentStatusEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpawnRequestedEvent {

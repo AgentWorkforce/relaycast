@@ -4,8 +4,7 @@ from pydantic import ValidationError
 from relay_sdk.models import (
     Agent,
     AgentListQuery,
-    AgentOfflineEvent,
-    AgentOnlineEvent,
+    AgentStatusEvent,
     ApiError,
     ApiSuccess,
     Channel,
@@ -21,13 +20,12 @@ from relay_sdk.models import (
     InboxMention,
     InboxResponse,
     MessageCreatedEvent,
+    MessageReactedEvent,
     MessageReadEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
     PongEvent,
-    ReactionAddedEvent,
     ReactionGroup,
-    ReactionRemovedEvent,
     ThreadReplyEvent,
     ThreadResponse,
     UnreadChannel,
@@ -340,20 +338,22 @@ def test_ws_thread_reply_event_model():
     assert ev.parent_id == "m_parent"
 
 
-def test_ws_reaction_added_event_model():
-    ev = ReactionAddedEvent.model_validate(
+def test_ws_message_reacted_added_event_model():
+    ev = MessageReactedEvent.model_validate(
         {"type": "message.reacted", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha", "action": "added"}
     )
     assert ev.type == "message.reacted"
     assert ev.emoji == ":+1:"
+    assert ev.action == "added"
 
 
-def test_ws_reaction_removed_event_model():
-    ev = ReactionRemovedEvent.model_validate(
+def test_ws_message_reacted_removed_event_model():
+    ev = MessageReactedEvent.model_validate(
         {"type": "message.reacted", "message_id": "m_1", "emoji": ":+1:", "agent_name": "Alpha", "action": "removed"}
     )
     assert ev.type == "message.reacted"
     assert ev.message_id == "m_1"
+    assert ev.action == "removed"
 
 
 def test_ws_dm_received_event_model():
@@ -376,14 +376,14 @@ def test_ws_group_dm_received_event_model():
     assert ev.conversation_id == "dm_g1"
 
 
-def test_ws_agent_online_event_model():
-    ev = AgentOnlineEvent.model_validate({"type": "agent.status.active", "agent": {"name": "Alpha"}, "status": "active"})
+def test_ws_agent_status_active_event_model():
+    ev = AgentStatusEvent.model_validate({"type": "agent.status.active", "agent": {"name": "Alpha"}, "status": "active"})
     assert ev.type == "agent.status.active"
     assert ev.agent.name == "Alpha"
 
 
-def test_ws_agent_offline_event_model():
-    ev = AgentOfflineEvent.model_validate({"type": "agent.status.offline", "agent": {"name": "Alpha"}, "status": "offline"})
+def test_ws_agent_status_offline_event_model():
+    ev = AgentStatusEvent.model_validate({"type": "agent.status.offline", "agent": {"name": "Alpha"}, "status": "offline"})
     assert ev.type == "agent.status.offline"
     assert ev.agent.name == "Alpha"
 

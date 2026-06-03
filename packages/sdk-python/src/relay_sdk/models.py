@@ -425,10 +425,6 @@ class MessageReactedEvent(BaseModel):
     action: Literal["added", "removed"] | None = None
 
 
-ReactionAddedEvent = MessageReactedEvent
-ReactionRemovedEvent = MessageReactedEvent
-
-
 class DmReceivedEvent(BaseModel):
     type: Literal["dm.received"]
     conversation_id: str
@@ -452,10 +448,6 @@ class AgentStatusEvent(BaseModel):
     ]
     agent: AgentEventPayload
     status: Literal["active", "idle", "blocked", "waiting", "offline"]
-
-
-AgentOnlineEvent = AgentStatusEvent
-AgentOfflineEvent = AgentStatusEvent
 
 
 class ChannelCreatedEvent(BaseModel):

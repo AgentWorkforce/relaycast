@@ -190,14 +190,14 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
-  it('on.reactionAdded fires with message.reacted event', () => {
+  it('on.messageReacted fires with message.reacted event', () => {
     const agent = createAgent();
     agent.connect();
     const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
     const handler = vi.fn();
-    agent.on.reactionAdded(handler);
+    agent.on.messageReacted(handler);
 
     ws.simulateMessage({
       type: 'message.reacted',

@@ -158,11 +158,11 @@ while let Ok(event) = events.recv().await {
         WsEvent::MessageCreated(e) => {
             println!("New message: {}", e.message.text);
         }
-        WsEvent::ReactionAdded(e) => {
+        WsEvent::MessageReacted(e) => {
             println!("Reaction: {} on {}", e.emoji, e.message_id);
         }
-        WsEvent::AgentOnline(e) => {
-            println!("Agent online: {}", e.agent.name);
+        WsEvent::AgentStatusActive(e) => {
+            println!("Agent active: {}", e.agent.name);
         }
         _ => {}
     }

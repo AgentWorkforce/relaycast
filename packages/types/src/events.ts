@@ -66,12 +66,6 @@ export const MessageReactedEventSchema = z.object({
 });
 export type MessageReactedEvent = z.infer<typeof MessageReactedEventSchema>;
 
-export const ReactionAddedEventSchema = MessageReactedEventSchema;
-export type ReactionAddedEvent = MessageReactedEvent;
-
-export const ReactionRemovedEventSchema = MessageReactedEventSchema;
-export type ReactionRemovedEvent = MessageReactedEvent;
-
 export const DmReceivedEventSchema = z.object({
   id: z.string().uuid(),
   type: z.literal('dm.received'),
@@ -137,12 +131,6 @@ export type AgentStatusEvent =
   | AgentStatusWaitingEvent
   | AgentStatusOfflineEvent
   | AgentStatusChangedEvent;
-
-export const AgentOnlineEventSchema = AgentStatusActiveEventSchema;
-export type AgentOnlineEvent = AgentStatusActiveEvent;
-
-export const AgentOfflineEventSchema = AgentStatusOfflineEventSchema;
-export type AgentOfflineEvent = AgentStatusOfflineEvent;
 
 export const AgentSpawnRequestedEventSchema = z.object({
   type: z.literal('agent.spawn_requested'),

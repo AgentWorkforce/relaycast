@@ -54,7 +54,7 @@
 //!             WsEvent::MessageCreated(e) => {
 //!                 println!("New message: {}", e.message.text);
 //!             }
-//!             WsEvent::AgentOnline(e) => {
+//!             WsEvent::AgentStatusActive(e) => {
 //!                 println!("Agent active: {}", e.agent.name);
 //!             }
 //!             _ => {}
@@ -163,8 +163,6 @@ pub use types::{
     // Commands
     AgentCommand,
     AgentListQuery,
-    AgentOfflineEvent,
-    AgentOnlineEvent,
     AgentPresenceInfo,
     AgentStatusEvent,
     // Channels
@@ -239,10 +237,8 @@ pub use types::{
     MessageUpdatedEvent,
     MessageWithMeta,
     PostMessageRequest,
-    ReactionAddedEvent,
     // Reactions
     ReactionGroup,
-    ReactionRemovedEvent,
     ReaderInfo,
     RegisterActionRequest,
     ReleaseAgentRequest,

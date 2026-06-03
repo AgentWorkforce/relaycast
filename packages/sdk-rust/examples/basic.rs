@@ -98,13 +98,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             WsEvent::MessageCreated(e) => {
                 println!("📨 New message in #{}: {}", e.channel, e.message.text);
             }
-            WsEvent::ReactionAdded(e) => {
-                println!("👍 Reaction added: {} on message {}", e.emoji, e.message_id);
+            WsEvent::MessageReacted(e) => {
+                let action = e.action.as_deref().unwrap_or("added");
+                println!("👍 Reaction {}: {} on message {}", action, e.emoji, e.message_id);
             }
-            WsEvent::AgentOnline(e) => {
-                println!("🟢 Agent online: {}", e.agent.name);
+            WsEvent::AgentStatusActive(e) => {
+                println!("🟢 Agent active: {}", e.agent.name);
             }
-            WsEvent::AgentOffline(e) => {
+            WsEvent::AgentStatusOffline(e) => {
                 println!("🔴 Agent offline: {}", e.agent.name);
             }
             WsEvent::Pong => {
