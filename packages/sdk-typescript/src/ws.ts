@@ -7,7 +7,7 @@ import type {
   WsCloseEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
-import { SDK_ORIGIN, type InternalOrigin } from './origin.js';
+import { SDK_ORIGIN, sanitizeHarness, type InternalOrigin } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
@@ -22,6 +22,11 @@ export interface WsClientOptions {
   circuitBreakerMaxAttempts?: number;
   /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
   debug?: boolean;
+  /**
+   * Optional User-Agent-style harness identifier, forwarded as the `harness`
+   * query param (browsers can't set custom WS headers). See {@link sanitizeHarness}.
+   */
+  harness?: string;
 }
 
 const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
@@ -70,6 +75,7 @@ export class WsClient {
   private originSurface: string;
   private originClient: string;
   private originVersion: string;
+  private originHarness?: string;
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -93,6 +99,7 @@ export class WsClient {
     this.originSurface = origin.surface;
     this.originClient = origin.client;
     this.originVersion = origin.version;
+    this.originHarness = sanitizeHarness(origin.harness ?? options.harness);
   }
 
   connect(): void {
@@ -105,6 +112,9 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
+    if (this.originHarness) {
+      wsUrl.searchParams.set('harness', this.originHarness);
+    }
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;

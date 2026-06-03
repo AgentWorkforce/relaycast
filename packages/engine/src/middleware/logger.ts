@@ -109,7 +109,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestHeaders = c.req.raw.headers;
   const clientName = deriveClientName(requestHeaders);
   const originInfo = extractOriginInfo(c.req.raw, clientName);
-  const harness = extractHarness(requestHeaders);
+  const harness = extractHarness(c.req.raw);
   c.set('harness', harness);
 
   const logger = createRequestLogger(c, 'request', {

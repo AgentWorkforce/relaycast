@@ -89,6 +89,13 @@ export interface RelayCastOptions {
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
+  /**
+   * Optional User-Agent-style identifier for the harness driving requests
+   * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
+   * the `X-Relaycast-Harness` header on every request so server-side telemetry
+   * can attribute traffic to a harness.
+   */
+  harness?: string;
 }
 
 export interface WorkspaceStreamConfig {

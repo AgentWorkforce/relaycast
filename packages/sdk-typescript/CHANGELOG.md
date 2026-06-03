@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Optional `harness` field on `RelayCastOptions`/`ClientOptions` and `WsClientOptions` (plus the internal `InternalOrigin` plumbing). A User-Agent-style identifier for the harness driving requests (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`); stamped as the `X-Relaycast-Harness` HTTP header and forwarded as the `harness` WS query param so server-side telemetry can attribute traffic. When a wrapping host supplies one via the internal origin it takes precedence over the public option. Invalid values (empty, control characters) are dropped rather than sent; the header is omitted entirely when no harness is set, so existing consumers are unchanged on the wire.
+- `sanitizeHarness` exported from `./origin.js` — lowercases, restricts to a UA-safe character set, caps at 120 chars.
+
 ### Breaking
 - Removed snake_case input aliases from the SDK surface; camelCase is now the only supported input style.
 
