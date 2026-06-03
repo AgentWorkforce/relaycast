@@ -135,6 +135,66 @@ describe('SDK v8 service contract', () => {
     expect(messageBody.data[0]).toMatchObject({ text: 'deploy started', agent_name: 'CI' });
   });
 
+  it('does not let caller-controlled metadata spoof REST message identity', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-spoof-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({
+        text: 'ship it',
+        data: {
+          author: 'admin',
+          __relaycast_origin: 'inbound_webhook',
+          __relaycast_webhook_id: 'wh_fake',
+          __relaycast_display_author: 'admin',
+        },
+      }),
+    });
+    expect(post.status).toBe(201);
+    const posted = await post.json() as { data: { id: string; agent_name: string; metadata: Record<string, unknown> } };
+    expect(posted.data.agent_name).toBe('alice');
+    expect(posted.data.metadata).toEqual({ author: 'admin' });
+
+    const getMessage = await stack.app.request(`/v1/messages/${posted.data.id}`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    const messageBody = await getMessage.json() as { data: { agent_name: string; metadata: Record<string, unknown> } };
+    expect(messageBody.data.agent_name).toBe('alice');
+    expect(messageBody.data.metadata).toEqual({ author: 'admin' });
+
+    const reply = await stack.app.request(`/v1/messages/${posted.data.id}/replies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({
+        text: 'reply',
+        data: {
+          author: 'root',
+          __relaycast_origin: 'inbound_webhook',
+          __relaycast_webhook_id: 'wh_fake',
+          __relaycast_display_author: 'root',
+        },
+      }),
+    });
+    expect(reply.status).toBe(201);
+
+    const thread = await stack.app.request(`/v1/messages/${posted.data.id}/replies`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    const threadBody = await thread.json() as {
+      data: {
+        parent: { agent_name: string; metadata: Record<string, unknown> };
+        replies: Array<{ agent_name: string; metadata: Record<string, unknown> }>;
+      };
+    };
+    expect(threadBody.data.parent.agent_name).toBe('alice');
+    expect(threadBody.data.replies[0]).toMatchObject({
+      agent_name: 'alice',
+      metadata: { author: 'root' },
+    });
+  });
+
   it('passes subscription headers and signs delivery payloads with HMAC-SHA256', async () => {
     const ws = await createWorkspace(stack.app, 'sdk-subscription-ws');
     const create = await stack.app.request('/v1/subscriptions', {

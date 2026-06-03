@@ -4,6 +4,7 @@ import { webhooks, channels, messages, agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
+import { inboundWebhookMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -192,12 +193,12 @@ export async function triggerWebhook(
       channelId: webhook.channelId,
       agentId: webhook.createdBy,
       body: text,
-      metadata: {
-        webhook_id: webhook.id,
-        webhook_name: webhook.name,
+      metadata: inboundWebhookMessageMetadata({
+        webhookId: webhook.id,
+        webhookName: webhook.name,
         source: data.source ?? null,
         author,
-      },
+      }),
     })
     .returning();
 

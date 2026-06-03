@@ -3,15 +3,11 @@ import type { getDb } from '../db/index.js';
 import { messages, agents, reactions, readReceipts, messageAttachments, files, channelMembers, deliveries } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { logMessage } from './console.js';
+import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
-
-function displayAgentName(metadata: Record<string, unknown> | null | undefined, fallback: string | null | undefined): string {
-  const author = metadata?.author;
-  return typeof author === 'string' && author.length > 0 ? author : (fallback || 'unknown');
-}
 
 async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
   const map = new Map<string, AttachmentRow[]>();
@@ -64,6 +60,7 @@ export async function postMessage(
   const mentionMatches = data.text.match(mentionPattern) || [];
 
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
+  const metadata = sanitizeUserMessageMetadata(data.data);
 
   const [message] = await db
     .insert(messages)
@@ -74,7 +71,7 @@ export async function postMessage(
       agentId,
       body: data.text,
       blocks: data.blocks || null,
-      metadata: data.data || {},
+      metadata,
       hasAttachments,
     })
     .returning();
@@ -130,7 +127,7 @@ export async function postMessage(
     body: message.body,
     contentType: data.content_type ?? null,
     metadata: {
-      ...(data.data || {}),
+      ...metadata,
       injection_mode: data.mode ?? 'wait',
     },
     attachmentCount: attachments.length,
@@ -145,7 +142,7 @@ export async function postMessage(
     agent_name: agent?.name || 'unknown',
     text: message.body,
     blocks: (message.blocks as unknown[] | null) || null,
-    metadata: message.metadata ?? {},
+    metadata: publicMessageMetadata(message.metadata),
     has_attachments: message.hasAttachments,
     thread_id: message.threadId,
     created_at: message.createdAt.toISOString(),
@@ -267,7 +264,7 @@ export async function getMessages(
     agent_name: displayAgentName(row.metadata, row.agentName),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
-    metadata: row.metadata ?? {},
+    metadata: publicMessageMetadata(row.metadata),
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
@@ -328,7 +325,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     agent_name: displayAgentName(row.metadata, row.agentName),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
-    metadata: row.metadata ?? {},
+    metadata: publicMessageMetadata(row.metadata),
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
     created_at: row.createdAt.toISOString(),
