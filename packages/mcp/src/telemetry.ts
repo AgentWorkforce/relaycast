@@ -40,7 +40,7 @@ function isTruthy(value: string | undefined): boolean {
 function telemetryEnabled(state: TelemetryState, apiKey: string): boolean {
   // No key configured (e.g. forks, local dev, CI) → silently no-op. Same code
   // path as the explicit DO_NOT_TRACK / RELAYCAST_TELEMETRY_DISABLED opt-outs.
-  if (!apiKey) return false;
+  if (!apiKey.trim()) return false;
   if (isTruthy(process.env.DO_NOT_TRACK) || isTruthy(process.env.RELAYCAST_TELEMETRY_DISABLED)) {
     return false;
   }
