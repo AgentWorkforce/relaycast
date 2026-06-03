@@ -17,6 +17,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Added `AgentRegistrationClient::registered_agent_client(...)` for cached/spawned token registration followed by agent-client construction.
 - Added idempotent channel startup helpers `AgentClient::ensure_joined_channel(...)` and `AgentClient::ensure_joined_channels(...)`.
 - Added `DmParticipantsCache` for bounded workspace DM participant lookup caching.
+- Added durable delivery APIs on `AgentClient`:
+  - `deliveries(...)`
+  - `ack_delivery(...)`
+  - `fail_delivery(...)`
+  - `defer_delivery(...)`
+- Added durable delivery types and websocket event variants for `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and `delivery.failed`.
 
 ### Changed
 - Made `agent.spawn_requested` websocket parsing tolerant of missing or `null` `task`, `channel`, and `already_existed` fields.

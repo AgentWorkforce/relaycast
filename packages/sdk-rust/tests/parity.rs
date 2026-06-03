@@ -1,11 +1,12 @@
 use relaycast::{
     ActionInvocationStatus, AgentClient, CompleteInvocationRequest, CreateAgentRequest,
-    CreateChannelRequest, DmConversationSummary, EmitSessionEventRequest, ListSessionEventsQuery,
+    CreateChannelRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
+    EmitSessionEventRequest, FailDeliveryRequest, ListDeliveriesOptions, ListSessionEventsQuery,
     MessageInjectionMode, MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions,
     ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
-use wiremock::matchers::{body_json, header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
@@ -27,6 +28,25 @@ fn api_error(status: u16, code: &str, message: &str) -> ResponseTemplate {
             "message": message
         }
     }))
+}
+
+fn delivery_payload(id: &str, status: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "message_id": "m_1",
+        "channel_id": "ch_1",
+        "agent_id": "a_1",
+        "status": status,
+        "mode": "wait",
+        "reason": null,
+        "priority": "normal",
+        "retryable": null,
+        "error": null,
+        "available_at": null,
+        "deadline": null,
+        "created_at": "2026-06-01T00:00:00.000Z",
+        "updated_at": "2026-06-01T00:00:01.000Z"
+    })
 }
 
 #[tokio::test]
@@ -466,6 +486,321 @@ async fn agent_heartbeat_uses_presence_endpoint() {
     let agent = AgentClient::new("at_live_test", Some(server.uri()))
         .expect("failed to create agent client");
     agent.heartbeat().await.expect("heartbeat failed");
+}
+
+#[tokio::test]
+async fn durable_delivery_methods_use_expected_endpoints() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/deliveries"))
+        .and(query_param("status", "accepted"))
+        .and(query_param("limit", "25"))
+        .respond_with(ok(json!([
+            {
+                "id": "del_1",
+                "message_id": "m_1",
+                "channel_id": "ch_1",
+                "agent_id": "a_1",
+                "status": "accepted",
+                "mode": "wait",
+                "reason": null,
+                "priority": "normal",
+                "retryable": null,
+                "error": null,
+                "available_at": null,
+                "deadline": null,
+                "created_at": "2026-06-01T00:00:00.000Z",
+                "updated_at": null,
+                "message": {
+                    "id": "m_1",
+                    "channel_id": "ch_1",
+                    "agent_id": "a_sender",
+                    "agent_name": "sender",
+                    "text": "hello",
+                    "thread_id": null,
+                    "created_at": "2026-06-01T00:00:00.000Z"
+                }
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let deliveries = agent
+        .deliveries(Some(ListDeliveriesOptions {
+            status: Some(DeliveryStatus::Accepted),
+            limit: Some(25),
+        }))
+        .await
+        .expect("deliveries failed");
+    assert_eq!(deliveries[0].delivery.id, "del_1");
+    assert_eq!(deliveries[0].delivery.status, DeliveryStatus::Accepted);
+    assert_eq!(
+        deliveries[0]
+            .message
+            .as_ref()
+            .map(|message| message.agent_name.as_deref()),
+        Some(Some("sender"))
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/v1/deliveries"))
+        .and(query_param_is_missing("status"))
+        .and(query_param("limit", "10"))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let unknown_status_deliveries = agent
+        .deliveries(Some(ListDeliveriesOptions {
+            status: Some(DeliveryStatus::Unknown),
+            limit: Some(10),
+        }))
+        .await
+        .expect("deliveries with unknown status failed");
+    assert!(unknown_status_deliveries.is_empty());
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/ack"))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "delivered",
+            "mode": "wait",
+            "reason": null,
+            "priority": "normal",
+            "retryable": null,
+            "error": null,
+            "available_at": null,
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:01.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let acked = agent
+        .ack_delivery("del_1")
+        .await
+        .expect("ack_delivery failed");
+    assert_eq!(acked.status, DeliveryStatus::Delivered);
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/fail"))
+        .and(body_json(json!({
+            "error": "boom",
+            "retryable": true
+        })))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "failed",
+            "mode": "wait",
+            "reason": null,
+            "priority": "normal",
+            "retryable": true,
+            "error": "boom",
+            "available_at": null,
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:02.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failed = agent
+        .fail_delivery(
+            "del_1",
+            Some(FailDeliveryRequest {
+                error: Some("boom".to_string()),
+                retryable: Some(true),
+            }),
+        )
+        .await
+        .expect("fail_delivery failed");
+    assert_eq!(failed.status, DeliveryStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("boom"));
+    assert_eq!(failed.retryable, Some(true));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/fail"))
+        .and(body_json(json!({
+            "error": "boom",
+            "retryable": false
+        })))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "failed",
+            "mode": "wait",
+            "reason": null,
+            "priority": "normal",
+            "retryable": false,
+            "error": "boom",
+            "available_at": null,
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:02.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failed = agent
+        .fail_delivery(
+            "del_1",
+            Some(FailDeliveryRequest {
+                error: Some("boom".to_string()),
+                retryable: Some(false),
+            }),
+        )
+        .await
+        .expect("fail_delivery retryable false failed");
+    assert_eq!(failed.status, DeliveryStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("boom"));
+    assert_eq!(failed.retryable, Some(false));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/fail"))
+        .and(body_json(json!({})))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "failed",
+            "mode": "wait",
+            "reason": null,
+            "priority": "normal",
+            "retryable": true,
+            "error": "boom",
+            "available_at": null,
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:02.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    agent
+        .fail_delivery("del_1", None)
+        .await
+        .expect("fail_delivery without options failed");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/deliveries/del_1/defer"))
+        .and(body_json(json!({
+            "available_at": "2026-06-01T00:05:00.000Z",
+            "reason": "busy"
+        })))
+        .respond_with(ok(json!({
+            "id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "agent_id": "a_1",
+            "status": "deferred",
+            "mode": "wait",
+            "reason": "busy",
+            "priority": "normal",
+            "retryable": true,
+            "error": "boom",
+            "available_at": "2026-06-01T00:05:00.000Z",
+            "deadline": null,
+            "created_at": "2026-06-01T00:00:00.000Z",
+            "updated_at": "2026-06-01T00:00:03.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let deferred = agent
+        .defer_delivery(
+            "del_1",
+            DeferDeliveryRequest {
+                available_at: "2026-06-01T00:05:00.000Z".to_string(),
+                reason: Some("busy".to_string()),
+            },
+        )
+        .await
+        .expect("defer_delivery failed");
+    assert_eq!(deferred.status, DeliveryStatus::Deferred);
+    assert_eq!(
+        deferred.available_at.as_deref(),
+        Some("2026-06-01T00:05:00.000Z")
+    );
+}
+
+#[tokio::test]
+async fn durable_delivery_methods_encode_delivery_ids() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+    let raw_id = "del needs/encoding";
+    let encoded_id = "del%20needs%2Fencoding";
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/ack")))
+        .respond_with(ok(delivery_payload(raw_id, "delivered")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let acked = agent
+        .ack_delivery(raw_id)
+        .await
+        .expect("ack_delivery with encoded id failed");
+    assert_eq!(acked.id, raw_id);
+    assert_eq!(acked.status, DeliveryStatus::Delivered);
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/fail")))
+        .respond_with(ok(delivery_payload(raw_id, "failed")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failed = agent
+        .fail_delivery(raw_id, None)
+        .await
+        .expect("fail_delivery with encoded id failed");
+    assert_eq!(failed.id, raw_id);
+    assert_eq!(failed.status, DeliveryStatus::Failed);
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/defer")))
+        .and(body_json(json!({
+            "available_at": "2026-06-01T00:05:00.000Z"
+        })))
+        .respond_with(ok(delivery_payload(raw_id, "deferred")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let deferred = agent
+        .defer_delivery(
+            raw_id,
+            DeferDeliveryRequest {
+                available_at: "2026-06-01T00:05:00.000Z".to_string(),
+                reason: None,
+            },
+        )
+        .await
+        .expect("defer_delivery with encoded id failed");
+    assert_eq!(deferred.id, raw_id);
+    assert_eq!(deferred.status, DeliveryStatus::Deferred);
 }
 
 #[test]
@@ -1036,4 +1371,66 @@ fn deserializes_action_ws_events() {
         bad.is_err(),
         "action.completed with status 'invoked' should fail"
     );
+}
+
+#[test]
+fn deserializes_delivery_ws_events() {
+    let accepted: WsEvent = serde_json::from_value(json!({
+        "type": "delivery.accepted",
+        "delivery_id": "del_1",
+        "message_id": "m_1",
+        "channel_id": "ch_1",
+        "reason": null
+    }))
+    .expect("delivery.accepted should deserialize");
+    match accepted {
+        WsEvent::DeliveryAccepted(e) => {
+            assert_eq!(e.delivery_id, "del_1");
+            assert_eq!(e.channel_id.as_deref(), Some("ch_1"));
+        }
+        other => panic!("expected DeliveryAccepted, got {other:?}"),
+    }
+
+    let delivered: WsEvent = serde_json::from_value(json!({
+        "type": "delivery.delivered",
+        "delivery_id": "del_1",
+        "message_id": "m_1"
+    }))
+    .expect("delivery.delivered should deserialize");
+    match delivered {
+        WsEvent::DeliveryDelivered(e) => assert_eq!(e.message_id, "m_1"),
+        other => panic!("expected DeliveryDelivered, got {other:?}"),
+    }
+
+    let deferred: WsEvent = serde_json::from_value(json!({
+        "type": "delivery.deferred",
+        "delivery_id": "del_1",
+        "message_id": "m_1",
+        "available_at": "2026-06-01T00:05:00.000Z",
+        "reason": "busy"
+    }))
+    .expect("delivery.deferred should deserialize");
+    match deferred {
+        WsEvent::DeliveryDeferred(e) => {
+            assert_eq!(e.available_at.as_deref(), Some("2026-06-01T00:05:00.000Z"));
+            assert_eq!(e.reason.as_deref(), Some("busy"));
+        }
+        other => panic!("expected DeliveryDeferred, got {other:?}"),
+    }
+
+    let failed: WsEvent = serde_json::from_value(json!({
+        "type": "delivery.failed",
+        "delivery_id": "del_1",
+        "message_id": "m_1",
+        "error": "boom",
+        "retryable": true
+    }))
+    .expect("delivery.failed should deserialize");
+    match failed {
+        WsEvent::DeliveryFailed(e) => {
+            assert_eq!(e.error.as_deref(), Some("boom"));
+            assert_eq!(e.retryable, Some(true));
+        }
+        other => panic!("expected DeliveryFailed, got {other:?}"),
+    }
 }

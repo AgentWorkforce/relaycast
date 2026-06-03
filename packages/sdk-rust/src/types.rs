@@ -593,6 +593,90 @@ pub struct ChannelReadStatus {
     pub last_read_at: Option<String>,
 }
 
+// === Durable Delivery ===
+
+/// Status of a per-recipient durable delivery record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStatus {
+    Accepted,
+    Delivered,
+    Deferred,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl DeliveryStatus {
+    /// Return the accepted API query value for this status.
+    pub fn as_query_value(self) -> Option<&'static str> {
+        match self {
+            DeliveryStatus::Accepted => Some("accepted"),
+            DeliveryStatus::Delivered => Some("delivered"),
+            DeliveryStatus::Deferred => Some("deferred"),
+            DeliveryStatus::Failed => Some("failed"),
+            DeliveryStatus::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryMessage {
+    pub id: String,
+    pub channel_id: String,
+    pub agent_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub text: String,
+    pub thread_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Delivery {
+    pub id: String,
+    pub message_id: String,
+    pub channel_id: String,
+    pub agent_id: String,
+    pub status: DeliveryStatus,
+    pub mode: String,
+    pub reason: Option<String>,
+    pub priority: String,
+    pub retryable: Option<bool>,
+    pub error: Option<String>,
+    pub available_at: Option<String>,
+    pub deadline: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryItem {
+    #[serde(flatten)]
+    pub delivery: Delivery,
+    pub message: Option<DeliveryMessage>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListDeliveriesOptions {
+    pub status: Option<DeliveryStatus>,
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FailDeliveryRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeferDeliveryRequest {
+    pub available_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // === Files ===
 
 #[derive(Debug, Clone, Serialize)]
@@ -1025,6 +1109,14 @@ pub enum WsEvent {
     ActionCompleted(ActionCompletedEvent),
     #[serde(rename = "action.failed")]
     ActionFailed(ActionFailedEvent),
+    #[serde(rename = "delivery.accepted")]
+    DeliveryAccepted(DeliveryAcceptedEvent),
+    #[serde(rename = "delivery.delivered")]
+    DeliveryDelivered(DeliveryDeliveredEvent),
+    #[serde(rename = "delivery.deferred")]
+    DeliveryDeferred(DeliveryDeferredEvent),
+    #[serde(rename = "delivery.failed")]
+    DeliveryFailed(DeliveryFailedEvent),
     #[serde(rename = "pong")]
     Pong,
     #[serde(other)]
@@ -1214,4 +1306,43 @@ pub struct ActionFailedEvent {
     pub output: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// `delivery.accepted` — emitted when a delivery is queued for the recipient.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryAcceptedEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `delivery.delivered` — emitted when a delivery is acknowledged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryDeliveredEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+}
+
+/// `delivery.deferred` — emitted when a delivery is deferred for retry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryDeferredEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+    pub available_at: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `delivery.failed` — emitted when a delivery handler reports failure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryFailedEvent {
+    pub delivery_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub retryable: Option<bool>,
 }
