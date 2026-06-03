@@ -91,11 +91,10 @@ describe('createMcpTelemetry', () => {
     expect(fs.readFileSync).toHaveBeenCalledWith(mockTelemetryPath, 'utf8');
   });
 
-  it('posts telemetry directly to PostHog capture endpoint', async () => {
+  it('posts telemetry to the hosted capture proxy by default', async () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
 
     const telemetry = createMcpTelemetry('1.0.0', {
-      posthogHost: 'https://app.posthog.example/',
       posthogApiKey: 'phc_example',
       originSurface: 'mcp',
       originClient: '@relaycast/mcp',
@@ -111,7 +110,7 @@ describe('createMcpTelemetry', () => {
       path: string;
       headers: Record<string, string>;
     };
-    expect(options.hostname).toBe('app.posthog.example');
+    expect(options.hostname).toBe('i.agentrelay.com');
     expect(options.path).toBe('/capture/');
 
     const body = JSON.parse(capturedBodies[0] ?? '{}') as {
@@ -122,6 +121,25 @@ describe('createMcpTelemetry', () => {
     expect(body.properties.origin_surface).toBe('mcp');
     expect(body.properties.origin_client).toBe('@relaycast/mcp');
     expect(body.properties.origin_version).toBe('1.0.0');
+  });
+
+  it('allows a custom PostHog host override', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
+
+    const telemetry = createMcpTelemetry('1.0.0', {
+      posthogHost: 'https://app.posthog.example/',
+      posthogApiKey: 'phc_example',
+    });
+
+    telemetry.capture('relaycast_mcp_server_started', { transport: 'stdio' });
+    await telemetry.flush();
+
+    const options = nodeRequestMock.mock.calls[0]?.[0] as {
+      hostname: string;
+      path: string;
+    };
+    expect(options.hostname).toBe('app.posthog.example');
+    expect(options.path).toBe('/capture/');
   });
 
   it('prefers fetch transport when worker globals are present', async () => {
