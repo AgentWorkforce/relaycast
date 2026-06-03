@@ -6,7 +6,7 @@ use relaycast::{
     ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
 };
 use serde_json::json;
-use wiremock::matchers::{body_json, header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
@@ -28,6 +28,25 @@ fn api_error(status: u16, code: &str, message: &str) -> ResponseTemplate {
             "message": message
         }
     }))
+}
+
+fn delivery_payload(id: &str, status: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "message_id": "m_1",
+        "channel_id": "ch_1",
+        "agent_id": "a_1",
+        "status": status,
+        "mode": "wait",
+        "reason": null,
+        "priority": "normal",
+        "retryable": null,
+        "error": null,
+        "available_at": null,
+        "deadline": null,
+        "created_at": "2026-06-01T00:00:00.000Z",
+        "updated_at": "2026-06-01T00:00:01.000Z"
+    })
 }
 
 #[tokio::test]
@@ -527,6 +546,24 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         Some(Some("sender"))
     );
 
+    Mock::given(method("GET"))
+        .and(path("/v1/deliveries"))
+        .and(query_param_is_missing("status"))
+        .and(query_param("limit", "10"))
+        .respond_with(ok(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let unknown_status_deliveries = agent
+        .deliveries(Some(ListDeliveriesOptions {
+            status: Some(DeliveryStatus::Unknown),
+            limit: Some(10),
+        }))
+        .await
+        .expect("deliveries with unknown status failed");
+    assert!(unknown_status_deliveries.is_empty());
+
     Mock::given(method("POST"))
         .and(path("/v1/deliveries/del_1/ack"))
         .respond_with(ok(json!({
@@ -704,6 +741,66 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         deferred.available_at.as_deref(),
         Some("2026-06-01T00:05:00.000Z")
     );
+}
+
+#[tokio::test]
+async fn durable_delivery_methods_encode_delivery_ids() {
+    let server = MockServer::start().await;
+    let agent = AgentClient::new("at_live_test", Some(server.uri()))
+        .expect("failed to create agent client");
+    let raw_id = "del needs/encoding";
+    let encoded_id = "del%20needs%2Fencoding";
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/ack")))
+        .respond_with(ok(delivery_payload(raw_id, "delivered")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let acked = agent
+        .ack_delivery(raw_id)
+        .await
+        .expect("ack_delivery with encoded id failed");
+    assert_eq!(acked.id, raw_id);
+    assert_eq!(acked.status, DeliveryStatus::Delivered);
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/fail")))
+        .respond_with(ok(delivery_payload(raw_id, "failed")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let failed = agent
+        .fail_delivery(raw_id, None)
+        .await
+        .expect("fail_delivery with encoded id failed");
+    assert_eq!(failed.id, raw_id);
+    assert_eq!(failed.status, DeliveryStatus::Failed);
+
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/deliveries/{encoded_id}/defer")))
+        .and(body_json(json!({
+            "available_at": "2026-06-01T00:05:00.000Z"
+        })))
+        .respond_with(ok(delivery_payload(raw_id, "deferred")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let deferred = agent
+        .defer_delivery(
+            raw_id,
+            DeferDeliveryRequest {
+                available_at: "2026-06-01T00:05:00.000Z".to_string(),
+                reason: None,
+            },
+        )
+        .await
+        .expect("defer_delivery with encoded id failed");
+    assert_eq!(deferred.id, raw_id);
+    assert_eq!(deferred.status, DeliveryStatus::Deferred);
 }
 
 #[test]
