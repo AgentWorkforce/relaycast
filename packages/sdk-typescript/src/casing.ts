@@ -47,7 +47,7 @@ export function decamelizeKeys<T>(value: T): unknown {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toSnakeKey(key)] = decamelizeKeys(val);
+      out[toSnakeKey(key)] = key === 'headers' && isPlainObject(val) ? val : decamelizeKeys(val);
     }
     return out;
   }

@@ -1,9 +1,10 @@
 use relaycast::{
     ActionInvocationStatus, AgentClient, CompleteInvocationRequest, CreateAgentRequest,
-    CreateChannelRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
-    EmitSessionEventRequest, FailDeliveryRequest, ListDeliveriesOptions, ListSessionEventsQuery,
-    MessageInjectionMode, MessageListQuery, RegisterActionRequest, RelayCast, RelayCastOptions,
-    ReleaseAgentRequest, SpawnAgentRequest, WsEvent,
+    CreateChannelRequest, CreateSubscriptionRequest, CreateWebhookRequest, DeferDeliveryRequest,
+    DeliveryStatus, DmConversationSummary, EmitSessionEventRequest, FailDeliveryRequest,
+    ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
+    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, SpawnAgentRequest,
+    WebhookTriggerRequest, WsEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
@@ -195,6 +196,47 @@ async fn register_or_get_agent_reclaims_public_agent_payload() {
     assert_eq!(reclaimed.token, "at_live_rotated");
     assert_eq!(reclaimed.status, "offline");
     assert_eq!(reclaimed.created_at, "2026-01-01T00:00:00.000Z");
+}
+
+#[tokio::test]
+async fn agent_token_resolution_uses_current_agent_endpoint() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/agent"))
+        .and(header("authorization", "Bearer at_live_worker"))
+        .respond_with(ok(json!({
+            "id": "agent_1",
+            "name": "Worker",
+            "type": "agent",
+            "status": "online",
+            "persona": null,
+            "metadata": {},
+            "last_seen": "2026-01-01T00:00:00.000Z",
+            "channels": []
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let current = relay
+        .get_current_agent("at_live_worker")
+        .await
+        .expect("get_current_agent failed");
+    assert_eq!(current.name, "Worker");
+
+    let agent = relay
+        .as_agent("at_live_worker")
+        .expect("failed to create agent client");
+    let me = agent.me().await.expect("agent.me failed");
+    assert_eq!(me.id, "agent_1");
+
+    relay
+        .reconnect_agent("at_live_worker")
+        .await
+        .expect("reconnect_agent failed");
 }
 
 #[tokio::test]
@@ -1067,6 +1109,131 @@ async fn dm_conversation_participants_returns_workspace_conversation_members() {
 }
 
 #[tokio::test]
+async fn inbound_webhook_helpers_use_token_and_author_contract() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/webhooks"))
+        .and(body_json(json!({ "channel": "dev" })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "webhook_id": "wh_1",
+                "name": "dev",
+                "channel": "dev",
+                "url": format!("{}/v1/hooks/wh_1", server.uri()),
+                "token": "whsec_1",
+                "is_active": true,
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let created = relay
+        .create_inbound_webhook(CreateWebhookRequest {
+            name: None,
+            channel: "dev".to_string(),
+        })
+        .await
+        .expect("create_inbound_webhook failed");
+    assert_eq!(created.token, "whsec_1");
+    assert!(created.is_active);
+
+    Mock::given(method("POST"))
+        .and(path("/v1/hooks/wh_1"))
+        .and(header("authorization", "Bearer whsec_1"))
+        .and(body_json(json!({
+            "message": "build failed",
+            "author": "GitHub"
+        })))
+        .respond_with(ok(json!({
+            "message_id": "m_1",
+            "channel": "dev",
+            "text": "build failed",
+            "source": null,
+            "author": "GitHub",
+            "created_at": "2026-01-01T00:00:01.000Z"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let response = relay
+        .trigger_webhook_with_token(
+            "wh_1",
+            WebhookTriggerRequest {
+                text: None,
+                message: Some("build failed".to_string()),
+                blocks: None,
+                source: None,
+                author: Some("GitHub".to_string()),
+                payload: None,
+            },
+            "whsec_1",
+        )
+        .await
+        .expect("trigger_webhook_with_token failed");
+    assert_eq!(response.author.as_deref(), Some("GitHub"));
+}
+
+#[tokio::test]
+async fn subscription_create_preserves_custom_headers() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    let mut headers = std::collections::BTreeMap::new();
+    headers.insert("Authorization".to_string(), "Bearer downstream".to_string());
+
+    Mock::given(method("POST"))
+        .and(path("/v1/subscriptions"))
+        .and(body_json(json!({
+            "events": ["message.created"],
+            "url": "https://hook.example.com",
+            "headers": { "Authorization": "Bearer downstream" },
+            "secret": "top-secret"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": {
+                "id": "sub_1",
+                "events": ["message.created"],
+                "filter": null,
+                "url": "https://hook.example.com",
+                "headers": { "Authorization": "Bearer downstream" },
+                "is_active": true,
+                "created_at": "2026-01-01T00:00:00.000Z"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let created = relay
+        .create_subscription(CreateSubscriptionRequest {
+            events: vec!["message.created".to_string()],
+            filter: None,
+            url: "https://hook.example.com".to_string(),
+            headers: Some(headers),
+            secret: Some("top-secret".to_string()),
+        })
+        .await
+        .expect("create_subscription failed");
+    assert_eq!(
+        created
+            .headers
+            .as_ref()
+            .and_then(|h| h.get("Authorization"))
+            .map(String::as_str),
+        Some("Bearer downstream")
+    );
+}
+
+#[tokio::test]
 async fn action_lifecycle_uses_expected_endpoints() {
     let server = MockServer::start().await;
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
@@ -1357,6 +1524,21 @@ fn deserializes_action_ws_events() {
     match failed {
         WsEvent::ActionFailed(e) => assert_eq!(e.error.as_deref(), Some("boom")),
         other => panic!("expected ActionFailed, got {other:?}"),
+    }
+
+    let denied: WsEvent = serde_json::from_value(json!({
+        "type": "action.denied",
+        "action_name": "deploy",
+        "caller_name": "BackendAgent",
+        "error": "Action deploy is not available to BackendAgent"
+    }))
+    .expect("action.denied should deserialize");
+    match denied {
+        WsEvent::ActionDenied(e) => {
+            assert_eq!(e.action_name, "deploy");
+            assert_eq!(e.caller_name.as_deref(), Some("BackendAgent"));
+        }
+        other => panic!("expected ActionDenied, got {other:?}"),
     }
 
     // A mismatched status fails fast (event-specific literal): an action.completed

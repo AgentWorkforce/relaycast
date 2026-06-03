@@ -1,0 +1,53 @@
+{
+  "id": "traj_s7q9iz33ywd4",
+  "version": 1,
+  "task": {
+    "title": "Align SDKs with SDK v8 service contract"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-03T02:40:30.056Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-03T02:45:19.786Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_up5crssoluqa",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-03T02:45:19.786Z",
+      "events": [
+        {
+          "ts": 1780454719787,
+          "type": "decision",
+          "content": "Aligned SDK bindings instead of only documenting server compatibility: Aligned SDK bindings instead of only documenting server compatibility",
+          "raw": {
+            "question": "Aligned SDK bindings instead of only documenting server compatibility",
+            "chosen": "Aligned SDK bindings instead of only documenting server compatibility",
+            "alternatives": [],
+            "reasoning": "TypeScript needed agent-token reconnect and token-aware webhook calls; Rust was missing wire fields and action.denied deserialization, so the PR would not fully satisfy SDK-facing issue coverage without SDK updates."
+          },
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-06-03T02:46:05.254Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "c11c1bad5e922af314b149719305f24a02aaf3b7",
+    "endRef": "c11c1bad5e922af314b149719305f24a02aaf3b7"
+  },
+  "completedAt": "2026-06-03T02:46:05.254Z",
+  "retrospective": {
+    "summary": "Aligned TypeScript and Rust SDKs with SDK v8 service contract: agent-token resolve/reconnect helpers, inbound webhook token/author support, subscription headers, and Rust action.denied event coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  }
+}

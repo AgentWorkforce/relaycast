@@ -76,6 +76,11 @@ impl AgentClient {
         Ok(())
     }
 
+    /// Resolve this agent token to its authenticated agent identity.
+    pub async fn me(&self) -> Result<Agent> {
+        self.client.get("/v1/agent", None, None).await
+    }
+
     // === WebSocket ===
 
     /// Connect to the WebSocket server for real-time events.

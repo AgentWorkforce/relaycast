@@ -107,6 +107,13 @@ impl RelayCast {
         Ok(AgentClient::from_client(client))
     }
 
+    /// Rehydrate an agent client from a persisted agent token, validating it first.
+    pub async fn reconnect_agent(&self, agent_token: impl Into<String>) -> Result<AgentClient> {
+        let agent = self.as_agent(agent_token)?;
+        agent.me().await?;
+        Ok(agent)
+    }
+
     // === Workspace ===
 
     /// Get workspace information.
@@ -300,6 +307,14 @@ impl RelayCast {
         self.client.post("/v1/agents", Some(request), None).await
     }
 
+    /// Resolve an agent token to its authenticated agent identity.
+    pub async fn get_current_agent(&self, agent_token: impl Into<String>) -> Result<Agent> {
+        self.client
+            .with_api_key(agent_token)?
+            .get("/v1/agent", None, None)
+            .await
+    }
+
     /// List agents.
     pub async fn list_agents(&self, query: Option<AgentListQuery>) -> Result<Vec<Agent>> {
         let query = query.unwrap_or_default();
@@ -419,6 +434,14 @@ impl RelayCast {
         self.client.post("/v1/webhooks", Some(request), None).await
     }
 
+    /// Create an inbound webhook.
+    pub async fn create_inbound_webhook(
+        &self,
+        request: CreateWebhookRequest,
+    ) -> Result<CreateWebhookResponse> {
+        self.create_webhook(request).await
+    }
+
     /// List webhooks.
     pub async fn list_webhooks(&self) -> Result<Vec<Webhook>> {
         self.client.get("/v1/webhooks", None, None).await
@@ -438,6 +461,23 @@ impl RelayCast {
         request: WebhookTriggerRequest,
     ) -> Result<WebhookTriggerResponse> {
         self.client
+            .post(
+                &format!("/v1/hooks/{}", urlencoding::encode(webhook_id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Trigger a webhook with its per-webhook bearer token.
+    pub async fn trigger_webhook_with_token(
+        &self,
+        webhook_id: &str,
+        request: WebhookTriggerRequest,
+        token: impl Into<String>,
+    ) -> Result<WebhookTriggerResponse> {
+        self.client
+            .with_api_key(token)?
             .post(
                 &format!("/v1/hooks/{}", urlencoding::encode(webhook_id)),
                 Some(request),

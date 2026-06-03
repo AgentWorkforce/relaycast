@@ -37,14 +37,46 @@ describe('Programmability SDK', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ webhook_id: 'wh_1', name: 'GitHub', channel: 'dev', url: 'https://...', created_at: '2025-01-01' }),
+        mockResponse({
+          webhook_id: 'wh_1',
+          name: 'GitHub',
+          channel: 'dev',
+          url: 'https://...',
+          token: 'whsec_1',
+          is_active: true,
+          created_at: '2025-01-01',
+        }),
       );
-      await relay.webhooks.create({ name: 'GitHub', channel: 'dev' });
+      const created = await relay.webhooks.create({ name: 'GitHub', channel: 'dev' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'GitHub', channel: 'dev' }));
+      expect(created.token).toBe('whsec_1');
+    });
+
+    it('createInbound() aliases webhook creation for inbound SDK contract', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({
+          webhook_id: 'wh_1',
+          name: 'dev',
+          channel: 'dev',
+          url: 'https://gateway.relaycast.dev/v1/hooks/wh_1',
+          token: 'whsec_1',
+          is_active: true,
+          created_at: '2025-01-01',
+        }),
+      );
+      await relay.webhooks.createInbound({ channel: 'dev' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({ channel: 'dev' }));
     });
 
     it('list() gets /v1/webhooks', async () => {
@@ -76,14 +108,22 @@ describe('Programmability SDK', () => {
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
       mockFetch.mockImplementation(() =>
-        mockResponse({ message_id: 'm_1', channel: 'dev', text: 'alert', created_at: '2025-01-01' }),
+        mockResponse({
+          message_id: 'm_1',
+          channel: 'dev',
+          text: 'alert',
+          source: null,
+          author: 'GitHub',
+          created_at: '2025-01-01',
+        }),
       );
-      await relay.webhooks.trigger('wh_1', { text: 'alert', source: 'github' });
+      await relay.webhooks.trigger('wh_1', { message: 'alert', author: 'GitHub' }, 'whsec_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://gateway.relaycast.dev/v1/hooks/wh_1');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ text: 'alert', source: 'github' }));
+      expect(init.headers.Authorization).toBe('Bearer whsec_1');
+      expect(init.body).toBe(JSON.stringify({ message: 'alert', author: 'GitHub' }));
     });
   });
 
@@ -100,6 +140,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.create({
         events: ['message.created'],
         url: 'https://hook.example.com',
+        headers: { Authorization: 'Bearer downstream' },
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
@@ -108,6 +149,7 @@ describe('Programmability SDK', () => {
       expect(JSON.parse(init.body)).toEqual({
         events: ['message.created'],
         url: 'https://hook.example.com',
+        headers: { Authorization: 'Bearer downstream' },
       });
     });
 

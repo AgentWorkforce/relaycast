@@ -714,7 +714,8 @@ pub struct FileListOptions {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateWebhookRequest {
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub channel: String,
 }
 
@@ -724,6 +725,8 @@ pub struct CreateWebhookResponse {
     pub name: String,
     pub channel: String,
     pub url: String,
+    pub token: String,
+    pub is_active: bool,
     pub created_at: String,
 }
 
@@ -745,9 +748,13 @@ pub struct WebhookTriggerRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -757,6 +764,10 @@ pub struct WebhookTriggerResponse {
     pub message_id: String,
     pub channel: String,
     pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
     pub created_at: String,
 }
 
@@ -771,10 +782,14 @@ pub struct SubscriptionFilter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSubscription {
     pub id: String,
+    #[serde(default)]
     pub workspace_id: String,
     pub events: Vec<String>,
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
     pub secret: Option<String>,
     pub is_active: bool,
     pub created_at: String,
@@ -787,6 +802,8 @@ pub struct CreateSubscriptionRequest {
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
 
@@ -796,6 +813,8 @@ pub struct CreateSubscriptionResponse {
     pub events: Vec<String>,
     pub filter: Option<SubscriptionFilter>,
     pub url: String,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
     pub is_active: bool,
     pub created_at: String,
 }
@@ -1058,6 +1077,8 @@ pub struct WebhookMessagePayload {
     pub id: String,
     pub text: String,
     pub source: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1115,6 +1136,8 @@ pub enum WsEvent {
     ActionCompleted(ActionCompletedEvent),
     #[serde(rename = "action.failed")]
     ActionFailed(ActionFailedEvent),
+    #[serde(rename = "action.denied")]
+    ActionDenied(ActionDeniedEvent),
     #[serde(rename = "delivery.accepted")]
     DeliveryAccepted(DeliveryAcceptedEvent),
     #[serde(rename = "delivery.delivered")]
@@ -1309,6 +1332,15 @@ pub struct ActionFailedEvent {
     pub output: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// `action.denied` — delivered to the caller when authorization rejects an invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionDeniedEvent {
+    pub action_name: String,
+    #[serde(default)]
+    pub caller_name: Option<String>,
+    pub error: String,
 }
 
 /// `delivery.accepted` — emitted when a delivery is queued for the recipient.

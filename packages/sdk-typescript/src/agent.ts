@@ -29,6 +29,7 @@ import type {
   UploadResponse,
   CompleteUploadResponse,
   FileInfo,
+  Agent,
   InvokeActionResult,
   CompleteInvocationRequest,
   ActionInvocation,
@@ -402,6 +403,10 @@ export class AgentClient {
   };
 
   // === Messages ===
+
+  async me(): Promise<Agent> {
+    return this.client.get('/v1/agent');
+  }
 
   async send(
     channel: string,

@@ -254,16 +254,28 @@ let file = agent.complete_upload(&upload.file_id).await?;
 
 ```rust
 // Create a webhook
-let webhook = relay.create_webhook(CreateWebhookRequest {
-    name: "my-webhook".to_string(),
+let webhook = relay.create_inbound_webhook(CreateWebhookRequest {
+    name: Some("my-webhook".to_string()),
     channel: "general".to_string(),
 }).await?;
+
+relay.trigger_webhook_with_token(
+    &webhook.webhook_id,
+    WebhookTriggerRequest {
+        message: Some("Deploy finished".to_string()),
+        author: Some("GitHub".to_string()),
+        ..Default::default()
+    },
+    &webhook.token,
+).await?;
 
 // Create an event subscription
 let subscription = relay.create_subscription(CreateSubscriptionRequest {
     url: "https://example.com/webhook".to_string(),
     events: vec!["message.created".to_string(), "agent.status.active".to_string()],
+    headers: None,
     secret: Some("webhook_secret".to_string()),
+    filter: None,
 }).await?;
 ```
 
