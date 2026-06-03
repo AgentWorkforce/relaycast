@@ -166,8 +166,7 @@ function resolveWorkspaceBootstrapOptions(
 
 export class RelayCast {
   private client: HttpClient;
-  private ws: WsClient | null = null;
-  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  private ws: WsClient;
   private identityHint: { agentId: string; name: string } | null = null;
   private workspaceIdHint: string | null = null;
 
@@ -179,16 +178,11 @@ export class RelayCast {
     // Preserve hidden internal-origin metadata on options when created via
     // createInternalRelayCast() so downstream requests use the correct origin headers.
     this.client = new HttpClient(options);
-    this.wsOptions = options.ws ?? {};
-  }
-
-  connect(): void {
-    if (this.ws) return;
     this.ws = new WsClient(withInternalWsOrigin(
       {
+        ...(options.ws ?? {}),
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
-        ...this.wsOptions,
       },
       {
         surface: this.client.originSurface,
@@ -197,19 +191,17 @@ export class RelayCast {
         ...(this.client.originHarness ? { harness: this.client.originHarness } : {}),
       },
     ));
+  }
+
+  connect(): void {
     this.ws.connect();
   }
 
   disconnect(): void {
-    if (!this.ws) return;
     this.ws.disconnect();
-    this.ws = null;
   }
 
   private onEvent<T extends WsClientEvent>(eventType: string, handler: (e: T) => void): () => void {
-    if (!this.ws) {
-      throw new Error('WebSocket not connected. Call connect() first.');
-    }
     return this.ws.on(eventType, handler as (e: WsClientEvent) => void);
   }
 
@@ -244,25 +236,12 @@ export class RelayCast {
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
     disconnected: (handler: () => void): (() => void) => this.onEvent('close', handler as (e: never) => void),
     error:        (handler: () => void): (() => void) => this.onEvent('error', handler as (e: never) => void),
-    reconnecting: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt));
-    },
-    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
-        handler((e as WsPermanentlyDisconnectedEvent).attempt));
-    },
-    any: (handler: (e: WsClientEvent) => void): (() => void) => {
-      if (!this.ws) {
-        throw new Error('WebSocket not connected. Call connect() first.');
-      }
-      return this.ws.on('*', handler);
-    },
+    reconnecting: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('reconnecting', (e: WsClientEvent) => handler((e as WsReconnectingEvent).attempt)),
+    permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
+      this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
+        handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    any: (handler: (e: WsClientEvent) => void): (() => void) => this.ws.on('*', handler),
   };
 
   static async createWorkspace(

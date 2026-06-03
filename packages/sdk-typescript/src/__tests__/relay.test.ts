@@ -73,6 +73,10 @@ describe('RelayCast', () => {
       const relay = new RelayCast({
         apiKey: 'rk_live_test123',
         baseUrl: 'http://localhost:8080',
+        ws: {
+          token: 'rk_live_wrong',
+          baseUrl: 'https://wrong.example',
+        } as any,
       });
 
       relay.connect();
@@ -90,9 +94,11 @@ describe('RelayCast', () => {
       relay.disconnect();
     });
 
-    it('connect() is idempotent and disconnect() allows a fresh workspace socket', async () => {
+    it('connect() is idempotent and disconnect() allows a fresh workspace socket with existing handlers', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
+      relay.on.messageCreated(handler);
 
       relay.connect();
       relay.connect();
@@ -104,6 +110,14 @@ describe('RelayCast', () => {
 
       relay.connect();
       expect(MockWebSocket.instances).toHaveLength(2);
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+      ws2.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
 
       relay.disconnect();
     });
@@ -112,12 +126,12 @@ describe('RelayCast', () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
+      relay.on.messageCreated(handler);
+
       relay.connect();
       const ws = MockWebSocket.instances[0]!;
       ws.simulateOpen();
-
-      const handler = vi.fn();
-      relay.on.messageCreated(handler);
 
       ws.simulateMessage({
         type: 'message.created',
@@ -133,6 +147,29 @@ describe('RelayCast', () => {
           message: expect.objectContaining({ agentName: 'Bot' }),
         }),
       );
+
+      relay.disconnect();
+    });
+
+    it('connect() restarts the workspace stream after permanent disconnection', async () => {
+      vi.useFakeTimers();
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({
+        apiKey: 'rk_live_test123',
+        ws: { maxReconnectAttempts: 0, reconnectJitter: false },
+      });
+      const permanentlyDisconnected = vi.fn();
+      relay.on.permanentlyDisconnected(permanentlyDisconnected);
+
+      relay.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateClose();
+
+      expect(permanentlyDisconnected).toHaveBeenCalledWith(0);
+
+      relay.connect();
+      expect(MockWebSocket.instances).toHaveLength(2);
 
       relay.disconnect();
     });
@@ -210,13 +247,24 @@ describe('RelayCast', () => {
       relay.disconnect();
     });
 
-    it('on.messageCreated throws if called before connect()', async () => {
+    it('allows registering event handlers before connect()', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const handler = vi.fn();
 
-      expect(() => relay.on.messageCreated(vi.fn())).toThrow(
-        'WebSocket not connected. Call connect() first.',
-      );
+      expect(() => relay.on.messageCreated(handler)).not.toThrow();
+
+      relay.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+      ws.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      relay.disconnect();
     });
   });
 
