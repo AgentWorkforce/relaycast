@@ -1,0 +1,25 @@
+{
+  "id": "traj_lck9v30g8vvw",
+  "version": 1,
+  "task": {
+    "title": "Upgrade agent-trajectories to latest"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-03T03:07:05.648Z",
+  "completedAt": "2026-06-03T03:09:01.140Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Upgraded agent-trajectories from 0.5.2 to 0.6.1 and validated the upgraded trail CLI.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/will/Projects/AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e5a56a9df04140f319bf627e0e1d8c40c9ea9f30",
+    "endRef": "e5a56a9df04140f319bf627e0e1d8c40c9ea9f30"
+  }
+}
