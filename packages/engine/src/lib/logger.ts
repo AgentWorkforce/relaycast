@@ -4,7 +4,9 @@ import type { AppEnv, EngineRuntime } from '../env.js';
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 type LogFields = Record<string, unknown>;
 
-const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
+// Route log export through the first-party reverse proxy; overridable via
+// the engine's logExport.posthogHost config.
+const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 const DEFAULT_APP_VERSION = '0.1.0';
 const DEFAULT_SDK_VERSION = 'unknown';
 const SERVICE_NAME = 'relaycast-server';

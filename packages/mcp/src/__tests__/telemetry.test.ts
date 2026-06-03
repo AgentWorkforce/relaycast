@@ -158,6 +158,20 @@ describe('createMcpTelemetry', () => {
     }
   });
 
+  it('defaults to the first-party proxy host when none is configured', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
+
+    // Key but no host → falls back to the default proxy, not posthog.com directly.
+    const telemetry = createMcpTelemetry('1.0.0', { posthogApiKey: 'phc_example' });
+    telemetry.capture('relaycast_mcp_server_started', {});
+    await telemetry.flush();
+
+    expect(nodeRequestMock).toHaveBeenCalledTimes(1);
+    const options = nodeRequestMock.mock.calls[0]?.[0] as { hostname: string; path: string };
+    expect(options.hostname).toBe('i.agentrelay.com');
+    expect(options.path).toBe('/capture/');
+  });
+
   it('silently no-ops when no PostHog API key is configured', async () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ anonymousId: 'anon-123' }));
 

@@ -29,7 +29,10 @@ export interface McpTelemetry {
 }
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
-const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
+// Route ingestion through the first-party reverse proxy rather than PostHog
+// directly (avoids ad-blockers, keeps traffic first-party). Overridable via
+// RELAYCAST_POSTHOG_HOST / POSTHOG_HOST / options.posthogHost.
+const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
