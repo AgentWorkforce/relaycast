@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --port 3100",
     "build": "next build",
+    "test": "vitest run",
     "start": "next start"
   },
   "dependencies": {
