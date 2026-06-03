@@ -70,6 +70,25 @@ jobs:
       deployments: write
     steps:
       - uses: actions/checkout@v4
+      - name: Inject PostHog API key into marketing site
+        env:
+          POSTHOG_PROJECT_KEY: ${{ vars.POSTHOG_PROJECT_KEY }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const file = "site/index.html";
+            const placeholder = "__RELAYCAST_POSTHOG_API_KEY__";
+            const key = process.env.POSTHOG_PROJECT_KEY || "";
+            const html = fs.readFileSync(file, "utf8");
+            if (!html.includes(placeholder)) {
+              console.error(`Placeholder ${placeholder} not found in ${file}`);
+              process.exit(1);
+            }
+            if (!key) {
+              console.warn("POSTHOG_PROJECT_KEY is unset — shipping site with telemetry disabled.");
+            }
+            fs.writeFileSync(file, html.split(placeholder).join(key));
+          '
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
