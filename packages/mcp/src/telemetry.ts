@@ -29,7 +29,7 @@ export interface McpTelemetry {
 }
 
 const TELEMETRY_PATH = path.join(os.homedir(), '.relay', 'telemetry.json');
-const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
+const DEFAULT_POSTHOG_HOST = 'https://i.agentrelay.com';
 
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
