@@ -4,6 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+const MESSAGE_EVENT_ID = '11111111-1111-4111-8111-111111111111';
+
+function messageCreatedEvent() {
+  return {
+    id: MESSAGE_EVENT_ID,
+    type: 'message.created',
+    channel: 'general',
+    message: {
+      id: 'm_1',
+      agent_id: 'agent_1',
+      agent_name: 'Bot',
+      text: 'hi',
+      attachments: [],
+    },
+  };
+}
+
 class MockWebSocket {
   static readonly OPEN = 1;
   static readonly CLOSED = 3;
@@ -112,11 +129,7 @@ describe('RelayCast', () => {
       expect(MockWebSocket.instances).toHaveLength(2);
       const ws2 = MockWebSocket.instances[1]!;
       ws2.simulateOpen();
-      ws2.simulateMessage({
-        type: 'message.created',
-        channel: 'general',
-        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
-      });
+      ws2.simulateMessage(messageCreatedEvent());
       expect(handler).toHaveBeenCalledTimes(1);
 
       relay.disconnect();
@@ -133,11 +146,7 @@ describe('RelayCast', () => {
       const ws = MockWebSocket.instances[0]!;
       ws.simulateOpen();
 
-      ws.simulateMessage({
-        type: 'message.created',
-        channel: 'general',
-        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
-      });
+      ws.simulateMessage(messageCreatedEvent());
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith(
@@ -257,11 +266,7 @@ describe('RelayCast', () => {
       relay.connect();
       const ws = MockWebSocket.instances[0]!;
       ws.simulateOpen();
-      ws.simulateMessage({
-        type: 'message.created',
-        channel: 'general',
-        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
-      });
+      ws.simulateMessage(messageCreatedEvent());
       expect(handler).toHaveBeenCalledTimes(1);
 
       relay.disconnect();
