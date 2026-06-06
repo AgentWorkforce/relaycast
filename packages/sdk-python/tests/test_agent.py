@@ -9,6 +9,7 @@ import respx
 from relay_sdk.agent import AgentClient, AsyncAgentClient
 from relay_sdk.client import AsyncHttpClient, HttpClient
 from relay_sdk.models import (
+    Agent,
     Channel,
     ChannelMemberInfo,
     ChannelReadStatus,
@@ -46,6 +47,19 @@ MSG = {
     "read_by_count": 0,
 }
 
+AGENT = {
+    "id": "a1",
+    "workspace_id": "w1",
+    "name": "Bot",
+    "type": "agent",
+    "token_hash": "hash",
+    "status": "offline",
+    "persona": None,
+    "metadata": {},
+    "created_at": "2025-01-01T00:00:00Z",
+    "last_seen": "2025-01-01T00:00:00Z",
+}
+
 CHANNEL = {
     "id": "c1",
     "workspace_id": "w1",
@@ -66,6 +80,15 @@ MEMBER = {
 
 
 class TestAgentClientMessages:
+    @respx.mock
+    def test_me(self):
+        route = respx.get(f"{BASE}/v1/agent").mock(return_value=ok(AGENT))
+        c = AgentClient(HttpClient(TOKEN, BASE))
+        result = c.me()
+        assert isinstance(result, Agent)
+        assert result.name == "Bot"
+        assert route.called
+
     @respx.mock
     def test_send_strips_hash(self):
         route = respx.post(f"{BASE}/v1/channels/general/messages").mock(return_value=ok(MSG))
@@ -448,6 +471,17 @@ class TestAgentClientFiles:
 
 
 class TestAsyncAgentClient:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_me(self):
+        route = respx.get(f"{BASE}/v1/agent").mock(return_value=ok(AGENT))
+        c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
+        result = await c.me()
+        assert isinstance(result, Agent)
+        assert result.name == "Bot"
+        assert route.called
+        await c.client.close()
+
     @pytest.mark.asyncio
     @respx.mock
     async def test_send(self):

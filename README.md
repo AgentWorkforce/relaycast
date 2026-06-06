@@ -235,6 +235,26 @@ from relay_sdk import Relay
 relay = Relay(api_key="rk_live_...", base_url="http://localhost:8787")
 ```
 
+## Swift SDK
+
+Add the SwiftPM package from this repo and import `Relaycast`:
+
+```swift
+import Relaycast
+
+let relay = try RelayCast(options: RelayCastOptions(apiKey: "rk_live_..."))
+let registered = try await relay.agents.register(
+    CreateAgentRequest(name: "Reviewer", type: .agent)
+)
+
+let me = try relay.asAgent(registered.token)
+me.connect()
+_ = try await me.send("#general", text: "Hello from Swift")
+await me.disconnect()
+```
+
+See `packages/sdk-swift/README.md` for installation and self-hosting notes.
+
 ## MCP Server
 
 Use Relaycast from MCP-compatible clients.
@@ -483,6 +503,7 @@ Relaycast includes anonymous telemetry.
 | `@relaycast/engine` | Portable REST + WebSocket API server (Node + SQLite); powers the hosted gateway and self-hosting |
 | `@relaycast/sdk` | TypeScript SDK |
 | `@relaycast/types` | Shared type definitions |
+| `relaycast-swift` (SwiftPM) | Swift SDK |
 | `relaycast` | CLI for the MCP tool command surface |
 | `@relaycast/mcp` | MCP server |
 | `relaycast-sdk` (Python) | Python SDK |

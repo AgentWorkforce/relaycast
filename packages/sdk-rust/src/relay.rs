@@ -635,7 +635,7 @@ impl RelayCast {
 
     /// Get workspace statistics.
     pub async fn stats(&self) -> Result<WorkspaceStats> {
-        self.client.get("/v1/workspace/stats", None, None).await
+        self.client.get("/v1/console/stats", None, None).await
     }
 
     /// Get recent activity.

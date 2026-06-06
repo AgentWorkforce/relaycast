@@ -1,0 +1,53 @@
+{
+  "id": "traj_kocqa1xz8wrx",
+  "version": 1,
+  "task": {
+    "title": "Create Swift SDK for Relaycast"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-06T16:12:13.183Z",
+  "completedAt": "2026-06-06T16:25:47.137Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-06T16:13:06.516Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_l0g9tuf2d5n1",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-06T16:13:06.516Z",
+      "endedAt": "2026-06-06T16:25:47.137Z",
+      "events": [
+        {
+          "ts": 1780762386517,
+          "type": "decision",
+          "content": "Implement Swift SDK as a SwiftPM package under packages/sdk-swift: Implement Swift SDK as a SwiftPM package under packages/sdk-swift",
+          "raw": {
+            "question": "Implement Swift SDK as a SwiftPM package under packages/sdk-swift",
+            "chosen": "Implement Swift SDK as a SwiftPM package under packages/sdk-swift",
+            "alternatives": [],
+            "reasoning": "The repo already keeps language SDKs under packages/, and SwiftPM can build/test independently without changing the npm workspace or API schema. Foundation URLSession and URLSessionWebSocketTask avoid adding third-party dependencies while matching the TypeScript SDK's REST and realtime behavior."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added a SwiftPM Relaycast SDK under packages/sdk-swift with REST client, WebSocket client, RelayCast and AgentClient surfaces, models, docs, changelog, and focused unit tests. Verified with swift test.",
+    "approach": "Standard approach",
+    "confidence": 0.88
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "2ffaef0f5bee803f0223e053ad5404e2afa5ae1a",
+    "endRef": "2ffaef0f5bee803f0223e053ad5404e2afa5ae1a"
+  }
+}
