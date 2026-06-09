@@ -10,7 +10,7 @@ import {
   dmConversations,
   dmParticipants,
 } from '../db/schema.js';
-import { runAtomic } from '../ports/database.js';
+import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -51,19 +51,19 @@ export async function markRead(
   if (!authorized) return null;
 
   // The three read-state writes (receipt + delivery transition + lastReadId)
-  // run atomically when the adapter supports transactions.
-  await runAtomic(db, async (tx) => {
+  // run as one atomic unit when the adapter supports it.
+  await runAtomicWrites(db, [
     // Upsert read receipt (idempotent)
-    await tx
+    db
       .insert(readReceipts)
       .values({ messageId, agentId })
-      .onConflictDoNothing();
+      .onConflictDoNothing(),
 
     // Transition delivery status to delivered. Reading consumes the message, so
     // clear both still-queued states (accepted and deferred) — otherwise a
     // deferred delivery would linger in the durable replay queue after the agent
     // has already seen the message. `delivered`/`failed` are left untouched.
-    await tx
+    db
       .update(deliveries)
       .set({ status: 'delivered', updatedAt: new Date() })
       .where(
@@ -72,10 +72,10 @@ export async function markRead(
           eq(deliveries.agentId, agentId),
           inArray(deliveries.status, ['accepted', 'deferred']),
         ),
-      );
+      ),
 
     // Update lastReadId for the channel membership (only move forward)
-    await tx
+    db
       .update(channelMembers)
       .set({ lastReadId: messageId })
       .where(
@@ -84,8 +84,8 @@ export async function markRead(
           eq(channelMembers.agentId, agentId),
           sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
         ),
-      );
-  });
+      ),
+  ]);
 
   const [receipt] = await db
     .select()

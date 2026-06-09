@@ -34,7 +34,8 @@ export function getSqliteDb(path: string): SqliteDbHandle {
   sqlite.pragma('foreign_keys = ON');
   const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
 
-  // Attach the transaction capability (`runAtomic` detects it on the handle).
+  // Attach the transaction capability (`runAtomicWrites` detects it on the
+  // handle and prefers it over a batch).
   //
   // Drizzle's better-sqlite3 `db.transaction()` requires a synchronous
   // callback (better-sqlite3's native wrapper commits when the sync call

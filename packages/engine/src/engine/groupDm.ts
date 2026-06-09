@@ -1,7 +1,7 @@
 import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files, deliveries } from '../db/schema.js';
-import { runAtomic } from '../ports/database.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -184,10 +184,18 @@ export async function postGroupMessage(
   const messageId = generateId();
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
 
-  // All durable writes (message + attachments + deliveries) run atomically
-  // when the adapter supports transactions; fanout stays in routes.
-  const { message, groupDeliveries } = await runAtomic(db, async (tx) => {
-    const [message] = await tx
+  // Read first: the active participants who get delivery records. The writes
+  // below must be a pure statement list so they can run as one atomic unit
+  // (transaction or D1 batch); see `runAtomicWrites`.
+  const otherParticipants = await db
+    .select({ agentId: dmParticipants.agentId })
+    .from(dmParticipants)
+    .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+
+  // All durable writes (message + attachments + deliveries) run as one atomic
+  // unit when the adapter supports it; fanout stays in routes.
+  const writes: AtomicWrite[] = [
+    db
       .insert(messages)
       .values({
         id: messageId,
@@ -198,42 +206,38 @@ export async function postGroupMessage(
         hasAttachments,
         metadata: { injection_mode: data.mode ?? 'wait' },
       })
-      .returning();
+      .returning(),
+  ];
 
-    if (data.attachments && data.attachments.length > 0) {
-      const attachmentValues = data.attachments.map((fileId, idx) => ({
-        messageId,
-        fileId,
-        position: idx,
-      }));
-      await tx.insert(messageAttachments).values(attachmentValues);
-    }
+  if (data.attachments && data.attachments.length > 0) {
+    const attachmentValues = data.attachments.map((fileId, idx) => ({
+      messageId,
+      fileId,
+      position: idx,
+    }));
+    writes.push(db.insert(messageAttachments).values(attachmentValues));
+  }
 
-    // Create delivery records for all other active participants
-    const otherParticipants = await tx
-      .select({ agentId: dmParticipants.agentId })
-      .from(dmParticipants)
-      .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+  // Create delivery records for all other active participants
+  const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
+  const groupDeliveries: Array<{ id: string; agentId: string }> = [];
+  if (recipients.length > 0) {
+    const rows = recipients.map((p) => ({
+      id: `del_${generateId()}`,
+      workspaceId,
+      messageId,
+      agentId: p.agentId,
+      mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+      reason: 'dm',
+      priority: 'normal',
+      status: 'accepted',
+    }));
+    writes.push(db.insert(deliveries).values(rows).onConflictDoNothing());
+    groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
+  }
 
-    const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
-    const groupDeliveries: Array<{ id: string; agentId: string }> = [];
-    if (recipients.length > 0) {
-      const rows = recipients.map((p) => ({
-        id: `del_${generateId()}`,
-        workspaceId,
-        messageId,
-        agentId: p.agentId,
-        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-        reason: 'dm',
-        priority: 'normal',
-        status: 'accepted',
-      }));
-      await tx.insert(deliveries).values(rows).onConflictDoNothing();
-      groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
-    }
-
-    return { message, groupDeliveries };
-  });
+  const results = await runAtomicWrites(db, writes);
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   const attachmentMap = hasAttachments
     ? await fetchAttachmentsBatch(db, workspaceId, [messageId])

@@ -12,10 +12,10 @@ import {
   deliveries,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
-import { runAtomic } from '../ports/database.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
-import { logMessage } from './console.js';
+import { buildMessageLogWrite } from './console.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -176,27 +176,34 @@ async function resolveAttachments(
   return attachmentIds.map((id) => ordered.get(id)!);
 }
 
-async function persistDmMessage(
+/**
+ * Build the message + attachment-junction inserts for a DM without executing
+ * them, so the send path can run them inside one atomic unit. The message
+ * insert is always first and carries `.returning()`.
+ */
+function buildDmMessageWrites(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
   channelId: string,
   data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
-  messageId = generateId(),
-) {
+  messageId: string,
+): AtomicWrite[] {
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId,
-      agentId: fromAgentId,
-      body: data.text,
-      hasAttachments,
-      metadata: { injection_mode: data.mode ?? 'wait' },
-    })
-    .returning();
+  const writes: AtomicWrite[] = [
+    db
+      .insert(messages)
+      .values({
+        id: messageId,
+        workspaceId,
+        channelId,
+        agentId: fromAgentId,
+        body: data.text,
+        hasAttachments,
+        metadata: { injection_mode: data.mode ?? 'wait' },
+      })
+      .returning(),
+  ];
 
   if (data.attachments && data.attachments.length > 0) {
     const attachmentValues = data.attachments.map((fileId, idx) => ({
@@ -204,10 +211,10 @@ async function persistDmMessage(
       fileId,
       position: idx,
     }));
-    await db.insert(messageAttachments).values(attachmentValues);
+    writes.push(db.insert(messageAttachments).values(attachmentValues));
   }
 
-  return message;
+  return writes;
 }
 
 export async function sendDm(
@@ -281,35 +288,37 @@ export async function sendDm(
   }
 
   // All durable writes (message + attachments + delivery + message_log) run
-  // atomically when the adapter supports transactions; fanout stays in routes.
-  const { message, dmDelivery } = await runAtomic(db, async (tx) => {
-    const message = await persistDmMessage(tx, workspaceId, fromAgentId, conv.channelId, data, messageId);
+  // as one atomic unit when the adapter supports it; fanout stays in routes.
+  const writes = buildDmMessageWrites(db, workspaceId, fromAgentId, conv.channelId, data, messageId);
 
-    // Create delivery record for the recipient (skip for @self DMs)
-    let dmDelivery: { id: string; agentId: string } | null = null;
-    if (toAgent.id !== fromAgentId) {
-      const deliveryId = `del_${generateId()}`;
-      await tx.insert(deliveries).values({
+  // Create delivery record for the recipient (skip for @self DMs)
+  let dmDelivery: { id: string; agentId: string } | null = null;
+  if (toAgent.id !== fromAgentId) {
+    const deliveryId = `del_${generateId()}`;
+    writes.push(
+      db.insert(deliveries).values({
         id: deliveryId,
         workspaceId,
-        messageId: message.id,
+        messageId,
         agentId: toAgent.id,
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
         reason: 'dm',
         priority: 'normal',
         status: 'accepted',
-      }).onConflictDoNothing();
-      dmDelivery = { id: deliveryId, agentId: toAgent.id };
-    }
+      }).onConflictDoNothing(),
+    );
+    dmDelivery = { id: deliveryId, agentId: toAgent.id };
+  }
 
-    await logMessage(tx, {
+  writes.push(
+    buildMessageLogWrite(db, {
       workspaceId,
-      messageId: message.id,
+      messageId,
       channelId: conv.channelId,
       agentId: fromAgentId,
       conversationId: conv.id,
       deliveryKind: 'dm',
-      body: message.body,
+      body: data.text,
       contentType: 'text/plain',
       metadata: {
         target_agent: toAgent.name,
@@ -319,10 +328,11 @@ export async function sendDm(
       attachmentCount: attachments.length,
       mentionCount: 0,
       latencyMs: Date.now() - startedAtMs,
-    });
+    }),
+  );
 
-    return { message, dmDelivery };
-  });
+  const results = await runAtomicWrites(db, writes);
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
 
   const injectionMode = data.mode ?? 'wait';
   return {
