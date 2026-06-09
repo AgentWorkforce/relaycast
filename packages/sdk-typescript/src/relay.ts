@@ -98,6 +98,7 @@ import type {
   GroupDmReceivedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
+  WsResyncedEvent,
 } from './types.js';
 import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
@@ -262,6 +263,11 @@ export class RelayCast {
     permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
       this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
         handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
+      this.ws.on('resynced', (e: WsClientEvent) => {
+        const event = e as WsResyncedEvent;
+        handler({ replayed: event.replayed, gapDetected: event.gapDetected });
+      }),
     any: (handler: (e: WsClientEvent) => void): (() => void) => this.ws.on('*', handler),
   };
 

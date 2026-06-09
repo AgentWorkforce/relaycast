@@ -465,6 +465,43 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(0);
   });
 
+  it('on.resynced fires with replay stats after a reconnect resync', () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.resynced(handler);
+
+    // Receive a seq-stamped event, drop, reconnect.
+    ws.simulateMessage({
+      type: 'message.created',
+      channel: 'general',
+      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      agent_seq: 4,
+    });
+    ws.simulateClose();
+    vi.advanceTimersByTime(1000);
+
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.simulateOpen();
+
+    const frames = ws2.send.mock.calls.map(([data]) => JSON.parse(data as string));
+    expect(frames.some((f) => f.type === 'resync' && f.last_seen_seq === 4)).toBe(true);
+
+    ws2.simulateMessage({
+      type: 'resync_ack',
+      last_seen_seq: 4,
+      current_seq: 6,
+      replayed: 2,
+      gap_detected: false,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({ replayed: 2, gapDetected: false });
+  });
+
   it('starts auto-heartbeat on open and continues on interval', () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();
