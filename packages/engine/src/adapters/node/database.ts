@@ -4,10 +4,14 @@ import { fileURLToPath } from 'node:url';
 import Database, { type RunResult } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
-import type { EngineDb } from '../../ports/database.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 
-/** The engine handle specialized to better-sqlite3's synchronous run-result. */
-export type NodeEngineDb = EngineDb<RunResult>;
+/**
+ * The engine handle specialized to better-sqlite3's synchronous run-result,
+ * with the optional transaction capability attached (better-sqlite3 supports
+ * interactive transactions, unlike D1).
+ */
+export type NodeEngineDb = EngineDb<RunResult> & TransactionCapability;
 
 export interface SqliteDbHandle {
   db: NodeEngineDb;
@@ -29,6 +33,39 @@ export function getSqliteDb(path: string): SqliteDbHandle {
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
+
+  // Attach the transaction capability (`runAtomic` detects it on the handle).
+  //
+  // Drizzle's better-sqlite3 `db.transaction()` requires a synchronous
+  // callback (better-sqlite3's native wrapper commits when the sync call
+  // returns), but engine write paths are async, so we manage the transaction
+  // manually on the shared connection. Transactions are serialized through a
+  // promise queue: better-sqlite3 is a single connection, and an unrelated
+  // request's statement issued during one of `fn`'s awaits would otherwise
+  // join (and roll back with) the open transaction. Serializing `withTransaction`
+  // callers closes that window for the multi-statement write paths, which all
+  // run through it.
+  let txTail: Promise<unknown> = Promise.resolve();
+  db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
+    const run = async (): Promise<T> => {
+      sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        const result = await fn(db as unknown as EngineDb);
+        sqlite.exec('COMMIT');
+        return result;
+      } catch (err) {
+        if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+        throw err;
+      }
+    };
+    const result = txTail.then(run);
+    txTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   return { db, sqlite };
 }
 

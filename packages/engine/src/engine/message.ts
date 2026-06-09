@@ -1,6 +1,7 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, agents, reactions, readReceipts, messageAttachments, files, channelMembers, deliveries } from '../db/schema.js';
+import { runAtomic } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import { logMessage } from './console.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
@@ -62,77 +63,83 @@ export async function postMessage(
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const metadata = sanitizeUserMessageMetadata(data.data);
 
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId,
-      agentId,
-      body: data.text,
-      blocks: data.blocks || null,
-      metadata,
-      hasAttachments,
-    })
-    .returning();
-
-  // Insert attachment records into junction table
-  if (data.attachments && data.attachments.length > 0) {
-    const attachmentValues = data.attachments.map((fileId, idx) => ({
-      messageId,
-      fileId,
-      position: idx,
-    }));
-    await db.insert(messageAttachments).values(attachmentValues);
-  }
-
-  // Fetch attachment details, agent name, and channel members (for delivery records)
   const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
 
-  const [attachmentMap, [agent], members] = await Promise.all([
-    hasAttachments ? fetchAttachmentsBatch(db, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
-    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
-    db
-      .select({ agentId: channelMembers.agentId, agentName: agents.name })
-      .from(channelMembers)
-      .innerJoin(agents, eq(channelMembers.agentId, agents.id))
-      .where(eq(channelMembers.channelId, channelId)),
-  ]);
-  const attachments = attachmentMap.get(messageId) || [];
+  // All durable writes (message + attachments + deliveries + message_log) run
+  // atomically when the adapter supports transactions; fanout stays in routes.
+  const { message, agent, attachments, deliveryRecords } = await runAtomic(db, async (tx) => {
+    const [message] = await tx
+      .insert(messages)
+      .values({
+        id: messageId,
+        workspaceId,
+        channelId,
+        agentId,
+        body: data.text,
+        blocks: data.blocks || null,
+        metadata,
+        hasAttachments,
+      })
+      .returning();
 
-  // Create per-recipient delivery records for all channel members except the sender
-  const recipientMembers = members.filter((m) => m.agentId !== agentId);
-  const deliveryRecords: Array<{ id: string; agentId: string; reason: string }> = [];
-  if (recipientMembers.length > 0) {
-    const rows = recipientMembers.map((m) => ({
-      id: `del_${generateId()}`,
+    // Insert attachment records into junction table
+    if (data.attachments && data.attachments.length > 0) {
+      const attachmentValues = data.attachments.map((fileId, idx) => ({
+        messageId,
+        fileId,
+        position: idx,
+      }));
+      await tx.insert(messageAttachments).values(attachmentValues);
+    }
+
+    // Fetch attachment details, agent name, and channel members (for delivery records)
+    const [attachmentMap, [agent], members] = await Promise.all([
+      hasAttachments ? fetchAttachmentsBatch(tx, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
+      tx.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+      tx
+        .select({ agentId: channelMembers.agentId, agentName: agents.name })
+        .from(channelMembers)
+        .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+        .where(eq(channelMembers.channelId, channelId)),
+    ]);
+    const attachments = attachmentMap.get(messageId) || [];
+
+    // Create per-recipient delivery records for all channel members except the sender
+    const recipientMembers = members.filter((m) => m.agentId !== agentId);
+    const deliveryRecords: Array<{ id: string; agentId: string; reason: string }> = [];
+    if (recipientMembers.length > 0) {
+      const rows = recipientMembers.map((m) => ({
+        id: `del_${generateId()}`,
+        workspaceId,
+        messageId,
+        agentId: m.agentId,
+        mode: (data.mode === 'steer' ? 'next-tool-call' : 'immediate') as string,
+        reason: (mentionedHandles.has(m.agentName ?? '') ? 'mention' : 'message') as string,
+        priority: 'normal',
+        status: 'accepted',
+      }));
+      await tx.insert(deliveries).values(rows);
+      deliveryRecords.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId, reason: r.reason })));
+    }
+
+    await logMessage(tx, {
       workspaceId,
       messageId,
-      agentId: m.agentId,
-      mode: (data.mode === 'steer' ? 'next-tool-call' : 'immediate') as string,
-      reason: (mentionedHandles.has(m.agentName ?? '') ? 'mention' : 'message') as string,
-      priority: 'normal',
-      status: 'accepted',
-    }));
-    await db.insert(deliveries).values(rows);
-    deliveryRecords.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId, reason: r.reason })));
-  }
+      channelId,
+      agentId,
+      deliveryKind: 'channel',
+      body: message.body,
+      contentType: data.content_type ?? null,
+      metadata: {
+        ...metadata,
+        injection_mode: data.mode ?? 'wait',
+      },
+      attachmentCount: attachments.length,
+      mentionCount: mentionMatches.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
 
-  await logMessage(db, {
-    workspaceId,
-    messageId,
-    channelId,
-    agentId,
-    deliveryKind: 'channel',
-    body: message.body,
-    contentType: data.content_type ?? null,
-    metadata: {
-      ...metadata,
-      injection_mode: data.mode ?? 'wait',
-    },
-    attachmentCount: attachments.length,
-    mentionCount: mentionMatches.length,
-    latencyMs: Date.now() - startedAtMs,
+    return { message, agent, attachments, deliveryRecords };
   });
 
   return {

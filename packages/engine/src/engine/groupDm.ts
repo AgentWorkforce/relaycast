@@ -1,6 +1,7 @@
 import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files, deliveries } from '../db/schema.js';
+import { runAtomic } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -182,50 +183,57 @@ export async function postGroupMessage(
 
   const messageId = generateId();
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId: conv.channelId,
-      agentId,
-      body: data.text,
-      hasAttachments,
-      metadata: { injection_mode: data.mode ?? 'wait' },
-    })
-    .returning();
 
-  if (data.attachments && data.attachments.length > 0) {
-    const attachmentValues = data.attachments.map((fileId, idx) => ({
-      messageId,
-      fileId,
-      position: idx,
-    }));
-    await db.insert(messageAttachments).values(attachmentValues);
-  }
+  // All durable writes (message + attachments + deliveries) run atomically
+  // when the adapter supports transactions; fanout stays in routes.
+  const { message, groupDeliveries } = await runAtomic(db, async (tx) => {
+    const [message] = await tx
+      .insert(messages)
+      .values({
+        id: messageId,
+        workspaceId,
+        channelId: conv.channelId,
+        agentId,
+        body: data.text,
+        hasAttachments,
+        metadata: { injection_mode: data.mode ?? 'wait' },
+      })
+      .returning();
 
-  // Create delivery records for all other active participants
-  const otherParticipants = await db
-    .select({ agentId: dmParticipants.agentId })
-    .from(dmParticipants)
-    .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+    if (data.attachments && data.attachments.length > 0) {
+      const attachmentValues = data.attachments.map((fileId, idx) => ({
+        messageId,
+        fileId,
+        position: idx,
+      }));
+      await tx.insert(messageAttachments).values(attachmentValues);
+    }
 
-  const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
-  const groupDeliveries: Array<{ id: string; agentId: string }> = [];
-  if (recipients.length > 0) {
-    const rows = recipients.map((p) => ({
-      id: `del_${generateId()}`,
-      workspaceId,
-      messageId,
-      agentId: p.agentId,
-      mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-      reason: 'dm',
-      priority: 'normal',
-      status: 'accepted',
-    }));
-    await db.insert(deliveries).values(rows).onConflictDoNothing();
-    groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
-  }
+    // Create delivery records for all other active participants
+    const otherParticipants = await tx
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+
+    const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
+    const groupDeliveries: Array<{ id: string; agentId: string }> = [];
+    if (recipients.length > 0) {
+      const rows = recipients.map((p) => ({
+        id: `del_${generateId()}`,
+        workspaceId,
+        messageId,
+        agentId: p.agentId,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        reason: 'dm',
+        priority: 'normal',
+        status: 'accepted',
+      }));
+      await tx.insert(deliveries).values(rows).onConflictDoNothing();
+      groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
+    }
+
+    return { message, groupDeliveries };
+  });
 
   const attachmentMap = hasAttachments
     ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
