@@ -8,6 +8,7 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as threadEngine from '../engine/thread.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -112,15 +113,11 @@ threadRoutes.post(
           }
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({
-            type: 'thread.reply',
-            workspaceId: workspace.id,
-            data: eventData,
-          }),
-          'queue thread.reply',
-        );
+        await sendWebhookEvent(c, {
+          type: 'thread.reply',
+          workspaceId: workspace.id,
+          data: eventData,
+        });
         emitServerEvent(c, workspace.id, 'relaycast_server_thread_reply_created', {
           message_id: publicReplyData.id,
           parent_message_id: parentId,

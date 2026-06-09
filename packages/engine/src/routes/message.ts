@@ -9,6 +9,7 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -121,11 +122,7 @@ messageRoutes.post(
           }
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({ type: 'message.created', workspaceId: workspace.id, data: eventData }),
-          'queue message.created',
-        );
+        await sendWebhookEvent(c, { type: 'message.created', workspaceId: workspace.id, data: eventData });
         emitServerEvent(c, workspace.id, 'relaycast_server_message_created', {
           channel_id: channel.id,
           message_id: String(publicData.id),

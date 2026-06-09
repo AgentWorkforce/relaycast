@@ -112,6 +112,45 @@ export async function rescheduleEvent(
     .where(and(eq(pendingEvents.id, id), eq(pendingEvents.status, 'pending')));
 }
 
+/** A claimed row bundled with its settle callbacks (see {@link sweepPendingEvents}). */
+export interface SweptEvent extends ClaimedEvent {
+  /** Delivery succeeded — drop the row. */
+  complete(): Promise<void>;
+  /** Terminal failure — settle the row as `failed`. */
+  fail(error: string): Promise<void>;
+  /** Retryable failure — make the row due again after `backoffMs`. */
+  reschedule(error: string, backoffMs: number): Promise<void>;
+}
+
+/**
+ * Claim due outbox rows for an external delivery pipeline.
+ *
+ * For queue-backed deployments (Cloudflare): the request path inserts the row
+ * and enqueues `{...event, outboxId}`; the queue consumer delivers and settles.
+ * A scheduled sweep calls this to pick up rows whose queue send was lost
+ * (isolate died before `send`, queue outage) or whose consumer crashed without
+ * settling, and RE-ENQUEUES them — it must not deliver directly.
+ *
+ * Shares `claimDueEvents` with the Node poller: claiming is a single atomic
+ * UPDATE, so concurrent sweepers (overlapping cron fires, sweep racing the
+ * Node poller) each claim a disjoint set. A claim consumes one attempt and
+ * holds a `leaseMs` lease; size the lease to cover the external queue's
+ * retry horizon so the sweep doesn't re-enqueue a row the queue is still
+ * retrying (see `rescheduleEvent` for extending it from the consumer).
+ */
+export async function sweepPendingEvents(
+  db: Db,
+  opts: { limit?: number; leaseMs?: number; now?: Date } = {},
+): Promise<SweptEvent[]> {
+  const claimed = await claimDueEvents(db, opts);
+  return claimed.map((event) => ({
+    ...event,
+    complete: () => completeEvent(db, event.id),
+    fail: (error: string) => failEvent(db, event.id, error),
+    reschedule: (error: string, backoffMs: number) => rescheduleEvent(db, event.id, error, backoffMs),
+  }));
+}
+
 // Cleanup completed and failed events older than given age (default 24h)
 export async function cleanupOldEvents(db: Db, maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMs);

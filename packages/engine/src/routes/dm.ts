@@ -10,6 +10,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -115,15 +116,11 @@ dmRoutes.post(
           );
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({
-            type: 'dm.received',
-            workspaceId: workspace.id,
-            data: { ...publicDmData, from_name: agent!.name },
-          }),
-          'queue dm.received',
-        );
+        await sendWebhookEvent(c, {
+          type: 'dm.received',
+          workspaceId: workspace.id,
+          data: { ...publicDmData, from_name: agent!.name },
+        });
         emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
           conversation_id: publicDmData.conversation_id,
           message_id: publicDmData.id,

@@ -11,6 +11,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const groupDmRoutes = new Hono<AppEnv>();
@@ -170,15 +171,11 @@ groupDmRoutes.post(
           }
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({
-            type: 'group_dm.received',
-            workspaceId: workspace.id,
-            data: { ...publicGroupData, from_name: agent!.name },
-          }),
-          'queue group_dm.received',
-        );
+        await sendWebhookEvent(c, {
+          type: 'group_dm.received',
+          workspaceId: workspace.id,
+          data: { ...publicGroupData, from_name: agent!.name },
+        });
         emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
           conversation_id: publicGroupData.conversation_id,
           message_id: publicGroupData.id,
