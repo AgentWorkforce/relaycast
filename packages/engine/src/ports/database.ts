@@ -15,14 +15,13 @@ import type * as schema from '../db/schema.js';
  * better-sqlite3 supports interactive transactions; D1 has no interactive
  * transactions but executes `db.batch([...])` atomically. Engine
  * multi-statement write paths go through {@link runAtomicWrites} with a
- * pre-built statement list, which uses {@link TransactionCapability} when an
- * adapter attached it, then a D1-style {@link BatchCapability} when the handle
- * exposes one, and otherwise falls back to plain sequential statements (the
- * engine's historical behavior). Cross-row invariants that must hold on
- * *every* adapter — not just atomicity-capable ones — still need
- * single-statement atomicity (e.g. a `... SELECT COALESCE(MAX(seq),0)+1 ...`
- * scalar-subquery insert guarded by a UNIQUE index) rather than a multi-step
- * read-modify-write.
+ * statement builder, which uses {@link TransactionCapability} when an adapter
+ * attached it, then a D1-style {@link BatchCapability} when the handle exposes
+ * one, and otherwise falls back to plain sequential statements (the engine's
+ * historical behavior). Cross-row invariants that must hold on *every*
+ * adapter — not just atomicity-capable ones — still need single-statement
+ * atomicity (e.g. a `... SELECT COALESCE(MAX(seq),0)+1 ...` scalar-subquery
+ * insert guarded by a UNIQUE index) rather than a multi-step read-modify-write.
  */
 // The engine is written against the async surface (everything is `await`ed),
 // which is exactly what the D1 driver produces, so the Cloudflare adapter's
@@ -38,7 +37,7 @@ import type * as schema from '../db/schema.js';
 // So we leave it as a type parameter, defaulting to `unknown`. Engine core uses
 // the bare `EngineDb` (i.e. `EngineDb<unknown>`) and never calls `.run()` or
 // reads a run result, so it stays platform-free. Each adapter specializes it
-// with its own driver's result type (the Node adapter → `EngineDb<RunResult>`),
+// with its own driver's result type (the Node adapter -> `EngineDb<RunResult>`),
 // importing only that platform's types, so the precise run-result type flows all
 // the way through on that side without the engine ever depending on it.
 export type EngineDb<TRunResult = unknown> = BaseSQLiteDatabase<'async', TRunResult, typeof schema>;
@@ -66,12 +65,21 @@ export interface TransactionCapability {
  * A built-but-unexecuted Drizzle write statement.
  *
  * Drizzle query builders are lazy: constructing one issues no SQL until it is
- * awaited (it is a thenable) or handed to a D1-style `batch()`. Write paths
- * build their full statement list up front — reads done, IDs app-generated —
- * and hand it to {@link runAtomicWrites}, so the same list works under a
- * transaction, an atomic batch, or plain sequential execution.
+ * awaited (it is a thenable) or handed to a D1-style `batch()`.
  */
 export type AtomicWrite = BatchItem<'sqlite'> & PromiseLike<unknown>;
+
+/**
+ * Build the full write list from the handle that will execute it.
+ *
+ * This matters for Node: the adapter runs file-backed transactions on a short
+ * lived isolated SQLite connection, so statements must be built from the
+ * transactional `tx` handle. For D1, no transaction handle exists, so the same
+ * builder runs against the original batch-capable handle and the returned list
+ * is passed to `batch([...])`.
+ */
+export type AtomicWriteBuilder = (db: EngineDb) => readonly AtomicWrite[];
+export type AtomicWriteInput = readonly AtomicWrite[] | AtomicWriteBuilder;
 
 /**
  * D1-style atomic batch: every statement applies, or none does.
@@ -80,15 +88,13 @@ export type AtomicWrite = BatchItem<'sqlite'> & PromiseLike<unknown>;
  * the hosted adapter's plain `drizzle(env.DB, { schema })` handle is
  * batch-capable with zero configuration — {@link runAtomicWrites} detects the
  * method structurally rather than requiring the adapter to attach anything.
- * That duck-typing is safe because the better-sqlite3 drizzle instance has no
- * `batch` member at all (drizzle-orm implements batching per driver, and only
- * for drivers whose backend executes a batch atomically), so a handle with a
- * `batch` method is by construction one whose driver gives the atomicity this
- * capability promises. Adapters wrapping a non-drizzle handle can also attach
- * an implementation explicitly.
  */
 export interface BatchCapability {
   batch(statements: readonly [AtomicWrite, ...AtomicWrite[]]): Promise<unknown[]>;
+}
+
+function buildStatements(input: AtomicWriteInput, db: EngineDb): readonly AtomicWrite[] {
+  return typeof input === 'function' ? input(db) : input;
 }
 
 async function runSequentially(statements: readonly AtomicWrite[]): Promise<unknown[]> {
@@ -100,13 +106,25 @@ async function runSequentially(statements: readonly AtomicWrite[]): Promise<unkn
 }
 
 /**
- * Execute pre-built write statements atomically when the handle supports it.
+ * Run `fn` atomically when the handle exposes {@link TransactionCapability},
+ * otherwise run it directly. Prefer {@link runAtomicWrites} for durable write
+ * paths that must also be atomic under D1.
+ */
+export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Promise<T> {
+  const { withTransaction } = db as EngineDb & Partial<TransactionCapability>;
+  return withTransaction ? withTransaction(fn) : fn(db);
+}
+
+/**
+ * Execute write statements atomically when the handle supports it.
  *
  * Resolution order:
- *  1. {@link TransactionCapability} (Node better-sqlite3) — statements run
- *     sequentially inside one transaction, so partial results roll back.
+ *  1. {@link TransactionCapability} (Node better-sqlite3) — statements are
+ *     built from the transaction handle and run sequentially inside one
+ *     transaction, so partial results roll back.
  *  2. {@link BatchCapability} (Cloudflare D1 via drizzle's native `batch`) —
- *     statements run as one atomic batch.
+ *     statements are built from the original handle and run as one atomic
+ *     batch.
  *  3. Neither — statements run sequentially with no rollback, the engine's
  *     historical behavior for bare handles.
  *
@@ -117,13 +135,19 @@ async function runSequentially(statements: readonly AtomicWrite[]): Promise<unkn
  */
 export async function runAtomicWrites(
   db: EngineDb,
-  statements: readonly AtomicWrite[],
+  input: AtomicWriteInput,
 ): Promise<unknown[]> {
-  if (statements.length === 0) return [];
   const handle = db as EngineDb & Partial<TransactionCapability> & Partial<BatchCapability>;
   if (handle.withTransaction) {
-    return handle.withTransaction(() => runSequentially(statements));
+    return handle.withTransaction(async (tx) => {
+      const statements = buildStatements(input, tx);
+      return statements.length === 0 ? [] : runSequentially(statements);
+    });
   }
+
+  const statements = buildStatements(input, db);
+  if (statements.length === 0) return [];
+
   if (typeof handle.batch === 'function') {
     return handle.batch(statements as [AtomicWrite, ...AtomicWrite[]]);
   }

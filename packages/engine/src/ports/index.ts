@@ -11,8 +11,15 @@
  *  - **Providers** — the open-core "hosting" seam the cloud layer overrides
  *    (auth, entitlements/billing, telemetry). Each ships an OSS default.
  */
-export type { EngineDb, TransactionCapability, BatchCapability, AtomicWrite } from './database.js';
-export { runAtomicWrites } from './database.js';
+export type {
+  EngineDb,
+  TransactionCapability,
+  BatchCapability,
+  AtomicWrite,
+  AtomicWriteBuilder,
+  AtomicWriteInput,
+} from './database.js';
+export { runAtomic, runAtomicWrites } from './database.js';
 export type {
   EngineEvent,
   RealtimeBus,

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
   registerAgent,
   type TestStack,
 } from './conformance/harness.js';
-import { channels, deliveries, messageLogs, messages, readReceipts, channelMembers } from '../db/schema.js';
+import { channels, deliveries, files, messageAttachments, messageLogs, messages, readReceipts, channelMembers } from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
@@ -116,7 +116,7 @@ describe('atomic write paths', () => {
    * `batch()` that executes every statement inside one underlying SQLite
    * transaction (all-or-nothing, like D1) and records each batch's SQL.
    */
-  function attachFakeBatch(db: EngineDb): string[][] {
+  function attachFakeBatch(db: EngineDb, beforeExecute?: () => Promise<void>): string[][] {
     stripCapability(db);
     const sqlite = stack.runtime.handle.sqlite;
     const batches: string[][] = [];
@@ -124,6 +124,7 @@ describe('atomic write paths', () => {
       statements: ReadonlyArray<AtomicWrite & { toSQL(): { sql: string } }>,
     ): Promise<unknown[]> => {
       batches.push(statements.map((s) => s.toSQL().sql));
+      await beforeExecute?.();
       sqlite.exec('BEGIN IMMEDIATE');
       try {
         const results: unknown[] = [];
@@ -176,6 +177,55 @@ describe('atomic write paths', () => {
       expect(await db.select().from(messages)).toHaveLength(0);
       expect(await db.select().from(messageLogs)).toHaveLength(0);
       expect(await db.select().from(deliveries)).toHaveLength(0);
+    });
+
+    it('rolls back group DM message and attachments when the deliveries insert fails', async () => {
+      const { ws, alice, db } = await seed();
+      const group = await createGroupDm(db, ws.workspaceId, alice.agentId, {
+        participants: ['bob'],
+        name: 'ops',
+      });
+      const fileId = 'file_group_attachment';
+      await db.insert(files).values({
+        id: fileId,
+        workspaceId: ws.workspaceId,
+        uploadedBy: alice.agentId,
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        sizeBytes: 5,
+        storageKey: `${ws.workspaceId}/${fileId}/notes.txt`,
+        status: 'complete',
+      });
+
+      const restore = injectInsertFailure(db, deliveries, 'injected deliveries failure');
+      await expect(
+        postGroupMessage(db, ws.workspaceId, group.id, alice.agentId, {
+          text: 'hello group',
+          attachments: [fileId],
+        }),
+      ).rejects.toThrow('injected deliveries failure');
+      restore();
+
+      expect(await db.select().from(messages)).toHaveLength(0);
+      expect(await db.select().from(messageAttachments)).toHaveLength(0);
+      expect(await db.select().from(deliveries)).toHaveLength(0);
+      expect(await db.select().from(files)).toHaveLength(1);
+    });
+
+    it('rolls back thread replies when the deliveries insert fails', async () => {
+      const { ws, alice, bob, channelId, db } = await seed();
+      const parent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'hello' });
+
+      const restore = injectInsertFailure(db, deliveries, 'injected deliveries failure');
+      await expect(
+        postReply(db, ws.workspaceId, parent.id, bob.agentId, { text: 'reply' }),
+      ).rejects.toThrow('injected deliveries failure');
+      restore();
+
+      expect(await db.select().from(messages)).toHaveLength(1);
+      expect(await db.select().from(messages).where(eq(messages.threadId, parent.id))).toHaveLength(0);
+      expect(await db.select().from(messageLogs)).toHaveLength(1);
+      expect(await db.select().from(deliveries)).toHaveLength(1);
     });
 
     it('rolls back markRead read state when the lastReadId update fails', async () => {
@@ -237,6 +287,24 @@ describe('atomic write paths', () => {
       const [delivery] = await db.select().from(deliveries);
       expect(delivery.agentId).toBe(bob.agentId);
       expect(await db.select().from(messageLogs)).toHaveLength(1);
+    });
+
+    it('channel deliveries are derived from membership at batch execution time', async () => {
+      const { ws, alice, bob, channelId, db } = await seed();
+      let removed = false;
+      attachFakeBatch(db, async () => {
+        if (removed) return;
+        removed = true;
+        await db
+          .delete(channelMembers)
+          .where(and(eq(channelMembers.channelId, channelId), eq(channelMembers.agentId, bob.agentId)));
+      });
+
+      const sent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'hello' });
+
+      expect(sent._deliveries).toHaveLength(0);
+      expect(await db.select().from(messages)).toHaveLength(1);
+      expect(await db.select().from(deliveries)).toHaveLength(0);
     });
 
     it('DM send issues exactly one batch: message + delivery + message_log', async () => {

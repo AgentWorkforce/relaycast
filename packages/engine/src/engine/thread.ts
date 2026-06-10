@@ -1,8 +1,12 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, channelMembers, deliveries } from '../db/schema.js';
+import { messages, channels, agents } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
+import {
+  buildChannelDeliveryWrite,
+  fetchDeliveryFanoutRecords,
+} from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -34,55 +38,44 @@ export async function postReply(
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
 
-  // Reads first: agent name + channel members for delivery records. The
-  // writes below must be a pure statement list so they can run as one atomic
-  // unit (transaction or D1 batch); see `runAtomicWrites`.
-  const [[agent], channelMemberRows] = await Promise.all([
-    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
-    db.select({ agentId: channelMembers.agentId })
-      .from(channelMembers)
-      .where(eq(channelMembers.channelId, parent.channelId)),
-  ]);
+  const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
 
-  // All durable writes (reply + deliveries) run as one atomic unit when the
-  // adapter supports it; fanout stays in routes.
-  const writes: AtomicWrite[] = [
-    db
-      .insert(messages)
-      .values({
-        id: replyId,
+  // Durable writes run as one atomic unit when the adapter supports it; fanout
+  // stays in routes. Delivery recipients are derived by the insert-select
+  // against current channel membership.
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: replyId,
+          workspaceId,
+          channelId: parent.channelId,
+          agentId,
+          threadId,
+          body: data.text,
+          blocks: data.blocks || null,
+          metadata,
+          hasAttachments: false,
+        })
+        .returning(),
+    ];
+
+    writes.push(
+      buildChannelDeliveryWrite(writeDb, {
         workspaceId,
+        messageId: replyId,
         channelId: parent.channelId,
-        agentId,
-        threadId,
-        body: data.text,
-        blocks: data.blocks || null,
-        metadata,
-        hasAttachments: false,
-      })
-      .returning(),
-  ];
+        senderAgentId: agentId,
+        mode: 'immediate',
+        reason: 'thread-reply',
+      }),
+    );
 
-  // Create per-recipient delivery records for all channel members except sender
-  const recipients = channelMemberRows.filter((m) => m.agentId !== agentId);
-  const replyDeliveries: Array<{ id: string; agentId: string }> = [];
-  if (recipients.length > 0) {
-    const rows = recipients.map((m) => ({
-      id: `del_${generateId()}`,
-      workspaceId,
-      messageId: replyId,
-      agentId: m.agentId,
-      mode: 'immediate',
-      reason: 'thread-reply',
-      priority: 'normal',
-      status: 'accepted',
-    }));
-    writes.push(db.insert(deliveries).values(rows).onConflictDoNothing());
-    replyDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
-  }
-
-  const results = await runAtomicWrites(db, writes);
+    return writes;
+  });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
+  const replyDeliveries = await fetchDeliveryFanoutRecords(db, replyId);
 
   return {
     id: reply.id,

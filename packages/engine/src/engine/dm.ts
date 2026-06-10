@@ -287,52 +287,53 @@ export async function sendDm(
     await a2aEngine.incrementA2aMessagesSent(db, a2aTarget.id);
   }
 
-  // All durable writes (message + attachments + delivery + message_log) run
-  // as one atomic unit when the adapter supports it; fanout stays in routes.
-  const writes = buildDmMessageWrites(db, workspaceId, fromAgentId, conv.channelId, data, messageId);
+  const deliveryId = toAgent.id !== fromAgentId ? `del_${generateId()}` : null;
 
-  // Create delivery record for the recipient (skip for @self DMs)
-  let dmDelivery: { id: string; agentId: string } | null = null;
-  if (toAgent.id !== fromAgentId) {
-    const deliveryId = `del_${generateId()}`;
+  // Durable writes (message + attachments + delivery + message_log) run as one
+  // atomic unit when the adapter supports it; fanout stays in routes.
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, messageId);
+
+    if (deliveryId) {
+      writes.push(
+        writeDb.insert(deliveries).values({
+          id: deliveryId,
+          workspaceId,
+          messageId,
+          agentId: toAgent.id,
+          mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+          reason: 'dm',
+          priority: 'normal',
+          status: 'accepted',
+        }).onConflictDoNothing(),
+      );
+    }
+
     writes.push(
-      db.insert(deliveries).values({
-        id: deliveryId,
+      buildMessageLogWrite(writeDb, {
         workspaceId,
         messageId,
-        agentId: toAgent.id,
-        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-        reason: 'dm',
-        priority: 'normal',
-        status: 'accepted',
-      }).onConflictDoNothing(),
+        channelId: conv.channelId,
+        agentId: fromAgentId,
+        conversationId: conv.id,
+        deliveryKind: 'dm',
+        body: data.text,
+        contentType: 'text/plain',
+        metadata: {
+          target_agent: toAgent.name,
+          injection_mode: data.mode ?? 'wait',
+          ...(a2aTarget ? { a2a_target_url: a2aTarget.external_url } : {}),
+        },
+        attachmentCount: attachments.length,
+        mentionCount: 0,
+        latencyMs: Date.now() - startedAtMs,
+      }),
     );
-    dmDelivery = { id: deliveryId, agentId: toAgent.id };
-  }
 
-  writes.push(
-    buildMessageLogWrite(db, {
-      workspaceId,
-      messageId,
-      channelId: conv.channelId,
-      agentId: fromAgentId,
-      conversationId: conv.id,
-      deliveryKind: 'dm',
-      body: data.text,
-      contentType: 'text/plain',
-      metadata: {
-        target_agent: toAgent.name,
-        injection_mode: data.mode ?? 'wait',
-        ...(a2aTarget ? { a2a_target_url: a2aTarget.external_url } : {}),
-      },
-      attachmentCount: attachments.length,
-      mentionCount: 0,
-      latencyMs: Date.now() - startedAtMs,
-    }),
-  );
-
-  const results = await runAtomicWrites(db, writes);
+    return writes;
+  });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
+  const dmDelivery = deliveryId ? { id: deliveryId, agentId: toAgent.id } : null;
 
   const injectionMode = data.mode ?? 'wait';
   return {

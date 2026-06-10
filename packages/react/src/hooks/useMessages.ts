@@ -39,18 +39,20 @@ export function useMessages(channel: string): UseMessagesReturn {
 
   const fetchMore = useCallback(async () => {
     const current = store.getState().channelMessages[channel];
-    if (!current || current.messages.length === 0) return;
+    if (!current || current.messages.length === 0) return 0;
 
     const oldest = sortMessagesChronologically(current.messages)[0];
-    if (!oldest) return;
+    if (!oldest) return 0;
 
     const older = await ctx.agent.messages(channel, { before: oldest.id, limit: 50 });
+    if (older.length === 0) return 0;
     const sortedOlder = sortMessagesChronologically(older);
 
     store.updateChannelMessages(channel, (prev) => ({
       ...prev,
       messages: sortMessagesChronologically([...sortedOlder, ...prev.messages]),
     }));
+    return older.length;
   }, [channel, ctx.agent, store]);
 
   return {

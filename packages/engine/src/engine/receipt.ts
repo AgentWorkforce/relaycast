@@ -52,9 +52,9 @@ export async function markRead(
 
   // The three read-state writes (receipt + delivery transition + lastReadId)
   // run as one atomic unit when the adapter supports it.
-  await runAtomicWrites(db, [
+  await runAtomicWrites(db, (writeDb) => [
     // Upsert read receipt (idempotent)
-    db
+    writeDb
       .insert(readReceipts)
       .values({ messageId, agentId })
       .onConflictDoNothing(),
@@ -63,7 +63,7 @@ export async function markRead(
     // clear both still-queued states (accepted and deferred) — otherwise a
     // deferred delivery would linger in the durable replay queue after the agent
     // has already seen the message. `delivered`/`failed` are left untouched.
-    db
+    writeDb
       .update(deliveries)
       .set({ status: 'delivered', updatedAt: new Date() })
       .where(
@@ -75,7 +75,7 @@ export async function markRead(
       ),
 
     // Update lastReadId for the channel membership (only move forward)
-    db
+    writeDb
       .update(channelMembers)
       .set({ lastReadId: messageId })
       .where(
