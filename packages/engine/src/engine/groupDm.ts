@@ -63,33 +63,35 @@ export async function createGroupDm(
   const conversationId = generateId();
   const channelId = generateId();
 
-  // Create private channel (channel_type=2 for group DM)
-  await db.insert(channels).values({
-    id: channelId,
-    workspaceId,
-    name: `group-dm-${conversationId}`,
-    channelType: 2,
-  });
-
-  // Create group DM conversation
-  await db.insert(dmConversations).values({
-    id: conversationId,
-    workspaceId,
-    channelId,
-    dmType: 'group',
-    name: data.name ?? null,
-  });
-
-  // Add creator + all participants
   const allParticipantIds = [creatorAgentId, ...participantAgents.map((a) => a.id)];
   const uniqueIds = [...new Set(allParticipantIds)];
 
-  for (const agentId of uniqueIds) {
-    await db.insert(dmParticipants).values({
-      conversationId,
-      agentId,
+  await runAtomic(db, async (tx) => {
+    // Create private channel (channel_type=2 for group DM)
+    await tx.insert(channels).values({
+      id: channelId,
+      workspaceId,
+      name: `group-dm-${conversationId}`,
+      channelType: 2,
     });
-  }
+
+    // Create group DM conversation
+    await tx.insert(dmConversations).values({
+      id: conversationId,
+      workspaceId,
+      channelId,
+      dmType: 'group',
+      name: data.name ?? null,
+    });
+
+    // Add creator + all participants
+    for (const agentId of uniqueIds) {
+      await tx.insert(dmParticipants).values({
+        conversationId,
+        agentId,
+      });
+    }
+  });
 
   return {
     id: conversationId,
