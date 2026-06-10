@@ -24,7 +24,7 @@ export interface SqliteDbHandle {
  * (created if absent) or `':memory:'` for tests. Sets WAL + foreign keys.
  *
  * The better-sqlite3 driver is synchronous; Drizzle query builders are thenable
- * so the engine's `await db.select()...` works unchanged. Only the sync→async
+ * so the engine's `await db.select()...` works unchanged. Only the sync->async
  * surface kind is bridged by the cast here — the run-result type (`RunResult`)
  * is preserved, so {@link NodeEngineDb} stays precisely typed.
  */
@@ -34,7 +34,8 @@ export function getSqliteDb(path: string): SqliteDbHandle {
   const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
   const isolatedTransactions = path !== ':memory:';
 
-  // Attach the transaction capability (`runAtomic` detects it on the handle).
+  // Attach the transaction capability (`runAtomicWrites` detects it on the
+  // handle and prefers it over a batch).
   //
   // Drizzle's better-sqlite3 `db.transaction()` requires a synchronous
   // callback (better-sqlite3's native wrapper commits when the sync call

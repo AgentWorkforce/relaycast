@@ -1,9 +1,13 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, agents, reactions, readReceipts, messageAttachments, files, channelMembers, deliveries } from '../db/schema.js';
-import { runAtomic } from '../ports/database.js';
+import { messages, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
-import { logMessage } from './console.js';
+import { buildMessageLogWrite } from './console.js';
+import {
+  buildChannelDeliveryWrite,
+  fetchDeliveryFanoutRecords,
+} from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -39,6 +43,39 @@ async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<stri
   return map;
 }
 
+/**
+ * Fetch attachment details straight from `files` by id, preserving the
+ * caller's ordering. Used by the send path, which needs the details *before*
+ * the `message_attachments` rows exist — the junction insert is part of the
+ * atomic write batch, so it cannot be joined against mid-send.
+ */
+async function fetchAttachmentDetails(db: Db, fileIds: string[]): Promise<AttachmentRow[]> {
+  if (fileIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      fileId: files.id,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(files)
+    .where(inArray(files.id, fileIds));
+
+  const byId = new Map(rows.map((row) => [row.fileId, row]));
+  return fileIds
+    .filter((id) => byId.has(id))
+    .map((id) => {
+      const row = byId.get(id)!;
+      return {
+        file_id: row.fileId,
+        filename: row.filename,
+        content_type: row.contentType,
+        size_bytes: row.sizeBytes,
+      };
+    });
+}
+
 export async function postMessage(
   db: Db,
   workspaceId: string,
@@ -65,82 +102,74 @@ export async function postMessage(
 
   const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
 
-  // All durable writes (message + attachments + deliveries + message_log) run
-  // atomically when the adapter supports transactions; fanout stays in routes.
-  const { message, agent, attachments, deliveryRecords } = await runAtomic(db, async (tx) => {
-    const [message] = await tx
-      .insert(messages)
-      .values({
-        id: messageId,
-        workspaceId,
-        channelId,
-        agentId,
-        body: data.text,
-        blocks: data.blocks || null,
-        metadata,
-        hasAttachments,
-      })
-      .returning();
+  const [attachments, [agent]] = await Promise.all([
+    fetchAttachmentDetails(db, data.attachments ?? []),
+    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+  ]);
 
-    // Insert attachment records into junction table
+  // Durable writes run as one atomic unit when the adapter supports it; fanout
+  // stays in routes. Delivery recipients are derived by the delivery insert
+  // itself, so membership changes cannot slip in between a pre-read and commit.
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: messageId,
+          workspaceId,
+          channelId,
+          agentId,
+          body: data.text,
+          blocks: data.blocks || null,
+          metadata,
+          hasAttachments,
+        })
+        .returning(),
+    ];
+
     if (data.attachments && data.attachments.length > 0) {
       const attachmentValues = data.attachments.map((fileId, idx) => ({
         messageId,
         fileId,
         position: idx,
       }));
-      await tx.insert(messageAttachments).values(attachmentValues);
+      writes.push(writeDb.insert(messageAttachments).values(attachmentValues));
     }
 
-    // Fetch attachment details, agent name, and channel members (for delivery records)
-    const [attachmentMap, [agent], members] = await Promise.all([
-      hasAttachments ? fetchAttachmentsBatch(tx, [messageId]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
-      tx.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
-      tx
-        .select({ agentId: channelMembers.agentId, agentName: agents.name })
-        .from(channelMembers)
-        .innerJoin(agents, eq(channelMembers.agentId, agents.id))
-        .where(eq(channelMembers.channelId, channelId)),
-    ]);
-    const attachments = attachmentMap.get(messageId) || [];
-
-    // Create per-recipient delivery records for all channel members except the sender
-    const recipientMembers = members.filter((m) => m.agentId !== agentId);
-    const deliveryRecords: Array<{ id: string; agentId: string; reason: string }> = [];
-    if (recipientMembers.length > 0) {
-      const rows = recipientMembers.map((m) => ({
-        id: `del_${generateId()}`,
+    writes.push(
+      buildChannelDeliveryWrite(writeDb, {
         workspaceId,
         messageId,
-        agentId: m.agentId,
-        mode: (data.mode === 'steer' ? 'next-tool-call' : 'immediate') as string,
-        reason: (mentionedHandles.has(m.agentName ?? '') ? 'mention' : 'message') as string,
-        priority: 'normal',
-        status: 'accepted',
-      }));
-      await tx.insert(deliveries).values(rows);
-      deliveryRecords.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId, reason: r.reason })));
-    }
+        channelId,
+        senderAgentId: agentId,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        mentionHandles: Array.from(mentionedHandles),
+      }),
+    );
 
-    await logMessage(tx, {
-      workspaceId,
-      messageId,
-      channelId,
-      agentId,
-      deliveryKind: 'channel',
-      body: message.body,
-      contentType: data.content_type ?? null,
-      metadata: {
-        ...metadata,
-        injection_mode: data.mode ?? 'wait',
-      },
-      attachmentCount: attachments.length,
-      mentionCount: mentionMatches.length,
-      latencyMs: Date.now() - startedAtMs,
-    });
+    writes.push(
+      buildMessageLogWrite(writeDb, {
+        workspaceId,
+        messageId,
+        channelId,
+        agentId,
+        deliveryKind: 'channel',
+        body: data.text,
+        contentType: data.content_type ?? null,
+        metadata: {
+          ...metadata,
+          injection_mode: data.mode ?? 'wait',
+        },
+        attachmentCount: attachments.length,
+        mentionCount: mentionMatches.length,
+        latencyMs: Date.now() - startedAtMs,
+      }),
+    );
 
-    return { message, agent, attachments, deliveryRecords };
+    return writes;
   });
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
+  const deliveryRecords = await fetchDeliveryFanoutRecords(db, messageId);
 
   return {
     id: message.id,
