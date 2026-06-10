@@ -5,9 +5,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
 use crate::error::{RelayError, Result};
-use crate::harness::{
-    sanitize_agent_relay_distinct_id, sanitize_harness, AGENT_RELAY_DISTINCT_ID_HEADER,
-    HARNESS_HEADER,
+use crate::origin_actor::{
+    sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_HEADER,
+    ORIGIN_ACTOR_HEADER,
 };
 use crate::types::ApiResponse;
 
@@ -30,10 +30,10 @@ pub struct ClientOptions {
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
     pub origin_version: Option<String>,
-    /// User-Agent-style identifier for the harness driving requests
+    /// User-Agent-style identifier for the origin_actor driving requests
     /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
-    /// the `X-Relaycast-Harness` header; invalid values are dropped.
-    pub harness: Option<String>,
+    /// the `X-Relaycast-Origin-Actor` header; invalid values are dropped.
+    pub origin_actor: Option<String>,
     /// Agent Relay distinct telemetry id. Sent as the
     /// `X-Agent-Relay-Distinct-Id` header; invalid values are dropped.
     pub agent_relay_distinct_id: Option<String>,
@@ -48,7 +48,7 @@ impl ClientOptions {
             origin_surface: None,
             origin_client: None,
             origin_version: None,
-            harness: None,
+            origin_actor: None,
             agent_relay_distinct_id: None,
         }
     }
@@ -72,9 +72,9 @@ impl ClientOptions {
         self
     }
 
-    /// Set the harness identifier sent as the `X-Relaycast-Harness` header.
-    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
-        self.harness = Some(harness.into());
+    /// Set the origin_actor identifier sent as the `X-Relaycast-Origin-Actor` header.
+    pub fn with_origin_actor(mut self, origin_actor: impl Into<String>) -> Self {
+        self.origin_actor = Some(origin_actor.into());
         self
     }
 
@@ -113,7 +113,7 @@ pub struct HttpClient {
     origin_surface: String,
     origin_client: String,
     origin_version: String,
-    harness: Option<String>,
+    origin_actor: Option<String>,
     agent_relay_distinct_id: Option<String>,
 }
 
@@ -137,7 +137,7 @@ impl HttpClient {
             origin_version: options
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
-            harness: sanitize_harness(options.harness),
+            origin_actor: sanitize_origin_actor(options.origin_actor),
             agent_relay_distinct_id: sanitize_agent_relay_distinct_id(
                 options.agent_relay_distinct_id,
             ),
@@ -169,9 +169,9 @@ impl HttpClient {
         &self.origin_version
     }
 
-    /// Get the sanitized harness identifier, if one was supplied.
-    pub fn harness(&self) -> Option<&str> {
-        self.harness.as_deref()
+    /// Get the sanitized origin_actor identifier, if one was supplied.
+    pub fn origin_actor(&self) -> Option<&str> {
+        self.origin_actor.as_deref()
     }
 
     /// Get the sanitized Agent Relay distinct id, if one was supplied.
@@ -188,8 +188,8 @@ impl HttpClient {
                 self.origin_client.clone(),
                 self.origin_version.clone(),
             );
-        if let Some(harness) = &self.harness {
-            options = options.with_harness(harness.clone());
+        if let Some(origin_actor) = &self.origin_actor {
+            options = options.with_origin_actor(origin_actor.clone());
         }
         if let Some(id) = &self.agent_relay_distinct_id {
             options = options.with_agent_relay_distinct_id(id.clone());
@@ -267,8 +267,8 @@ impl HttpClient {
             .header("X-Relaycast-Origin-Client", &self.origin_client)
             .header("X-Relaycast-Origin-Version", &self.origin_version);
 
-        if let Some(ref harness) = self.harness {
-            request = request.header(HARNESS_HEADER, harness);
+        if let Some(ref origin_actor) = self.origin_actor {
+            request = request.header(ORIGIN_ACTOR_HEADER, origin_actor);
         }
         if let Some(ref id) = self.agent_relay_distinct_id {
             request = request.header(AGENT_RELAY_DISTINCT_ID_HEADER, id);

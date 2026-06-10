@@ -75,8 +75,8 @@ export interface UpgradeArgs {
   /** Display name, used for presence events. */
   agentName?: string;
   origin: { surface: string; client: string; version: string };
-  /** Cloud-only harness identifier; defaults to `'unknown'`. */
-  harness?: string;
+  /** Cloud-only origin-actor path (`{app}/{type}[/{name}]`); defaults to `'unknown'`. */
+  originActor?: string;
 }
 
 export interface ConnectionRegistry {

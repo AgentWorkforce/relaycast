@@ -522,14 +522,14 @@ async fn create_workspace_sends_origin_headers() {
 }
 
 #[tokio::test]
-async fn client_sends_sanitized_harness_header() {
+async fn client_sends_sanitized_origin_actor_header() {
     let server = MockServer::start().await;
 
-    // The harness is supplied mixed-case; it should arrive lowercased.
+    // The origin actor is supplied mixed-case; it should arrive lowercased.
     Mock::given(method("GET"))
         .and(path("/v1/channels"))
         .and(header(
-            "x-relaycast-harness",
+            "x-relaycast-origin-actor",
             "claude-code/2.3 (model=opus-4.8)",
         ))
         .respond_with(ok(json!([])))
@@ -540,7 +540,7 @@ async fn client_sends_sanitized_harness_header() {
     let relay = RelayCast::new(
         RelayCastOptions::new("rk_live_test")
             .with_base_url(server.uri())
-            .with_harness("Claude-Code/2.3 (model=Opus-4.8)"),
+            .with_origin_actor("Claude-Code/2.3 (model=Opus-4.8)"),
     )
     .expect("failed to create RelayCast client");
 
@@ -576,13 +576,13 @@ async fn client_sends_agent_relay_distinct_id_header() {
 }
 
 #[tokio::test]
-async fn client_preserves_harness_across_api_key_rotation() {
+async fn client_preserves_origin_actor_across_api_key_rotation() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/v1/channels"))
         .and(header("authorization", "Bearer at_live_rotated"))
-        .and(header("x-relaycast-harness", "cursor"))
+        .and(header("x-relaycast-origin-actor", "cursor"))
         .respond_with(ok(json!([])))
         .expect(1)
         .mount(&server)
@@ -591,7 +591,7 @@ async fn client_preserves_harness_across_api_key_rotation() {
     let client = HttpClient::new(
         ClientOptions::new("rk_live_test")
             .with_base_url(server.uri())
-            .with_harness("Cursor"),
+            .with_origin_actor("Cursor"),
     )
     .expect("failed to create HTTP client");
     let rotated = client
@@ -634,7 +634,7 @@ async fn client_preserves_agent_relay_distinct_id_across_api_key_rotation() {
 }
 
 #[tokio::test]
-async fn ws_client_forwards_sanitized_harness_query_param() {
+async fn ws_client_forwards_sanitized_origin_actor_query_param() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test WS server");
     let addr = listener.local_addr().expect("failed to read listener addr");
     let (uri_tx, uri_rx) = mpsc::channel();
@@ -654,7 +654,7 @@ async fn ws_client_forwards_sanitized_harness_query_param() {
     let mut ws = WsClient::new(
         WsClientOptions::new("at_live_test")
             .with_base_url(format!("http://{addr}"))
-            .with_harness("Claude-Code/2.3"),
+            .with_origin_actor("Claude-Code/2.3"),
     );
     ws.connect().await.expect("WS connect failed");
 
@@ -671,7 +671,7 @@ async fn ws_client_forwards_sanitized_harness_query_param() {
     );
     assert_eq!(
         url.query_pairs()
-            .find(|(key, _)| key == "harness")
+            .find(|(key, _)| key == "origin_actor")
             .map(|(_, value)| value.into_owned()),
         Some("claude-code/2.3".to_string())
     );

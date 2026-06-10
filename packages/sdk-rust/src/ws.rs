@@ -10,8 +10,8 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::error::{RelayError, Result};
-use crate::harness::{
-    sanitize_agent_relay_distinct_id, sanitize_harness, AGENT_RELAY_DISTINCT_ID_QUERY,
+use crate::origin_actor::{
+    sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_QUERY,
 };
 use crate::types::WsEvent;
 
@@ -38,9 +38,9 @@ pub struct WsClientOptions {
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
     pub origin_version: Option<String>,
-    /// User-Agent-style harness identifier, forwarded as the `harness` query
+    /// User-Agent-style origin_actor identifier, forwarded as the `origin_actor` query
     /// param (browsers can't set custom WS headers). Invalid values are dropped.
-    pub harness: Option<String>,
+    pub origin_actor: Option<String>,
     /// Agent Relay distinct telemetry id, forwarded as the
     /// `agent_relay_distinct_id` query param. Invalid values are dropped.
     pub agent_relay_distinct_id: Option<String>,
@@ -60,7 +60,7 @@ impl WsClientOptions {
             origin_surface: None,
             origin_client: None,
             origin_version: None,
-            harness: None,
+            origin_actor: None,
             agent_relay_distinct_id: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
@@ -92,9 +92,9 @@ impl WsClientOptions {
         self
     }
 
-    /// Set the harness identifier forwarded as the `harness` query param.
-    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
-        self.harness = Some(harness.into());
+    /// Set the origin_actor identifier forwarded as the `origin_actor` query param.
+    pub fn with_origin_actor(mut self, origin_actor: impl Into<String>) -> Self {
+        self.origin_actor = Some(origin_actor.into());
         self
     }
 
@@ -141,7 +141,7 @@ pub struct WsClient {
     origin_surface: String,
     origin_client: String,
     origin_version: String,
-    harness: Option<String>,
+    origin_actor: Option<String>,
     agent_relay_distinct_id: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
@@ -184,7 +184,7 @@ impl WsClient {
             origin_version: options
                 .origin_version
                 .unwrap_or_else(|| SDK_VERSION.to_string()),
-            harness: sanitize_harness(options.harness),
+            origin_actor: sanitize_origin_actor(options.origin_actor),
             agent_relay_distinct_id: sanitize_agent_relay_distinct_id(
                 options.agent_relay_distinct_id,
             ),
@@ -241,8 +241,8 @@ impl WsClient {
             query.append_pair("origin_surface", &self.origin_surface);
             query.append_pair("origin_client", &self.origin_client);
             query.append_pair("origin_version", &self.origin_version);
-            if let Some(ref harness) = self.harness {
-                query.append_pair("harness", harness);
+            if let Some(ref origin_actor) = self.origin_actor {
+                query.append_pair("origin_actor", origin_actor);
             }
             if let Some(ref id) = self.agent_relay_distinct_id {
                 query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
@@ -264,7 +264,7 @@ impl WsClient {
         let origin_surface = self.origin_surface.clone();
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
-        let harness = self.harness.clone();
+        let origin_actor = self.origin_actor.clone();
         let agent_relay_distinct_id = self.agent_relay_distinct_id.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
@@ -297,8 +297,8 @@ impl WsClient {
                         query.append_pair("origin_surface", &origin_surface);
                         query.append_pair("origin_client", &origin_client);
                         query.append_pair("origin_version", &origin_version);
-                        if let Some(ref harness) = harness {
-                            query.append_pair("harness", harness);
+                        if let Some(ref origin_actor) = origin_actor {
+                            query.append_pair("origin_actor", origin_actor);
                         }
                         if let Some(ref id) = agent_relay_distinct_id {
                             query.append_pair(AGENT_RELAY_DISTINCT_ID_QUERY, id);
