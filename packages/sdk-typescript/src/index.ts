@@ -34,9 +34,9 @@ export type { ClientOptions } from './client.js';
 export {
   AGENT_RELAY_DISTINCT_ID_HEADER,
   AGENT_RELAY_DISTINCT_ID_QUERY,
-  HARNESS_HEADER,
+  ORIGIN_ACTOR_HEADER,
   sanitizeAgentRelayDistinctId,
-  sanitizeHarness,
+  sanitizeOriginActor,
 } from './origin.js';
 export {
   relayErrorFromApi,

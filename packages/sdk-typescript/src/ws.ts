@@ -11,7 +11,7 @@ import {
   AGENT_RELAY_DISTINCT_ID_QUERY,
   SDK_ORIGIN,
   sanitizeAgentRelayDistinctId,
-  sanitizeHarness,
+  sanitizeOriginActor,
   type InternalOrigin,
 } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
@@ -29,10 +29,10 @@ export interface WsClientOptions {
   /** Log warnings for dropped/malformed WebSocket messages via console.warn. */
   debug?: boolean;
   /**
-   * Optional User-Agent-style harness identifier, forwarded as the `harness`
-   * query param (browsers can't set custom WS headers). See {@link sanitizeHarness}.
+   * Optional User-Agent-style originActor identifier, forwarded as the `originActor`
+   * query param (browsers can't set custom WS headers). See {@link sanitizeOriginActor}.
    */
-  harness?: string;
+  originActor?: string;
   /**
    * Optional Agent Relay distinct telemetry id, forwarded as the
    * `agent_relay_distinct_id` query param (browsers can't set custom WS
@@ -87,7 +87,7 @@ export class WsClient {
   private originSurface: string;
   private originClient: string;
   private originVersion: string;
-  private originHarness?: string;
+  private originActor?: string;
   private agentRelayDistinctId?: string;
 
   constructor(options: WsClientOptions) {
@@ -112,7 +112,7 @@ export class WsClient {
     this.originSurface = origin.surface;
     this.originClient = origin.client;
     this.originVersion = origin.version;
-    this.originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    this.originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
     this.agentRelayDistinctId = sanitizeAgentRelayDistinctId(
       origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
     );
@@ -128,8 +128,8 @@ export class WsClient {
     wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
-    if (this.originHarness) {
-      wsUrl.searchParams.set('harness', this.originHarness);
+    if (this.originActor) {
+      wsUrl.searchParams.set('origin_actor', this.originActor);
     }
     if (this.agentRelayDistinctId) {
       wsUrl.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, this.agentRelayDistinctId);

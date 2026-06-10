@@ -1,16 +1,16 @@
 /**
- * Tests for the harness identifier sent to the relaycast server.
+ * Tests for the originActor identifier sent to the relaycast server.
  *
- * A caller-supplied harness (public `harness` option or internal origin):
- *   - lands as the `X-Relaycast-Harness` HTTP header
- *   - lands as the `harness` WS query param
+ * A caller-supplied originActor (public `originActor` option or internal origin):
+ *   - lands as the `X-Relaycast-Origin-Actor` HTTP header
+ *   - lands as the `origin_actor` WS query param
  *   - is sanitised (lowercased, length-capped) and accepts UA-style tokens
  *   - is omitted entirely when absent / invalid
  *   - survives `withApiKey()` rotations
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sanitizeAgentRelayDistinctId, sanitizeHarness } from '../origin.js';
+import { sanitizeAgentRelayDistinctId, sanitizeOriginActor } from '../origin.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -23,9 +23,9 @@ function jsonOk(data: unknown) {
   });
 }
 
-function harnessHeaderFromLastCall(): string | undefined {
+function originActorHeaderFromLastCall(): string | undefined {
   const [, init] = mockFetch.mock.calls.at(-1)!;
-  return (init.headers as Record<string, string>)['X-Relaycast-Harness'];
+  return (init.headers as Record<string, string>)['X-Relaycast-Origin-Actor'];
 }
 
 function agentRelayDistinctIdHeaderFromLastCall(): string | undefined {
@@ -33,40 +33,46 @@ function agentRelayDistinctIdHeaderFromLastCall(): string | undefined {
   return (init.headers as Record<string, string>)['X-Agent-Relay-Distinct-Id'];
 }
 
-describe('sanitizeHarness', () => {
+describe('sanitizeOriginActor', () => {
   it('is available from the package root', async () => {
     const sdk = await import('../index.js');
 
-    expect(sdk.HARNESS_HEADER).toBe('X-Relaycast-Harness');
+    expect(sdk.ORIGIN_ACTOR_HEADER).toBe('X-Relaycast-Origin-Actor');
     expect(sdk.AGENT_RELAY_DISTINCT_ID_HEADER).toBe('X-Agent-Relay-Distinct-Id');
     expect(sdk.AGENT_RELAY_DISTINCT_ID_QUERY).toBe('agent_relay_distinct_id');
-    expect(sdk.sanitizeHarness('Codex')).toBe('codex');
+    expect(sdk.sanitizeOriginActor('Codex')).toBe('codex');
     expect(sdk.sanitizeAgentRelayDistinctId('abc123def4567890')).toBe('abc123def4567890');
   });
 
   it('keeps a UA-style token, lowercased', () => {
-    expect(sanitizeHarness('Claude-Code/2.3 (model=Opus-4.8; fast)')).toBe(
+    expect(sanitizeOriginActor('Claude-Code/2.3 (model=Opus-4.8; fast)')).toBe(
       'claude-code/2.3 (model=opus-4.8; fast)',
     );
   });
 
   it('trims surrounding whitespace', () => {
-    expect(sanitizeHarness('  codex  ')).toBe('codex');
+    expect(sanitizeOriginActor('  codex  ')).toBe('codex');
   });
 
   it('drops empty / whitespace-only input', () => {
-    expect(sanitizeHarness('')).toBeUndefined();
-    expect(sanitizeHarness('   ')).toBeUndefined();
-    expect(sanitizeHarness(undefined)).toBeUndefined();
+    expect(sanitizeOriginActor('')).toBeUndefined();
+    expect(sanitizeOriginActor('   ')).toBeUndefined();
+    expect(sanitizeOriginActor(undefined)).toBeUndefined();
   });
 
   it('drops CRLF / control characters rather than sending garbage', () => {
-    expect(sanitizeHarness('evil\r\nX-Inject: bad')).toBeUndefined();
-    expect(sanitizeHarness('a\tb')).toBeUndefined();
+    expect(sanitizeOriginActor('evil\r\nX-Inject: bad')).toBeUndefined();
+    expect(sanitizeOriginActor('a\tb')).toBeUndefined();
   });
 
-  it('caps at 120 characters', () => {
-    expect(sanitizeHarness('a'.repeat(200))).toBe('a'.repeat(120));
+  it('caps at 128 characters', () => {
+    expect(sanitizeOriginActor('a'.repeat(200))).toBe('a'.repeat(128));
+  });
+
+  it('accepts the {app}/{type}/{name}@{version}-{model} path', () => {
+    expect(sanitizeOriginActor('Agent-Relay-Cli/agent/Claude-Code@2.3.1-Opus4.8')).toBe(
+      'agent-relay-cli/agent/claude-code@2.3.1-opus4.8',
+    );
   });
 });
 
@@ -95,22 +101,22 @@ describe('sanitizeAgentRelayDistinctId', () => {
   });
 });
 
-describe('harness — HTTP', () => {
+describe('originActor — HTTP', () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  it('stamps X-Relaycast-Harness from the public constructor option', async () => {
+  it('stamps X-Relaycast-Origin-Actor from the public constructor option', async () => {
     const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test', harness: 'human' });
+    const relay = new RelayCast({ apiKey: 'rk_live_test', originActor: 'human' });
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
-    expect(harnessHeaderFromLastCall()).toBe('human');
+    expect(originActorHeaderFromLastCall()).toBe('human');
   });
 
-  it('stamps a UA-style harness from the internal origin', async () => {
+  it('stamps a path originActor from the internal origin', async () => {
     const { createInternalRelayCast } = await import('../internal.js');
     const relay = createInternalRelayCast(
       { apiKey: 'rk_live_test' },
@@ -118,17 +124,17 @@ describe('harness — HTTP', () => {
         surface: 'mcp',
         client: '@agent-relay/relaycast-mcp',
         version: '6.0.0',
-        harness: 'claude-code/2.3 (model=opus-4.8)',
+        originActor: 'agent-relay-cli/agent/claude-code@2.3.1-opus4.8',
       },
     );
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
-    expect(harnessHeaderFromLastCall()).toBe('claude-code/2.3 (model=opus-4.8)');
+    expect(originActorHeaderFromLastCall()).toBe('agent-relay-cli/agent/claude-code@2.3.1-opus4.8');
   });
 
-  it('omits the header entirely when no harness is supplied', async () => {
+  it('omits the header entirely when no originActor is supplied', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test' });
 
@@ -136,44 +142,44 @@ describe('harness — HTTP', () => {
     await relay.activity();
 
     const [, init] = mockFetch.mock.calls.at(-1)!;
-    expect('X-Relaycast-Harness' in (init.headers as Record<string, string>)).toBe(false);
+    expect('X-Relaycast-Origin-Actor' in (init.headers as Record<string, string>)).toBe(false);
   });
 
-  it('drops an invalid harness (header omitted) rather than sending garbage', async () => {
+  it('drops an invalid originActor (header omitted) rather than sending garbage', async () => {
     const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test', harness: 'evil\r\nX-Inject: bad' });
+    const relay = new RelayCast({ apiKey: 'rk_live_test', originActor: 'evil\r\nX-Inject: bad' });
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
     const [, init] = mockFetch.mock.calls.at(-1)!;
-    expect('X-Relaycast-Harness' in (init.headers as Record<string, string>)).toBe(false);
+    expect('X-Relaycast-Origin-Actor' in (init.headers as Record<string, string>)).toBe(false);
   });
 
-  it('preserves the harness across withApiKey()', async () => {
+  it('preserves the originActor across withApiKey()', async () => {
     const { HttpClient } = await import('../client.js');
-    const client = new HttpClient({ apiKey: 'rk_live_test', harness: 'cursor' });
+    const client = new HttpClient({ apiKey: 'rk_live_test', originActor: 'cursor' });
     const rotated = client.withApiKey('rk_live_other');
 
     expect(rotated.apiKey).toBe('rk_live_other');
-    expect(rotated.originHarness).toBe('cursor');
+    expect(rotated.originActor).toBe('cursor');
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await rotated.get('/v1/activity');
-    expect(harnessHeaderFromLastCall()).toBe('cursor');
+    expect(originActorHeaderFromLastCall()).toBe('cursor');
   });
 
   it('lets the internal origin override the public option', async () => {
     const { createInternalRelayCast } = await import('../internal.js');
     const relay = createInternalRelayCast(
-      { apiKey: 'rk_live_test', harness: 'human' },
-      { surface: 'mcp', client: '@agent-relay/relaycast-mcp', version: '6.0.0', harness: 'claude-code' },
+      { apiKey: 'rk_live_test', originActor: 'human' },
+      { surface: 'mcp', client: '@agent-relay/relaycast-mcp', version: '6.0.0', originActor: 'claude-code' },
     );
 
     mockFetch.mockImplementation(() => jsonOk([]));
     await relay.activity();
 
-    expect(harnessHeaderFromLastCall()).toBe('claude-code');
+    expect(originActorHeaderFromLastCall()).toBe('claude-code');
   });
 
   it('stamps X-Agent-Relay-Distinct-Id from the public constructor option', async () => {
@@ -238,8 +244,8 @@ describe('harness — HTTP', () => {
   });
 });
 
-describe('harness — WS', () => {
-  it('forwards the harness as a `harness` query param on connect', async () => {
+describe('originActor — WS', () => {
+  it('forwards the originActor as a `originActor` query param on connect', async () => {
     const constructed: string[] = [];
     class MockWs {
       static readonly OPEN = 1;
@@ -256,16 +262,16 @@ describe('harness — WS', () => {
     vi.stubGlobal('WebSocket', MockWs);
 
     const { WsClient } = await import('../ws.js');
-    const ws = new WsClient({ token: 'at_live_test', harness: 'claude-code/2.3' });
+    const ws = new WsClient({ token: 'at_live_test', originActor: 'claude-code/2.3' });
     ws.connect();
     ws.disconnect();
 
     expect(constructed).toHaveLength(1);
     const url = new URL(constructed[0]!);
-    expect(url.searchParams.get('harness')).toBe('claude-code/2.3');
+    expect(url.searchParams.get('origin_actor')).toBe('claude-code/2.3');
   });
 
-  it('omits the harness query param when none is supplied', async () => {
+  it('omits the originActor query param when none is supplied', async () => {
     const constructed: string[] = [];
     class MockWs {
       static readonly OPEN = 1;
@@ -287,7 +293,7 @@ describe('harness — WS', () => {
     ws.disconnect();
 
     const url = new URL(constructed[0]!);
-    expect(url.searchParams.has('harness')).toBe(false);
+    expect(url.searchParams.has('originActor')).toBe(false);
   });
 
   it('forwards the Agent Relay distinct id as a query param on connect', async () => {

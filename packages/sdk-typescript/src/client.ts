@@ -3,10 +3,10 @@ import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import {
   AGENT_RELAY_DISTINCT_ID_HEADER,
-  HARNESS_HEADER,
+  ORIGIN_ACTOR_HEADER,
   SDK_ORIGIN,
   sanitizeAgentRelayDistinctId,
-  sanitizeHarness,
+  sanitizeOriginActor,
   type InternalOrigin,
 } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
@@ -17,12 +17,12 @@ export interface ClientOptions {
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
   /**
-   * Optional User-Agent-style identifier for the harness driving requests
+   * Optional User-Agent-style identifier for the originActor driving requests
    * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
-   * the `X-Relaycast-Harness` header; invalid values are dropped. See
-   * {@link sanitizeHarness}.
+   * the `X-Relaycast-Origin-Actor` header; invalid values are dropped. See
+   * {@link sanitizeOriginActor}.
    */
-  harness?: string;
+  originActor?: string;
   /**
    * Optional Agent Relay distinct telemetry id. Sent as the
    * `X-Agent-Relay-Distinct-Id` header so Relaycast telemetry can be joined to
@@ -146,7 +146,7 @@ export class HttpClient {
   private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
-  private _originHarness?: string;
+  private _originActor?: string;
   private _agentRelayDistinctId?: string;
   private _retryPolicy: RetryPolicy;
 
@@ -157,9 +157,9 @@ export class HttpClient {
     this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
-    // A wrapping host's internal origin is authoritative about the harness;
-    // fall back to the public `harness` option for plain consumers.
-    this._originHarness = sanitizeHarness(origin.harness ?? options.harness);
+    // A wrapping host's internal origin is authoritative about the originActor;
+    // fall back to the public `originActor` option for plain consumers.
+    this._originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
     this._agentRelayDistinctId = sanitizeAgentRelayDistinctId(
       origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
     );
@@ -186,9 +186,9 @@ export class HttpClient {
     return this._originVersion;
   }
 
-  /** Sanitized harness identifier, or `undefined` when none was supplied. */
-  get originHarness(): string | undefined {
-    return this._originHarness;
+  /** Sanitized originActor identifier, or `undefined` when none was supplied. */
+  get originActor(): string | undefined {
+    return this._originActor;
   }
 
   /** Sanitized Agent Relay distinct id, or `undefined` when none was supplied. */
@@ -207,7 +207,7 @@ export class HttpClient {
         surface: this._originSurface,
         client: this._originClient,
         version: this._originVersion,
-        ...(this._originHarness ? { harness: this._originHarness } : {}),
+        ...(this._originActor ? { originActor: this._originActor } : {}),
         ...(this._agentRelayDistinctId ? { agentRelayDistinctId: this._agentRelayDistinctId } : {}),
       },
     ));
@@ -233,7 +233,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Surface': this._originSurface,
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
-      ...(this._originHarness ? { [HARNESS_HEADER]: this._originHarness } : {}),
+      ...(this._originActor ? { [ORIGIN_ACTOR_HEADER]: this._originActor } : {}),
       ...(this._agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: this._agentRelayDistinctId } : {}),
       ...(options?.headers || {}),
     };
