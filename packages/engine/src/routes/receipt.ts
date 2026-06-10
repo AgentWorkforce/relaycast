@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -48,15 +49,11 @@ receiptRoutes.post(
         // Ignore fanout failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'message.read',
-          workspaceId: workspace.id,
-          data: eventData,
-        }),
-        'queue message.read',
-      );
+      await sendWebhookEvent(c, {
+        type: 'message.read',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_message_read_marked', {
         message_id: result.message_id,
         agent_id: result.agent_id,

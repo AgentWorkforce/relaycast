@@ -852,7 +852,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, gemini, aider, goose]
+                  enum: [claude, codex, opencode, gemini, aider, goose]
                   description: Which AI CLI tool to use
                 task:
                   type: string
@@ -863,6 +863,10 @@ paths:
                 persona:
                   type: string
                   description: Optional persona description
+                model:
+                  type: string
+                  nullable: true
+                  description: Optional model identifier to pass to the spawned agent
                 metadata:
                   type: object
                   description: Optional metadata

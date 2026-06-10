@@ -8,6 +8,7 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as threadEngine from '../engine/thread.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -55,6 +56,11 @@ threadRoutes.post(
       }
 
       const parentId = c.req.param('id');
+      const toThreadReplyEventData = (data: Awaited<ReturnType<typeof threadEngine.postReply>>) => {
+        const { _deliveries, ...publicReplyData } = data;
+        return { ...publicReplyData, from_name: agent?.name };
+      };
+
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agentId,
@@ -71,6 +77,13 @@ threadRoutes.post(
             agentId,
             { text, blocks, data },
           ),
+        afterOperation: async (data) => {
+          await sendWebhookEvent(c, {
+            type: 'thread.reply',
+            workspaceId: workspace.id,
+            data: toThreadReplyEventData(data),
+          });
+        },
       });
 
       if (idempotent.replayed) {
@@ -79,7 +92,7 @@ threadRoutes.post(
 
       if (!idempotent.replayed) {
         const { _deliveries, ...publicReplyData } = idempotent.data as typeof idempotent.data & { _deliveries?: Array<{ id: string; agentId: string }> };
-        const eventData = { ...publicReplyData, from_name: agent?.name };
+        const eventData = toThreadReplyEventData(idempotent.data);
         if (publicReplyData.channel_id) {
           const channelId = publicReplyData.channel_id;
           runInBackground(
@@ -112,15 +125,6 @@ threadRoutes.post(
           }
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({
-            type: 'thread.reply',
-            workspaceId: workspace.id,
-            data: eventData,
-          }),
-          'queue thread.reply',
-        );
         emitServerEvent(c, workspace.id, 'relaycast_server_thread_reply_created', {
           message_id: publicReplyData.id,
           parent_message_id: parentId,

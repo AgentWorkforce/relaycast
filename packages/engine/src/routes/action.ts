@@ -7,6 +7,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
 import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError } from '../lib/httpError.js';
 
@@ -182,15 +183,11 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
       'fanout action.invoked',
     );
-    runInBackground(
-      c,
-      c.get('engine').webhookQueue.send({
-        type: 'action.invoked',
-        workspaceId: workspace.id,
-        data: eventData,
-      }),
-      'queue action.invoked',
-    );
+    await sendWebhookEvent(c, {
+      type: 'action.invoked',
+      workspaceId: workspace.id,
+      data: eventData,
+    });
     emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
       action_name: result.action_name,
       invocation_id: result.invocation_id,
@@ -209,15 +206,11 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         error: error.message,
       };
       runInBackground(c, fanoutToAgents(c, [agent.id], 'action.denied', eventData), 'fanout action.denied');
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'action.denied',
-          workspaceId: workspace.id,
-          data: eventData,
-        }),
-        'queue action.denied',
-      );
+      await sendWebhookEvent(c, {
+        type: 'action.denied',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
     }
     return errorResponse(c, error);
   }
@@ -275,11 +268,7 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
       fanoutToWorkspace(c, eventType, eventPayload),
       `fanout ${eventType} workspace`,
     );
-    runInBackground(
-      c,
-      c.get('engine').webhookQueue.send({ type: eventType, workspaceId: workspace.id, data: result }),
-      `queue ${eventType}`,
-    );
+    await sendWebhookEvent(c, { type: eventType, workspaceId: workspace.id, data: result });
 
     // Strip caller_id from client response (internal routing detail)
     const { caller_id: _drop, ...publicResult } = result;
