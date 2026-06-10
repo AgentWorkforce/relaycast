@@ -29,7 +29,7 @@ const ORIGIN_ACTOR_MAX_LENGTH = 128;
  * characters — rejecting those is what keeps a buggy upstream caller from
  * smuggling a header injection past the relaycast WAF.
  */
-const ORIGIN_ACTOR_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
+const ORIGIN_ACTOR_ALLOWED = /^[a-z0-9 ._\-/():=;,+@]+$/i;
 const AGENT_RELAY_DISTINCT_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
 
 /**

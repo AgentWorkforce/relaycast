@@ -530,7 +530,7 @@ async fn client_sends_sanitized_origin_actor_header() {
         .and(path("/v1/channels"))
         .and(header(
             "x-relaycast-origin-actor",
-            "claude-code/2.3 (model=opus-4.8)",
+            "agent-relay-cli/agent/claude-code@2.3.1-opus4.8",
         ))
         .respond_with(ok(json!([])))
         .expect(1)
@@ -540,7 +540,7 @@ async fn client_sends_sanitized_origin_actor_header() {
     let relay = RelayCast::new(
         RelayCastOptions::new("rk_live_test")
             .with_base_url(server.uri())
-            .with_origin_actor("Claude-Code/2.3 (model=Opus-4.8)"),
+            .with_origin_actor("Agent-Relay-Cli/agent/Claude-Code@2.3.1-Opus4.8"),
     )
     .expect("failed to create RelayCast client");
 
@@ -654,7 +654,7 @@ async fn ws_client_forwards_sanitized_origin_actor_query_param() {
     let mut ws = WsClient::new(
         WsClientOptions::new("at_live_test")
             .with_base_url(format!("http://{addr}"))
-            .with_origin_actor("Claude-Code/2.3"),
+            .with_origin_actor("Agent-Relay-Cli/agent/Claude-Code@2.3.1"),
     );
     ws.connect().await.expect("WS connect failed");
 
@@ -673,7 +673,7 @@ async fn ws_client_forwards_sanitized_origin_actor_query_param() {
         url.query_pairs()
             .find(|(key, _)| key == "origin_actor")
             .map(|(_, value)| value.into_owned()),
-        Some("claude-code/2.3".to_string())
+        Some("agent-relay-cli/agent/claude-code@2.3.1".to_string())
     );
 
     ws.disconnect().await;

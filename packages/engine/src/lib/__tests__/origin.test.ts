@@ -32,10 +32,13 @@ describe("extractOriginActor", () => {
     expect(extractOriginActor(req({ header: "Claude-Code" }))).toBe("claude-code");
   });
 
-  it("accepts a UA-style token", () => {
+  it("accepts a path carrying harness version + model in the name", () => {
+    // {app}/{type}/{name} where name = {harness}@{version}-{model}.
     expect(
-      extractOriginActor(req({ header: "claude-code/2.3 (model=opus-4.8; fast)" })),
-    ).toBe("claude-code/2.3 (model=opus-4.8; fast)");
+      extractOriginActor(
+        req({ header: "agent-relay-cli/agent/claude-code@2.3.1-opus4.8" }),
+      ),
+    ).toBe("agent-relay-cli/agent/claude-code@2.3.1-opus4.8");
   });
 
   it("falls back to the `origin_actor` query param (browser WS path)", () => {
