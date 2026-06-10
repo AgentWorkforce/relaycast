@@ -458,6 +458,198 @@ describe('WsClient', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  describe('reconnect resync', () => {
+    function sentFrames(ws: MockWebSocket): Array<Record<string, unknown>> {
+      return ws.send.mock.calls.map(([data]) => JSON.parse(data as string));
+    }
+
+    function resyncFrames(ws: MockWebSocket): Array<Record<string, unknown>> {
+      return sentFrames(ws).filter((frame) => frame.type === 'resync');
+    }
+
+    it('does not send a resync frame on first connection', () => {
+      const client = new WsClient({ token: 'at_live_test' });
+      client.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      expect(resyncFrames(ws)).toHaveLength(0);
+    });
+
+    it('tracks agent_seq and sends resync with the highest seen seq on reconnect', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+
+      ws1.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+        agent_seq: 1,
+      });
+      // Unrecognized event types still advance the seq cursor.
+      ws1.simulateMessage({ type: 'typing.started', agent_name: 'Alice', agent_seq: 2 });
+      ws1.simulateMessage({ type: 'pong' });
+
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      const frames = resyncFrames(ws2);
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toMatchObject({ type: 'resync', last_seen_seq: 2 });
+      expect(typeof frames[0]!.since).toBe('string');
+      expect(Number.isNaN(new Date(frames[0]!.since as string).getTime())).toBe(false);
+    });
+
+    it('sends resync after open handlers have re-subscribed', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.on('open', () => client.subscribe(['general']));
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_1',
+        emoji: 'thumbsup',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 7,
+      });
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      const frames = sentFrames(ws2);
+      expect(frames[0]).toMatchObject({ type: 'subscribe', channels: ['general'] });
+      expect(frames[1]).toMatchObject({ type: 'resync', last_seen_seq: 7 });
+    });
+
+    it('does not send a resync frame on reconnect when no events were received', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      expect(resyncFrames(ws2)).toHaveLength(0);
+    });
+
+    it('dispatches replayed events once, deduped by stable event id', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      const handler = vi.fn();
+      client.on('message.created', handler);
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+
+      const original = {
+        id: 'evt-stable-1',
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+        agent_seq: 1,
+      };
+      ws1.simulateMessage(original);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      // Server replays the same event (same stable id) plus a new one.
+      ws2.simulateMessage(original);
+      ws2.simulateMessage({
+        id: 'evt-stable-2',
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_2', agent_name: 'Bot', text: 'missed you', attachments: [] },
+        agent_seq: 2,
+        replayed: true,
+      });
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: 'evt-stable-2' }),
+      );
+    });
+
+    it('emits resynced with replay stats when the server acks a resync', () => {
+      const client = new WsClient({ token: 'at_live_test' });
+      const resyncedHandler = vi.fn();
+      const wildcardHandler = vi.fn();
+      client.on('resynced', resyncedHandler);
+      client.on('*', wildcardHandler);
+      client.connect();
+      const ws = MockWebSocket.instances[0]!;
+      ws.simulateOpen();
+
+      ws.simulateMessage({
+        type: 'resync_ack',
+        last_seen_seq: 5,
+        current_seq: 9,
+        replayed: 4,
+        gap_detected: true,
+      });
+
+      expect(resyncedHandler).toHaveBeenCalledTimes(1);
+      expect(resyncedHandler).toHaveBeenCalledWith({
+        type: 'resynced',
+        replayed: 4,
+        gapDetected: true,
+      });
+      expect(wildcardHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'resynced' }),
+      );
+    });
+
+    it('resyncs from the latest seq after multiple reconnects', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_1',
+        emoji: 'eyes',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 3,
+      });
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+      expect(resyncFrames(ws2)[0]).toMatchObject({ last_seen_seq: 3 });
+
+      ws2.simulateMessage({
+        type: 'message.reacted',
+        message_id: 'm_2',
+        emoji: 'eyes',
+        agent_name: 'Bot',
+        action: 'added',
+        agent_seq: 8,
+      });
+      ws2.simulateClose();
+      vi.advanceTimersByTime(1000);
+
+      const ws3 = MockWebSocket.instances[2]!;
+      ws3.simulateOpen();
+      expect(resyncFrames(ws3)[0]).toMatchObject({ last_seen_seq: 8 });
+    });
+  });
+
   it('manual reconnect() opens a new socket after circuit breaker trip', () => {
     const client = new WsClient({
       token: 'at_live_test',

@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- Reconnect resync: `WsClient` now tracks the server-stamped `agent_seq` on delivered events and, after every reconnect, sends a `resync` frame so the server replays events missed during the disconnect window. Replayed events flow through the normal handlers, deduplicated by stable event id. First connections are unchanged (no resync until an event has been seen).
+- `resynced` lifecycle event on `WsClient`, plus `on.resynced(({ replayed, gapDetected }) => ...)` on `RelayCast` and `AgentClient`, reporting how many events were replayed and whether the gap exceeded the server's replay buffer.
+- Package README with install, `RelayCast` vs `AgentClient` quickstart, and reconnect/resync behavior.
 - Optional `harness` field on `RelayCastOptions`/`ClientOptions` and `WsClientOptions` (plus the internal `InternalOrigin` plumbing). A User-Agent-style identifier for the harness driving requests (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`); stamped as the `X-Relaycast-Harness` HTTP header and forwarded as the `harness` WS query param so server-side telemetry can attribute traffic. When a wrapping host supplies one via the internal origin it takes precedence over the public option. Invalid values (empty, control characters) are dropped rather than sent; the header is omitted entirely when no harness is set, so existing consumers are unchanged on the wire.
 - `sanitizeHarness` and `HARNESS_HEADER` exported from the SDK root — lowercases, restricts to a UA-safe character set, caps at 120 chars.
 - Workspace-key realtime on `RelayCast`: `connect()`, `disconnect()`, and typed `on.*` handlers now open `/v1/ws` with the workspace key and expose workspace stream events.
