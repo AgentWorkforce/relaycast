@@ -25,11 +25,11 @@ export interface AppVariables {
   logger: Logger;
   requestId: string;
   /**
-   * Harness identifier derived from the `X-Relaycast-Harness` request header.
-   * Always set (defaults to `'unknown'`). Stamped on every server-side telemetry
-   * event for the request via `emitServerEvent`.
+   * Origin-actor path derived from the `X-Relaycast-Origin-Actor` request header
+   * (`{app}/{type}[/{name}]`). Always set (defaults to `'unknown'`). Stamped on
+   * every server-side telemetry event for the request via `emitServerEvent`.
    */
-  harness: string;
+  originActor: string;
   /** The injected ports + providers + config for this deployment. */
   engine: EngineRuntime;
 }

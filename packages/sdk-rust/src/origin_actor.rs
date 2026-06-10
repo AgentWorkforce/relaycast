@@ -1,30 +1,31 @@
-//! Harness identifier handling.
+//! Origin-actor identifier handling.
 //!
-//! A harness is a User-Agent-style identifier for the process driving requests
-//! (e.g. `claude-code/2.3 (model=opus-4.8; fast)`, `codex`, `human`). When set,
-//! it is sent as the `X-Relaycast-Harness` HTTP header and the `harness` WS query
-//! param so server-side telemetry can attribute traffic. Mirrors the contract in
-//! `@relaycast/sdk` and `@relaycast/engine`.
+//! The origin actor is a User-Agent-style path identifying *who* drives a
+//! request — `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`,
+//! `pear/user/send-message-box`). When set, it is sent as the
+//! `X-Relaycast-Origin-Actor` HTTP header and the `origin_actor` WS query param
+//! so server-side telemetry can attribute traffic. See
+//! `cloud/plans/origin-actor.md`.
 
-/// HTTP header used to tell the relaycast server which harness drives a request.
-pub const HARNESS_HEADER: &str = "X-Relaycast-Harness";
+/// HTTP header used to tell the relaycast server which origin actor drives a request.
+pub const ORIGIN_ACTOR_HEADER: &str = "X-Relaycast-Origin-Actor";
 /// HTTP header used to forward Agent Relay's distinct telemetry id.
 pub const AGENT_RELAY_DISTINCT_ID_HEADER: &str = "X-Agent-Relay-Distinct-Id";
 /// WebSocket query param used to forward Agent Relay's distinct telemetry id.
 pub const AGENT_RELAY_DISTINCT_ID_QUERY: &str = "agent_relay_distinct_id";
 
-/// Upper bound on the harness value — generous enough for a UA-style token.
-const HARNESS_MAX_LENGTH: usize = 120;
+/// Upper bound on the origin_actor value — generous enough for a UA-style token.
+const ORIGIN_ACTOR_MAX_LENGTH: usize = 128;
 const AGENT_RELAY_DISTINCT_ID_MAX_LENGTH: usize = 128;
 
-/// Characters permitted in a harness identifier. Deliberately broad enough for a
+/// Characters permitted in a origin_actor identifier. Deliberately broad enough for a
 /// User-Agent-style token (`name/version (model=...; setting)`) while excluding
 /// CR/LF and other control characters.
 fn is_allowed(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
-            ' ' | '.' | '_' | '-' | '/' | '(' | ')' | ':' | '=' | ';' | ',' | '+'
+            ' ' | '.' | '_' | '-' | '/' | '(' | ')' | ':' | '=' | ';' | ',' | '+' | '@'
         )
 }
 
@@ -32,12 +33,12 @@ fn is_allowed_agent_relay_distinct_id(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-')
 }
 
-/// Normalize a caller-supplied harness identifier to the wire contract.
+/// Normalize a caller-supplied origin_actor identifier to the wire contract.
 ///
 /// Returns a trimmed, lowercased, length-capped token, or `None` when the input
 /// is empty or contains disallowed characters — in which case callers omit the
 /// header/param entirely rather than sending garbage the server would reject.
-pub fn sanitize_harness(raw: Option<impl AsRef<str>>) -> Option<String> {
+pub fn sanitize_origin_actor(raw: Option<impl AsRef<str>>) -> Option<String> {
     let raw = raw?;
     let trimmed = raw.as_ref().trim();
     if trimmed.is_empty() {
@@ -49,7 +50,7 @@ pub fn sanitize_harness(raw: Option<impl AsRef<str>>) -> Option<String> {
     Some(
         trimmed
             .chars()
-            .take(HARNESS_MAX_LENGTH)
+            .take(ORIGIN_ACTOR_MAX_LENGTH)
             .collect::<String>()
             .to_lowercase(),
     )
@@ -58,7 +59,7 @@ pub fn sanitize_harness(raw: Option<impl AsRef<str>>) -> Option<String> {
 /// Normalize an Agent Relay distinct telemetry id to the wire contract.
 ///
 /// Returns a trimmed, length-capped id, or `None` when the input is empty or
-/// contains disallowed characters. Unlike harness values, this preserves case
+/// contains disallowed characters. Unlike origin_actor values, this preserves case
 /// because the id is an opaque token.
 pub fn sanitize_agent_relay_distinct_id(raw: Option<impl AsRef<str>>) -> Option<String> {
     let raw = raw?;
@@ -84,7 +85,7 @@ mod tests {
     #[test]
     fn keeps_a_ua_style_token_lowercased() {
         assert_eq!(
-            sanitize_harness(Some("Claude-Code/2.3 (model=Opus-4.8; fast)")),
+            sanitize_origin_actor(Some("Claude-Code/2.3 (model=Opus-4.8; fast)")),
             Some("claude-code/2.3 (model=opus-4.8; fast)".to_string())
         );
     }
@@ -92,28 +93,28 @@ mod tests {
     #[test]
     fn trims_surrounding_whitespace() {
         assert_eq!(
-            sanitize_harness(Some("  codex  ")),
+            sanitize_origin_actor(Some("  codex  ")),
             Some("codex".to_string())
         );
     }
 
     #[test]
     fn drops_empty_and_none() {
-        assert_eq!(sanitize_harness(Some("")), None);
-        assert_eq!(sanitize_harness(Some("   ")), None);
-        assert_eq!(sanitize_harness(None::<&str>), None);
+        assert_eq!(sanitize_origin_actor(Some("")), None);
+        assert_eq!(sanitize_origin_actor(Some("   ")), None);
+        assert_eq!(sanitize_origin_actor(None::<&str>), None);
     }
 
     #[test]
     fn drops_crlf_and_control_characters() {
-        assert_eq!(sanitize_harness(Some("evil\r\nX-Inject: bad")), None);
-        assert_eq!(sanitize_harness(Some("a\tb")), None);
+        assert_eq!(sanitize_origin_actor(Some("evil\r\nX-Inject: bad")), None);
+        assert_eq!(sanitize_origin_actor(Some("a\tb")), None);
     }
 
     #[test]
-    fn caps_at_120_characters() {
+    fn caps_at_128_characters() {
         let long = "a".repeat(200);
-        assert_eq!(sanitize_harness(Some(&long)), Some("a".repeat(120)));
+        assert_eq!(sanitize_origin_actor(Some(&long)), Some("a".repeat(128)));
     }
 
     #[test]

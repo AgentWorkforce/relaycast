@@ -67,7 +67,8 @@ export interface UseMessagesReturn {
   messages: MessageWithMeta[];
   loading: boolean;
   error: Error | null;
-  fetchMore: () => Promise<void>;
+  /** Fetch the previous page of messages. Resolves with the number of older messages added (0 = history exhausted). */
+  fetchMore: () => Promise<number>;
 }
 
 export interface UseThreadReturn {

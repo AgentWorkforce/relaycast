@@ -24,11 +24,11 @@ pub struct RelayCastOptions {
     /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
     /// set this to e.g. `http://localhost:8787`.
     pub base_url: Option<String>,
-    /// User-Agent-style identifier for the harness driving requests
+    /// User-Agent-style identifier for the origin_actor driving requests
     /// (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`). Sent as
-    /// the `X-Relaycast-Harness` header so server-side telemetry can attribute
+    /// the `X-Relaycast-Origin-Actor` header so server-side telemetry can attribute
     /// traffic. Invalid values are dropped.
-    pub harness: Option<String>,
+    pub origin_actor: Option<String>,
     /// Agent Relay distinct telemetry id. Sent as
     /// `X-Agent-Relay-Distinct-Id` on HTTP requests; invalid values are dropped.
     pub agent_relay_distinct_id: Option<String>,
@@ -40,7 +40,7 @@ impl RelayCastOptions {
         Self {
             api_key: api_key.into(),
             base_url: None,
-            harness: None,
+            origin_actor: None,
             agent_relay_distinct_id: None,
         }
     }
@@ -51,9 +51,9 @@ impl RelayCastOptions {
         self
     }
 
-    /// Set the harness identifier sent as the `X-Relaycast-Harness` header.
-    pub fn with_harness(mut self, harness: impl Into<String>) -> Self {
-        self.harness = Some(harness.into());
+    /// Set the origin_actor identifier sent as the `X-Relaycast-Origin-Actor` header.
+    pub fn with_origin_actor(mut self, origin_actor: impl Into<String>) -> Self {
+        self.origin_actor = Some(origin_actor.into());
         self
     }
 
@@ -85,8 +85,8 @@ impl RelayCast {
 
         let mut client_options = ClientOptions::new(options.api_key);
         client_options = client_options.with_base_url(base_url);
-        if let Some(harness) = options.harness {
-            client_options = client_options.with_harness(harness);
+        if let Some(origin_actor) = options.origin_actor {
+            client_options = client_options.with_origin_actor(origin_actor);
         }
         if let Some(id) = options.agent_relay_distinct_id {
             client_options = client_options.with_agent_relay_distinct_id(id);

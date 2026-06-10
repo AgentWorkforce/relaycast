@@ -2,7 +2,7 @@ import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
 import { randomUuid, sha256Hex } from '../lib/crypto.js';
 import { createRequestLogger } from '../lib/logger.js';
-import { deriveClientName, extractHarness, extractOriginInfo } from '../lib/origin.js';
+import { deriveClientName, extractOriginActor, extractOriginInfo } from '../lib/origin.js';
 
 type WaitUntilContext = {
   executionCtx?: {
@@ -109,14 +109,14 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const requestHeaders = c.req.raw.headers;
   const clientName = deriveClientName(requestHeaders);
   const originInfo = extractOriginInfo(c.req.raw, clientName);
-  const harness = extractHarness(c.req.raw);
-  c.set('harness', harness);
+  const originActor = extractOriginActor(c.req.raw);
+  c.set('originActor', originActor);
 
   const logger = createRequestLogger(c, 'request', {
     request_id: requestId,
     ...(clientName ? { client_name: clientName } : {}),
     ...originInfo,
-    harness,
+    origin_actor: originActor,
   });
   c.set('logger', logger);
 
@@ -154,7 +154,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     ...(ipHash ? { ip_hash: ipHash } : {}),
     ...(uaHash ? { ua_hash: uaHash } : {}),
     ...originInfo,
-    harness,
+    origin_actor: originActor,
     ...errorInfo,
   };
 

@@ -9,6 +9,7 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -70,6 +71,16 @@ messageRoutes.post(
         }, 403);
       }
 
+      const toMessageCreatedEventData = (data: Awaited<ReturnType<typeof messageEngine.postMessage>>) => {
+        const { _deliveries, ...publicData } = data;
+        return {
+          ...publicData,
+          channel_name: channelName,
+          from_name: agent?.name,
+          injection_mode: publicData.injection_mode ?? mode,
+        };
+      };
+
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agentId,
@@ -86,6 +97,13 @@ messageRoutes.post(
             agentId,
             { text, blocks, attachments, data, content_type, mode },
           ),
+        afterOperation: async (data) => {
+          await sendWebhookEvent(c, {
+            type: 'message.created',
+            workspaceId: workspace.id,
+            data: toMessageCreatedEventData(data),
+          });
+        },
       });
 
       if (idempotent.replayed) {
@@ -96,12 +114,7 @@ messageRoutes.post(
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
         const { _deliveries, ...publicData } = idempotent.data as typeof idempotent.data & { _deliveries?: Array<{ id: string; agentId: string; reason: string }> };
-        const eventData = {
-          ...publicData,
-          channel_name: channelName,
-          from_name: agent?.name,
-          injection_mode: publicData.injection_mode ?? mode,
-        };
+        const eventData = toMessageCreatedEventData(idempotent.data);
         runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
 
         // Emit delivery.accepted to each recipient's AgentDO individually —
@@ -121,11 +134,6 @@ messageRoutes.post(
           }
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({ type: 'message.created', workspaceId: workspace.id, data: eventData }),
-          'queue message.created',
-        );
         emitServerEvent(c, workspace.id, 'relaycast_server_message_created', {
           channel_id: channel.id,
           message_id: String(publicData.id),

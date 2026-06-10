@@ -6,6 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -67,15 +68,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'channel.created',
-          workspaceId: workspace.id,
-          data: { ...result, created_by_name: agent?.name },
-        }),
-        'queue channel.created',
-      );
+      await sendWebhookEvent(c, {
+        type: 'channel.created',
+        workspaceId: workspace.id,
+        data: { ...result, created_by_name: agent?.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_created', {
         channel_id: result.id,
         channel_name: result.name,
@@ -173,15 +170,11 @@ channelRoutes.patch(
 
       const eventData = { ...updated, channel_name: updated.name };
       runInBackground(c, fanoutToChannel(c, updated.id, 'channel.updated', eventData), 'fanout channel.updated');
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'channel.updated',
-          workspaceId: workspace.id,
-          data: { ...updated, channel_name: name },
-        }),
-        'queue channel.updated',
-      );
+      await sendWebhookEvent(c, {
+        type: 'channel.updated',
+        workspaceId: workspace.id,
+        data: { ...updated, channel_name: name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_updated', {
         channel_id: updated.id,
         channel_name: updated.name,
@@ -232,15 +225,11 @@ channelRoutes.patch(
 
       const eventData = { ...updated, channel_name: name };
       runInBackground(c, fanoutToChannel(c, updated.id, 'channel.updated', eventData), 'fanout channel.updated topic');
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'channel.updated',
-          workspaceId: workspace.id,
-          data: { ...updated, channel_name: name },
-        }),
-        'queue channel.updated topic',
-      );
+      await sendWebhookEvent(c, {
+        type: 'channel.updated',
+        workspaceId: workspace.id,
+        data: { ...updated, channel_name: name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_topic_updated', {
         channel_id: updated.id,
         channel_name: updated.name,
@@ -283,15 +272,11 @@ channelRoutes.delete(
         const eventData = { channel_name: name };
         runInBackground(c, fanoutToChannel(c, channel.id, 'channel.archived', eventData), 'fanout channel.archived');
       }
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'channel.archived',
-          workspaceId: workspace.id,
-          data: { channel_name: name },
-        }),
-        'queue channel.archived',
-      );
+      await sendWebhookEvent(c, {
+        type: 'channel.archived',
+        workspaceId: workspace.id,
+        data: { channel_name: name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_archived', {
         channel_name: name,
       });
@@ -334,15 +319,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'member.joined',
-          workspaceId: workspace.id,
-          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-        }),
-        'queue member.joined',
-      );
+      await sendWebhookEvent(c, {
+        type: 'member.joined',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_joined', {
         channel_name: name,
         agent_id: agent!.id,
@@ -398,15 +379,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'member.left',
-          workspaceId: workspace.id,
-          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-        }),
-        'queue member.left',
-      );
+      await sendWebhookEvent(c, {
+        type: 'member.left',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_left', {
         channel_name: name,
         agent_id: agent!.id,
@@ -494,15 +471,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'member.joined',
-          workspaceId: workspace.id,
-          data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
-        }),
-        'queue member.invited',
-      );
+      await sendWebhookEvent(c, {
+        type: 'member.joined',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_name: agentName, invited_by: agent?.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_invited', {
         channel_name: name,
         invited_agent_name: agentName,
@@ -546,15 +519,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'member.channel_muted',
-          workspaceId: workspace.id,
-          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-        }),
-        'queue member.channel_muted',
-      );
+      await sendWebhookEvent(c, {
+        type: 'member.channel_muted',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_muted', {
         channel_name: name,
         agent_id: agent!.id,
@@ -598,15 +567,11 @@ channelRoutes.post(
         // Ignore cache update failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'member.channel_unmuted',
-          workspaceId: workspace.id,
-          data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
-        }),
-        'queue member.channel_unmuted',
-      );
+      await sendWebhookEvent(c, {
+        type: 'member.channel_unmuted',
+        workspaceId: workspace.id,
+        data: { channel_name: name, agent_id: agent!.id, agent_name: agent!.name },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_channel_unmuted', {
         channel_name: name,
         agent_id: agent!.id,

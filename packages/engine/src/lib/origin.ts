@@ -6,52 +6,57 @@ import {
 export type OriginInfo = Partial<TelemetryOrigin>;
 
 /**
- * HTTP header used by harnesses (Claude Code, Cursor, etc.) to identify
- * themselves to the relaycast server. See relay#881.
+ * HTTP header used by callers to identify *who* is driving a request — a
+ * UA-style path `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`,
+ * `pear/user/send-message-box`). See `cloud/plans/origin-actor.md`. Supersedes
+ * the former `X-Relaycast-Harness` (relay#881).
  */
-export const HARNESS_HEADER = "X-Relaycast-Harness";
+export const ORIGIN_ACTOR_HEADER = "X-Relaycast-Origin-Actor";
+export const ORIGIN_ACTOR_QUERY = "origin_actor";
 export const AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id";
 export const AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id";
 
-/** Fallback value when the harness is missing or invalid. */
-export const UNKNOWN_HARNESS = "unknown";
+/** Fallback value when the origin actor is missing or invalid. */
+export const UNKNOWN_ORIGIN_ACTOR = "unknown";
 
-/** Upper bound on the harness value — generous enough for a UA-style token. */
-const HARNESS_MAX_LENGTH = 120;
+/** Upper bound on the origin-actor value — generous enough for a UA-style path. */
+const ORIGIN_ACTOR_MAX_LENGTH = 128;
 
 /**
- * Characters permitted in a harness identifier. Deliberately broad enough for a
- * User-Agent-style token (`name/version (model=...; setting)`) while excluding
- * CR/LF and other control characters — rejecting those is what keeps a buggy
- * upstream caller from smuggling a header injection past the relaycast WAF.
+ * Characters permitted in an origin-actor path. Deliberately broad enough for a
+ * User-Agent-style token with `/`-separated segments (`{app}/{type}/{name}`,
+ * `name/version (model=...; setting)`) while excluding CR/LF and other control
+ * characters — rejecting those is what keeps a buggy upstream caller from
+ * smuggling a header injection past the relaycast WAF.
  */
-const HARNESS_ALLOWED = /^[a-z0-9 ._\-/():=;,+]+$/i;
+const ORIGIN_ACTOR_ALLOWED = /^[a-z0-9 ._\-/():=;,+@]+$/i;
 const AGENT_RELAY_DISTINCT_ID_ALLOWED = /^[a-z0-9._:-]+$/i;
 
 /**
- * Read and sanitize the harness identifier from a request.
+ * Read and sanitize the origin-actor path from a request.
  *
- * Read from the `X-Relaycast-Harness` header, falling back to the `harness`
- * query param (WebSocket upgrades from browsers can't set custom headers, so
- * the SDK forwards it on the query string — mirrors how origin fields work).
+ * Read from the `X-Relaycast-Origin-Actor` header, falling back to the
+ * `origin_actor` query param (WebSocket upgrades from browsers can't set custom
+ * headers, so the SDK forwards it on the query string — mirrors how origin
+ * fields work).
  *
- * Returns a lowercase, UA-style identifier (e.g. `claude-code`, `codex`,
- * `claude-code/2.3 (model=opus-4.8; fast)`). We intentionally do NOT enforce an
- * enum here — accepting any well-formed value lets us discover new harnesses
- * without shipping a relaycast release first; segmentation happens downstream
- * in the analytics layer. Drops empty or malformed values to `'unknown'`.
+ * Returns a lowercase, UA-style path (e.g. `agent-relay-cli/agent/claude-code`).
+ * We intentionally do NOT enforce an enum here — accepting any well-formed value
+ * lets us discover new apps/actors without shipping a relaycast release first;
+ * the `{app}/{type}/{name}` split happens downstream in the analytics layer.
+ * Drops empty or malformed values to `'unknown'`.
  */
-export function extractHarness(request: Request): string {
+export function extractOriginActor(request: Request): string {
   const raw =
-    request.headers.get(HARNESS_HEADER) ??
-    new URL(request.url).searchParams.get("harness");
-  if (!raw) return UNKNOWN_HARNESS;
+    request.headers.get(ORIGIN_ACTOR_HEADER) ??
+    new URL(request.url).searchParams.get(ORIGIN_ACTOR_QUERY);
+  if (!raw) return UNKNOWN_ORIGIN_ACTOR;
 
   const trimmed = raw.trim();
-  if (!trimmed) return UNKNOWN_HARNESS;
-  if (!HARNESS_ALLOWED.test(trimmed)) return UNKNOWN_HARNESS;
+  if (!trimmed) return UNKNOWN_ORIGIN_ACTOR;
+  if (!ORIGIN_ACTOR_ALLOWED.test(trimmed)) return UNKNOWN_ORIGIN_ACTOR;
 
-  return trimmed.slice(0, HARNESS_MAX_LENGTH).toLowerCase();
+  return trimmed.slice(0, ORIGIN_ACTOR_MAX_LENGTH).toLowerCase();
 }
 
 export function extractAgentRelayDistinctId(

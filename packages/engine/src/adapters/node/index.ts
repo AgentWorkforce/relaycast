@@ -11,7 +11,7 @@ import { InProcessRealtime } from './realtime.js';
 import { InProcessPresence, type InProcessPresenceOptions } from './presence.js';
 import { InProcessRateLimiter } from './rate-limit.js';
 import { InProcessKeyValueStore } from './kv.js';
-import { InProcessEventQueue } from './event-queue.js';
+import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions } from './event-queue.js';
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 
 export {
@@ -20,6 +20,7 @@ export {
   InProcessRateLimiter,
   InProcessKeyValueStore,
   InProcessEventQueue,
+  DurableEventQueue,
   LocalFileStorage,
   createFileRouteHandler,
   FILE_ROUTE_PREFIX,
@@ -29,6 +30,7 @@ export {
 export type { EngineSocket, SocketHandle } from './realtime.js';
 export type { SqliteDbHandle } from './database.js';
 export type { InProcessPresenceOptions } from './presence.js';
+export type { DurableEventQueueOptions, InProcessEventQueueOptions } from './event-queue.js';
 
 export interface NodeRuntimeOptions {
   /** SQLite file path, or ':memory:' for tests. */
@@ -51,6 +53,8 @@ export interface NodeRuntimeOptions {
   config?: EngineConfig;
   /** Presence TTL / sweep tuning (tests use short windows). */
   presence?: InProcessPresenceOptions;
+  /** Durable webhook outbox tuning (poll interval, backoff, cleanup cadence). */
+  eventQueue?: DurableEventQueueOptions;
 }
 
 /**
@@ -62,6 +66,8 @@ export interface NodeRuntime {
   deps: EngineDeps;
   realtime: InProcessRealtime;
   presence: InProcessPresence;
+  /** Durable webhook outbox; already started — exposed for graceful shutdown and tests. */
+  webhookQueue: DurableEventQueue;
   /** `fetch`-style handler for the `${FILE_ROUTE_PREFIX}` upload/download routes. */
   fileHandler: (request: Request) => Promise<Response>;
   handle: SqliteDbHandle;
@@ -99,7 +105,13 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     options.baseUrl,
     options.fileSecret ?? randomBytes(32).toString('hex'),
   );
-  const webhookQueue = new InProcessEventQueue(db, (err, ctx) => telemetry.captureException(err, ctx));
+  const webhookQueue = new DurableEventQueue(
+    db,
+    (err, ctx) => telemetry.captureException(err, ctx),
+    options.eventQueue,
+  );
+  // Resume any deliveries left over from a previous process (the outbox's point).
+  webhookQueue.start();
 
   const auth = options.auth ?? new SqliteApiKeyAuthProvider();
   const entitlements = options.entitlements ?? new StaticEntitlementsProvider(kv);
@@ -123,10 +135,12 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     deps,
     realtime,
     presence,
+    webhookQueue,
     fileHandler: createFileRouteHandler(fileStorage),
     handle,
     close() {
       presence.stop();
+      webhookQueue.stop();
       kv.dispose();
       try {
         handle.sqlite.close();
