@@ -2,9 +2,9 @@ import type { Context } from "hono";
 import type { AppEnv } from "../env.js";
 import {
   extractAgentRelayDistinctId,
-  extractHarness,
+  extractOriginActor,
   requiredOriginInfo,
-  UNKNOWN_HARNESS,
+  UNKNOWN_ORIGIN_ACTOR,
 } from "./origin.js";
 
 type ServerEvent = `relaycast_server_${string}`;
@@ -51,8 +51,8 @@ export function emitServerEvent(
 
   // Prefer the value stashed by the logger middleware. Fall back to reading the
   // header directly so emitters that bypass middleware still get a sane value.
-  const harness =
-    c.get("harness") ?? extractHarness(c.req.raw) ?? UNKNOWN_HARNESS;
+  const originActor =
+    c.get("originActor") ?? extractOriginActor(c.req.raw) ?? UNKNOWN_ORIGIN_ACTOR;
 
   const origin = requiredOriginInfo(c.req.raw);
   const clientDistinctId = extractAgentRelayDistinctId(c.req.raw);
@@ -64,7 +64,7 @@ export function emitServerEvent(
       surface: "cloud",
       workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
-      harness,
+      origin_actor: originActor,
       origin_surface: origin.origin_surface,
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,

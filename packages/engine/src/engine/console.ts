@@ -1,6 +1,7 @@
 import { and, desc, eq, lt, gte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, channels, messageLogs } from '../db/schema.js';
+import type { AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -37,8 +38,12 @@ function getWindowStart(days: number): Date {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
-export async function logMessage(db: Db, input: LogMessageInput): Promise<void> {
-  await db
+/**
+ * Build the message-log insert without executing it, so send paths can include
+ * it in an atomic statement list (see {@link runAtomicWrites}).
+ */
+export function buildMessageLogWrite(db: Db, input: LogMessageInput): AtomicWrite {
+  return db
     .insert(messageLogs)
     .values({
       id: generateId(),
@@ -56,6 +61,10 @@ export async function logMessage(db: Db, input: LogMessageInput): Promise<void> 
       latencyMs: input.latencyMs ?? 0,
     })
     .onConflictDoNothing();
+}
+
+export async function logMessage(db: Db, input: LogMessageInput): Promise<void> {
+  await buildMessageLogWrite(db, input);
 }
 
 export async function listMessageLogs(

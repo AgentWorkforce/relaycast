@@ -188,6 +188,7 @@ impl AgentRegistrationClient {
             task: format!("relay worker session for {}", trimmed_name),
             channel: None,
             persona: None,
+            model: None,
             metadata: None,
         };
 

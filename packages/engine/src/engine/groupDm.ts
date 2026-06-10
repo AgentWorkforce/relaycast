@@ -1,7 +1,12 @@
 import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files, deliveries } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
+import {
+  buildGroupDmDeliveryWrite,
+  fetchDeliveryFanoutRecords,
+} from './deliveryWrites.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -62,33 +67,36 @@ export async function createGroupDm(
   const conversationId = generateId();
   const channelId = generateId();
 
-  // Create private channel (channel_type=2 for group DM)
-  await db.insert(channels).values({
-    id: channelId,
-    workspaceId,
-    name: `group-dm-${conversationId}`,
-    channelType: 2,
-  });
-
-  // Create group DM conversation
-  await db.insert(dmConversations).values({
-    id: conversationId,
-    workspaceId,
-    channelId,
-    dmType: 'group',
-    name: data.name ?? null,
-  });
-
-  // Add creator + all participants
   const allParticipantIds = [creatorAgentId, ...participantAgents.map((a) => a.id)];
   const uniqueIds = [...new Set(allParticipantIds)];
 
-  for (const agentId of uniqueIds) {
-    await db.insert(dmParticipants).values({
+  await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb.insert(channels).values({
+        id: channelId,
+        workspaceId,
+        name: `group-dm-${conversationId}`,
+        channelType: 2,
+      }),
+      writeDb.insert(dmConversations).values({
+        id: conversationId,
+        workspaceId,
+        channelId,
+        dmType: 'group',
+        name: data.name ?? null,
+      }),
+    ];
+
+    const participantRows = uniqueIds.map((agentId) => ({
       conversationId,
       agentId,
-    });
-  }
+    }));
+    if (participantRows.length > 0) {
+      writes.push(writeDb.insert(dmParticipants).values(participantRows));
+    }
+
+    return writes;
+  });
 
   return {
     id: conversationId,
@@ -182,50 +190,49 @@ export async function postGroupMessage(
 
   const messageId = generateId();
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId: conv.channelId,
-      agentId,
-      body: data.text,
-      hasAttachments,
-      metadata: { injection_mode: data.mode ?? 'wait' },
-    })
-    .returning();
 
-  if (data.attachments && data.attachments.length > 0) {
-    const attachmentValues = data.attachments.map((fileId, idx) => ({
-      messageId,
-      fileId,
-      position: idx,
-    }));
-    await db.insert(messageAttachments).values(attachmentValues);
-  }
+  // Durable writes run as one atomic unit when the adapter supports it; fanout
+  // stays in routes. Delivery recipients are derived by the delivery insert
+  // from current active participants.
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: messageId,
+          workspaceId,
+          channelId: conv.channelId,
+          agentId,
+          body: data.text,
+          hasAttachments,
+          metadata: { injection_mode: data.mode ?? 'wait' },
+        })
+        .returning(),
+    ];
 
-  // Create delivery records for all other active participants
-  const otherParticipants = await db
-    .select({ agentId: dmParticipants.agentId })
-    .from(dmParticipants)
-    .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+    if (data.attachments && data.attachments.length > 0) {
+      const attachmentValues = data.attachments.map((fileId, idx) => ({
+        messageId,
+        fileId,
+        position: idx,
+      }));
+      writes.push(writeDb.insert(messageAttachments).values(attachmentValues));
+    }
 
-  const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
-  const groupDeliveries: Array<{ id: string; agentId: string }> = [];
-  if (recipients.length > 0) {
-    const rows = recipients.map((p) => ({
-      id: `del_${generateId()}`,
-      workspaceId,
-      messageId,
-      agentId: p.agentId,
-      mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-      reason: 'dm',
-      priority: 'normal',
-      status: 'accepted',
-    }));
-    await db.insert(deliveries).values(rows).onConflictDoNothing();
-    groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
-  }
+    writes.push(
+      buildGroupDmDeliveryWrite(writeDb, {
+        workspaceId,
+        messageId,
+        conversationId,
+        senderAgentId: agentId,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+      }),
+    );
+
+    return writes;
+  });
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
+  const groupDeliveries = await fetchDeliveryFanoutRecords(db, messageId);
 
   const attachmentMap = hasAttachments
     ? await fetchAttachmentsBatch(db, workspaceId, [messageId])

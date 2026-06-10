@@ -105,7 +105,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       client: originInfo.origin_client,
       version: originInfo.origin_version,
     };
-    const harness = c.get('harness') ?? 'unknown';
+    const originActor = c.get('originActor') ?? 'unknown';
 
     if (token.startsWith('at_live_')) {
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
@@ -124,7 +124,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
         agentId: agent.id,
         agentName: agent.name,
         origin,
-        harness,
+        originActor,
       });
       if (response.status === 101) {
         emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
@@ -152,7 +152,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
         scope: 'workspace',
         workspaceId: workspace.id,
         origin,
-        harness,
+        originActor,
       });
       if (response.status === 101) {
         emitServerEvent(c, workspace.id, 'relaycast_server_ws_session_started', {

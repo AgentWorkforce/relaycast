@@ -8,6 +8,7 @@ import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const inboundWebhookRoutes = new Hono<AppEnv>();
@@ -157,15 +158,11 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         'fanout webhook.received',
       );
     }
-    runInBackground(
-      c,
-      c.get('engine').webhookQueue.send({
-        type: 'webhook.received',
-        workspaceId: workspace_id,
-        data: eventData,
-      }),
-      'queue webhook.received',
-    );
+    await sendWebhookEvent(c, {
+      type: 'webhook.received',
+      workspaceId: workspace_id,
+      data: eventData,
+    });
     emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
       webhook_id: result.webhook_id,
       message_id: result.message_id,

@@ -151,6 +151,7 @@ export const AgentSpawnRequestedEventSchema = z.object({
     cli: z.string(),
     task: z.string(),
     channel: z.string().nullable(),
+    model: z.string().nullable().optional(),
     already_existed: z.boolean(),
   }),
 });

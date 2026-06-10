@@ -10,6 +10,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -60,6 +61,11 @@ dmRoutes.post(
         }, 400);
       }
 
+      const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => {
+        const { _delivery, ...publicDmData } = data;
+        return { ...publicDmData, from_name: agent!.name };
+      };
+
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agent!.id,
@@ -78,6 +84,13 @@ dmRoutes.post(
           attachments: normalizedAttachments,
           mode,
         }),
+        afterOperation: async (data) => {
+          await sendWebhookEvent(c, {
+            type: 'dm.received',
+            workspaceId: workspace.id,
+            data: toDmReceivedEventData(data),
+          });
+        },
       });
 
       if (idempotent.replayed) {
@@ -86,6 +99,7 @@ dmRoutes.post(
 
       if (!idempotent.replayed) {
         const { _delivery, ...publicDmData } = idempotent.data as typeof idempotent.data & { _delivery?: { id: string; agentId: string } | null };
+        const eventData = toDmReceivedEventData(idempotent.data);
         try {
           const rows = await db
             .select({ agentId: dmParticipants.agentId })
@@ -96,7 +110,6 @@ dmRoutes.post(
                 isNull(dmParticipants.leftAt),
               ),
             );
-          const eventData = { ...publicDmData, from_name: agent!.name };
           runInBackground(c, fanoutToAgents(c, rows.map((r) => r.agentId), 'dm.received', eventData), 'fanout dm.received');
         } catch {
           // Ignore fanout failures
@@ -115,15 +128,6 @@ dmRoutes.post(
           );
         }
 
-        runInBackground(
-          c,
-          c.get('engine').webhookQueue.send({
-            type: 'dm.received',
-            workspaceId: workspace.id,
-            data: { ...publicDmData, from_name: agent!.name },
-          }),
-          'queue dm.received',
-        );
         emitServerEvent(c, workspace.id, 'relaycast_server_dm_sent', {
           conversation_id: publicDmData.conversation_id,
           message_id: publicDmData.id,

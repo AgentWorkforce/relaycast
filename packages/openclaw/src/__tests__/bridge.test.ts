@@ -22,15 +22,19 @@ const mockAgentClient = {
 };
 
 vi.mock('@relaycast/sdk', () => ({
-  RelayCast: vi.fn().mockImplementation(() => ({
-    agents: { register: mockRegister },
-    as: vi.fn().mockReturnValue(mockAgentClient),
-  })),
-  WsClient: vi.fn().mockImplementation(() => ({
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    subscribe: vi.fn(),
-  })),
+  RelayCast: vi.fn().mockImplementation(function RelayCast() {
+    return {
+      agents: { register: mockRegister },
+      as: vi.fn().mockReturnValue(mockAgentClient),
+    };
+  }),
+  WsClient: vi.fn().mockImplementation(function WsClient() {
+    return {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      subscribe: vi.fn(),
+    };
+  }),
 }));
 
 import { OpenClawBridge } from '../bridge.js';

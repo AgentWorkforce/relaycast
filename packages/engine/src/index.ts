@@ -49,5 +49,20 @@ export * as schema from './db/schema.js';
 export { deliverEvent } from './engine/eventDelivery.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
 
+// `pending_events` outbox primitives for queue-backed deployments: the queue
+// consumer settles rows (`completeEvent` / `failEvent` / `rescheduleEvent`)
+// and a scheduled sweep re-enqueues lost ones (`sweepPendingEvents`) and
+// prunes settled ones (`cleanupOldEvents`).
+export {
+  enqueueEvent,
+  claimDueEvents,
+  completeEvent,
+  failEvent,
+  rescheduleEvent,
+  sweepPendingEvents,
+  cleanupOldEvents,
+} from './engine/eventQueue.js';
+export type { ClaimedEvent, SweptEvent } from './engine/eventQueue.js';
+
 // ID generation.
 export { generateId, getSnowflakeGenerator, SnowflakeGenerator } from './engine/snowflake.js';
