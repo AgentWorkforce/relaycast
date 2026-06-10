@@ -82,6 +82,7 @@ export const SpawnAgentRequestSchema = z.object({
   task: z.string(),
   channel: z.string().nullable().optional(),
   persona: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type SpawnAgentRequest = z.infer<typeof SpawnAgentRequestSchema>;
