@@ -101,6 +101,27 @@ describe('DurableEventQueue', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('send with a pre-inserted outbox row (outboxId) does not double-insert', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    await seedSubscription(db, ws);
+
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // The engine send path (routes/webhookOutbox.ts) inserted the row already.
+    const data = { text: 'pre-inserted' };
+    const outboxId = await enqueueEvent(db, ws, 'message.created', data);
+    expect(await pendingRows(db)).toHaveLength(1);
+
+    const queue = makeQueue(db);
+    await queue.send({ type: 'message.created', workspaceId: ws, data, outboxId });
+
+    await waitFor(async () => (await pendingRows(db)).length === 0);
+    // Exactly one delivery — a second row would have produced a second fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('successful delivery deletes the row and signs the payload', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);

@@ -70,9 +70,15 @@ export class DurableEventQueue implements EventQueue {
    * Persist the outbox row first (awaited — the event is durable once `send`
    * resolves), then kick an immediate poll so delivery is prompt. The poll path
    * claims rows atomically, so the kick and the interval timer never double-deliver.
+   *
+   * When the engine send path already inserted the row (`message.outboxId` set,
+   * see routes/webhookOutbox.ts), skip the insert — the poller picks the existing
+   * row up; inserting again would deliver the event twice.
    */
   async send(message: QueuedEvent): Promise<void> {
-    await enqueueEvent(this.db, message.workspaceId, message.type, message.data);
+    if (!message.outboxId) {
+      await enqueueEvent(this.db, message.workspaceId, message.type, message.data);
+    }
     void this.poll();
   }
 

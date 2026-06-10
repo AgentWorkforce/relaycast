@@ -7,6 +7,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 
 export const fileRoutes = new Hono<AppEnv>();
@@ -87,15 +88,11 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
 
     const eventData = { ...result, agent_id: agent.id };
     runInBackground(c, fanoutToWorkspace(c, 'file.uploaded', eventData), 'fanout file.uploaded');
-    runInBackground(
-      c,
-      c.get('engine').webhookQueue.send({
-        type: 'file.uploaded',
-        workspaceId: workspace.id,
-        data: { ...result, uploaded_by_name: agent.name },
-      }),
-      'queue file.uploaded',
-    );
+    await sendWebhookEvent(c, {
+      type: 'file.uploaded',
+      workspaceId: workspace.id,
+      data: { ...result, uploaded_by_name: agent.name },
+    });
     emitServerEvent(c, workspace.id, 'relaycast_server_file_upload_completed', {
       file_id: result.id,
       size_bytes: result.size_bytes,

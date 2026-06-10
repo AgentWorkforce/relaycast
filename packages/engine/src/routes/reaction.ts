@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 
@@ -68,15 +69,11 @@ reactionRoutes.post(
           'fanout message.reacted',
         );
       }
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'message.reacted',
-          workspaceId: workspace.id,
-          data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name, action: 'added' },
-        }),
-        'queue message.reacted',
-      );
+      await sendWebhookEvent(c, {
+        type: 'message.reacted',
+        workspaceId: workspace.id,
+        data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name, action: 'added' },
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
         message_id: c.req.param('id'),
         emoji,
@@ -146,15 +143,11 @@ reactionRoutes.delete(
         // Ignore fanout failures
       }
 
-      runInBackground(
-        c,
-        c.get('engine').webhookQueue.send({
-          type: 'message.reacted',
-          workspaceId: workspace.id,
-          data: eventData,
-        }),
-        'queue message.reacted',
-      );
+      await sendWebhookEvent(c, {
+        type: 'message.reacted',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_removed', {
         message_id: c.req.param('id'),
         emoji: c.req.param('emoji'),
