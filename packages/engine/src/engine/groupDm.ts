@@ -84,12 +84,12 @@ export async function createGroupDm(
       name: data.name ?? null,
     });
 
-    // Add creator + all participants
-    for (const agentId of uniqueIds) {
-      await tx.insert(dmParticipants).values({
-        conversationId,
-        agentId,
-      });
+    const participantRows = uniqueIds.map((agentId) => ({
+      conversationId,
+      agentId,
+    }));
+    if (participantRows.length > 0) {
+      await tx.insert(dmParticipants).values(participantRows);
     }
   });
 
@@ -110,52 +110,6 @@ export async function postGroupMessage(
   agentId: string,
   data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
 ) {
-  // Verify sender is a participant (and hasn't left)
-  const [participant] = await db
-    .select()
-    .from(dmParticipants)
-    .where(
-      and(
-        eq(dmParticipants.conversationId, conversationId),
-        eq(dmParticipants.agentId, agentId),
-        isNull(dmParticipants.leftAt),
-      ),
-    );
-
-  if (!participant) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
-  }
-
-  // Get the conversation to find the channel
-  const [conv] = await db
-    .select()
-    .from(dmConversations)
-    .where(
-      and(
-        eq(dmConversations.id, conversationId),
-        eq(dmConversations.workspaceId, workspaceId),
-      ),
-    );
-
-  if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
-  }
-
-  const [fromAgent] = await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
-
-  if (!fromAgent?.name) {
-    const err = new Error('Sender agent not found');
-    Object.assign(err, { code: 'internal_error', status: 500 });
-    throw err;
-  }
-
   if (data.attachments && data.attachments.length > 0) {
     const unique = new Set(data.attachments);
     if (unique.size !== data.attachments.length) {
@@ -188,7 +142,53 @@ export async function postGroupMessage(
 
   // All durable writes (message + attachments + deliveries) run atomically
   // when the adapter supports transactions; fanout stays in routes.
-  const { message, groupDeliveries } = await runAtomic(db, async (tx) => {
+  const { message, agentName, groupDeliveries } = await runAtomic(db, async (tx) => {
+    // Re-check membership and conversation state inside the transaction so a
+    // sender that leaves mid-request cannot still create durable rows.
+    const [participant] = await tx
+      .select()
+      .from(dmParticipants)
+      .where(
+        and(
+          eq(dmParticipants.conversationId, conversationId),
+          eq(dmParticipants.agentId, agentId),
+          isNull(dmParticipants.leftAt),
+        ),
+      );
+
+    if (!participant) {
+      const err = new Error('Not a participant in this conversation');
+      Object.assign(err, { code: 'forbidden', status: 403 });
+      throw err;
+    }
+
+    const [conv] = await tx
+      .select()
+      .from(dmConversations)
+      .where(
+        and(
+          eq(dmConversations.id, conversationId),
+          eq(dmConversations.workspaceId, workspaceId),
+        ),
+      );
+
+    if (!conv) {
+      const err = new Error('Conversation not found');
+      Object.assign(err, { code: 'not_found', status: 404 });
+      throw err;
+    }
+
+    const [fromAgent] = await tx
+      .select({ name: agents.name })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+
+    if (!fromAgent?.name) {
+      const err = new Error('Sender agent not found');
+      Object.assign(err, { code: 'internal_error', status: 500 });
+      throw err;
+    }
+
     const [message] = await tx
       .insert(messages)
       .values({
@@ -234,7 +234,7 @@ export async function postGroupMessage(
       groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
     }
 
-    return { message, groupDeliveries };
+    return { message, agentName: fromAgent.name, groupDeliveries };
   });
 
   const attachmentMap = hasAttachments
@@ -249,7 +249,7 @@ export async function postGroupMessage(
     message: {
       id: message.id,
       agent_id: message.agentId,
-      agent_name: fromAgent.name,
+      agent_name: agentName,
       text: message.body,
       injection_mode: injectionMode,
       attachments,
