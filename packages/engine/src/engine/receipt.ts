@@ -10,6 +10,7 @@ import {
   dmConversations,
   dmParticipants,
 } from '../db/schema.js';
+import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -49,38 +50,42 @@ export async function markRead(
   }
   if (!authorized) return null;
 
-  // Upsert read receipt (idempotent)
-  await db
-    .insert(readReceipts)
-    .values({ messageId, agentId })
-    .onConflictDoNothing();
+  // The three read-state writes (receipt + delivery transition + lastReadId)
+  // run as one atomic unit when the adapter supports it.
+  await runAtomicWrites(db, (writeDb) => [
+    // Upsert read receipt (idempotent)
+    writeDb
+      .insert(readReceipts)
+      .values({ messageId, agentId })
+      .onConflictDoNothing(),
 
-  // Transition delivery status to delivered. Reading consumes the message, so
-  // clear both still-queued states (accepted and deferred) — otherwise a
-  // deferred delivery would linger in the durable replay queue after the agent
-  // has already seen the message. `delivered`/`failed` are left untouched.
-  await db
-    .update(deliveries)
-    .set({ status: 'delivered', updatedAt: new Date() })
-    .where(
-      and(
-        eq(deliveries.messageId, messageId),
-        eq(deliveries.agentId, agentId),
-        inArray(deliveries.status, ['accepted', 'deferred']),
+    // Transition delivery status to delivered. Reading consumes the message, so
+    // clear both still-queued states (accepted and deferred) — otherwise a
+    // deferred delivery would linger in the durable replay queue after the agent
+    // has already seen the message. `delivered`/`failed` are left untouched.
+    writeDb
+      .update(deliveries)
+      .set({ status: 'delivered', updatedAt: new Date() })
+      .where(
+        and(
+          eq(deliveries.messageId, messageId),
+          eq(deliveries.agentId, agentId),
+          inArray(deliveries.status, ['accepted', 'deferred']),
+        ),
       ),
-    );
 
-  // Update lastReadId for the channel membership (only move forward)
-  await db
-    .update(channelMembers)
-    .set({ lastReadId: messageId })
-    .where(
-      and(
-        eq(channelMembers.channelId, msg.channelId),
-        eq(channelMembers.agentId, agentId),
-        sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+    // Update lastReadId for the channel membership (only move forward)
+    writeDb
+      .update(channelMembers)
+      .set({ lastReadId: messageId })
+      .where(
+        and(
+          eq(channelMembers.channelId, msg.channelId),
+          eq(channelMembers.agentId, agentId),
+          sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+        ),
       ),
-    );
+  ]);
 
   const [receipt] = await db
     .select()

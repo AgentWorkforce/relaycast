@@ -55,6 +55,7 @@ const spawnAgentSchema = z.object({
   task: z.string().min(1),
   channel: z.string().nullable().optional(),
   persona: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -331,7 +332,7 @@ agentRoutes.post(
           error: { code: 'invalid_request', message },
         }, 400);
       }
-      const { name, cli, task, channel, persona, metadata } = parsed.data;
+      const { name, cli, task, channel, persona, model, metadata } = parsed.data;
 
       const validClis = ['claude', 'codex', 'opencode', 'gemini', 'aider', 'goose'];
       if (!validClis.includes(cli)) {
@@ -347,7 +348,9 @@ agentRoutes.post(
         task,
         channel: channel ?? undefined,
         persona: persona ?? undefined,
-        metadata,
+        // Persist the requested model into agent metadata so it is visible via
+        // list_agents, in addition to being emitted on the spawn event below.
+        metadata: model ? { ...(metadata ?? {}), model } : metadata,
       });
 
       const spawnEventData = {
@@ -356,6 +359,7 @@ agentRoutes.post(
         cli: result.cli,
         task: result.task,
         channel: result.channel,
+        model: model ?? null,
         already_existed: result.already_existed,
       };
 

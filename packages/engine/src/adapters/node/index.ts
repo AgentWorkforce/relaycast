@@ -11,7 +11,7 @@ import { InProcessRealtime } from './realtime.js';
 import { InProcessPresence, type InProcessPresenceOptions } from './presence.js';
 import { InProcessRateLimiter } from './rate-limit.js';
 import { InProcessKeyValueStore } from './kv.js';
-import { DurableEventQueue, type DurableEventQueueOptions } from './event-queue.js';
+import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions } from './event-queue.js';
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 
 export {
@@ -19,6 +19,7 @@ export {
   InProcessPresence,
   InProcessRateLimiter,
   InProcessKeyValueStore,
+  InProcessEventQueue,
   DurableEventQueue,
   LocalFileStorage,
   createFileRouteHandler,
@@ -29,7 +30,7 @@ export {
 export type { EngineSocket, SocketHandle } from './realtime.js';
 export type { SqliteDbHandle } from './database.js';
 export type { InProcessPresenceOptions } from './presence.js';
-export type { DurableEventQueueOptions } from './event-queue.js';
+export type { DurableEventQueueOptions, InProcessEventQueueOptions } from './event-queue.js';
 
 export interface NodeRuntimeOptions {
   /** SQLite file path, or ':memory:' for tests. */
