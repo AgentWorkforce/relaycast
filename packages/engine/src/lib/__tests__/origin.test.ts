@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   extractAgentRelayDistinctId,
-  extractHarness,
-  UNKNOWN_HARNESS,
+  extractOriginActor,
+  UNKNOWN_ORIGIN_ACTOR,
 } from "../origin.js";
 
 function req(
@@ -14,65 +14,80 @@ function req(
   } = {},
 ): Request {
   const url = new URL("https://gateway.relaycast.dev/v1/activity");
-  if (init.query !== undefined) url.searchParams.set("harness", init.query);
+  if (init.query !== undefined) url.searchParams.set("origin_actor", init.query);
   if (init.agentRelayDistinctQuery !== undefined) {
     url.searchParams.set("agent_relay_distinct_id", init.agentRelayDistinctQuery);
   }
   const headers = new Headers();
   if (init.header !== undefined)
-    headers.set("X-Relaycast-Harness", init.header);
+    headers.set("X-Relaycast-Origin-Actor", init.header);
   if (init.agentRelayDistinctId !== undefined) {
     headers.set("X-Agent-Relay-Distinct-Id", init.agentRelayDistinctId);
   }
   return new Request(url, { headers });
 }
 
-describe("extractHarness", () => {
-  it("reads the X-Relaycast-Harness header, lowercased", () => {
-    expect(extractHarness(req({ header: "Claude-Code" }))).toBe("claude-code");
+describe("extractOriginActor", () => {
+  it("reads the X-Relaycast-Origin-Actor header, lowercased", () => {
+    expect(extractOriginActor(req({ header: "Claude-Code" }))).toBe("claude-code");
   });
 
-  it("accepts a UA-style token", () => {
+  it("accepts a path carrying harness version + model in the name", () => {
+    // {app}/{type}/{name} where name = {harness}@{version}-{model}.
     expect(
-      extractHarness(req({ header: "claude-code/2.3 (model=opus-4.8; fast)" })),
-    ).toBe("claude-code/2.3 (model=opus-4.8; fast)");
+      extractOriginActor(
+        req({ header: "agent-relay-cli/agent/claude-code@2.3.1-opus4.8" }),
+      ),
+    ).toBe("agent-relay-cli/agent/claude-code@2.3.1-opus4.8");
   });
 
-  it("falls back to the `harness` query param (browser WS path)", () => {
-    expect(extractHarness(req({ query: "codex" }))).toBe("codex");
+  it("falls back to the `origin_actor` query param (browser WS path)", () => {
+    expect(extractOriginActor(req({ query: "codex" }))).toBe("codex");
   });
 
   it("prefers the header over the query param", () => {
-    expect(extractHarness(req({ header: "claude-code", query: "codex" }))).toBe(
+    expect(extractOriginActor(req({ header: "claude-code", query: "codex" }))).toBe(
       "claude-code",
     );
   });
 
   it("returns unknown when neither is present", () => {
-    expect(extractHarness(req())).toBe(UNKNOWN_HARNESS);
+    expect(extractOriginActor(req())).toBe(UNKNOWN_ORIGIN_ACTOR);
   });
 
   it("rejects disallowed characters in the header", () => {
-    expect(extractHarness(req({ header: "claude<script>" }))).toBe(
-      UNKNOWN_HARNESS,
+    expect(extractOriginActor(req({ header: "claude<script>" }))).toBe(
+      UNKNOWN_ORIGIN_ACTOR,
     );
   });
 
   it("rejects CRLF smuggled through the query param", () => {
     // The runtime Headers object already blocks CRLF header values, so the only
     // way control characters reach us is the query string — drop them there too.
-    expect(extractHarness(req({ query: "evil\r\nX-Inject: bad" }))).toBe(
-      UNKNOWN_HARNESS,
+    expect(extractOriginActor(req({ query: "evil\r\nX-Inject: bad" }))).toBe(
+      UNKNOWN_ORIGIN_ACTOR,
     );
   });
 
   it("rejects empty / whitespace-only values", () => {
-    expect(extractHarness(req({ header: "   " }))).toBe(UNKNOWN_HARNESS);
+    expect(extractOriginActor(req({ header: "   " }))).toBe(UNKNOWN_ORIGIN_ACTOR);
   });
 
-  it("truncates to 120 characters", () => {
-    expect(extractHarness(req({ header: "a".repeat(200) }))).toBe(
-      "a".repeat(120),
+  it("truncates to 128 characters", () => {
+    expect(extractOriginActor(req({ header: "a".repeat(200) }))).toBe(
+      "a".repeat(128),
+    );
+  });
+
+  it("accepts a {app}/{type}/{name} path", () => {
+    expect(
+      extractOriginActor(req({ header: "agent-relay-cli/agent/claude-code" })),
+    ).toBe("agent-relay-cli/agent/claude-code");
+    expect(extractOriginActor(req({ header: "pear/user/send-message-box" }))).toBe(
+      "pear/user/send-message-box",
+    );
+    expect(extractOriginActor(req({ header: "agent-relay-cli/cli" }))).toBe(
+      "agent-relay-cli/cli",
     );
   });
 });

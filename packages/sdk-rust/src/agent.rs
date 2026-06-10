@@ -96,8 +96,8 @@ impl AgentClient {
                 self.client.origin_client(),
                 self.client.origin_version(),
             );
-        if let Some(harness) = self.client.harness() {
-            options = options.with_harness(harness);
+        if let Some(origin_actor) = self.client.origin_actor() {
+            options = options.with_origin_actor(origin_actor);
         }
         if let Some(id) = self.client.agent_relay_distinct_id() {
             options = options.with_agent_relay_distinct_id(id);

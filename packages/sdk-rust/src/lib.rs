@@ -118,8 +118,8 @@ pub mod credentials;
 pub mod dm_participants;
 pub mod error;
 pub mod events;
-pub mod harness;
 pub mod identity;
+pub mod origin_actor;
 pub mod registration;
 pub mod relay;
 pub mod types;
@@ -138,11 +138,11 @@ pub use events::{
     NormalizedCommandInvocation, NormalizedEventKind, NormalizedInboundEvent, RelayPriority,
     SenderKind,
 };
-pub use harness::{
-    sanitize_agent_relay_distinct_id, sanitize_harness, AGENT_RELAY_DISTINCT_ID_HEADER,
-    AGENT_RELAY_DISTINCT_ID_QUERY, HARNESS_HEADER,
-};
 pub use identity::{agent_name_eq, is_self_name};
+pub use origin_actor::{
+    sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_HEADER,
+    AGENT_RELAY_DISTINCT_ID_QUERY, ORIGIN_ACTOR_HEADER,
+};
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
     retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
