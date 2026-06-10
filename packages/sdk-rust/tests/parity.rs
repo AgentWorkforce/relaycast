@@ -321,6 +321,7 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             "task": "Run parity check",
             "channel": "general",
             "persona": "SDK verifier",
+            "model": "claude-haiku-4-5-20251001",
             "metadata": {"ticket": "SDK-101"}
         })))
         .respond_with(ok(json!({
@@ -345,6 +346,7 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             task: "Run parity check".to_string(),
             channel: Some("general".to_string()),
             persona: Some("SDK verifier".to_string()),
+            model: Some("claude-haiku-4-5-20251001".to_string()),
             metadata: Some(json!({"ticket": "SDK-101"})),
         })
         .await
