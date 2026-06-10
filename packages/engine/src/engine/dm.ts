@@ -12,6 +12,7 @@ import {
   deliveries,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { runAtomic } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { logMessage } from './console.js';
@@ -279,42 +280,48 @@ export async function sendDm(
     await a2aEngine.incrementA2aMessagesSent(db, a2aTarget.id);
   }
 
-  const message = await persistDmMessage(db, workspaceId, fromAgentId, conv.channelId, data, messageId);
+  // All durable writes (message + attachments + delivery + message_log) run
+  // atomically when the adapter supports transactions; fanout stays in routes.
+  const { message, dmDelivery } = await runAtomic(db, async (tx) => {
+    const message = await persistDmMessage(tx, workspaceId, fromAgentId, conv.channelId, data, messageId);
 
-  // Create delivery record for the recipient (skip for @self DMs)
-  let dmDelivery: { id: string; agentId: string } | null = null;
-  if (toAgent.id !== fromAgentId) {
-    const deliveryId = `del_${generateId()}`;
-    await db.insert(deliveries).values({
-      id: deliveryId,
+    // Create delivery record for the recipient (skip for @self DMs)
+    let dmDelivery: { id: string; agentId: string } | null = null;
+    if (toAgent.id !== fromAgentId) {
+      const deliveryId = `del_${generateId()}`;
+      await tx.insert(deliveries).values({
+        id: deliveryId,
+        workspaceId,
+        messageId: message.id,
+        agentId: toAgent.id,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        reason: 'dm',
+        priority: 'normal',
+        status: 'accepted',
+      }).onConflictDoNothing();
+      dmDelivery = { id: deliveryId, agentId: toAgent.id };
+    }
+
+    await logMessage(tx, {
       workspaceId,
       messageId: message.id,
-      agentId: toAgent.id,
-      mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-      reason: 'dm',
-      priority: 'normal',
-      status: 'accepted',
-    }).onConflictDoNothing();
-    dmDelivery = { id: deliveryId, agentId: toAgent.id };
-  }
+      channelId: conv.channelId,
+      agentId: fromAgentId,
+      conversationId: conv.id,
+      deliveryKind: 'dm',
+      body: message.body,
+      contentType: 'text/plain',
+      metadata: {
+        target_agent: toAgent.name,
+        injection_mode: data.mode ?? 'wait',
+        ...(a2aTarget ? { a2a_target_url: a2aTarget.external_url } : {}),
+      },
+      attachmentCount: attachments.length,
+      mentionCount: 0,
+      latencyMs: Date.now() - startedAtMs,
+    });
 
-  await logMessage(db, {
-    workspaceId,
-    messageId: message.id,
-    channelId: conv.channelId,
-    agentId: fromAgentId,
-    conversationId: conv.id,
-    deliveryKind: 'dm',
-    body: message.body,
-    contentType: 'text/plain',
-    metadata: {
-      target_agent: toAgent.name,
-      injection_mode: data.mode ?? 'wait',
-      ...(a2aTarget ? { a2a_target_url: a2aTarget.external_url } : {}),
-    },
-    attachmentCount: attachments.length,
-    mentionCount: 0,
-    latencyMs: Date.now() - startedAtMs,
+    return { message, dmDelivery };
   });
 
   const injectionMode = data.mode ?? 'wait';

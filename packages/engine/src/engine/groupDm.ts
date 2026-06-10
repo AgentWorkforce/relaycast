@@ -1,6 +1,7 @@
 import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files, deliveries } from '../db/schema.js';
+import { runAtomic } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -62,33 +63,35 @@ export async function createGroupDm(
   const conversationId = generateId();
   const channelId = generateId();
 
-  // Create private channel (channel_type=2 for group DM)
-  await db.insert(channels).values({
-    id: channelId,
-    workspaceId,
-    name: `group-dm-${conversationId}`,
-    channelType: 2,
-  });
-
-  // Create group DM conversation
-  await db.insert(dmConversations).values({
-    id: conversationId,
-    workspaceId,
-    channelId,
-    dmType: 'group',
-    name: data.name ?? null,
-  });
-
-  // Add creator + all participants
   const allParticipantIds = [creatorAgentId, ...participantAgents.map((a) => a.id)];
   const uniqueIds = [...new Set(allParticipantIds)];
 
-  for (const agentId of uniqueIds) {
-    await db.insert(dmParticipants).values({
+  await runAtomic(db, async (tx) => {
+    // Create private channel (channel_type=2 for group DM)
+    await tx.insert(channels).values({
+      id: channelId,
+      workspaceId,
+      name: `group-dm-${conversationId}`,
+      channelType: 2,
+    });
+
+    // Create group DM conversation
+    await tx.insert(dmConversations).values({
+      id: conversationId,
+      workspaceId,
+      channelId,
+      dmType: 'group',
+      name: data.name ?? null,
+    });
+
+    const participantRows = uniqueIds.map((agentId) => ({
       conversationId,
       agentId,
-    });
-  }
+    }));
+    if (participantRows.length > 0) {
+      await tx.insert(dmParticipants).values(participantRows);
+    }
+  });
 
   return {
     id: conversationId,
@@ -107,52 +110,6 @@ export async function postGroupMessage(
   agentId: string,
   data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
 ) {
-  // Verify sender is a participant (and hasn't left)
-  const [participant] = await db
-    .select()
-    .from(dmParticipants)
-    .where(
-      and(
-        eq(dmParticipants.conversationId, conversationId),
-        eq(dmParticipants.agentId, agentId),
-        isNull(dmParticipants.leftAt),
-      ),
-    );
-
-  if (!participant) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
-  }
-
-  // Get the conversation to find the channel
-  const [conv] = await db
-    .select()
-    .from(dmConversations)
-    .where(
-      and(
-        eq(dmConversations.id, conversationId),
-        eq(dmConversations.workspaceId, workspaceId),
-      ),
-    );
-
-  if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
-  }
-
-  const [fromAgent] = await db
-    .select({ name: agents.name })
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
-
-  if (!fromAgent?.name) {
-    const err = new Error('Sender agent not found');
-    Object.assign(err, { code: 'internal_error', status: 500 });
-    throw err;
-  }
-
   if (data.attachments && data.attachments.length > 0) {
     const unique = new Set(data.attachments);
     if (unique.size !== data.attachments.length) {
@@ -182,50 +139,103 @@ export async function postGroupMessage(
 
   const messageId = generateId();
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: messageId,
-      workspaceId,
-      channelId: conv.channelId,
-      agentId,
-      body: data.text,
-      hasAttachments,
-      metadata: { injection_mode: data.mode ?? 'wait' },
-    })
-    .returning();
 
-  if (data.attachments && data.attachments.length > 0) {
-    const attachmentValues = data.attachments.map((fileId, idx) => ({
-      messageId,
-      fileId,
-      position: idx,
-    }));
-    await db.insert(messageAttachments).values(attachmentValues);
-  }
+  // All durable writes (message + attachments + deliveries) run atomically
+  // when the adapter supports transactions; fanout stays in routes.
+  const { message, agentName, groupDeliveries } = await runAtomic(db, async (tx) => {
+    // Re-check membership and conversation state inside the transaction so a
+    // sender that leaves mid-request cannot still create durable rows.
+    const [participant] = await tx
+      .select()
+      .from(dmParticipants)
+      .where(
+        and(
+          eq(dmParticipants.conversationId, conversationId),
+          eq(dmParticipants.agentId, agentId),
+          isNull(dmParticipants.leftAt),
+        ),
+      );
 
-  // Create delivery records for all other active participants
-  const otherParticipants = await db
-    .select({ agentId: dmParticipants.agentId })
-    .from(dmParticipants)
-    .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+    if (!participant) {
+      const err = new Error('Not a participant in this conversation');
+      Object.assign(err, { code: 'forbidden', status: 403 });
+      throw err;
+    }
 
-  const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
-  const groupDeliveries: Array<{ id: string; agentId: string }> = [];
-  if (recipients.length > 0) {
-    const rows = recipients.map((p) => ({
-      id: `del_${generateId()}`,
-      workspaceId,
-      messageId,
-      agentId: p.agentId,
-      mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
-      reason: 'dm',
-      priority: 'normal',
-      status: 'accepted',
-    }));
-    await db.insert(deliveries).values(rows).onConflictDoNothing();
-    groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
-  }
+    const [conv] = await tx
+      .select()
+      .from(dmConversations)
+      .where(
+        and(
+          eq(dmConversations.id, conversationId),
+          eq(dmConversations.workspaceId, workspaceId),
+        ),
+      );
+
+    if (!conv) {
+      const err = new Error('Conversation not found');
+      Object.assign(err, { code: 'not_found', status: 404 });
+      throw err;
+    }
+
+    const [fromAgent] = await tx
+      .select({ name: agents.name })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+
+    if (!fromAgent?.name) {
+      const err = new Error('Sender agent not found');
+      Object.assign(err, { code: 'internal_error', status: 500 });
+      throw err;
+    }
+
+    const [message] = await tx
+      .insert(messages)
+      .values({
+        id: messageId,
+        workspaceId,
+        channelId: conv.channelId,
+        agentId,
+        body: data.text,
+        hasAttachments,
+        metadata: { injection_mode: data.mode ?? 'wait' },
+      })
+      .returning();
+
+    if (data.attachments && data.attachments.length > 0) {
+      const attachmentValues = data.attachments.map((fileId, idx) => ({
+        messageId,
+        fileId,
+        position: idx,
+      }));
+      await tx.insert(messageAttachments).values(attachmentValues);
+    }
+
+    // Create delivery records for all other active participants
+    const otherParticipants = await tx
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, conversationId), isNull(dmParticipants.leftAt)));
+
+    const recipients = otherParticipants.filter((p) => p.agentId !== agentId);
+    const groupDeliveries: Array<{ id: string; agentId: string }> = [];
+    if (recipients.length > 0) {
+      const rows = recipients.map((p) => ({
+        id: `del_${generateId()}`,
+        workspaceId,
+        messageId,
+        agentId: p.agentId,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        reason: 'dm',
+        priority: 'normal',
+        status: 'accepted',
+      }));
+      await tx.insert(deliveries).values(rows).onConflictDoNothing();
+      groupDeliveries.push(...rows.map((r) => ({ id: r.id, agentId: r.agentId })));
+    }
+
+    return { message, agentName: fromAgent.name, groupDeliveries };
+  });
 
   const attachmentMap = hasAttachments
     ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
@@ -239,7 +249,7 @@ export async function postGroupMessage(
     message: {
       id: message.id,
       agent_id: message.agentId,
-      agent_name: fromAgent.name,
+      agent_name: agentName,
       text: message.body,
       injection_mode: injectionMode,
       attachments,

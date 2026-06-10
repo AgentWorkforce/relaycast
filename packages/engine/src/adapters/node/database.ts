@@ -4,10 +4,14 @@ import { fileURLToPath } from 'node:url';
 import Database, { type RunResult } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
-import type { EngineDb } from '../../ports/database.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 
-/** The engine handle specialized to better-sqlite3's synchronous run-result. */
-export type NodeEngineDb = EngineDb<RunResult>;
+/**
+ * The engine handle specialized to better-sqlite3's synchronous run-result,
+ * with the optional transaction capability attached (better-sqlite3 supports
+ * interactive transactions, unlike D1).
+ */
+export type NodeEngineDb = EngineDb<RunResult> & TransactionCapability;
 
 export interface SqliteDbHandle {
   db: NodeEngineDb;
@@ -26,10 +30,58 @@ export interface SqliteDbHandle {
  */
 export function getSqliteDb(path: string): SqliteDbHandle {
   const sqlite = new Database(path);
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('foreign_keys = ON');
+  configureSqlite(sqlite, { enableWal: true });
   const db = drizzle(sqlite, { schema }) as unknown as NodeEngineDb;
+  const isolatedTransactions = path !== ':memory:';
+
+  // Attach the transaction capability (`runAtomic` detects it on the handle).
+  //
+  // Drizzle's better-sqlite3 `db.transaction()` requires a synchronous
+  // callback (better-sqlite3's native wrapper commits when the sync call
+  // returns), but engine write paths are async. For file-backed databases we
+  // therefore open the transaction on a short-lived, dedicated connection so
+  // unrelated statements on the main handle cannot join the open transaction.
+  // `:memory:` databases are connection-local, so tests keep the shared
+  // connection while still serializing transactional callers.
+  let txTail: Promise<unknown> = Promise.resolve();
+  db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
+    const run = async (): Promise<T> => {
+      const txSqlite = isolatedTransactions ? new Database(path) : sqlite;
+      try {
+        if (isolatedTransactions) configureSqlite(txSqlite);
+        const txDb = (isolatedTransactions
+          ? drizzle(txSqlite, { schema })
+          : db) as unknown as EngineDb;
+
+        txSqlite.exec('BEGIN IMMEDIATE');
+        const result = await fn(txDb);
+        txSqlite.exec('COMMIT');
+        return result;
+      } catch (err) {
+        if (txSqlite.inTransaction) txSqlite.exec('ROLLBACK');
+        throw err;
+      } finally {
+        if (isolatedTransactions) txSqlite.close();
+      }
+    };
+    const result = txTail.then(run);
+    txTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   return { db, sqlite };
+}
+
+function configureSqlite(
+  sqlite: Database.Database,
+  options: { enableWal?: boolean } = {},
+): void {
+  if (options.enableWal) sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('foreign_keys = ON');
+  sqlite.pragma('busy_timeout = 5000');
 }
 
 function migrationsDir(): string {
