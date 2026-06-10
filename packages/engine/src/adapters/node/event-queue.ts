@@ -6,6 +6,7 @@ import {
   claimDueEvents,
   completeEvent,
   failEvent,
+  failExhaustedDueEvents,
   rescheduleEvent,
   cleanupOldEvents,
   type ClaimedEvent,
@@ -109,6 +110,7 @@ export class DurableEventQueue implements EventQueue {
     this.polling = true;
     try {
       for (;;) {
+        await failExhaustedDueEvents(this.db);
         const claimed = await claimDueEvents(this.db, {
           limit: this.batchSize,
           leaseMs: this.leaseMs,
@@ -166,3 +168,6 @@ export class DurableEventQueue implements EventQueue {
     await cleanupOldEvents(this.db);
   }
 }
+
+export { DurableEventQueue as InProcessEventQueue };
+export type InProcessEventQueueOptions = DurableEventQueueOptions;

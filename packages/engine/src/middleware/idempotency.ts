@@ -27,6 +27,12 @@ interface RunIdempotentOptions<T> {
   ttlSeconds?: number;
   kv?: KeyValueStore;
   operation: () => Promise<T>;
+  /**
+   * Fresh-result hook that must complete before the idempotency success record
+   * is stored. Use it for durable post-mutation writes that must not be skipped
+   * by a later idempotent replay.
+   */
+  afterOperation?: (data: T) => Promise<void>;
 }
 
 async function buildKey(workspaceId: string, actorId: string, scope: string, key: string): Promise<string> {
@@ -73,6 +79,7 @@ export async function runIdempotent<T>(
     key,
     fingerprint,
     operation,
+    afterOperation,
     status = 201,
     ttlSeconds = IDEMPOTENCY_TTL_SECONDS,
     kv,
@@ -80,6 +87,7 @@ export async function runIdempotent<T>(
 
   if (!key) {
     const data = await operation();
+    if (afterOperation) await afterOperation(data);
     return { status, data, replayed: false };
   }
 
@@ -169,6 +177,7 @@ export async function runIdempotent<T>(
 
   try {
     const data = await operation();
+    if (afterOperation) await afterOperation(data);
 
     if (kvStore && kvKey && lockAcquired) {
       const record: StoredIdempotencyRecord<T> = {

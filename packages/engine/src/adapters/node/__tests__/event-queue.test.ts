@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../database.js';
 import { DurableEventQueue } from '../event-queue.js';
 import { createNodeRuntime } from '../index.js';
-import { enqueueEvent } from '../../../engine/eventQueue.js';
+import { claimDueEvents, enqueueEvent } from '../../../engine/eventQueue.js';
 import { pendingEvents, workspaces, eventSubscriptions } from '../../../db/schema.js';
 
 const HOOK_URL = 'https://hooks.example.test/relay';
@@ -209,6 +209,36 @@ describe('DurableEventQueue', () => {
     expect(row.attempts).toBe(1);
     expect(row.lastError).toMatch(/attempts exhausted/);
     expect(errors).toContainEqual(expect.objectContaining({ settled: 'failed' }));
+  });
+
+  it('settles an expired final-attempt lease after a crash', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    await seedSubscription(db, ws);
+
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const id = await enqueueEvent(db, ws, 'message.created', { text: 'leased' });
+    await db.update(pendingEvents).set({ maxAttempts: 1 }).where(eq(pendingEvents.id, id));
+
+    const [claimed] = await claimDueEvents(db, { leaseMs: 60_000 });
+    expect(claimed.id).toBe(id);
+    expect(claimed.attempts).toBe(1);
+
+    await db
+      .update(pendingEvents)
+      .set({ processAfter: new Date(Date.now() - 1_000) })
+      .where(eq(pendingEvents.id, id));
+
+    const queue = makeQueue(db);
+    await queue.poll();
+
+    const [row] = await pendingRows(db);
+    expect(row.status).toBe('failed');
+    expect(row.completedAt).not.toBeNull();
+    expect(row.lastError).toMatch(/lease expired/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('resumes pending deliveries after a restart over the same database', async () => {

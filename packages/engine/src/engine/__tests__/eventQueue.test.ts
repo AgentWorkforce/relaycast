@@ -95,6 +95,28 @@ describe('sweepPendingEvents', () => {
     expect(rescheduled.processAfter.getTime()).toBeGreaterThan(before + 110_000);
   });
 
+  it('settles expired final-attempt rows before sweeping', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const id = await enqueueEvent(db, ws, 'message.created', {});
+    await db.update(pendingEvents).set({ maxAttempts: 1 }).where(eq(pendingEvents.id, id));
+
+    const [claimed] = await sweepPendingEvents(db, { leaseMs: 60_000 });
+    expect(claimed.id).toBe(id);
+    expect(claimed.attempts).toBe(1);
+
+    await db
+      .update(pendingEvents)
+      .set({ processAfter: new Date(Date.now() - 1_000) })
+      .where(eq(pendingEvents.id, id));
+
+    expect(await sweepPendingEvents(db, { leaseMs: 60_000 })).toHaveLength(0);
+
+    const [row] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, id));
+    expect(row.status).toBe('failed');
+    expect(row.lastError).toMatch(/lease expired/);
+  });
+
   it('never claims settled rows', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { pendingEvents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -38,6 +38,8 @@ export async function enqueueEvent(
  * `attempts < max_attempts`. Claiming increments `attempts` and pushes
  * `process_after` out by `leaseMs`, so a worker that crashes mid-delivery
  * leaves the row reclaimable once the lease expires (one attempt consumed).
+ * Expired rows that already consumed their final attempt are settled by
+ * `failExhaustedDueEvents` before the next claim pass.
  *
  * Single `UPDATE ... WHERE id IN (subquery) RETURNING` statement — atomic on
  * both drivers per the no-interactive-transactions doctrine (ports/database.ts).
@@ -99,6 +101,35 @@ export async function failEvent(db: Db, id: string, error: string): Promise<void
     .where(and(eq(pendingEvents.id, id), eq(pendingEvents.status, 'pending')));
 }
 
+/**
+ * Settle pending rows whose final leased attempt expired without completing.
+ * These rows have already consumed every allowed attempt, so reclaiming them
+ * for another delivery would exceed `max_attempts`.
+ */
+export async function failExhaustedDueEvents(
+  db: Db,
+  opts: { now?: Date; error?: string } = {},
+): Promise<number> {
+  const now = opts.now ?? new Date();
+  const failed = await db
+    .update(pendingEvents)
+    .set({
+      status: 'failed',
+      lastError: opts.error ?? 'attempts exhausted after delivery lease expired',
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(pendingEvents.status, 'pending'),
+        lte(pendingEvents.processAfter, now),
+        gte(pendingEvents.attempts, pendingEvents.maxAttempts),
+      ),
+    )
+    .returning({ id: pendingEvents.id });
+
+  return failed.length;
+}
+
 /** Retryable failure — keep the row `pending` and make it due again after `backoffMs`. */
 export async function rescheduleEvent(
   db: Db,
@@ -142,6 +173,7 @@ export async function sweepPendingEvents(
   db: Db,
   opts: { limit?: number; leaseMs?: number; now?: Date } = {},
 ): Promise<SweptEvent[]> {
+  await failExhaustedDueEvents(db, { now: opts.now });
   const claimed = await claimDueEvents(db, opts);
   return claimed.map((event) => ({
     ...event,
