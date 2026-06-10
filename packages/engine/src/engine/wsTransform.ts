@@ -155,6 +155,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           cli: d.cli as string,
           task: d.task as string,
           channel: (d.channel as string | null) ?? null,
+          model: (d.model as string | null) ?? null,
           already_existed: d.already_existed as boolean,
         },
       };

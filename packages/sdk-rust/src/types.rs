@@ -217,6 +217,8 @@ pub struct SpawnAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -1212,6 +1214,8 @@ pub struct AgentSpawnRequestedPayload {
     pub task: String,
     #[serde(default)]
     pub channel: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub already_existed: bool,
 }
