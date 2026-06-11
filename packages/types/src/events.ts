@@ -20,10 +20,22 @@ export const PingEventSchema = z.object({
 });
 export type PingEvent = z.infer<typeof PingEventSchema>;
 
+// Sent after a reconnect to request replay of events missed while disconnected.
+// `last_seen_seq` is the highest `agent_seq` the client observed; `since` is an
+// ISO timestamp used for the DB-backed replay when the gap exceeds the server's
+// in-memory resync ring.
+export const ResyncEventSchema = z.object({
+  type: z.literal('resync'),
+  last_seen_seq: z.number(),
+  since: z.string().optional(),
+});
+export type ResyncEvent = z.infer<typeof ResyncEventSchema>;
+
 export const ClientEventSchema = z.discriminatedUnion('type', [
   SubscribeEventSchema,
   UnsubscribeEventSchema,
   PingEventSchema,
+  ResyncEventSchema,
 ]);
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
@@ -218,6 +230,18 @@ export const PongEventSchema = z.object({
 });
 export type PongEvent = z.infer<typeof PongEventSchema>;
 
+// Server acknowledgement of a `resync` request. `replayed` counts the events
+// re-sent (ring buffer plus DB fallback); `gap_detected` is true when the gap
+// exceeded the server's resync ring and a DB-backed replay was attempted.
+export const ResyncAckEventSchema = z.object({
+  type: z.literal('resync_ack'),
+  last_seen_seq: z.number(),
+  current_seq: z.number(),
+  replayed: z.number(),
+  gap_detected: z.boolean(),
+});
+export type ResyncAckEvent = z.infer<typeof ResyncAckEventSchema>;
+
 export const WebhookReceivedEventSchema = z.object({
   type: z.literal('webhook.received'),
   webhook_id: z.string(),
@@ -345,6 +369,14 @@ export const WsCloseEventSchema = z.object({
 });
 export type WsCloseEvent = z.infer<typeof WsCloseEventSchema>;
 
+// Emitted by WsClient after the server acknowledges a reconnect resync.
+export const WsResyncedEventSchema = z.object({
+  type: z.literal('resynced'),
+  replayed: z.number(),
+  gap_detected: z.boolean(),
+});
+export type WsResyncedEvent = z.infer<typeof WsResyncedEventSchema>;
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageCreatedEventSchema,
   MessageUpdatedEventSchema,
@@ -380,6 +412,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
+  ResyncAckEventSchema,
 ]);
 
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
@@ -430,12 +463,14 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
+  ResyncAckEventSchema,
   // Client-only events
   WsOpenEventSchema,
   WsErrorEventSchema,
   WsReconnectingEventSchema,
   WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
+  WsResyncedEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
 export type WsClientEventType = WsClientEvent['type'];

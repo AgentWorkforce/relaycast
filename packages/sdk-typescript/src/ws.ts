@@ -5,6 +5,7 @@ import type {
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
   WsCloseEvent,
+  WsResyncedEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import {
@@ -40,6 +41,12 @@ export interface WsClientOptions {
    */
   agentRelayDistinctId?: string;
 }
+
+/**
+ * How many recently-seen event ids to remember for replay dedupe. Sized above
+ * the server's 500-event resync ring plus DB-fallback replay batches.
+ */
+const SEEN_EVENT_IDS_MAX = 2048;
 
 const INTERNAL_WS_ORIGIN = Symbol('relaycast.internal.ws-origin');
 
@@ -89,6 +96,12 @@ export class WsClient {
   private originVersion: string;
   private originActor?: string;
   private agentRelayDistinctId?: string;
+  /** Highest `agent_seq` observed across delivered events; null until the first stamped event. */
+  private lastSeenSeq: number | null = null;
+  /** Receive time of the last seq-stamped event, used as `since` for DB-backed replay. */
+  private lastEventAt: string | null = null;
+  /** Recently dispatched event ids (insertion-ordered for LRU eviction) for replay dedupe. */
+  private seenEventIds = new Set<string>();
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -159,12 +172,42 @@ export class WsClient {
       this.startPing();
       const openEvent: WsOpenEvent = { type: 'open' };
       this.emit('open', openEvent);
+      // After open handlers have re-subscribed, request replay of anything
+      // missed while disconnected. A fresh client has no seq and sends nothing.
+      this.sendResync();
     };
 
     ws.onmessage = (event: MessageEvent) => {
       if (this.ws !== ws) return;
       try {
         const parsed = JSON.parse(String(event.data));
+
+        if (parsed !== null && typeof parsed === 'object') {
+          // The server stamps every delivered event with a monotonic
+          // `agent_seq` (stripped by schema parsing, so read it raw here).
+          if (typeof parsed.agent_seq === 'number' && Number.isFinite(parsed.agent_seq)) {
+            this.lastSeenSeq = parsed.agent_seq;
+            this.lastEventAt = new Date().toISOString();
+          }
+
+          if (parsed.type === 'resync_ack') {
+            const resyncedEvent: WsResyncedEvent = {
+              type: 'resynced',
+              replayed: typeof parsed.replayed === 'number' ? parsed.replayed : 0,
+              gapDetected: parsed.gap_detected === true,
+            };
+            this.emit('resynced', resyncedEvent);
+            return;
+          }
+
+          // Drop replays of events already dispatched (stable event id).
+          if (typeof parsed.id === 'string' && parsed.id.length > 0 && typeof parsed.type === 'string') {
+            const dedupeKey = `${parsed.type}:${parsed.id}`;
+            if (this.seenEventIds.has(dedupeKey)) return;
+            this.rememberEventId(dedupeKey);
+          }
+        }
+
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
           this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
@@ -305,6 +348,29 @@ export class WsClient {
   private sendJson(data: unknown): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    }
+  }
+
+  /**
+   * Request replay of events missed while disconnected. The server replays its
+   * resync ring past `last_seen_seq`, falls back to a DB-backed replay from
+   * `since` when the gap exceeds the ring, and answers with `resync_ack`.
+   * No-op until at least one seq-stamped event has been received.
+   */
+  private sendResync(): void {
+    if (this.lastSeenSeq === null) return;
+    this.sendJson({
+      type: 'resync',
+      last_seen_seq: this.lastSeenSeq,
+      ...(this.lastEventAt ? { since: this.lastEventAt } : {}),
+    });
+  }
+
+  private rememberEventId(key: string): void {
+    this.seenEventIds.add(key);
+    if (this.seenEventIds.size > SEEN_EVENT_IDS_MAX) {
+      const oldest = this.seenEventIds.values().next().value;
+      if (oldest !== undefined) this.seenEventIds.delete(oldest);
     }
   }
 

@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from .client import AsyncHttpClient, HttpClient
 from .models import (
+    Agent,
     Channel,
     ChannelMemberInfo,
     ChannelReadStatus,
@@ -201,6 +202,10 @@ class AgentClient:
         self.channels = _ChannelsNamespace(client)
         self.files = _FilesNamespace(client)
         self.presence = _PresenceNamespace(client)
+
+    def me(self) -> Agent:
+        result = self.client.get("/v1/agent")
+        return Agent.model_validate(result)
 
     # ── Messages ──
 
@@ -515,6 +520,10 @@ class AsyncAgentClient:
         self.channels = _AsyncChannelsNamespace(client)
         self.files = _AsyncFilesNamespace(client)
         self.presence = _AsyncPresenceNamespace(client)
+
+    async def me(self) -> Agent:
+        result = await self.client.get("/v1/agent")
+        return Agent.model_validate(result)
 
     # ── Messages ──
 

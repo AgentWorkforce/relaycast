@@ -69,6 +69,7 @@ import type {
   DeliveryFailedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
+  WsResyncedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
@@ -385,6 +386,15 @@ export class AgentClient {
       }
       return this.ws.on('permanently_disconnected', (e: WsClientEvent) =>
         handler((e as WsPermanentlyDisconnectedEvent).attempt));
+    },
+    resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) => {
+      if (!this.ws) {
+        throw new Error('WebSocket not connected. Call connect() first.');
+      }
+      return this.ws.on('resynced', (e: WsClientEvent) => {
+        const event = e as WsResyncedEvent;
+        handler({ replayed: event.replayed, gapDetected: event.gapDetected });
+      });
     },
     // Wildcard
     any: (handler: (e: WsClientEvent) => void): (() => void) => {
