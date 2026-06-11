@@ -7,7 +7,6 @@ const telemetryString = (max: number) => z.string().trim().min(1).max(max);
 const telemetryKeySchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/);
 
 export const telemetryOriginSchema = z.object({
-  origin_surface: telemetryString(32),
   origin_client: telemetryString(80),
   origin_version: telemetryString(48),
 });
@@ -231,7 +230,6 @@ export function sanitizeTelemetryProperties(
 
 export function normalizeTelemetryOrigin(origin: Partial<TelemetryOrigin> | undefined): TelemetryOrigin {
   return {
-    origin_surface: normalizeStringValue(origin?.origin_surface ?? 'unknown').slice(0, 32) || 'unknown',
     origin_client: normalizeStringValue(origin?.origin_client ?? 'unknown').slice(0, 80) || 'unknown',
     origin_version: normalizeStringValue(origin?.origin_version ?? 'unknown').slice(0, 48) || 'unknown',
   };

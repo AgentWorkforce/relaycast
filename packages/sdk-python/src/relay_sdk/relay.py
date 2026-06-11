@@ -118,7 +118,6 @@ class Relay:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
-        origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
         agent_relay_distinct_id: str | None = None,
@@ -129,7 +128,6 @@ class Relay:
         self._client = HttpClient(
             api_key,
             base_url,
-            origin_surface=origin_surface,
             origin_client=origin_client,
             origin_version=origin_version,
             agent_relay_distinct_id=agent_relay_distinct_id,
@@ -141,7 +139,6 @@ class Relay:
         agent_client = HttpClient(
             agent_token,
             self._client.base_url,
-            origin_surface=self._client.origin_surface,
             origin_client=self._client.origin_client,
             origin_version=self._client.origin_version,
             agent_relay_distinct_id=self._client.agent_relay_distinct_id,
@@ -263,7 +260,6 @@ class AsyncRelay:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
-        origin_surface: str | None = None,
         origin_client: str | None = None,
         origin_version: str | None = None,
         agent_relay_distinct_id: str | None = None,
@@ -274,7 +270,6 @@ class AsyncRelay:
         self._client = AsyncHttpClient(
             api_key,
             base_url,
-            origin_surface=origin_surface,
             origin_client=origin_client,
             origin_version=origin_version,
             agent_relay_distinct_id=agent_relay_distinct_id,
@@ -286,7 +281,6 @@ class AsyncRelay:
         agent_client = AsyncHttpClient(
             agent_token,
             self._client.base_url,
-            origin_surface=self._client.origin_surface,
             origin_client=self._client.origin_client,
             origin_version=self._client.origin_version,
             agent_relay_distinct_id=self._client.agent_relay_distinct_id,

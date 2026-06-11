@@ -211,7 +211,6 @@ export class AgentClient {
         ...this.wsOptions,
       },
       {
-        surface: this.client.originSurface,
         client: this.client.originClient,
         version: this.client.originVersion,
         ...(this.client.originActor ? { originActor: this.client.originActor } : {}),

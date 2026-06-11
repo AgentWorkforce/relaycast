@@ -8,7 +8,6 @@ import type { McpWorkspaceConfig } from './workspaces.js';
 import { resolveDefaultWorkspaceId } from './workspaces.js';
 
 const mcpOrigin = {
-  surface: 'mcp' as const,
   client: '@relaycast/mcp',
   version: MCP_VERSION,
 };
@@ -202,7 +201,6 @@ export function createHttpHandler(baseOptions: McpServerOptions, lifecycle?: Ses
 
       // New session — create fresh MCP server + transport + telemetry
       const telemetry = createMcpTelemetry(MCP_VERSION, {
-        originSurface: 'mcp',
         originClient: '@relaycast/mcp',
         originVersion: MCP_VERSION,
       });

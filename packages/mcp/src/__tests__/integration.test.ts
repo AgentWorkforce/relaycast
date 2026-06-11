@@ -291,7 +291,6 @@ describe('MCP → SDK → HTTP integration', () => {
   it('sends mcp origin headers on relay API requests', async () => {
     await client.callTool({ name: 'channel.list', arguments: {} });
     const req = lastReq();
-    expect(req.headers['x-relaycast-origin-surface']).toBe('mcp');
     expect(req.headers['x-relaycast-origin-client']).toBe('@relaycast/mcp');
     expect(req.headers['x-relaycast-origin-version']).toBeDefined();
   });

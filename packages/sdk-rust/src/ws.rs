@@ -17,7 +17,6 @@ use crate::types::WsEvent;
 
 const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const PING_INTERVAL_SECS: u64 = 30;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS: u32 = 10;
@@ -32,8 +31,6 @@ pub struct WsClientOptions {
     pub base_url: Option<String>,
     /// Enable debug logging for dropped/malformed messages.
     pub debug: bool,
-    /// SDK origin surface metadata.
-    pub origin_surface: Option<String>,
     /// SDK origin client metadata.
     pub origin_client: Option<String>,
     /// SDK origin version metadata.
@@ -57,7 +54,6 @@ impl WsClientOptions {
             token: token.into(),
             base_url: None,
             debug: false,
-            origin_surface: None,
             origin_client: None,
             origin_version: None,
             origin_actor: None,
@@ -82,11 +78,9 @@ impl WsClientOptions {
     /// Set origin metadata query params for WebSocket handshake.
     pub fn with_origin(
         mut self,
-        origin_surface: impl Into<String>,
         origin_client: impl Into<String>,
         origin_version: impl Into<String>,
     ) -> Self {
-        self.origin_surface = Some(origin_surface.into());
         self.origin_client = Some(origin_client.into());
         self.origin_version = Some(origin_version.into());
         self
@@ -138,7 +132,6 @@ pub struct WsClient {
     token: Arc<Mutex<String>>,
     base_url: String,
     debug: bool,
-    origin_surface: String,
     origin_client: String,
     origin_version: String,
     origin_actor: Option<String>,
@@ -175,9 +168,6 @@ impl WsClient {
             token: Arc::new(Mutex::new(options.token)),
             base_url: base_url.trim_end_matches('/').to_string(),
             debug: options.debug,
-            origin_surface: options
-                .origin_surface
-                .unwrap_or_else(|| DEFAULT_ORIGIN_SURFACE.to_string()),
             origin_client: options
                 .origin_client
                 .unwrap_or_else(|| DEFAULT_ORIGIN_CLIENT.to_string()),
@@ -238,7 +228,6 @@ impl WsClient {
             let token = self.token.lock().await.clone();
             let mut query = url.query_pairs_mut();
             query.append_pair("token", &token);
-            query.append_pair("origin_surface", &self.origin_surface);
             query.append_pair("origin_client", &self.origin_client);
             query.append_pair("origin_version", &self.origin_version);
             if let Some(ref origin_actor) = self.origin_actor {
@@ -261,7 +250,6 @@ impl WsClient {
         let is_connected = self.is_connected.clone();
         let debug = self.debug;
         let base_url = self.base_url.clone();
-        let origin_surface = self.origin_surface.clone();
         let origin_client = self.origin_client.clone();
         let origin_version = self.origin_version.clone();
         let origin_actor = self.origin_actor.clone();
@@ -294,7 +282,6 @@ impl WsClient {
                     {
                         let mut query = reconnect_url.query_pairs_mut();
                         query.append_pair("token", &current_token);
-                        query.append_pair("origin_surface", &origin_surface);
                         query.append_pair("origin_client", &origin_client);
                         query.append_pair("origin_version", &origin_version);
                         if let Some(ref origin_actor) = origin_actor {

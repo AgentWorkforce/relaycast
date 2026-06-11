@@ -91,7 +91,6 @@ export class WsClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private debug: boolean;
-  private originSurface: string;
   private originClient: string;
   private originVersion: string;
   private originActor?: string;
@@ -122,7 +121,6 @@ export class WsClient {
       : 30;
     const base = (options.baseUrl ?? 'https://gateway.relaycast.dev').replace(/\/+$/, '');
     this.baseUrl = base.replace(/^http/, 'ws');
-    this.originSurface = origin.surface;
     this.originClient = origin.client;
     this.originVersion = origin.version;
     this.originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
@@ -138,7 +136,6 @@ export class WsClient {
 
     const wsUrl = new URL('/v1/ws', `${this.baseUrl}/`);
     wsUrl.searchParams.set('token', this.token);
-    wsUrl.searchParams.set(decamelizeKey('originSurface'), this.originSurface);
     wsUrl.searchParams.set(decamelizeKey('originClient'), this.originClient);
     wsUrl.searchParams.set(decamelizeKey('originVersion'), this.originVersion);
     if (this.originActor) {

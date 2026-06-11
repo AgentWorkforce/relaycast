@@ -153,7 +153,6 @@ class TestWsClientOriginParams:
         url = connect_mock.call_args.args[0]
         assert "/v1/ws?" in url
         assert "token=at_xxx" in url
-        assert "origin_surface=sdk" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
         assert f"origin_version={relay_sdk.SDK_VERSION}" in url
 

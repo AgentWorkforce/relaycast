@@ -91,11 +91,7 @@ impl AgentClient {
 
         let mut options = WsClientOptions::new(self.client.api_key())
             .with_base_url(self.client.base_url())
-            .with_origin(
-                self.client.origin_surface(),
-                self.client.origin_client(),
-                self.client.origin_version(),
-            );
+            .with_origin(self.client.origin_client(), self.client.origin_version());
         if let Some(origin_actor) = self.client.origin_actor() {
             options = options.with_origin_actor(origin_actor);
         }

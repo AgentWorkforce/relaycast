@@ -71,7 +71,6 @@ describe('RelaycastSetup', () => {
     expect(init.method).toBe('POST');
     expect(init.headers['Content-Type']).toBe('application/json');
     expect(init.headers['X-SDK-Version']).toBeDefined();
-    expect(init.headers['X-Relaycast-Origin-Surface']).toBe('sdk');
     expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
     expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     expect(init.headers.Authorization).toBeUndefined();

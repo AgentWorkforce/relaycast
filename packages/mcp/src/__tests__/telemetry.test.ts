@@ -96,7 +96,6 @@ describe('createMcpTelemetry', () => {
 
     const telemetry = createMcpTelemetry('1.0.0', {
       posthogApiKey: 'phc_example',
-      originSurface: 'mcp',
       originClient: '@relaycast/mcp',
       originVersion: '1.0.0',
     });
@@ -118,7 +117,6 @@ describe('createMcpTelemetry', () => {
       properties: Record<string, unknown>;
     };
     expect(body.api_key).toBe('phc_example');
-    expect(body.properties.origin_surface).toBe('mcp');
     expect(body.properties.origin_client).toBe('@relaycast/mcp');
     expect(body.properties.origin_version).toBe('1.0.0');
   });

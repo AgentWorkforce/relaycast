@@ -102,16 +102,9 @@ export function extractOriginInfo(
   const headers = request.headers;
   const url = new URL(request.url);
 
-  const querySurface = url.searchParams.get("origin_surface");
   const queryClient = url.searchParams.get("origin_client");
   const queryVersion = url.searchParams.get("origin_version");
 
-  const originSurface = sanitizeOriginPart(
-    headers.get("x-relaycast-origin-surface") ??
-      headers.get("x-origin-surface") ??
-      querySurface,
-    32,
-  );
   const originClient = sanitizeOriginPart(
     headers.get("x-relaycast-origin-client") ??
       headers.get("x-origin-client") ??
@@ -128,7 +121,6 @@ export function extractOriginInfo(
   );
 
   return {
-    ...(originSurface ? { origin_surface: originSurface } : {}),
     ...(originClient ? { origin_client: originClient } : {}),
     ...(originVersion ? { origin_version: originVersion } : {}),
   };

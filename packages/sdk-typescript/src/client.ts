@@ -143,7 +143,6 @@ const apiEnvelopeSchema = z.object({
 export class HttpClient {
   private _apiKey: string;
   private _baseUrl: string;
-  private _originSurface: string;
   private _originClient: string;
   private _originVersion: string;
   private _originActor?: string;
@@ -154,7 +153,6 @@ export class HttpClient {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
     this._apiKey = options.apiKey;
     this._baseUrl = options.baseUrl ?? 'https://gateway.relaycast.dev';
-    this._originSurface = origin.surface;
     this._originClient = origin.client;
     this._originVersion = origin.version;
     // A wrapping host's internal origin is authoritative about the originActor;
@@ -172,10 +170,6 @@ export class HttpClient {
 
   get baseUrl(): string {
     return this._baseUrl;
-  }
-
-  get originSurface(): string {
-    return this._originSurface;
   }
 
   get originClient(): string {
@@ -204,7 +198,6 @@ export class HttpClient {
     return new HttpClient(withInternalOrigin(
       { apiKey, baseUrl: this._baseUrl, retryPolicy: this._retryPolicy },
       {
-        surface: this._originSurface,
         client: this._originClient,
         version: this._originVersion,
         ...(this._originActor ? { originActor: this._originActor } : {}),
@@ -230,7 +223,6 @@ export class HttpClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this._apiKey}`,
       'X-SDK-Version': SDK_VERSION,
-      'X-Relaycast-Origin-Surface': this._originSurface,
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
       ...(this._originActor ? { [ORIGIN_ACTOR_HEADER]: this._originActor } : {}),

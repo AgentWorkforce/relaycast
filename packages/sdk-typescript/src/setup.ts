@@ -330,7 +330,6 @@ export class RelaycastSetup {
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-SDK-Version': SDK_ORIGIN.version,
-      'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
       'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
       'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
     };
