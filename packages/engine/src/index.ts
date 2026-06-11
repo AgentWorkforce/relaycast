@@ -64,5 +64,22 @@ export {
 } from './engine/eventQueue.js';
 export type { ClaimedEvent, SweptEvent } from './engine/eventQueue.js';
 
+// Retention pruning: bounded-batch deletion of expired messages, settled
+// deliveries, message logs, and orphaned read receipts. The Node adapter runs
+// it on the outbox cleanup cadence; queue-backed deployments call it from a
+// scheduled handler.
+export {
+  pruneExpired,
+  DEFAULT_DELIVERY_TTL_DAYS,
+  DEFAULT_MESSAGE_LOG_TTL_DAYS,
+} from './engine/retention.js';
+export type { PruneOptions, PruneResult, RetentionDefaults } from './engine/retention.js';
+export type { WorkspaceRetentionSettings } from './db/schema.js';
+
 // ID generation.
-export { generateId, getSnowflakeGenerator, SnowflakeGenerator } from './engine/snowflake.js';
+export {
+  generateId,
+  getSnowflakeGenerator,
+  snowflakeIdLowerBound,
+  SnowflakeGenerator,
+} from './engine/snowflake.js';

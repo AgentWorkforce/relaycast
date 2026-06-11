@@ -102,6 +102,26 @@ export async function deleteSubscription(db: Db, workspaceId: string, subId: str
   return result.length > 0;
 }
 
+/**
+ * Whether the workspace has any active event subscription at all — a cheap
+ * existence probe (indexed lookup, LIMIT 1) used to skip outbox writes for
+ * workspaces that have no webhooks configured.
+ */
+export async function hasActiveSubscriptions(db: Db, workspaceId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: eventSubscriptions.id })
+    .from(eventSubscriptions)
+    .where(
+      and(
+        eq(eventSubscriptions.workspaceId, workspaceId),
+        eq(eventSubscriptions.isActive, true),
+      ),
+    )
+    .limit(1);
+
+  return rows.length > 0;
+}
+
 export async function getActiveSubscriptions(
   db: Db,
   workspaceId: string,

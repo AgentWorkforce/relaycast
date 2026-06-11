@@ -30,6 +30,12 @@ export interface AppVariables {
    * every server-side telemetry event for the request via `emitServerEvent`.
    */
   originActor: string;
+  /**
+   * Per-request memo of whether the workspace has any active event
+   * subscription (set lazily by `sendWebhookEvent`, which may fire several
+   * times per request). Unset until the first webhook-eligible mutation.
+   */
+  webhookSubscribersExist?: boolean;
   /** The injected ports + providers + config for this deployment. */
   engine: EngineRuntime;
 }

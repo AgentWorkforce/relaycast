@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import { pendingEvents, workspaces } from '../../db/schema.js';
-import { enqueueEvent, sweepPendingEvents } from '../eventQueue.js';
+import { cleanupOldEvents, enqueueEvent, sweepPendingEvents } from '../eventQueue.js';
 
 let seq = 0;
 
@@ -124,5 +124,44 @@ describe('sweepPendingEvents', () => {
     await db.update(pendingEvents).set({ status: 'failed' }).where(eq(pendingEvents.id, id));
 
     expect(await sweepPendingEvents(db, { limit: 10 })).toHaveLength(0);
+  });
+});
+
+describe('cleanupOldEvents', () => {
+  it('settles and prunes exhausted pending rows instead of leaving them unclaimable', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const id = await enqueueEvent(db, ws, 'message.created', {});
+    // Exhausted: final leased attempt expired without settling, row is old.
+    await db
+      .update(pendingEvents)
+      .set({
+        attempts: 5,
+        maxAttempts: 5,
+        processAfter: new Date(Date.now() - 1_000),
+        createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      })
+      .where(eq(pendingEvents.id, id));
+
+    const deleted = await cleanupOldEvents(db);
+
+    expect(deleted).toBe(1);
+    expect(await db.select().from(pendingEvents)).toHaveLength(0);
+  });
+
+  it('settles fresh exhausted rows as failed but keeps them until they age out', async () => {
+    const { db } = track(openDb());
+    const ws = await seedWorkspace(db);
+    const id = await enqueueEvent(db, ws, 'message.created', {});
+    await db
+      .update(pendingEvents)
+      .set({ attempts: 5, maxAttempts: 5, processAfter: new Date(Date.now() - 1_000) })
+      .where(eq(pendingEvents.id, id));
+
+    const deleted = await cleanupOldEvents(db);
+
+    expect(deleted).toBe(0);
+    const [row] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, id));
+    expect(row.status).toBe('failed');
   });
 });

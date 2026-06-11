@@ -11,6 +11,7 @@ import {
   cleanupOldEvents,
   type ClaimedEvent,
 } from '../../engine/eventQueue.js';
+import { pruneExpired, type PruneOptions } from '../../engine/retention.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BASE_BACKOFF_MS = 30_000;
@@ -32,6 +33,13 @@ export interface DurableEventQueueOptions {
   batchSize?: number;
   /** How often settled rows older than 24h are pruned. Default 1h. */
   cleanupIntervalMs?: number;
+  /**
+   * Retention pruning (`pruneExpired`) options, run on the same cleanup
+   * cadence. `false` disables it. Defaults are conservative: only operational
+   * tables (settled deliveries, message logs) are pruned; message retention is
+   * opt-in per workspace via `workspaces.retention`.
+   */
+  retention?: PruneOptions | false;
 }
 
 /**
@@ -49,8 +57,10 @@ export class DurableEventQueue implements EventQueue {
   private readonly leaseMs: number;
   private readonly batchSize: number;
   private readonly cleanupIntervalMs: number;
+  private readonly retention: PruneOptions | false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private polling = false;
+  private stopped = false;
   private lastCleanupAt = 0;
 
   constructor(
@@ -64,6 +74,7 @@ export class DurableEventQueue implements EventQueue {
     this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     this.cleanupIntervalMs = options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
+    this.retention = options.retention ?? {};
   }
 
   /**
@@ -84,6 +95,7 @@ export class DurableEventQueue implements EventQueue {
 
   /** Start the interval poller and immediately resume any rows left over from a previous run. */
   start(): void {
+    this.stopped = false;
     if (this.pollIntervalMs > 0 && !this.timer) {
       this.timer = setInterval(() => {
         void this.poll();
@@ -96,6 +108,7 @@ export class DurableEventQueue implements EventQueue {
 
   /** Stop the interval poller (server shutdown / test teardown). */
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -162,10 +175,19 @@ export class DurableEventQueue implements EventQueue {
   }
 
   private async maybeCleanup(): Promise<void> {
+    // Skip after stop(): the DB connection may already be closed at shutdown.
+    if (this.stopped) return;
     const now = Date.now();
     if (now - this.lastCleanupAt < this.cleanupIntervalMs) return;
     this.lastCleanupAt = now;
     await cleanupOldEvents(this.db);
+    if (this.retention !== false && !this.stopped) {
+      try {
+        await pruneExpired(this.db, this.retention);
+      } catch (err) {
+        this.onError(err, { source: 'node.event_queue', op: 'retention_prune' });
+      }
+    }
   }
 }
 

@@ -14,6 +14,17 @@ import type { FleetCapability } from '@relaycast/types';
 // ============================================
 // Workspaces
 // ============================================
+/**
+ * Per-workspace retention TTLs (days), stored in `workspaces.retention`.
+ * `undefined` inherits the deployment default; explicit `null` disables
+ * pruning for that table even when a deployment default exists.
+ */
+export interface WorkspaceRetentionSettings {
+  message_ttl_days?: number | null;
+  delivery_ttl_days?: number | null;
+  message_log_ttl_days?: number | null;
+}
+
 export const workspaces = sqliteTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -22,6 +33,7 @@ export const workspaces = sqliteTable('workspaces', {
   plan: text('plan').notNull().default('free'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+  retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
 });
 
 // ============================================

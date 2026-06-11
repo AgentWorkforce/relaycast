@@ -102,6 +102,14 @@ afterEach(() => {
 
 async function postMessage(stack: OutboxStack, headers: Record<string, string> = {}): Promise<Response> {
   const ws = await createWorkspace(stack.app, 'outbox-ws');
+  // The outbox path skips workspaces without subscribers entirely; these tests
+  // exercise persist-first ordering, so the workspace needs a subscription.
+  const subRes = await stack.app.request('/v1/subscriptions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+    body: JSON.stringify({ events: ['*'], url: 'http://127.0.0.1:1/hook' }),
+  });
+  expect(subRes.status).toBe(201);
   const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
   return stack.app.request('/v1/channels/general/messages', {
     method: 'POST',
