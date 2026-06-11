@@ -123,12 +123,12 @@ export interface RelayCastOptions {
   retryPolicy?: RetryPolicyInput;
   ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
   /**
-   * Optional User-Agent-style identifier for the harness driving requests
+   * Optional User-Agent-style identifier for the originActor driving requests
    * (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`). Sent as
-   * the `X-Relaycast-Harness` header on every request so server-side telemetry
-   * can attribute traffic to a harness.
+   * the `X-Relaycast-Origin-Actor` header on every request so server-side telemetry
+   * can attribute traffic to a originActor.
    */
-  harness?: string;
+  originActor?: string;
   /**
    * Optional Agent Relay distinct telemetry id. Sent as
    * `X-Agent-Relay-Distinct-Id` on HTTP requests so Relaycast telemetry can be
@@ -210,7 +210,7 @@ export class RelayCast {
         surface: this.client.originSurface,
         client: this.client.originClient,
         version: this.client.originVersion,
-        ...(this.client.originHarness ? { harness: this.client.originHarness } : {}),
+        ...(this.client.originActor ? { originActor: this.client.originActor } : {}),
       },
     ));
   }
