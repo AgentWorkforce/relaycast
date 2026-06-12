@@ -68,7 +68,7 @@ export const FleetAgentRegisterMessageSchema = z
     ...FleetWireEnvelopeFields,
     type: z.literal('agent.register'),
     name: z.string(),
-    invocationId: z.string().optional(),
+    invocation_id: z.string().optional(),
     session_ref: z.string().optional(),
     resumable: z.boolean().optional(),
   })
@@ -79,6 +79,7 @@ export const FleetAgentDeregisterMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('agent.deregister'),
+    name: z.string(),
   })
   .strict();
 export type FleetAgentDeregisterMessage = z.infer<typeof FleetAgentDeregisterMessageSchema>;
@@ -97,7 +98,7 @@ export const FleetActionResultMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('action.result'),
-    invocationId: z.string(),
+    invocation_id: z.string(),
     output: FleetWireJsonValueSchema.optional(),
     error: z.string().optional(),
   })
@@ -119,7 +120,7 @@ export const FleetInventoryAgentSchema = z
   .object({
     agent_id: z.string(),
     name: z.string(),
-    invocationId: z.string().optional(),
+    invocation_id: z.string().optional(),
     session_ref: z.string().optional(),
   })
   .strict();
@@ -151,7 +152,7 @@ export const FleetActionInvokeMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('action.invoke'),
-    invocationId: z.string(),
+    invocation_id: z.string(),
     action: z.string(),
     input: FleetWireJsonValueSchema,
   })

@@ -29,7 +29,8 @@ const RELAYCAST_TO_BROKER_TYPES = new Set(['deliver', 'action.invoke', 'ping']);
 
 const EXPECTED_FIXTURES = [
   'action.invoke.json',
-  'action.result.json',
+  'action.result.error.json',
+  'action.result.output.json',
   'agent.deregister.json',
   'agent.register.json',
   'deliver.json',
@@ -45,8 +46,24 @@ function readFixture(file: string): unknown {
   return JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, file), 'utf8'));
 }
 
+function expectSnakeCaseKeys(value: unknown, pathParts: string[] = []): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectSnakeCaseKeys(item, [...pathParts, String(index)]));
+    return;
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    expect(key, [...pathParts, key].join('.')).not.toMatch(/[A-Z]/);
+    expectSnakeCaseKeys(nestedValue, [...pathParts, key]);
+  }
+}
+
 describe('fleet wire fixtures', () => {
-  it('keeps one plain JSON fixture per message type', () => {
+  it('keeps one plain JSON fixture per required message shape', () => {
     const fixtureFiles = fs
       .readdirSync(FIXTURE_DIR)
       .filter((file) => file.endsWith('.json'))
@@ -82,6 +99,7 @@ describe('fleet wire fixtures', () => {
       const parsed = parse(fixture);
       const serialized = JSON.parse(JSON.stringify(parsed));
 
+      expectSnakeCaseKeys(serialized);
       expect(serialized).toEqual(fixture);
       expect(schema.parse(serialized)).toEqual(parsed);
     });
@@ -92,13 +110,13 @@ describe('fleet wire fixtures', () => {
       parseFleetBrokerToRelaycastMessage({
         v: 1,
         type: 'action.result',
-        invocationId: 'inv_spawn_codex_001',
+        invocation_id: 'inv_spawn_codex_001',
         error: 'handler_unavailable',
       }),
     ).toEqual({
       v: 1,
       type: 'action.result',
-      invocationId: 'inv_spawn_codex_001',
+      invocation_id: 'inv_spawn_codex_001',
       error: 'handler_unavailable',
     });
   });
@@ -108,7 +126,7 @@ describe('fleet wire fixtures', () => {
       parseFleetBrokerToRelaycastMessage({
         v: 1,
         type: 'action.result',
-        invocationId: 'inv_spawn_codex_001',
+        invocation_id: 'inv_spawn_codex_001',
       }),
     ).toThrow();
 
@@ -116,7 +134,7 @@ describe('fleet wire fixtures', () => {
       parseFleetBrokerToRelaycastMessage({
         v: 1,
         type: 'action.result',
-        invocationId: 'inv_spawn_codex_001',
+        invocation_id: 'inv_spawn_codex_001',
         output: null,
         error: 'handler_unavailable',
       }),
