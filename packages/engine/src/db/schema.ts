@@ -9,6 +9,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
+import type { FleetCapability } from '@relaycast/types';
 
 // ============================================
 // Workspaces
@@ -68,7 +69,7 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
-    capabilities: text('capabilities', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
     maxAgents: integer('max_agents').notNull().default(0),
     activeAgents: integer('active_agents').notNull().default(0),
     tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),

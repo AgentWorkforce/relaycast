@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import type { FleetCapability } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { agents, nodes } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
@@ -17,7 +18,11 @@ export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, no
 }
 
 export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capability: string): boolean {
-  return Array.isArray(node.capabilities) && node.capabilities.includes(capability);
+  return Array.isArray(node.capabilities)
+    && node.capabilities.some((item) => {
+      if (typeof item === 'string') return item === capability;
+      return (item as FleetCapability | undefined)?.name === capability;
+    });
 }
 
 export function nodeHasCapacity(node: Pick<NodeRow, 'maxAgents' | 'activeAgents'>): boolean {

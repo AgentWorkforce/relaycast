@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, lte } from 'drizzle-orm';
 import type { FleetWireJsonValue } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, nodes } from '../db/schema.js';
@@ -12,6 +12,13 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
+export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
+
+function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
+  if (typeof capability === 'string') return capability;
+  if (capability && typeof capability.name === 'string') return capability.name;
+  return null;
+}
 
 function isActionVisibleToCaller(availableTo: string[] | null, callerName?: string): boolean {
   if (!availableTo || availableTo.length === 0) return true;
@@ -131,7 +138,10 @@ export async function registerAction(
     if (!node) {
       throw codedError(`Node "${data.handler_node}" not found`, 'node_not_found', 404);
     }
-    if (!node.capabilities.includes(data.name)) {
+    const nodeCapabilities = Array.isArray(node.capabilities)
+      ? node.capabilities.map(capabilityName).filter((value): value is string => !!value)
+      : [];
+    if (!nodeCapabilities.includes(data.name)) {
       throw codedError(`Node "${data.handler_node}" does not provide ${data.name}`, 'capability_mismatch', 409);
     }
     handlerNodeId = node.id;
@@ -314,18 +324,15 @@ async function dispatchSpawn(args: {
     caller_name: args.data.caller_name,
   });
 
-  let dispatched = false;
-  if (!placement.queued) {
-    dispatched = await dispatchNodeInvocation({
-      db: args.db,
-      registry: args.registry,
-      workspaceId: args.workspaceId,
-      invocationId: invocation.id,
-      nodeId: placement.node.id,
-      action: placement.capability,
-      input: recordInput(invocation.input),
-    });
-  }
+  const dispatched = await dispatchNodeInvocation({
+    db: args.db,
+    registry: args.registry,
+    workspaceId: args.workspaceId,
+    invocationId: invocation.id,
+    nodeId: placement.node.id,
+    action: placement.capability,
+    input: recordInput(invocation.input),
+  });
 
   return {
     invocation_id: invocation.id,
@@ -464,7 +471,9 @@ export async function completeInvocation(
       id: actionInvocations.id,
       status: actionInvocations.status,
       actionName: actionInvocations.actionName,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
       handlerAgentId: actions.handlerAgentId,
+      handlerNodeId: actions.handlerNodeId,
     })
     .from(actionInvocations)
     .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
@@ -477,6 +486,10 @@ export async function completeInvocation(
     );
 
   if (!existing) return null;
+
+  if (existing.handlerNodeId || existing.dispatchedNodeId) {
+    throw codedError('Node-owned invocations must be completed over the node control channel', 'node_owned_invocation', 403);
+  }
 
   // Agent tokens must belong to the handler agent
   if (data.caller_agent_id && existing.handlerAgentId && data.caller_agent_id !== existing.handlerAgentId) {
@@ -580,14 +593,34 @@ export async function completeNodeInvocation(
   },
 ) {
   const [existing] = await db
-    .select()
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionId: actionInvocations.actionId,
+      actionName: actionInvocations.actionName,
+      callerId: actionInvocations.callerId,
+      callerName: actionInvocations.callerName,
+      input: actionInvocations.input,
+      output: actionInvocations.output,
+      status: actionInvocations.status,
+      error: actionInvocations.error,
+      durationMs: actionInvocations.durationMs,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedAt: actionInvocations.dispatchedAt,
+      createdAt: actionInvocations.createdAt,
+      completedAt: actionInvocations.completedAt,
+    })
     .from(actionInvocations)
     .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocationId)));
 
   if (!existing) return null;
 
+  if (existing.dispatchedNodeId && existing.dispatchedNodeId !== nodeId) {
+    return null;
+  }
+
   if (existing.status === 'completed' || existing.status === 'failed') {
-    return publicInvocation(existing);
+    return null;
   }
 
   if (data.error === 'handler_unavailable') {
@@ -597,11 +630,7 @@ export async function completeNodeInvocation(
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     try {
       if (await rescheduleNodeInvocation(db, registry, existing)) {
-        const [rescheduled] = await db
-          .select()
-          .from(actionInvocations)
-          .where(eq(actionInvocations.id, invocationId));
-        return rescheduled ? publicInvocation(rescheduled) : null;
+        return null;
       }
     } catch {
       // Fall through and fail the invocation if no eligible node exists.
@@ -619,11 +648,39 @@ export async function completeNodeInvocation(
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ))
     .returning();
 
   return updated ? publicInvocation(updated) : null;
+}
+
+export async function sweepTimedOutInvocations(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  timeoutMs = ACTION_DISPATCH_TIMEOUT_MS,
+) {
+  const cutoff = new Date(Date.now() - timeoutMs);
+  const rows = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      inArray(actionInvocations.status, ['dispatched']),
+      lte(actionInvocations.dispatchedAt, cutoff),
+    ));
+
+  let rescheduled = 0;
+  for (const invocation of rows) {
+    try {
+      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+        rescheduled++;
+      }
+    } catch {
+      // Leave the invocation for the next sweep.
+    }
+  }
+  return rescheduled;
 }
 
 export async function getInvocation(db: Db, workspaceId: string, actionName: string, invocationId: string) {

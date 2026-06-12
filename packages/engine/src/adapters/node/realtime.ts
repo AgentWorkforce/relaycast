@@ -7,11 +7,13 @@ import type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
+import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
 import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /** Matches the Cloudflare AgentDO resync ring size. */
@@ -41,6 +43,15 @@ interface AgentConn {
   ring: Array<{ seq: number; payload: EngineEvent }>;
 }
 
+interface NodeConn {
+  socket: EngineSocket;
+}
+
+interface QueuedNodeMessage {
+  key: string;
+  message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
+}
+
 interface ChannelState {
   seq: number;
   members: string[];
@@ -63,14 +74,20 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private readonly agents = new Map<string, AgentConn>();
   private readonly channels = new Map<string, ChannelState>();
   private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
-  private readonly nodeSockets = new Map<string, Set<EngineSocket>>();
+  private readonly nodeSockets = new Map<string, NodeConn>();
+  private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   private presence: PresenceTracker | undefined;
+  private nodeCompletionDeps: InvocationCompletionDeps | undefined;
 
   constructor(private readonly db: EngineDb) {}
 
   /** Wire the presence tracker after construction (ping → heartbeat, close → offline). */
   setPresence(presence: PresenceTracker): void {
     this.presence = presence;
+  }
+
+  setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
+    this.nodeCompletionDeps = deps;
   }
 
   private agentKey(workspaceId: string, agentId: string): string {
@@ -241,36 +258,44 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
-    const set = this.nodeSockets.get(this.nodeKey(workspaceId, nodeId));
-    if (!set || set.size === 0) return false;
-    const data = JSON.stringify(message);
-    let sent = false;
-    for (const socket of set) {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const current = this.nodeSockets.get(key)?.socket;
+    if (current) {
       try {
-        socket.send(data);
-        sent = true;
+        current.send(JSON.stringify(message));
+        return true;
       } catch {
-        // Socket may have closed between enumeration and send.
+        this.nodeSockets.delete(key);
       }
     }
-    return sent;
+
+    if (message.type !== 'action.invoke') {
+      return false;
+    }
+
+    const queue = this.nodeQueues.get(key) ?? [];
+    const queueKey = `${message.type}:${message.invocation_id}`;
+    if (!queue.some((item) => item.key === queueKey)) {
+      queue.push({ key: queueKey, message });
+    }
+    while (queue.length > 100) queue.shift();
+    this.nodeQueues.set(key, queue);
+    return true;
   }
 
   isNodeConnected(workspaceId: string, nodeId: string): boolean {
-    return (this.nodeSockets.get(this.nodeKey(workspaceId, nodeId))?.size ?? 0) > 0;
+    return !!this.nodeSockets.get(this.nodeKey(workspaceId, nodeId));
   }
 
   async disconnectNode(workspaceId: string, nodeId: string): Promise<void> {
     const key = this.nodeKey(workspaceId, nodeId);
-    const set = this.nodeSockets.get(key);
-    if (!set) return;
-    for (const socket of [...set]) {
-      try {
-        socket.close(1000, 'force-disconnect');
-      } catch {
-        // already closed
-      }
-      set.delete(socket);
+    const conn = this.nodeSockets.get(key);
+    if (!conn) return;
+    this.nodeSockets.delete(key);
+    try {
+      conn.socket.close(1000, 'force-disconnect');
+    } catch {
+      // already closed
     }
   }
 
@@ -310,28 +335,68 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   /** Register a live fleet node control socket; returns handlers the transport drives. */
   attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
     const key = this.nodeKey(workspaceId, nodeId);
-    let set = this.nodeSockets.get(key);
-    if (!set) {
-      set = new Set();
-      this.nodeSockets.set(key, set);
+    const previous = this.nodeSockets.get(key)?.socket;
+    this.nodeSockets.set(key, { socket });
+    if (previous && previous !== socket) {
+      try {
+        previous.close(1000, 'superseded');
+      } catch {
+        // already closed
+      }
     }
-    set.add(socket);
-    return {
+    const handle: SocketHandle = {
       handleMessage: async (raw) => handleNodeControlMessage({
         db: this.db,
         registry: this,
+        completionDeps: this.nodeCompletionDeps,
         workspaceId,
         nodeId,
         socket,
         raw,
       }),
       handleClose: async () => {
-        set!.delete(socket);
-        if (set!.size === 0) {
+        const conn = this.nodeSockets.get(key);
+        if (conn?.socket === socket) {
+          this.nodeSockets.delete(key);
           await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
         }
       },
     };
+    void this.drainNodeQueue(workspaceId, nodeId);
+    return handle;
+  }
+
+  private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const conn = this.nodeSockets.get(key)?.socket;
+    if (!conn) return;
+    const queued = this.nodeQueues.get(key);
+    if (!queued || queued.length === 0) return;
+
+    const remaining: QueuedNodeMessage[] = [];
+    for (const item of queued) {
+      try {
+        const [row] = await this.db
+          .select({
+            dispatchedNodeId: actionInvocations.dispatchedNodeId,
+            status: actionInvocations.status,
+          })
+          .from(actionInvocations)
+          .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
+        if (!row) continue;
+        if (row.dispatchedNodeId !== nodeId || row.status !== 'dispatched') continue;
+        conn.send(JSON.stringify(item.message));
+      } catch {
+        remaining.push(item);
+        remaining.push(...queued.slice(queued.indexOf(item) + 1));
+        break;
+      }
+    }
+    if (remaining.length > 0) {
+      this.nodeQueues.set(key, remaining);
+    } else {
+      this.nodeQueues.delete(key);
+    }
   }
 
   private async onAgentMessage(

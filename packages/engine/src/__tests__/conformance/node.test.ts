@@ -7,6 +7,10 @@ import {
   type TestStack,
 } from './harness.js';
 
+function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
+  return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
+}
+
 /**
  * Conformance suite for the in-process Node adapter. These assert the
  * parity-critical realtime invariants the Cloudflare DOs guarantee — sequence
@@ -209,7 +213,7 @@ describe('node adapter conformance', () => {
   describe('fleet node control', () => {
     async function enrollAndAttachNode(
       ws: { workspaceKey: string; workspaceId: string },
-      opts: { id: string; name: string; capabilities: string[]; load?: number },
+      opts: { id: string; name: string; capabilities: Array<ReturnType<typeof capability>>; load?: number },
     ) {
       const create = await stack.app.request('/v1/nodes', {
         method: 'POST',
@@ -217,7 +221,7 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({
           node_id: opts.id,
           name: opts.name,
-          capabilities: opts.capabilities,
+          capabilities: opts.capabilities.map((cap) => cap.name),
           max_agents: 4,
           tags: ['test'],
           version: 'test-node',
@@ -229,6 +233,7 @@ describe('node adapter conformance', () => {
       const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, opts.id, sock);
       await handle.handleMessage(JSON.stringify({
         v: 1,
+        id: 'node-register-1',
         type: 'node.register',
         name: opts.name,
         node_id: opts.id,
@@ -238,6 +243,30 @@ describe('node adapter conformance', () => {
         version: 'test-node',
         resume_cursor: null,
       }));
+      expect(sock.ofType('reply')).toHaveLength(1);
+      expect(sock.ofType('reply')[0]).toMatchObject({
+        id: 'node-register-1',
+        ok: true,
+        data: expect.objectContaining({ name: opts.name }),
+      });
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'node-register-bad',
+        type: 'node.register',
+        name: opts.name,
+        node_id: 'wrong-node',
+        capabilities: opts.capabilities,
+        max_agents: 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      expect(sock.ofType('error')).toHaveLength(1);
+      expect(sock.ofType('error')[0]).toMatchObject({
+        id: 'node-register-bad',
+        ok: false,
+        code: 'node_id_mismatch',
+      });
       await handle.handleMessage(JSON.stringify({
         v: 1,
         type: 'node.heartbeat',
@@ -255,7 +284,7 @@ describe('node adapter conformance', () => {
       const alpha = await enrollAndAttachNode(ws, {
         id: 'node_alpha',
         name: 'alpha',
-        capabilities: ['spawn:claude', 'echo'],
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' }), capability('echo', 'tool')],
         load: 0,
       });
 
@@ -271,6 +300,13 @@ describe('node adapter conformance', () => {
         invocation_id: spawnBody.data.invocation_id,
         action: 'spawn:claude',
       });
+
+      const blockedCompletion = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ output: { agent: 'should-be-rejected' } }),
+      });
+      expect(blockedCompletion.status).toBe(403);
 
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
@@ -314,7 +350,7 @@ describe('node adapter conformance', () => {
       const beta = await enrollAndAttachNode(ws, {
         id: 'node_beta',
         name: 'beta',
-        capabilities: ['echo'],
+        capabilities: [capability('echo', 'tool')],
         load: 0,
       });
 

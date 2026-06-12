@@ -1,10 +1,11 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRegisterMessage,
   FleetBrokerToRelaycastMessage,
   FleetInventoryAgent,
   FleetNodeHeartbeatMessage,
   FleetNodeRegisterMessage,
+  FleetCapability,
 } from '@relaycast/types';
 import { parseFleetBrokerToRelaycastMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -14,14 +15,33 @@ import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
-import { isNodeLive } from './placement.js';
+import { isNodeLive, nodeHasCapability } from './placement.js';
 import { completeNodeInvocation, rescheduleInvocationsForLostNode } from './action.js';
+import { emitInvocationCompletionEffects } from './invocationCompletion.js';
+import type { InvocationCompletionDeps } from './invocationCompletion.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
 
 interface NodeSocketLike {
   send(data: string): void;
+}
+
+type CapabilityLike = string | FleetCapability;
+
+function capabilityName(capability: CapabilityLike | null | undefined): string | null {
+  if (typeof capability === 'string') return capability;
+  return capability?.name ?? null;
+}
+
+function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[] {
+  return capabilities.map((capability) => (
+    typeof capability === 'string' ? { name: capability } : capability
+  ));
+}
+
+function requestId(message: { id?: string }): string {
+  return message.id ?? generateId();
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -49,19 +69,20 @@ function publicNode(row: NodeRow) {
   };
 }
 
-async function ensureCapabilityActions(db: Db, workspaceId: string, nodeId: string, capabilities: string[]) {
+async function ensureCapabilityActions(db: Db, workspaceId: string, nodeId: string, capabilities: CapabilityLike[]) {
   for (const capability of capabilities) {
-    if (!capability || capability.startsWith('spawn:')) continue;
+    const name = capabilityName(capability);
+    if (!name || name.startsWith('spawn:')) continue;
     const [existing] = await db
       .select()
       .from(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, capability)));
+      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
     if (!existing) {
       await db.insert(actions).values({
         id: `act_${generateId()}`,
         workspaceId,
-        name: capability,
-        description: `Node handler ${capability}`,
+        name,
+        description: `Node handler ${name}`,
         handlerAgentId: null,
         handlerNodeId: nodeId,
         inputSchema: {},
@@ -83,7 +104,7 @@ export async function createNodeToken(
   data: {
     node_id?: string;
     name: string;
-    capabilities?: string[];
+    capabilities?: CapabilityLike[];
     max_agents?: number;
     tags?: string[];
     version?: string;
@@ -99,7 +120,7 @@ export async function createNodeToken(
       .update(nodes)
       .set({
         tokenHash,
-        capabilities: data.capabilities ?? existing.capabilities,
+        capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
         maxAgents: data.max_agents ?? existing.maxAgents,
         tags: data.tags ?? existing.tags,
         version: data.version ?? existing.version,
@@ -118,7 +139,7 @@ export async function createNodeToken(
       workspaceId,
       name: data.name,
       tokenHash,
-      capabilities: data.capabilities ?? [],
+      capabilities: normalizeCapabilities(data.capabilities ?? []),
       maxAgents: data.max_agents ?? 0,
       tags: data.tags ?? [],
       version: data.version ?? 'unknown',
@@ -277,60 +298,18 @@ export async function registerAgentViaNode(
   message: FleetAgentRegisterMessage,
 ) {
   return runAtomic(db, async (tx) => {
-    const [existing] = await tx
-      .select()
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
-
-    if (
-      existing &&
-      existing.status === 'active' &&
-      (existing.locationType !== 'via_node' || existing.locationNodeId !== nodeId)
-    ) {
-      throw codedError(`Agent "${message.name}" already has an active location`, 'agent_location_conflict', 409);
-    }
-
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
-    const metadata = {
-      ...(existing?.metadata ?? {}),
-      fleet: {
-        node_id: nodeId,
-        invocation_id: message.invocation_id ?? null,
-        registered_at: new Date().toISOString(),
-      },
-    };
-
-    if (existing) {
-      const [updated] = await tx
-        .update(agents)
-        .set({
-          tokenHash,
-          status: 'active',
-          lastSeen: new Date(),
-          metadata,
-          locationType: 'via_node',
-          locationNodeId: nodeId,
-          originNodeId: existing.originNodeId ?? nodeId,
-          resumable: message.resumable ?? false,
-          sessionRef: message.session_ref ?? null,
-        })
-        .where(eq(agents.id, existing.id))
-        .returning();
-      return {
-        agent_id: updated.id,
-        name: updated.name,
-        token,
-        invocation_id: message.invocation_id ?? null,
-        session_ref: updated.sessionRef,
-      };
-    }
-
-    const agentId = generateId();
-    const [created] = await tx
+    const now = new Date().toISOString();
+    const fleetMetadata = sql`json_object(
+      'node_id', ${nodeId},
+      'invocation_id', ${message.invocation_id ?? null},
+      'registered_at', ${now}
+    )`;
+    const [result] = await tx
       .insert(agents)
       .values({
-        id: agentId,
+        id: generateId(),
         workspaceId,
         name: message.name,
         handle: `@${message.name}`,
@@ -338,22 +317,44 @@ export async function registerAgentViaNode(
         tokenHash,
         status: 'active',
         persona: null,
-        metadata,
+        metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
         locationType: 'via_node',
         locationNodeId: nodeId,
         originNodeId: nodeId,
         resumable: message.resumable ?? false,
         sessionRef: message.session_ref ?? null,
       })
+      .onConflictDoUpdate({
+        target: [agents.workspaceId, agents.name],
+        set: {
+          tokenHash,
+          status: 'active',
+          lastSeen: new Date(),
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
+          locationType: 'via_node',
+          locationNodeId: nodeId,
+          originNodeId: sql`COALESCE(${agents.originNodeId}, ${nodeId})`,
+          resumable: message.resumable ?? false,
+          sessionRef: message.session_ref ?? null,
+        },
+        setWhere: or(
+          ne(agents.status, 'active'),
+          and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+        ),
+      })
       .returning();
 
-    await autoJoinGeneral(tx, workspaceId, agentId);
+    if (!result) {
+      throw codedError(`Agent "${message.name}" already has an active location`, 'agent_location_conflict', 409);
+    }
+
+    await autoJoinGeneral(tx, workspaceId, result.id);
     return {
-      agent_id: created.id,
-      name: created.name,
+      agent_id: result.id,
+      name: result.name,
       token,
       invocation_id: message.invocation_id ?? null,
-      session_ref: created.sessionRef,
+      session_ref: result.sessionRef,
     };
   });
 }
@@ -362,17 +363,25 @@ export async function deregisterAgentViaNode(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  name: string,
+  message: { agent_id?: string; name?: string },
 ) {
+  const conditions = [
+    eq(agents.workspaceId, workspaceId),
+    eq(agents.locationType, 'via_node'),
+    eq(agents.locationNodeId, nodeId),
+  ];
+  if (message.agent_id) {
+    conditions.push(eq(agents.id, message.agent_id));
+  } else if (message.name) {
+    conditions.push(eq(agents.name, message.name));
+  } else {
+    return null;
+  }
+
   const [updated] = await db
     .update(agents)
     .set({ status: 'offline', lastSeen: new Date() })
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.name, name),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-    ))
+    .where(and(...conditions))
     .returning();
   return updated ?? null;
 }
@@ -439,7 +448,7 @@ export async function listNodes(
   const rows = await db.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
   return rows
     .filter((node) => !filters.name || node.name === filters.name)
-    .filter((node) => !filters.capability || node.capabilities.includes(filters.capability))
+    .filter((node) => !filters.capability || nodeHasCapability(node, filters.capability))
     .map(publicNode);
 }
 
@@ -460,6 +469,7 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
 export async function handleNodeControlMessage(args: {
   db: Db;
   registry: NodeConnectionRegistry;
+  completionDeps?: InvocationCompletionDeps;
   workspaceId: string;
   nodeId: string;
   socket?: NodeSocketLike;
@@ -471,7 +481,9 @@ export async function handleNodeControlMessage(args: {
   } catch (err) {
     sendControl(args.socket, {
       v: 1,
+      id: generateId(),
       type: 'error',
+      ok: false,
       code: 'invalid_message',
       message: err instanceof Error ? err.message : 'Invalid node control message',
     });
@@ -482,7 +494,13 @@ export async function handleNodeControlMessage(args: {
     switch (message.type) {
       case 'node.register': {
         const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message);
-        sendControl(args.socket, { v: 1, type: 'node.registered', node_id: registered.id });
+        sendControl(args.socket, {
+          v: 1,
+          id: requestId(message),
+          type: 'reply',
+          ok: true,
+          data: registered,
+        });
         return;
       }
       case 'node.heartbeat':
@@ -493,23 +511,39 @@ export async function handleNodeControlMessage(args: {
         return;
       case 'agent.register': {
         const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
-        sendControl(args.socket, { v: 1, type: 'agent.registered', ...registered });
+        sendControl(args.socket, {
+          v: 1,
+          id: requestId(message),
+          type: 'reply',
+          ok: true,
+          data: registered,
+        });
         return;
       }
       case 'agent.deregister':
-        await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message.name);
+        await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
         return;
       case 'inventory.sync': {
         const result = await reconcileInventory(args.db, args.workspaceId, args.nodeId, message.agents);
-        sendControl(args.socket, { v: 1, type: 'inventory.synced', ...result });
+        sendControl(args.socket, {
+          v: 1,
+          id: requestId(message),
+          type: 'reply',
+          ok: true,
+          data: result,
+        });
         return;
       }
-      case 'action.result':
-        await completeNodeInvocation(args.db, args.registry, args.workspaceId, args.nodeId, message.invocation_id, {
+      case 'action.result': {
+        const completed = await completeNodeInvocation(args.db, args.registry, args.workspaceId, args.nodeId, message.invocation_id, {
           ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: asObject(message.output) } : {}),
           ...(message.error ? { error: message.error } : {}),
         });
+        if (completed && args.completionDeps) {
+          await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);
+        }
         return;
+      }
       case 'delivery.ack':
         return;
     }
@@ -517,7 +551,9 @@ export async function handleNodeControlMessage(args: {
     const error = err as Error & { code?: string };
     sendControl(args.socket, {
       v: 1,
-      type: `${message.type}.failed`,
+      id: requestId(message),
+      type: 'error',
+      ok: false,
       code: error.code ?? 'node_control_failed',
       message: error.message,
     });

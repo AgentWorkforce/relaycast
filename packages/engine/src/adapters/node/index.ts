@@ -13,6 +13,8 @@ import { InProcessRateLimiter } from './rate-limit.js';
 import { InProcessKeyValueStore } from './kv.js';
 import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions } from './event-queue.js';
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
+import { sweepOfflineNodes } from '../../engine/node.js';
+import { sweepTimedOutInvocations } from '../../engine/action.js';
 
 export {
   InProcessRealtime,
@@ -132,6 +134,14 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     config: options.config ?? {},
   };
 
+  realtime.setNodeCompletionDeps(deps);
+
+  const sweepTimer = setInterval(() => {
+    void sweepOfflineNodes(db, realtime).catch(() => {});
+    void sweepTimedOutInvocations(db, realtime).catch(() => {});
+  }, 15_000);
+  (sweepTimer as { unref?: () => void }).unref?.();
+
   return {
     deps,
     realtime,
@@ -140,6 +150,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     fileHandler: createFileRouteHandler(fileStorage),
     handle,
     close() {
+      clearInterval(sweepTimer);
       presence.stop();
       webhookQueue.stop();
       kv.dispose();

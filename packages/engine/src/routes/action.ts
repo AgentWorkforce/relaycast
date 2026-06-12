@@ -5,6 +5,7 @@ import { errorResponse } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
+import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
 import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -251,30 +252,7 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
       );
     }
 
-    const eventType = result.status === 'failed' ? 'action.failed' : 'action.completed';
-    const eventPayload = {
-      invocation_id: result.invocation_id,
-      action_name: result.action_name,
-      status: result.status,
-      output: result.output,
-      error: result.error,
-    };
-
-    // Push directly to the invoking agent's AgentDO (targeted delivery)
-    if (result.caller_id) {
-      runInBackground(
-        c,
-        fanoutToAgents(c, [result.caller_id], eventType, eventPayload),
-        `fanout ${eventType} to caller`,
-      );
-    }
-    // Also broadcast on workspace stream for dashboard/workspace-key subscribers
-    runInBackground(
-      c,
-      fanoutToWorkspace(c, eventType, eventPayload),
-      `fanout ${eventType} workspace`,
-    );
-    await sendWebhookEvent(c, { type: eventType, workspaceId: workspace.id, data: result });
+    await emitInvocationCompletionEffects(c.get('engine'), workspace.id, result);
 
     // Strip caller_id from client response (internal routing detail)
     const { caller_id: _drop, ...publicResult } = result;
