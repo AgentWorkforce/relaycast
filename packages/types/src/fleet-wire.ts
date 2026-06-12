@@ -29,6 +29,25 @@ const FleetWireEnvelopeFields = {
   v: FleetWireVersionSchema,
 } as const;
 
+const FleetRequestEnvelopeFields = {
+  ...FleetWireEnvelopeFields,
+  id: z.string().optional(),
+} as const;
+
+const FleetResponseEnvelopeFields = {
+  ...FleetWireEnvelopeFields,
+  id: z.string(),
+} as const;
+
+export const FleetCapabilitySchema = z
+  .object({
+    name: z.string(),
+    kind: z.string().optional(),
+    metadata: z.record(z.string(), FleetWireJsonValueSchema).optional(),
+  })
+  .strict();
+export type FleetCapability = z.infer<typeof FleetCapabilitySchema>;
+
 function forbidOwnProperty(property: string) {
   return (message: object, ctx: z.RefinementCtx): void => {
     if (Object.prototype.hasOwnProperty.call(message, property)) {
@@ -43,11 +62,11 @@ function forbidOwnProperty(property: string) {
 
 export const FleetNodeRegisterMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('node.register'),
     name: z.string(),
     node_id: z.string(),
-    capabilities: z.array(z.string()),
+    capabilities: z.array(FleetCapabilitySchema),
     max_agents: z.number().int().nonnegative(),
     tags: z.array(z.string()),
     version: z.string(),
@@ -59,7 +78,7 @@ export type FleetNodeRegisterMessage = z.infer<typeof FleetNodeRegisterMessageSc
 
 export const FleetNodeHeartbeatMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('node.heartbeat'),
     load: z.number().finite().nonnegative(),
     active_agents: z.number().int().nonnegative(),
@@ -70,7 +89,7 @@ export type FleetNodeHeartbeatMessage = z.infer<typeof FleetNodeHeartbeatMessage
 
 export const FleetNodeDeregisterMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('node.deregister'),
   })
   .strict();
@@ -78,7 +97,7 @@ export type FleetNodeDeregisterMessage = z.infer<typeof FleetNodeDeregisterMessa
 
 export const FleetAgentRegisterMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('agent.register'),
     name: z.string(),
     invocation_id: z.string().optional(),
@@ -90,16 +109,17 @@ export type FleetAgentRegisterMessage = z.infer<typeof FleetAgentRegisterMessage
 
 export const FleetAgentDeregisterMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('agent.deregister'),
-    name: z.string(),
+    agent_id: z.string(),
+    name: z.string().optional(),
   })
   .strict();
 export type FleetAgentDeregisterMessage = z.infer<typeof FleetAgentDeregisterMessageSchema>;
 
 export const FleetDeliveryAckMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('delivery.ack'),
     agent: z.string(),
     up_to_seq: z.number().int().nonnegative(),
@@ -109,7 +129,7 @@ export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSche
 
 export const FleetActionResultOutputMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('action.result'),
     invocation_id: z.string(),
     output: FleetWireJsonValueSchema,
@@ -121,7 +141,7 @@ export type FleetActionResultOutputMessage = z.infer<typeof FleetActionResultOut
 
 export const FleetActionResultErrorMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('action.result'),
     invocation_id: z.string(),
     error: z.string(),
@@ -149,12 +169,33 @@ export type FleetInventoryAgent = z.infer<typeof FleetInventoryAgentSchema>;
 
 export const FleetInventorySyncMessageSchema = z
   .object({
-    ...FleetWireEnvelopeFields,
+    ...FleetRequestEnvelopeFields,
     type: z.literal('inventory.sync'),
     agents: z.array(FleetInventoryAgentSchema),
   })
   .strict();
 export type FleetInventorySyncMessage = z.infer<typeof FleetInventorySyncMessageSchema>;
+
+export const FleetReplyMessageSchema = z
+  .object({
+    ...FleetResponseEnvelopeFields,
+    type: z.literal('reply'),
+    ok: z.literal(true),
+    data: FleetWireJsonValueSchema,
+  })
+  .strict();
+export type FleetReplyMessage = z.infer<typeof FleetReplyMessageSchema>;
+
+export const FleetErrorMessageSchema = z
+  .object({
+    ...FleetResponseEnvelopeFields,
+    type: z.literal('error'),
+    ok: z.literal(false),
+    code: z.string(),
+    message: z.string(),
+  })
+  .strict();
+export type FleetErrorMessage = z.infer<typeof FleetErrorMessageSchema>;
 
 export const FleetDeliverMessageSchema = z
   .object({
@@ -212,6 +253,8 @@ export const FleetRelaycastToBrokerMessageSchema = z.discriminatedUnion('type', 
   FleetDeliverMessageSchema,
   FleetActionInvokeMessageSchema,
   FleetPingMessageSchema,
+  FleetReplyMessageSchema,
+  FleetErrorMessageSchema,
 ]);
 export type FleetRelaycastToBrokerMessage = z.infer<typeof FleetRelaycastToBrokerMessageSchema>;
 export type FleetRelaycastToBrokerMessageType = FleetRelaycastToBrokerMessage['type'];
