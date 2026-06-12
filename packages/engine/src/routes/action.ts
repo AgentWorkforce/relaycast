@@ -16,7 +16,8 @@ export const actionRoutes = new Hono<AppEnv>();
 const registerActionSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  handler_agent: z.string().min(1),
+  handler_agent: z.string().min(1).optional(),
+  handler_node: z.string().min(1).optional(),
   input_schema: z.record(z.string(), z.unknown()).optional(),
   output_schema: z.record(z.string(), z.unknown()).optional(),
   available_to: z.array(z.string().min(1)).optional(),
@@ -41,13 +42,13 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
     if (!parsed.success) {
       const hasNameIssue = parsed.error.issues.some((i) => i.path[0] === 'name');
       const hasDescIssue = parsed.error.issues.some((i) => i.path[0] === 'description');
-      const hasHandlerIssue = parsed.error.issues.some((i) => i.path[0] === 'handler_agent');
+      const hasHandlerIssue = parsed.error.issues.some((i) => i.path[0] === 'handler_agent' || i.path[0] === 'handler_node');
       const message = hasNameIssue
         ? 'name is required'
         : hasDescIssue
           ? 'description is required'
           : hasHandlerIssue
-            ? 'handler_agent is required'
+            ? 'handler_agent or handler_node is required'
             : 'invalid action registration body';
       return c.json({ ok: false, error: { code: 'invalid_request', message } }, 400);
     }
@@ -65,7 +66,8 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
 
     emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
       action_name: result.name,
-      handler_agent_name: parsed.data.handler_agent,
+      handler_agent_name: parsed.data.handler_agent ?? null,
+      handler_node_name: parsed.data.handler_node ?? null,
     });
     runInBackground(
       c,
@@ -169,6 +171,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         caller_id: agent.id,
         caller_name: agent.name,
       },
+      { nodeConnections: c.get('engine').nodeConnections },
     );
 
     const eventData = {
@@ -176,13 +179,16 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       action_name: result.action_name,
       caller_name: agent.name,
       handler_agent_id: result.handler_agent_id,
+      handler_node_id: result.handler_node_id,
     };
 
-    runInBackground(
-      c,
-      fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
-      'fanout action.invoked',
-    );
+    if (result.handler_agent_id) {
+      runInBackground(
+        c,
+        fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
+        'fanout action.invoked',
+      );
+    }
     await sendWebhookEvent(c, {
       type: 'action.invoked',
       workspaceId: workspace.id,

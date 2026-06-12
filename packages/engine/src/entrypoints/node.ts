@@ -18,6 +18,7 @@ import {
   type InProcessPresenceOptions,
   type NodeRuntime,
 } from '../adapters/node/index.js';
+import { getNodeByTokenHash } from '../engine/node.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -96,7 +97,7 @@ export function startServer(options: StartServerOptions): RunningServer {
     'upgrade',
     (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const url = new URL(req.url ?? '/', baseUrl);
-      if (url.pathname !== '/v1/ws') {
+      if (url.pathname !== '/v1/ws' && url.pathname !== '/v1/node/ws') {
         rejectUpgrade(socket, 426, 'Upgrade Required');
         return;
       }
@@ -107,6 +108,25 @@ export function startServer(options: StartServerOptions): RunningServer {
       }
 
       void (async () => {
+        if (url.pathname === '/v1/node/ws') {
+          if (!token.startsWith('nt_live_')) {
+            rejectUpgrade(socket, 401, 'Unauthorized');
+            return;
+          }
+          const hash = await auth.hashToken(token);
+          const node = await getNodeByTokenHash(db, hash);
+          if (!node) {
+            rejectUpgrade(socket, 401, 'Unauthorized');
+            return;
+          }
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            const handle = runtime.realtime.attachNodeSocket(node.workspaceId, node.id, toEngineSocket(ws));
+            ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
+            ws.on('close', () => { void handle.handleClose(); });
+          });
+          return;
+        }
+
         if (token.startsWith('at_live_')) {
           const res = await auth.authenticate({ token, require: 'agent', db });
           if (!res.ok || !res.agent) {

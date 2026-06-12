@@ -205,4 +205,137 @@ describe('node adapter conformance', () => {
       expect(typeof delivered[0].agent_seq).toBe('number');
     });
   });
+
+  describe('fleet node control', () => {
+    async function enrollAndAttachNode(
+      ws: { workspaceKey: string; workspaceId: string },
+      opts: { id: string; name: string; capabilities: string[]; load?: number },
+    ) {
+      const create = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          node_id: opts.id,
+          name: opts.name,
+          capabilities: opts.capabilities,
+          max_agents: 4,
+          tags: ['test'],
+          version: 'test-node',
+        }),
+      });
+      expect(create.status).toBe(201);
+
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, opts.id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.register',
+        name: opts.name,
+        node_id: opts.id,
+        capabilities: opts.capabilities,
+        max_agents: 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: opts.load ?? 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      return { sock, handle };
+    }
+
+    it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: ['spawn:claude', 'echo'],
+        load: 0,
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-1', task: 'say hi' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const spawnBody = await spawn.json() as { data: { invocation_id: string } };
+      const spawnInvoke = alpha.sock.ofType('action.invoke').at(-1);
+      expect(spawnInvoke).toMatchObject({
+        invocation_id: spawnBody.data.invocation_id,
+        action: 'spawn:claude',
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: spawnBody.data.invocation_id,
+        output: { agent: 'worker-1', token: 'at_live_child' },
+      }));
+
+      const spawnStatus = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(spawnStatus.status).toBe(200);
+      expect(((await spawnStatus.json()) as { data: { status: string } }).data.status).toBe('completed');
+
+      const roster = await stack.app.request('/v1/nodes?capability=spawn%3Aclaude', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(roster.status).toBe(200);
+      const rosterBody = await roster.json() as { data: Array<{ name: string; live: boolean; handlers_live: boolean }> };
+      expect(rosterBody.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'alpha', live: true, handlers_live: true }),
+      ]));
+
+      const trigger = await stack.app.request('/v1/triggers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ channel: 'general', pattern: 'ship', action_name: 'echo' }),
+      });
+      expect(trigger.status).toBe(201);
+
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ text: 'ship it' }),
+      });
+      expect(post.status).toBe(201);
+      await new Promise((r) => setTimeout(r, 75));
+      const triggerInvoke = alpha.sock.ofType('action.invoke').find((event) => event.action === 'echo');
+      expect(triggerInvoke).toMatchObject({ action: 'echo' });
+
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: ['echo'],
+        load: 0,
+      });
+
+      const echo = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'reschedule me' } }),
+      });
+      expect(echo.status).toBe(201);
+      const echoBody = await echo.json() as { data: { invocation_id: string } };
+      expect(alpha.sock.ofType('action.invoke').at(-1)).toMatchObject({
+        invocation_id: echoBody.data.invocation_id,
+        action: 'echo',
+      });
+
+      await alpha.handle.handleClose();
+      await new Promise((r) => setTimeout(r, 25));
+      expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({
+        invocation_id: echoBody.data.invocation_id,
+        action: 'echo',
+      });
+    });
+  });
 });

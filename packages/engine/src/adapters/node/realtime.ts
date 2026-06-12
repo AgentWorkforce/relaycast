@@ -1,14 +1,18 @@
 import type {
   RealtimeBus,
   ConnectionRegistry,
+  NodeConnectionRegistry,
   EngineEvent,
   BroadcastToChannelArgs,
   UpgradeArgs,
+  NodeUpgradeArgs,
 } from '../../ports/realtime.js';
 import { sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
+import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /** Matches the Cloudflare AgentDO resync ring size. */
 const RESYNC_BUFFER_SIZE = 500;
@@ -55,10 +59,11 @@ interface ChannelState {
  * backend (Redis pub/sub for fanout, a shared counter store) plugged in behind
  * these same two interfaces.
  */
-export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
+export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly agents = new Map<string, AgentConn>();
   private readonly channels = new Map<string, ChannelState>();
   private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
+  private readonly nodeSockets = new Map<string, Set<EngineSocket>>();
   private presence: PresenceTracker | undefined;
 
   constructor(private readonly db: EngineDb) {}
@@ -90,6 +95,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
       this.channels.set(key, ch);
     }
     return ch;
+  }
+
+  private nodeKey(workspaceId: string, nodeId: string): string {
+    return `${workspaceId}:${nodeId}`;
   }
 
   /* ---------------------------- RealtimeBus ---------------------------- */
@@ -221,6 +230,50 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
     }
   }
 
+  /* ---------------------- NodeConnectionRegistry ---------------------- */
+
+  async upgradeNode(_args: NodeUpgradeArgs): Promise<Response> {
+    return new Response('WebSocket upgrade is handled by the Node server', { status: 426 });
+  }
+
+  async sendToNode(
+    workspaceId: string,
+    nodeId: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean> {
+    const set = this.nodeSockets.get(this.nodeKey(workspaceId, nodeId));
+    if (!set || set.size === 0) return false;
+    const data = JSON.stringify(message);
+    let sent = false;
+    for (const socket of set) {
+      try {
+        socket.send(data);
+        sent = true;
+      } catch {
+        // Socket may have closed between enumeration and send.
+      }
+    }
+    return sent;
+  }
+
+  isNodeConnected(workspaceId: string, nodeId: string): boolean {
+    return (this.nodeSockets.get(this.nodeKey(workspaceId, nodeId))?.size ?? 0) > 0;
+  }
+
+  async disconnectNode(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const set = this.nodeSockets.get(key);
+    if (!set) return;
+    for (const socket of [...set]) {
+      try {
+        socket.close(1000, 'force-disconnect');
+      } catch {
+        // already closed
+      }
+      set.delete(socket);
+    }
+  }
+
   /* --------------------- Node transport attach helpers ----------------- */
 
   /** Register a live agent socket; returns handlers the transport drives. */
@@ -250,6 +303,33 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
       handleMessage: async (raw) => this.onWorkspaceMessage(socket, raw),
       handleClose: async () => {
         set!.delete(socket);
+      },
+    };
+  }
+
+  /** Register a live fleet node control socket; returns handlers the transport drives. */
+  attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
+    const key = this.nodeKey(workspaceId, nodeId);
+    let set = this.nodeSockets.get(key);
+    if (!set) {
+      set = new Set();
+      this.nodeSockets.set(key, set);
+    }
+    set.add(socket);
+    return {
+      handleMessage: async (raw) => handleNodeControlMessage({
+        db: this.db,
+        registry: this,
+        workspaceId,
+        nodeId,
+        socket,
+        raw,
+      }),
+      handleClose: async () => {
+        set!.delete(socket);
+        if (set!.size === 0) {
+          await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
+        }
       },
     };
   }

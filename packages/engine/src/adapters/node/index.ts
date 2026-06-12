@@ -120,6 +120,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     db,
     realtime,
     connections: realtime,
+    nodeConnections: realtime,
     presence,
     rateLimiter,
     files: fileStorage,
