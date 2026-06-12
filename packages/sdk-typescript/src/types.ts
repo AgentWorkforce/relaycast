@@ -229,7 +229,9 @@ export interface ActionDefinition {
   id: string;
   name: string;
   description: string;
-  handlerAgent: string;
+  handlerAgent: string | null;
+  handlerNode: string | null;
+  handlerNodeId: string | null;
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
   availableTo: string[] | null;
@@ -240,7 +242,8 @@ export interface ActionDefinition {
 export interface RegisterActionRequest {
   name: string;
   description: string;
-  handlerAgent: string;
+  handlerAgent?: string;
+  handlerNode?: string;
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   availableTo?: string[];
@@ -249,7 +252,9 @@ export interface RegisterActionRequest {
 export interface InvokeActionResult {
   invocationId: string;
   actionName: string;
-  handlerAgentId: string;
+  handlerAgentId: string | null;
+  handlerNodeId?: string | null;
+  dispatchedNodeId?: string | null;
   input: Record<string, unknown>;
   status: string;
   createdAt: string;
@@ -271,9 +276,56 @@ export interface ActionInvocation {
   status: string;
   error: string | null;
   durationMs: number | null;
+  dispatchedNodeId?: string | null;
+  dispatchedAt?: string | null;
   createdAt?: string;
   completedAt: string | null;
 }
+
+// === Fleet nodes / triggers ===
+
+export interface NodeRosterEntry {
+  id: string;
+  name: string;
+  capabilities: string[];
+  tags: string[];
+  version: string;
+  status: 'online' | 'offline' | string;
+  live: boolean;
+  handlersLive: boolean;
+  load: number;
+  activeAgents: number;
+  maxAgents: number;
+  lastHeartbeatAt: string | null;
+  createdAt: string;
+}
+
+export interface NodeListQuery {
+  capability?: string;
+  name?: string;
+}
+
+export interface Trigger {
+  id: string;
+  channel: string | null;
+  pattern: string | null;
+  mention: boolean | null;
+  actionName: string;
+  enabled: boolean;
+  lastTriggeredAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CreateTriggerRequest {
+  channel?: string | null;
+  pattern?: string | null;
+  mention?: boolean | null;
+  actionName: string;
+  enabled?: boolean;
+}
+
+export type UpdateTriggerRequest = Partial<CreateTriggerRequest>;
 
 // === Agent session events ===
 
