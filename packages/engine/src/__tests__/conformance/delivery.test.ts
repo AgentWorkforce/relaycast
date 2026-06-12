@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
@@ -6,7 +7,10 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
+import { agents } from '../../db/schema.js';
 import * as deliveryEngine from '../../engine/delivery.js';
+import * as messageEngine from '../../engine/message.js';
+import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 /**
  * Durable delivery API conformance: listing the queued inbox, and the
@@ -501,6 +505,78 @@ describe('durable delivery api', () => {
     expect(((await inboxAfter.json()) as {
       data: { unread_channels: Array<{ channel_name: string; unread_count: number }> };
     }).data.unread_channels).toHaveLength(0);
+  });
+
+  it('re-resolves a recipient location before fanout so a transport switch does not drop the delivery', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-reroute');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const create = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(create.status).toBeLessThan(300);
+    const channelId = ((await create.json()) as { data: { id: string } }).data.id;
+
+    for (const token of [alice.token, bob.token]) {
+      const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(joinRes.status).toBeLessThan(300);
+    }
+
+    const result = await messageEngine.postMessage(
+      stack.runtime.deps.db,
+      ws.workspaceId,
+      channelId,
+      alice.agentId,
+      { text: 'reroute me' },
+      { mailbox: { ttlMs: 60_000, depthCap: 1_000 } },
+    );
+
+    expect(result._deliveries).toHaveLength(1);
+    expect(result._deliveries[0]).toMatchObject({
+      agentId: bob.agentId,
+      locationType: 'via_node',
+      locationNodeId: node.id,
+    });
+
+    const bobSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, bob.agentId));
+
+    const ctx = {
+      get(key: string) {
+        if (key === 'workspace') return { id: ws.workspaceId };
+        if (key === 'db') return stack.runtime.deps.db;
+        if (key === 'engine') {
+          return {
+            nodeConnections: stack.runtime.realtime,
+            realtime: stack.runtime.realtime,
+          };
+        }
+        return undefined;
+      },
+    } as unknown as Parameters<typeof routeDeliveryOutcomes>[0];
+
+    await routeDeliveryOutcomes(ctx, result._deliveries, 'message.created', {
+      channel_id: channelId,
+      channel_name: 'team-chat',
+      from_name: 'alice',
+      injection_mode: 'wait',
+    });
+
+    expect(node.sock.ofType('deliver')).toHaveLength(0);
+    expect(bobSock.ofType('delivery.accepted')).toHaveLength(1);
+    expect(await listDeliveries(bob.token)).toHaveLength(1);
+    expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });
 
   it('does not redeliver acked messages after a node reconnect with inventory sync', async () => {
