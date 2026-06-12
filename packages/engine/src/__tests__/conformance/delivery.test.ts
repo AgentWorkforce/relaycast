@@ -8,8 +8,8 @@ import {
   type TestStack,
 } from './harness.js';
 import { agents } from '../../db/schema.js';
-import * as deliveryEngine from '../../engine/delivery.js';
 import * as messageEngine from '../../engine/message.js';
+import * as deliveryEngine from '../../engine/delivery.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 /**
@@ -821,6 +821,7 @@ describe('durable delivery api', () => {
       expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
     ]));
   });
+
   it('rejects new deliveries over the depth cap and sends feedback to the sender', async () => {
     stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1 };
 

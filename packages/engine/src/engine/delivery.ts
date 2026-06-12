@@ -4,13 +4,14 @@ import { deliveries, messages, agents, readReceipts, channelMembers, channels, d
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
+import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
@@ -43,6 +44,35 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
     created_at: toIso(row.createdAt) ?? new Date(0).toISOString(),
     updated_at: toIso(row.updatedAt),
   };
+}
+
+async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
 }
 
 /**
@@ -414,7 +444,7 @@ export async function expireDueDeliveries(
   if (due.length === 0) return [];
 
   const ids = due.map((row) => row.delivery.id);
-  await db
+  const updated = await db
     .update(deliveries)
     .set({
       status: 'dead_lettered',
@@ -423,10 +453,16 @@ export async function expireDueDeliveries(
       deadLetteredAt: now,
       updatedAt: now,
     })
-    .where(and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, ids)));
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      inArray(deliveries.id, ids),
+      notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed']),
+    ))
+    .returning({ id: deliveries.id });
+  const updatedIds = new Set(updated.map((row) => row.id));
 
   return due
-    .filter((row) => row.senderAgentId)
+    .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
     .map((row) => ({
       delivery_id: row.delivery.id,
       message_id: row.delivery.messageId,
@@ -442,37 +478,6 @@ export async function expireDueDeliveries(
 
 function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
-}
-
-type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
-
-async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
-  const map = new Map<string, AttachmentRow[]>();
-  if (msgIds.length === 0) return map;
-
-  const rows = await db
-    .select({
-      messageId: messageAttachments.messageId,
-      fileId: messageAttachments.fileId,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
-
-  for (const row of rows) {
-    const list = map.get(row.messageId) || [];
-    list.push({
-      file_id: row.fileId,
-      filename: row.filename,
-      content_type: row.contentType,
-      size_bytes: row.sizeBytes,
-    });
-    map.set(row.messageId, list);
-  }
-  return map;
 }
 
 export async function deliverPendingToNode(
@@ -524,11 +529,13 @@ export async function deliverPendingToNode(
     const senderName = row.senderAgentName ?? 'unknown';
     const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
     const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
-    const eventType = row.dmType ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received') : (row.threadId ? 'thread.reply' : 'message.created');
-    let eventData: Record<string, unknown>;
+    const eventType = row.dmType
+      ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received')
+      : (row.threadId ? 'thread.reply' : 'message.created');
 
+    let eventData: Record<string, unknown>;
     if (eventType === 'dm.received') {
-      const payload = {
+      eventData = buildDmReceivedEventData({
         conversation_id: row.conversationId,
         message: {
           id: row.delivery.messageId,
@@ -545,10 +552,9 @@ export async function deliverPendingToNode(
         text: row.body,
         injection_mode: injectionMode,
         attachments,
-      };
-      eventData = buildDmReceivedEventData(payload, { fromName: senderName });
+      }, { fromName: senderName });
     } else if (eventType === 'group_dm.received') {
-      const payload = {
+      eventData = buildGroupDmReceivedEventData({
         conversation_id: row.conversationId,
         message: {
           id: row.delivery.messageId,
@@ -564,10 +570,9 @@ export async function deliverPendingToNode(
         text: row.body,
         injection_mode: injectionMode,
         attachments,
-      };
-      eventData = buildGroupDmReceivedEventData(payload, { fromName: senderName });
+      }, { fromName: senderName });
     } else if (eventType === 'thread.reply') {
-      const payload = {
+      eventData = buildThreadReplyEventData({
         id: row.delivery.messageId,
         channel_id: row.channelId,
         channel_name: row.channelName,
@@ -579,12 +584,10 @@ export async function deliverPendingToNode(
         metadata: publicMessageMetadata(row.metadata),
         has_attachments: row.hasAttachments,
         created_at: row.createdAt.toISOString(),
-      };
-      eventData = buildThreadReplyEventData(payload, { channelName: row.channelName, fromName: senderName });
+      }, { channelName: row.channelName, fromName: senderName });
     } else {
-      const mentionPattern = /@(\w+)/g;
-      const mentions = row.body.match(mentionPattern) || [];
-      const payload = {
+      const mentions = [...row.body.matchAll(/@(\w+)/g)].map((match) => match[1]);
+      eventData = buildMessageCreatedEventData({
         id: row.delivery.messageId,
         channel_id: row.channelId,
         agent_id: row.senderAgentId,
@@ -595,22 +598,19 @@ export async function deliverPendingToNode(
         has_attachments: row.hasAttachments,
         thread_id: row.threadId,
         created_at: row.createdAt.toISOString(),
-        mentions: mentions.map((m) => m.slice(1)),
+        mentions,
         attachments,
         injection_mode: injectionMode,
-      };
-      eventData = buildMessageCreatedEventData(payload, { channelName: row.channelName, fromName: senderName, mode: injectionMode });
+      }, { channelName: row.channelName, fromName: senderName, mode: injectionMode });
     }
 
-    const sent = await registry.sendToNode(workspaceId, nodeId, {
-      v: 1,
-      type: 'deliver',
+    const sent = await registry.sendToNode(workspaceId, nodeId, buildDeliverFrame({
       agent: row.recipientAgentName,
       msg_id: row.delivery.messageId,
       seq: row.delivery.seq,
       mode: wireMode(row.delivery.mode),
       payload: buildDeliverPayload(eventType, eventData),
-    });
+    }));
     if (sent) deliveredIds.push(row.delivery.id);
   }
 

@@ -1,32 +1,15 @@
 import type { Context } from 'hono';
 import { and, eq, inArray } from 'drizzle-orm';
-import type { FleetWireJsonValue } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import * as deliveryEngine from '../engine/delivery.js';
+import { buildDeliverFrame, buildDeliverPayload } from '../engine/deliveryWire.js';
 import type {
   DeliveryFanoutRecord,
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
 import { agents } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
-
 type HonoContext = Context<AppEnv>;
-
-function toFleetWireJson(value: unknown): FleetWireJsonValue {
-  if (value === null) return null;
-  if (typeof value === 'string' || typeof value === 'boolean') return value;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (Array.isArray(value)) return value.map(toFleetWireJson);
-  if (value instanceof Date) return value.toISOString();
-  if (value && typeof value === 'object') {
-    const out: Record<string, FleetWireJsonValue> = {};
-    for (const [key, nested] of Object.entries(value)) {
-      out[key] = toFleetWireJson(nested);
-    }
-    return out;
-  }
-  return null;
-}
 
 function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
@@ -74,15 +57,13 @@ export async function routeDeliveryOutcomes(
     const locationNodeId = liveLocation?.locationNodeId ?? delivery.locationNodeId;
 
     if (locationType === 'via_node' && locationNodeId) {
-      const sent = await c.get('engine').nodeConnections.sendToNode(workspaceId, locationNodeId, {
-        v: 1,
-        type: 'deliver',
+      const sent = await c.get('engine').nodeConnections.sendToNode(workspaceId, locationNodeId, buildDeliverFrame({
         agent: delivery.agentName,
         msg_id: delivery.messageId,
         seq: delivery.seq,
         mode: wireMode(delivery.mode),
-        payload: toFleetWireJson({ type: eventType, data: eventData }),
-      });
+        payload: buildDeliverPayload(eventType, eventData),
+      }));
       if (sent) deliveredIds.push(delivery.id);
       continue;
     }
