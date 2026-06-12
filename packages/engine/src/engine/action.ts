@@ -635,7 +635,7 @@ export async function completeInvocation(
   actionName: string,
   invocationId: string,
   data: {
-    output?: Record<string, unknown>;
+    output?: unknown;
     error?: string;
     duration_ms?: number;
     caller_agent_id?: string;
@@ -707,7 +707,7 @@ export async function completeNodeInvocation(
   nodeId: string,
   invocationId: string,
   data: {
-    output?: Record<string, unknown>;
+    output?: unknown;
     error?: string;
   },
 ) {

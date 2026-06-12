@@ -45,12 +45,6 @@ function requestId(message: { id?: string }): string {
   return message.id ?? generateId();
 }
 
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : { value };
-}
-
 function publicNode(row: NodeRow) {
   const live = isNodeLive(row);
   return {
@@ -354,8 +348,6 @@ export async function registerAgentViaNode(
       agent_id: result.id,
       name: result.name,
       token,
-      invocation_id: message.invocation_id ?? null,
-      session_ref: result.sessionRef,
     };
   });
 }
@@ -406,6 +398,28 @@ export async function reconcileInventory(
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
     if (existing) {
+      if (existing.status === 'active') {
+        const [boundNode] = await db
+          .select()
+          .from(nodes)
+          .where(and(
+            eq(nodes.workspaceId, workspaceId),
+            eq(nodes.id, existing.locationNodeId ?? ''),
+          ));
+        const boundNodeLive = !!boundNode && isNodeLive(boundNode);
+        const conflict = existing.locationType !== 'via_node' || !existing.locationNodeId || (existing.locationNodeId !== nodeId && boundNodeLive);
+        if (conflict) {
+          console.warn('[node.inventory] rejected active-name claim', {
+            workspace_id: workspaceId,
+            node_id: nodeId,
+            agent_id: existing.id,
+            agent_name: existing.name,
+            existing_location_type: existing.locationType,
+            existing_location_node_id: existing.locationNodeId,
+          });
+          throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+        }
+      }
       await db
         .update(agents)
         .set({
@@ -595,7 +609,7 @@ export async function handleNodeControlMessage(args: {
       }
       case 'action.result': {
         const completed = await completeNodeInvocation(args.db, args.registry, args.workspaceId, args.nodeId, message.invocation_id, {
-          ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: asObject(message.output) } : {}),
+          ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
           ...(message.error ? { error: message.error } : {}),
         });
         if (completed && args.completionDeps) {

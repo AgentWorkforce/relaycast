@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
@@ -6,6 +7,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
+import { agents } from '../../db/schema.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -346,6 +348,60 @@ describe('node adapter conformance', () => {
       expect(spawnStatus.status).toBe(200);
       expect(((await spawnStatus.json()) as { data: { status: string } }).data.status).toBe('completed');
 
+      const echoScalar = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'scalar' } }),
+      });
+      expect(echoScalar.status).toBe(201);
+      const echoScalarBody = await echoScalar.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoScalarBody.data.invocation_id,
+        output: 'ok',
+      }));
+      const echoScalarStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoScalarBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoScalarStatus.json() as { data: { output: unknown } }).data.output).toBe('ok');
+
+      const echoArray = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'array' } }),
+      });
+      expect(echoArray.status).toBe(201);
+      const echoArrayBody = await echoArray.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoArrayBody.data.invocation_id,
+        output: ['a', 1, null],
+      }));
+      const echoArrayStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoArrayBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoArrayStatus.json() as { data: { output: unknown } }).data.output).toEqual(['a', 1, null]);
+
+      const echoNull = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'null' } }),
+      });
+      expect(echoNull.status).toBe(201);
+      const echoNullBody = await echoNull.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoNullBody.data.invocation_id,
+        output: null,
+      }));
+      const echoNullStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoNullBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoNullStatus.json() as { data: { output: unknown } }).data.output).toBeNull();
+
       const roster = await stack.app.request('/v1/nodes?capability=spawn%3Aclaude', {
         headers: { authorization: `Bearer ${ws.workspaceKey}` },
       });
@@ -377,6 +433,49 @@ describe('node adapter conformance', () => {
         name: 'beta',
         capabilities: [capability('echo', 'tool')],
         load: 0,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'agent.register',
+        name: 'claimed-agent',
+        session_ref: 'pty://alpha/sessions/claimed-agent',
+        resumable: true,
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        ok: true,
+        data: expect.objectContaining({ name: 'claimed-agent' }),
+      });
+
+      beta.sock.received.length = 0;
+      await beta.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [
+          {
+            agent_id: 'agt_conflict',
+            name: 'claimed-agent',
+            session_ref: 'pty://beta/sessions/claimed-agent',
+          },
+        ],
+      }));
+      expect(beta.sock.ofType('error').at(-1)).toMatchObject({
+        code: 'agent_location_conflict',
+      });
+
+      const worker = await stack.runtime.handle.db
+        .select({
+          locationNodeId: agents.locationNodeId,
+          locationType: agents.locationType,
+          status: agents.status,
+        })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'claimed-agent')))
+        .then((rows) => rows[0]);
+      expect(worker).toMatchObject({
+        locationNodeId: 'node_alpha',
+        locationType: 'via_node',
+        status: 'active',
       });
 
       const echo = await stack.app.request('/v1/actions/echo/invoke', {

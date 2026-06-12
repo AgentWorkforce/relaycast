@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -29,7 +30,7 @@ const invokeActionSchema = z.object({
 });
 
 const completeInvocationSchema = z.object({
-  output: z.record(z.string(), z.unknown()).optional(),
+  output: FleetWireJsonValueSchema.optional(),
   error: z.string().optional(),
   duration_ms: z.number().int().nonnegative().optional(),
 });

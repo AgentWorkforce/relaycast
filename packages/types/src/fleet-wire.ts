@@ -179,10 +179,8 @@ export type FleetInventorySyncMessage = z.infer<typeof FleetInventorySyncMessage
 export const AgentRegisterReplyDataSchema = z
   .object({
     agent_id: z.string(),
-    name: z.string(),
     token: z.string(),
-    invocation_id: z.string().nullable().optional(),
-    session_ref: z.string().nullable().optional(),
+    name: z.string().optional(),
   })
   .strict();
 export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema>;
