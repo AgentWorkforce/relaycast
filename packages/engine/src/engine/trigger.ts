@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { triggers } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
@@ -166,15 +166,27 @@ export async function fireMessageTriggers(args: {
     .where(and(eq(triggers.workspaceId, args.workspaceId), eq(triggers.enabled, true)));
 
   const now = Date.now();
+  const cutoff = new Date(now - TRIGGER_RATE_LIMIT_MS);
   const invoked: string[] = [];
 
   for (const row of rows) {
     if (!matchesTrigger(row, args.message) || rateLimited(row, now)) continue;
 
-    await args.db
+    const [claimed] = await args.db
       .update(triggers)
       .set({ lastTriggeredAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(triggers.workspaceId, args.workspaceId), eq(triggers.id, row.id)));
+      .where(and(
+        eq(triggers.workspaceId, args.workspaceId),
+        eq(triggers.id, row.id),
+        eq(triggers.enabled, true),
+        or(
+          isNull(triggers.lastTriggeredAt),
+          lt(triggers.lastTriggeredAt, cutoff),
+        ),
+      ))
+      .returning({ id: triggers.id });
+
+    if (!claimed) continue;
 
     try {
       await invokeAction(args.db, args.workspaceId, row.actionName, {

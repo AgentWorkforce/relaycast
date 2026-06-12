@@ -213,7 +213,13 @@ describe('node adapter conformance', () => {
   describe('fleet node control', () => {
     async function enrollAndAttachNode(
       ws: { workspaceKey: string; workspaceId: string },
-      opts: { id: string; name: string; capabilities: Array<ReturnType<typeof capability>>; load?: number },
+      opts: {
+        id: string;
+        name: string;
+        capabilities: Array<ReturnType<typeof capability>>;
+        load?: number;
+        maxAgents?: number;
+      },
     ) {
       const create = await stack.app.request('/v1/nodes', {
         method: 'POST',
@@ -222,7 +228,7 @@ describe('node adapter conformance', () => {
           node_id: opts.id,
           name: opts.name,
           capabilities: opts.capabilities.map((cap) => cap.name),
-          max_agents: 4,
+          max_agents: opts.maxAgents ?? 4,
           tags: ['test'],
           version: 'test-node',
         }),
@@ -238,7 +244,7 @@ describe('node adapter conformance', () => {
         name: opts.name,
         node_id: opts.id,
         capabilities: opts.capabilities,
-        max_agents: 4,
+        max_agents: opts.maxAgents ?? 4,
         tags: ['test'],
         version: 'test-node',
         resume_cursor: null,
@@ -256,7 +262,7 @@ describe('node adapter conformance', () => {
         name: opts.name,
         node_id: 'wrong-node',
         capabilities: opts.capabilities,
-        max_agents: 4,
+        max_agents: opts.maxAgents ?? 4,
         tags: ['test'],
         version: 'test-node',
         resume_cursor: null,
@@ -307,6 +313,25 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({ output: { agent: 'should-be-rejected' } }),
       });
       expect(blockedCompletion.status).toBe(403);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [
+          {
+            agent_id: 'agt_worker_1',
+            name: 'worker-1',
+            invocation_id: spawnBody.data.invocation_id,
+            session_ref: 'pty://alpha/sessions/worker-1',
+          },
+        ],
+      }));
+
+      const spawnAfterInventory = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(spawnAfterInventory.status).toBe(200);
+      expect(((await spawnAfterInventory.json()) as { data: { status: string } }).data.status).toBe('completed');
 
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
@@ -372,6 +397,83 @@ describe('node adapter conformance', () => {
         invocation_id: echoBody.data.invocation_id,
         action: 'echo',
       });
+    });
+
+    it('reserves spawn capacity atomically across concurrent invocations', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-capacity-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 1,
+      });
+
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 1,
+      });
+
+      const [first, second] = await Promise.all([
+        stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'worker-a', task: 'one' } }),
+        }),
+        stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'worker-b', task: 'two' } }),
+        }),
+      ]);
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      const spawnNodes = [await first.json(), await second.json()] as Array<{ data: { handler_node_id: string } }>;
+      expect(new Set(spawnNodes.map((entry) => entry.data.handler_node_id))).toEqual(new Set(['node_alpha', 'node_beta']));
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn')).length).toBe(1);
+      expect(beta.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn')).length).toBe(1);
+    });
+
+    it('fires a trigger only once when concurrent posts match the same rate-limited trigger', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-trigger-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+
+      const trigger = await stack.app.request('/v1/triggers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ channel: 'general', pattern: 'ship', action_name: 'echo' }),
+      });
+      expect(trigger.status).toBe(201);
+
+      await Promise.all([
+        stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ text: 'ship it once' }),
+        }),
+        stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ text: 'ship it twice' }),
+        }),
+      ]);
+
+      await new Promise((r) => setTimeout(r, 75));
+      const triggerInvokes = alpha.sock.ofType('action.invoke').filter((event) => event.action === 'echo');
+      expect(triggerInvokes).toHaveLength(1);
     });
   });
 });

@@ -13,6 +13,7 @@ import type { PresenceTracker } from '../../ports/presence.js';
 import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
 import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import { reserveNodeCapacity } from '../../engine/placement.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -380,11 +381,24 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           .select({
             dispatchedNodeId: actionInvocations.dispatchedNodeId,
             status: actionInvocations.status,
+            spawnReservedAt: actionInvocations.spawnReservedAt,
           })
           .from(actionInvocations)
           .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
         if (!row) continue;
-        if (row.dispatchedNodeId !== nodeId || row.status !== 'dispatched') continue;
+        if (row.dispatchedNodeId !== nodeId || (row.status !== 'dispatched' && row.status !== 'pending')) continue;
+        const isSpawnAction = item.message.action === 'spawn' || item.message.action.startsWith('spawn:');
+        if (isSpawnAction && !row.spawnReservedAt) {
+          const reserved = await reserveNodeCapacity(this.db, workspaceId, nodeId);
+          if (!reserved) {
+            remaining.push(item);
+            continue;
+          }
+          await this.db
+            .update(actionInvocations)
+            .set({ spawnReservedAt: new Date() })
+            .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
+        }
         conn.send(JSON.stringify(item.message));
       } catch {
         remaining.push(item);

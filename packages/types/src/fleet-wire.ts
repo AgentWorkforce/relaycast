@@ -176,6 +176,17 @@ export const FleetInventorySyncMessageSchema = z
   .strict();
 export type FleetInventorySyncMessage = z.infer<typeof FleetInventorySyncMessageSchema>;
 
+export const AgentRegisterReplyDataSchema = z
+  .object({
+    agent_id: z.string(),
+    name: z.string(),
+    token: z.string(),
+    invocation_id: z.string().nullable().optional(),
+    session_ref: z.string().nullable().optional(),
+  })
+  .strict();
+export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema>;
+
 export const FleetReplyMessageSchema = z
   .object({
     ...FleetResponseEnvelopeFields,

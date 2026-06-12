@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FleetCapability } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { agents, nodes } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
+import { runAtomic } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -25,8 +26,8 @@ export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capabilit
     });
 }
 
-export function nodeHasCapacity(node: Pick<NodeRow, 'maxAgents' | 'activeAgents'>): boolean {
-  return node.maxAgents === 0 || node.activeAgents < node.maxAgents;
+export function nodeHasCapacity(node: Pick<NodeRow, 'maxAgents' | 'activeAgents' | 'reservedAgents'>): boolean {
+  return node.maxAgents === 0 || node.activeAgents + (node.reservedAgents ?? 0) < node.maxAgents;
 }
 
 function normalizeTarget(target: unknown): string | undefined {
@@ -47,12 +48,157 @@ export interface PlacementRequest {
   input?: Record<string, unknown>;
   callerId?: string | null;
   preferredNodeId?: string | null;
+  excludeNodeIds?: string[];
 }
 
 export interface PlacementResult {
   node: NodeRow;
   capability: string;
   queued: boolean;
+}
+
+export async function reserveNodeCapacity(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+): Promise<NodeRow | null> {
+  const [updated] = await db
+    .update(nodes)
+    .set({
+      reservedAgents: sql`coalesce(${nodes.reservedAgents}, 0) + 1`,
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.id, nodeId),
+      eq(nodes.status, 'online'),
+      eq(nodes.handlersLive, true),
+      sql`(${nodes.maxAgents} = 0 OR (${nodes.activeAgents} + coalesce(${nodes.reservedAgents}, 0)) < ${nodes.maxAgents})`,
+    ))
+    .returning();
+  return updated ?? null;
+}
+
+export async function releaseNodeCapacity(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  count = 1,
+): Promise<void> {
+  if (count <= 0) return;
+  await db
+    .update(nodes)
+    .set({
+      reservedAgents: sql`CASE WHEN coalesce(${nodes.reservedAgents}, 0) > ${count} THEN coalesce(${nodes.reservedAgents}, 0) - ${count} ELSE 0 END`,
+    })
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+}
+
+export async function claimSpawnNode(
+  db: Db,
+  workspaceId: string,
+  request: PlacementRequest,
+): Promise<PlacementResult> {
+  const input = request.input ?? {};
+  const capability = normalizeCapability('spawn', input);
+  const target = normalizeTarget(input.target_node ?? input.node ?? input.target);
+  const excluded = new Set(request.excludeNodeIds ?? []);
+
+  return runAtomic(db, async (tx) => {
+    const chooseLiveCandidate = async (node: NodeRow | undefined): Promise<PlacementResult | null> => {
+      if (!node) return null;
+      if (!nodeHasCapability(node, capability) || excluded.has(node.id)) return null;
+      if (!isNodeLive(node) || !node.handlersLive) return { node, capability, queued: true };
+      const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
+      if (!reserved) {
+        throw codedError(`Node "${node.name}" is at capacity`, 'handler_unavailable', 503);
+      }
+      return { node: reserved, capability, queued: false };
+    };
+
+    if (request.preferredNodeId) {
+      const [node] = await tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, request.preferredNodeId)));
+      const claimed = await chooseLiveCandidate(node ?? undefined);
+      if (claimed) return claimed;
+      if (node && excluded.has(node.id)) {
+        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+      }
+      if (node && nodeHasCapability(node, capability)) {
+        return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+      }
+    }
+
+    if (target === 'self') {
+      if (!request.callerId) {
+        throw codedError('target "self" requires an agent caller', 'placement_self_requires_agent', 400);
+      }
+      const [caller] = await tx
+        .select({
+          locationNodeId: agents.locationNodeId,
+          locationType: agents.locationType,
+        })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, request.callerId)));
+      if (!caller || caller.locationType !== 'via_node' || !caller.locationNodeId) {
+        throw codedError('caller is not attached to a node', 'placement_self_unavailable', 409);
+      }
+      const [node] = await tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, caller.locationNodeId)));
+      if (!node) {
+        throw codedError('caller node was not found', 'node_not_found', 404);
+      }
+      const claimed = await chooseLiveCandidate(node);
+      if (claimed) return claimed;
+      if (excluded.has(node.id)) {
+        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+      }
+      if (!nodeHasCapability(node, capability)) {
+        throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
+      }
+      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+    }
+
+    if (target) {
+      const [node] = await tx
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.name, target)));
+      if (!node) {
+        throw codedError(`Node "${target}" not found`, 'node_not_found', 404);
+      }
+      const claimed = await chooseLiveCandidate(node);
+      if (claimed) return claimed;
+      if (excluded.has(node.id)) {
+        throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+      }
+      if (!nodeHasCapability(node, capability)) {
+        throw codedError(`Node "${target}" does not provide ${capability}`, 'capability_mismatch', 409);
+      }
+      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+    }
+
+    const rows = await tx.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
+    const eligible = rows
+      .filter((node) =>
+        !excluded.has(node.id) &&
+        nodeHasCapability(node, capability) &&
+        isNodeLive(node) &&
+        node.handlersLive &&
+        nodeHasCapacity(node),
+      )
+      .sort((a, b) => (a.load - b.load) || (a.activeAgents - b.activeAgents) || a.name.localeCompare(b.name));
+
+    for (const node of eligible) {
+      const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
+      if (reserved) return { node: reserved, capability, queued: false };
+    }
+
+    throw codedError(`No live node provides ${capability}`, 'handler_unavailable', 503);
+  });
 }
 
 export async function chooseNodeForAction(
@@ -63,18 +209,22 @@ export async function chooseNodeForAction(
   const input = request.input ?? {};
   const capability = normalizeCapability(request.actionName, input);
   const target = normalizeTarget(input.target_node ?? input.node ?? input.target);
+  const excluded = new Set(request.excludeNodeIds ?? []);
 
   if (request.preferredNodeId) {
     const [node] = await db
       .select()
       .from(nodes)
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, request.preferredNodeId)));
-    if (node && nodeHasCapability(node, capability)) {
+    if (node && nodeHasCapability(node, capability) && !excluded.has(node.id)) {
       return {
         node,
         capability,
-        queued: !isNodeLive(node) || !node.handlersLive || !nodeHasCapacity(node),
+        queued: !isNodeLive(node) || !node.handlersLive,
       };
+    }
+    if (node && excluded.has(node.id)) {
+      throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
     }
   }
 
@@ -99,13 +249,16 @@ export async function chooseNodeForAction(
     if (!node) {
       throw codedError('caller node was not found', 'node_not_found', 404);
     }
+    if (excluded.has(node.id)) {
+      throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+    }
     if (!nodeHasCapability(node, capability)) {
       throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
     }
     return {
       node,
       capability,
-      queued: !isNodeLive(node) || !node.handlersLive || !nodeHasCapacity(node),
+      queued: !isNodeLive(node) || !node.handlersLive,
     };
   }
 
@@ -117,19 +270,23 @@ export async function chooseNodeForAction(
     if (!node) {
       throw codedError(`Node "${target}" not found`, 'node_not_found', 404);
     }
+    if (excluded.has(node.id)) {
+      throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
+    }
     if (!nodeHasCapability(node, capability)) {
       throw codedError(`Node "${target}" does not provide ${capability}`, 'capability_mismatch', 409);
     }
     return {
       node,
       capability,
-      queued: !isNodeLive(node) || !node.handlersLive || !nodeHasCapacity(node),
+      queued: !isNodeLive(node) || !node.handlersLive,
     };
   }
 
   const rows = await db.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
   const eligible = rows
     .filter((node) =>
+      !excluded.has(node.id) &&
       nodeHasCapability(node, capability) &&
       isNodeLive(node) &&
       node.handlersLive &&

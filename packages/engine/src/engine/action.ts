@@ -1,23 +1,41 @@
-import { and, eq, inArray, lte } from 'drizzle-orm';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { FleetWireJsonValue } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { chooseNodeForAction } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity } from './placement.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
+type RetryableInvocationRow = Pick<
+  InvocationRow,
+  'id' | 'workspaceId' | 'actionName' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'attemptedNodeIds' | 'dispatchAttempts'
+>;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
+const ACTION_RETRY_BACKOFF_MS = 5_000;
 
 function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
   if (typeof capability === 'string') return capability;
   if (capability && typeof capability.name === 'string') return capability.name;
   return null;
+}
+
+function isSpawnInvocation(actionName: string): boolean {
+  return actionName === 'spawn' || actionName.startsWith('spawn:');
+}
+
+function normalizeAttemptedNodeIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function nextRetryAfter(attempts: number): Date {
+  const backoff = Math.min(ACTION_RETRY_BACKOFF_MS * 2 ** Math.max(0, attempts - 1), 60_000);
+  return new Date(Date.now() + backoff);
 }
 
 function isActionVisibleToCaller(availableTo: string[] | null, callerName?: string): boolean {
@@ -265,40 +283,6 @@ async function createInvocation(
   return invocation;
 }
 
-async function dispatchNodeInvocation(args: {
-  db: Db;
-  registry: NodeConnectionRegistry;
-  workspaceId: string;
-  invocationId: string;
-  nodeId: string;
-  action: string;
-  input: Record<string, unknown>;
-}) {
-  const sent = await args.registry.sendToNode(args.workspaceId, args.nodeId, {
-    v: 1,
-    type: 'action.invoke',
-    invocation_id: args.invocationId,
-    action: args.action,
-    input: toFleetWireJson(args.input),
-  });
-
-  if (!sent) return false;
-
-  await args.db
-    .update(actionInvocations)
-    .set({
-      status: 'dispatched',
-      dispatchedNodeId: args.nodeId,
-      dispatchedAt: new Date(),
-    })
-    .where(and(
-      eq(actionInvocations.workspaceId, args.workspaceId),
-      eq(actionInvocations.id, args.invocationId),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-    ));
-  return true;
-}
-
 async function dispatchSpawn(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
@@ -313,15 +297,16 @@ async function dispatchSpawn(args: {
     throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
   }
 
-  const placement = await chooseNodeForAction(args.db, args.workspaceId, {
-    actionName: 'spawn',
-    input: args.data.input,
-    callerId: args.data.caller_id,
-  });
   const invocation = await createInvocation(args.db, args.workspaceId, null, {
     input: args.data.input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
+  });
+
+  const placement = await claimSpawnNode(args.db, args.workspaceId, {
+    actionName: 'spawn',
+    input: args.data.input,
+    callerId: args.data.caller_id,
   });
 
   const dispatched = await dispatchNodeInvocation({
@@ -332,6 +317,8 @@ async function dispatchSpawn(args: {
     nodeId: placement.node.id,
     action: placement.capability,
     input: recordInput(invocation.input),
+    pending: placement.queued,
+    reservationHeld: !placement.queued,
   });
 
   return {
@@ -339,9 +326,9 @@ async function dispatchSpawn(args: {
     action_name: 'spawn',
     handler_agent_id: null,
     handler_node_id: placement.node.id,
-    dispatched_node_id: dispatched ? placement.node.id : null,
+    dispatched_node_id: dispatched.accepted ? placement.node.id : null,
     input: recordInput(invocation.input),
-    status: dispatched ? 'dispatched' : 'pending',
+    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -399,15 +386,16 @@ export async function invokeAction(
       nodeId: action.handlerNodeId,
       action: action.name,
       input: recordInput(invocation.input),
+      reservationHeld: isSpawnInvocation(action.name),
     });
     return {
       invocation_id: invocation.id,
       action_name: actionName,
       handler_agent_id: null,
       handler_node_id: action.handlerNodeId,
-      dispatched_node_id: dispatched ? action.handlerNodeId : null,
+      dispatched_node_id: dispatched.accepted ? action.handlerNodeId : null,
       input: recordInput(invocation.input),
-      status: dispatched ? 'dispatched' : 'pending',
+      status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
       created_at: invocation.createdAt.toISOString(),
     };
   }
@@ -453,6 +441,194 @@ function publicInvocation(row: InvocationRow) {
   };
 }
 
+async function dispatchNodeAttempt(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+  opts: { pending?: boolean; retryAfterAt?: Date | null; reservationHeld?: boolean } = {},
+) {
+  const [updated] = await db
+    .update(actionInvocations)
+    .set({
+      status: opts.pending ? 'pending' : 'dispatched',
+      dispatchedNodeId: nodeId,
+      dispatchedAt: opts.pending ? null : new Date(),
+      spawnReservedAt: opts.reservationHeld ? new Date() : null,
+      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+      retryAfterAt: opts.retryAfterAt ?? null,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning();
+  return !!updated;
+}
+
+async function dispatchNodeInvocation(args: {
+  db: Db;
+  registry: NodeConnectionRegistry;
+  workspaceId: string;
+  invocationId: string;
+  nodeId: string;
+  action: string;
+  input: Record<string, unknown>;
+  pending?: boolean;
+  retryAfterAt?: Date | null;
+  reservationHeld?: boolean;
+}): Promise<{ accepted: boolean; pending: boolean }> {
+  const connectedBefore = args.registry.isNodeConnected(args.workspaceId, args.nodeId);
+  const sent = await args.registry.sendToNode(args.workspaceId, args.nodeId, {
+    v: 1,
+    type: 'action.invoke',
+    invocation_id: args.invocationId,
+    action: args.action,
+    input: toFleetWireJson(args.input),
+  });
+
+  if (!sent) return { accepted: false, pending: false };
+
+  const pending = !!args.pending || !connectedBefore;
+  const accepted = await dispatchNodeAttempt(
+    args.db,
+    args.workspaceId,
+    args.invocationId,
+    args.nodeId,
+    { pending, retryAfterAt: args.retryAfterAt, reservationHeld: args.reservationHeld },
+  );
+  return { accepted, pending };
+}
+
+function attemptedNodeSet(invocation: Pick<InvocationRow, 'attemptedNodeIds' | 'dispatchedNodeId'>): string[] {
+  return Array.from(new Set([
+    ...normalizeAttemptedNodeIds(invocation.attemptedNodeIds),
+    invocation.dispatchedNodeId,
+  ].filter((nodeId): nodeId is string => !!nodeId)));
+}
+
+async function selectRetryPlacement(
+  db: Db,
+  invocation: RetryableInvocationRow,
+  excludeNodeIds: string[],
+) {
+  const input = recordInput(invocation.input);
+  if (isSpawnInvocation(invocation.actionName)) {
+    return claimSpawnNode(db, invocation.workspaceId, {
+      actionName: 'spawn',
+      input,
+      callerId: invocation.callerId,
+      excludeNodeIds,
+    });
+  }
+  return chooseNodeForAction(db, invocation.workspaceId, {
+    actionName: invocation.actionName,
+    input,
+    callerId: invocation.callerId,
+    excludeNodeIds,
+  });
+}
+
+export async function rescheduleNodeInvocation(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  invocation: RetryableInvocationRow,
+  opts: { allowAttemptedFallback?: boolean; retryAfterAt?: Date | null } = {},
+) {
+  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
+    await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+  }
+  const attempted = attemptedNodeSet(invocation);
+  const current = invocation.dispatchedNodeId ? [invocation.dispatchedNodeId] : [];
+  const input = recordInput(invocation.input);
+  const actionToSend = isSpawnInvocation(invocation.actionName) ? 'spawn' : invocation.actionName;
+  const baseExclude = Array.from(new Set([...attempted, ...current]));
+  const candidates = opts.allowAttemptedFallback ? [baseExclude, []] : [baseExclude];
+
+  for (const excludeNodeIds of candidates) {
+    try {
+      const placement = await selectRetryPlacement(db, invocation, excludeNodeIds);
+      if (placement.queued) {
+        await dispatchNodeAttempt(db, invocation.workspaceId, invocation.id, placement.node.id, {
+          pending: true,
+          retryAfterAt: opts.retryAfterAt ?? null,
+          reservationHeld: false,
+        });
+        return true;
+      }
+      const dispatched = await dispatchNodeInvocation({
+        db,
+        registry,
+        workspaceId: invocation.workspaceId,
+        invocationId: invocation.id,
+        nodeId: placement.node.id,
+        action: actionToSend,
+        input,
+        reservationHeld: isSpawnInvocation(invocation.actionName) && !placement.queued,
+      });
+      return dispatched.accepted;
+    } catch {
+      // Try the next candidate set.
+    }
+  }
+
+  await db
+    .update(actionInvocations)
+    .set({
+      status: 'pending',
+      dispatchedNodeId: null,
+      dispatchedAt: null,
+      spawnReservedAt: null,
+      retryAfterAt: opts.retryAfterAt ?? nextRetryAfter(invocation.dispatchAttempts + 1),
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ));
+  return false;
+}
+
+export async function rescheduleInvocationsForLostNode(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+) {
+  const rows = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ));
+
+  let rescheduled = 0;
+  for (const invocation of rows) {
+    try {
+      if (await rescheduleNodeInvocation(db, registry, invocation, { retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1) })) {
+        rescheduled++;
+      }
+    } catch {
+      // Keep the invocation pending; another heartbeat/sweep can retry.
+      await db
+        .update(actionInvocations)
+        .set({
+          status: 'pending',
+          dispatchedNodeId: null,
+          dispatchedAt: null,
+          spawnReservedAt: null,
+          retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+        })
+        .where(eq(actionInvocations.id, invocation.id));
+    }
+  }
+  return rescheduled;
+}
+
 export async function completeInvocation(
   db: Db,
   workspaceId: string,
@@ -471,6 +647,8 @@ export async function completeInvocation(
       id: actionInvocations.id,
       status: actionInvocations.status,
       actionName: actionInvocations.actionName,
+      attemptedNodeIds: actionInvocations.attemptedNodeIds,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       handlerAgentId: actions.handlerAgentId,
       handlerNodeId: actions.handlerNodeId,
@@ -517,68 +695,9 @@ export async function completeInvocation(
     )
     .returning();
 
-  // No rows updated means either not found or already completed by a concurrent request
   if (!updated) return null;
 
   return publicInvocation(updated);
-}
-
-async function rescheduleNodeInvocation(
-  db: Db,
-  registry: NodeConnectionRegistry,
-  invocation: InvocationRow,
-) {
-  const input = recordInput(invocation.input);
-  const placement = await chooseNodeForAction(db, invocation.workspaceId, {
-    actionName: invocation.actionName,
-    input,
-    callerId: invocation.callerId,
-  });
-  if (placement.node.id === invocation.dispatchedNodeId && invocation.dispatchedNodeId) {
-    return false;
-  }
-  const actionToSend = invocation.actionName === 'spawn' ? placement.capability : invocation.actionName;
-  return dispatchNodeInvocation({
-    db,
-    registry,
-    workspaceId: invocation.workspaceId,
-    invocationId: invocation.id,
-    nodeId: placement.node.id,
-    action: actionToSend,
-    input,
-  });
-}
-
-export async function rescheduleInvocationsForLostNode(
-  db: Db,
-  registry: NodeConnectionRegistry,
-  workspaceId: string,
-  nodeId: string,
-) {
-  const rows = await db
-    .select()
-    .from(actionInvocations)
-    .where(and(
-      eq(actionInvocations.workspaceId, workspaceId),
-      eq(actionInvocations.dispatchedNodeId, nodeId),
-      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-    ));
-
-  let rescheduled = 0;
-  for (const invocation of rows) {
-    try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
-        rescheduled++;
-      }
-    } catch {
-      // Keep the invocation pending; another heartbeat/sweep can retry.
-      await db
-        .update(actionInvocations)
-        .set({ status: 'pending' })
-        .where(eq(actionInvocations.id, invocation.id));
-    }
-  }
-  return rescheduled;
 }
 
 export async function completeNodeInvocation(
@@ -596,10 +715,8 @@ export async function completeNodeInvocation(
     .select({
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
-      actionId: actionInvocations.actionId,
       actionName: actionInvocations.actionName,
       callerId: actionInvocations.callerId,
-      callerName: actionInvocations.callerName,
       input: actionInvocations.input,
       output: actionInvocations.output,
       status: actionInvocations.status,
@@ -607,6 +724,8 @@ export async function completeNodeInvocation(
       durationMs: actionInvocations.durationMs,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedAt: actionInvocations.dispatchedAt,
+      attemptedNodeIds: actionInvocations.attemptedNodeIds,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
       createdAt: actionInvocations.createdAt,
       completedAt: actionInvocations.completedAt,
     })
@@ -629,7 +748,7 @@ export async function completeNodeInvocation(
       .set({ handlersLive: false })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     try {
-      if (await rescheduleNodeInvocation(db, registry, existing)) {
+      if (await rescheduleNodeInvocation(db, registry, existing, { retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1) })) {
         return null;
       }
     } catch {
@@ -644,6 +763,7 @@ export async function completeNodeInvocation(
       error: data.error ?? null,
       status: data.error ? 'failed' : 'completed',
       completedAt: new Date(),
+      spawnReservedAt: null,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -653,6 +773,10 @@ export async function completeNodeInvocation(
     ))
     .returning();
 
+  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId) {
+    await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
+  }
+
   return updated ? publicInvocation(updated) : null;
 }
 
@@ -661,6 +785,7 @@ export async function sweepTimedOutInvocations(
   registry: NodeConnectionRegistry,
   timeoutMs = ACTION_DISPATCH_TIMEOUT_MS,
 ) {
+  const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db
     .select()
@@ -670,10 +795,22 @@ export async function sweepTimedOutInvocations(
       lte(actionInvocations.dispatchedAt, cutoff),
     ));
 
+  const pendingRows = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.status, 'pending'),
+      lte(actionInvocations.retryAfterAt, now),
+    ));
+
   let rescheduled = 0;
-  for (const invocation of rows) {
+  for (const invocation of [...rows, ...pendingRows]) {
     try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+      const allowFallback = invocation.status === 'pending';
+      if (await rescheduleNodeInvocation(db, registry, invocation, {
+        allowAttemptedFallback: allowFallback,
+        retryAfterAt: allowFallback ? null : nextRetryAfter(invocation.dispatchAttempts + 1),
+      })) {
         rescheduled++;
       }
     } catch {

@@ -6,6 +6,7 @@ import type {
   FleetNodeHeartbeatMessage,
   FleetNodeRegisterMessage,
   FleetCapability,
+  AgentRegisterReplyData,
 } from '@relaycast/types';
 import { parseFleetBrokerToRelaycastMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -16,7 +17,7 @@ import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
-import { completeNodeInvocation, rescheduleInvocationsForLostNode } from './action.js';
+import { completeNodeInvocation, rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from './action.js';
 import { emitInvocationCompletionEffects } from './invocationCompletion.js';
 import type { InvocationCompletionDeps } from './invocationCompletion.js';
 
@@ -296,7 +297,7 @@ export async function registerAgentViaNode(
   workspaceId: string,
   nodeId: string,
   message: FleetAgentRegisterMessage,
-) {
+): Promise<AgentRegisterReplyData> {
   return runAtomic(db, async (tx) => {
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
@@ -388,28 +389,51 @@ export async function deregisterAgentViaNode(
 
 export async function reconcileInventory(
   db: Db,
+  registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
   inventoryAgents: FleetInventoryAgent[],
+  completionDeps?: InvocationCompletionDeps,
 ) {
   const names = new Set(inventoryAgents.map((agent) => agent.name));
+  const liveInvocationIds = new Set(inventoryAgents.flatMap((agent) => (
+    agent.invocation_id ? [agent.invocation_id] : []
+  )));
+  let completedInvocations = 0;
   for (const item of inventoryAgents) {
     const [existing] = await db
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
-    if (!existing) continue;
-    await db
-      .update(agents)
-      .set({
-        status: 'active',
-        lastSeen: new Date(),
-        locationType: 'via_node',
-        locationNodeId: nodeId,
-        originNodeId: existing.originNodeId ?? nodeId,
-        sessionRef: item.session_ref ?? existing.sessionRef,
-      })
-      .where(eq(agents.id, existing.id));
+    if (existing) {
+      await db
+        .update(agents)
+        .set({
+          status: 'active',
+          lastSeen: new Date(),
+          locationType: 'via_node',
+          locationNodeId: nodeId,
+          originNodeId: existing.originNodeId ?? nodeId,
+          sessionRef: item.session_ref ?? existing.sessionRef,
+        })
+        .where(eq(agents.id, existing.id));
+    }
+
+    if (!item.invocation_id) continue;
+    const completed = await completeNodeInvocation(db, registry, workspaceId, nodeId, item.invocation_id, {
+      output: {
+        agent_id: item.agent_id,
+        name: item.name,
+        invocation_id: item.invocation_id ?? null,
+        session_ref: item.session_ref ?? null,
+      },
+    });
+    if (completed) {
+      completedInvocations++;
+      if (completionDeps) {
+        await emitInvocationCompletionEffects(completionDeps, workspaceId, completed);
+      }
+    }
   }
 
   const nodeAgents = await db
@@ -430,14 +454,49 @@ export async function reconcileInventory(
   }
 
   const openInvocations = await db
-    .select({ id: actionInvocations.id })
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionName: actionInvocations.actionName,
+      callerId: actionInvocations.callerId,
+      input: actionInvocations.input,
+      status: actionInvocations.status,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      attemptedNodeIds: actionInvocations.attemptedNodeIds,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
+    })
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.dispatchedNodeId, nodeId),
       inArray(actionInvocations.status, ['pending', 'dispatched']),
     ));
-  return { rebound_agents: inventoryAgents.length, open_invocations: openInvocations.length };
+  let rescheduledInvocations = 0;
+  for (const invocation of openInvocations) {
+    if (liveInvocationIds.has(invocation.id)) continue;
+    try {
+      if (await rescheduleNodeInvocation(db, registry, invocation)) {
+        rescheduledInvocations++;
+      }
+    } catch {
+      await db
+        .update(actionInvocations)
+        .set({
+          status: 'pending',
+          dispatchedNodeId: null,
+          dispatchedAt: null,
+          retryAfterAt: new Date(Date.now() + 5_000),
+        })
+        .where(eq(actionInvocations.id, invocation.id));
+    }
+  }
+
+  return {
+    rebound_agents: inventoryAgents.length,
+    open_invocations: openInvocations.length,
+    completed_invocations: completedInvocations,
+    rescheduled_invocations: rescheduledInvocations,
+  };
 }
 
 export async function listNodes(
@@ -524,7 +583,7 @@ export async function handleNodeControlMessage(args: {
         await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
         return;
       case 'inventory.sync': {
-        const result = await reconcileInventory(args.db, args.workspaceId, args.nodeId, message.agents);
+        const result = await reconcileInventory(args.db, args.registry, args.workspaceId, args.nodeId, message.agents, args.completionDeps);
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
