@@ -8,7 +8,31 @@ from urllib.parse import quote
 from .agent import AgentClient, AsyncAgentClient
 from .client import AsyncHttpClient, HttpClient
 from .errors import RelayError
-from .models import Agent, CreateAgentRequest, CreateAgentResponse, TokenRotateResponse, Workspace
+from .models import (
+    A2aAgentCard,
+    A2aAgentRecord,
+    DirectoryAgent,
+    DirectoryRating,
+    DirectorySearchResult,
+    ImportSkillsRequest,
+    RateDirectoryAgentRequest,
+    RegisterA2aOptions,
+    RegisterA2aResponse,
+    RemoveA2aAgentResponse,
+    RouteFeedbackRequest,
+    RouteFeedbackResult,
+    RouteResult,
+    RoutingConfig,
+    SkillSearchResult,
+    UpdateDirectoryAgentRequest,
+    UpdateRoutingConfigRequest,
+    Agent,
+    CreateAgentRequest,
+    CreateAgentResponse,
+    PublishToDirectoryRequest,
+    TokenRotateResponse,
+    Workspace,
+)
 
 
 def _enc(value: str) -> str:
@@ -134,6 +158,128 @@ class Relay:
         )
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
+
+
+    def register_agent(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        return self.agents.register(name, type=type, persona=persona, metadata=metadata)
+
+    def register_or_rotate(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        return self.agents.register_or_rotate(name, type=type, persona=persona, metadata=metadata)
+
+    def agent(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return self.register_agent(name, type="agent", persona=persona, metadata=metadata)
+
+    def human(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return self.register_agent(name, type="human", persona=persona, metadata=metadata)
+
+    def system(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return self.register_agent(name, type="system", persona=persona, metadata=metadata)
+
+    def register_a2a(self, options: RegisterA2aOptions) -> RegisterA2aResponse:
+        result = self._client.post("/v1/a2a/register", options.model_dump(exclude_none=True))
+        return RegisterA2aResponse.model_validate(result)
+
+    def list_a2a_agents(self) -> list[A2aAgentRecord]:
+        result = self._client.get("/v1/a2a/agents")
+        return [A2aAgentRecord.model_validate(a) for a in result]
+
+    def remove_a2a_agent(self, name: str) -> RemoveA2aAgentResponse:
+        result = self._client.request("DELETE", f"/v1/a2a/agents/{_enc(name)}")
+        return RemoveA2aAgentResponse.model_validate(result)
+
+    def get_a2a_agent_card(self, name: str) -> A2aAgentCard:
+        result = self._client.get(f"/v1/a2a/agents/{_enc(name)}/card")
+        return A2aAgentCard.model_validate(result)
+
+    def route(self, skill: str, message: str | None = None) -> RouteResult:
+        result = self._client.post("/v1/route", {"skill": skill, "message": message})
+        return RouteResult.model_validate(result)
+
+    def search_directory(
+        self, *, q: str | None = None, tags: list[str] | None = None, status: str | None = None, limit: int | None = None
+    ) -> list[DirectorySearchResult]:
+        query: dict[str, str] = {}
+        if q:
+            query["q"] = q
+        if tags:
+            query["tags"] = ",".join(tags)
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = self._client.get("/v1/directory/search", query or None)
+        return [DirectorySearchResult.model_validate(a) for a in result]
+
+    def publish_to_directory(self, data: PublishToDirectoryRequest) -> DirectoryAgent:
+        result = self._client.post("/v1/directory/agents", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result)
+
+    def import_skills(self, data: ImportSkillsRequest) -> DirectoryAgent | None:
+        result = self._client.post("/v1/skills/sync", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result) if result is not None else None
+
+    def search_skills(self, *, q: str | None = None, limit: int | None = None) -> list[SkillSearchResult]:
+        query: dict[str, str] = {}
+        if q:
+            query["q"] = q
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = self._client.get("/v1/skills/search", query or None)
+        return [SkillSearchResult.model_validate(s) for s in result]
+
+    def route_feedback(self, data: RouteFeedbackRequest) -> RouteFeedbackResult:
+        result = self._client.post("/v1/route/feedback", data.model_dump(exclude_none=True))
+        return RouteFeedbackResult.model_validate(result)
+
+    def list_directory(self, *, status: str | None = None, limit: int | None = None) -> list[DirectoryAgent]:
+        query: dict[str, str] = {}
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = self._client.get("/v1/directory/agents", query or None)
+        return [DirectoryAgent.model_validate(a) for a in result]
+
+    def get_directory_agent(self, slug: str) -> DirectoryAgent:
+        result = self._client.get(f"/v1/directory/agents/{_enc(slug)}")
+        return DirectoryAgent.model_validate(result)
+
+    def update_directory_agent(self, slug: str, data: UpdateDirectoryAgentRequest) -> DirectoryAgent:
+        result = self._client.patch(f"/v1/directory/agents/{_enc(slug)}", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result)
+
+    def delete_directory_agent(self, slug: str) -> None:
+        self._client.delete(f"/v1/directory/agents/{_enc(slug)}")
+
+    def list_directory_ratings(self, slug: str) -> list[DirectoryRating]:
+        result = self._client.get(f"/v1/directory/agents/{_enc(slug)}/ratings")
+        return [DirectoryRating.model_validate(r) for r in result]
+
+    def rate_directory_agent(self, slug: str, data: RateDirectoryAgentRequest) -> DirectoryRating:
+        result = self._client.post(f"/v1/directory/agents/{_enc(slug)}/ratings", data.model_dump(exclude_none=True))
+        return DirectoryRating.model_validate(result)
+
+    def get_routing_config(self) -> RoutingConfig:
+        result = self._client.get("/v1/routing/config")
+        return RoutingConfig.model_validate(result)
+
+    def update_routing_config(self, data: UpdateRoutingConfigRequest) -> RoutingConfig:
+        result = self._client.put("/v1/routing/config", data.model_dump(exclude_none=True))
+        return RoutingConfig.model_validate(result)
 
     def as_agent(self, agent_token: str) -> AgentClient:
         agent_client = HttpClient(
@@ -276,6 +422,128 @@ class AsyncRelay:
         )
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
+
+
+    async def register_agent(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        return await self.agents.register(name, type=type, persona=persona, metadata=metadata)
+
+    async def register_or_rotate(
+        self,
+        name: str,
+        *,
+        type: str | None = None,
+        persona: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CreateAgentResponse:
+        return await self.agents.register_or_rotate(name, type=type, persona=persona, metadata=metadata)
+
+    async def agent(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return await self.register_agent(name, type="agent", persona=persona, metadata=metadata)
+
+    async def human(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return await self.register_agent(name, type="human", persona=persona, metadata=metadata)
+
+    async def system(self, name: str, *, persona: str | None = None, metadata: dict[str, Any] | None = None) -> CreateAgentResponse:
+        return await self.register_agent(name, type="system", persona=persona, metadata=metadata)
+
+    async def register_a2a(self, options: RegisterA2aOptions) -> RegisterA2aResponse:
+        result = await self._client.post("/v1/a2a/register", options.model_dump(exclude_none=True))
+        return RegisterA2aResponse.model_validate(result)
+
+    async def list_a2a_agents(self) -> list[A2aAgentRecord]:
+        result = await self._client.get("/v1/a2a/agents")
+        return [A2aAgentRecord.model_validate(a) for a in result]
+
+    async def remove_a2a_agent(self, name: str) -> RemoveA2aAgentResponse:
+        result = await self._client.request("DELETE", f"/v1/a2a/agents/{_enc(name)}")
+        return RemoveA2aAgentResponse.model_validate(result)
+
+    async def get_a2a_agent_card(self, name: str) -> A2aAgentCard:
+        result = await self._client.get(f"/v1/a2a/agents/{_enc(name)}/card")
+        return A2aAgentCard.model_validate(result)
+
+    async def route(self, skill: str, message: str | None = None) -> RouteResult:
+        result = await self._client.post("/v1/route", {"skill": skill, "message": message})
+        return RouteResult.model_validate(result)
+
+    async def search_directory(
+        self, *, q: str | None = None, tags: list[str] | None = None, status: str | None = None, limit: int | None = None
+    ) -> list[DirectorySearchResult]:
+        query: dict[str, str] = {}
+        if q:
+            query["q"] = q
+        if tags:
+            query["tags"] = ",".join(tags)
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = await self._client.get("/v1/directory/search", query or None)
+        return [DirectorySearchResult.model_validate(a) for a in result]
+
+    async def publish_to_directory(self, data: PublishToDirectoryRequest) -> DirectoryAgent:
+        result = await self._client.post("/v1/directory/agents", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result)
+
+    async def import_skills(self, data: ImportSkillsRequest) -> DirectoryAgent | None:
+        result = await self._client.post("/v1/skills/sync", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result) if result is not None else None
+
+    async def search_skills(self, *, q: str | None = None, limit: int | None = None) -> list[SkillSearchResult]:
+        query: dict[str, str] = {}
+        if q:
+            query["q"] = q
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = await self._client.get("/v1/skills/search", query or None)
+        return [SkillSearchResult.model_validate(s) for s in result]
+
+    async def route_feedback(self, data: RouteFeedbackRequest) -> RouteFeedbackResult:
+        result = await self._client.post("/v1/route/feedback", data.model_dump(exclude_none=True))
+        return RouteFeedbackResult.model_validate(result)
+
+    async def list_directory(self, *, status: str | None = None, limit: int | None = None) -> list[DirectoryAgent]:
+        query: dict[str, str] = {}
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = await self._client.get("/v1/directory/agents", query or None)
+        return [DirectoryAgent.model_validate(a) for a in result]
+
+    async def get_directory_agent(self, slug: str) -> DirectoryAgent:
+        result = await self._client.get(f"/v1/directory/agents/{_enc(slug)}")
+        return DirectoryAgent.model_validate(result)
+
+    async def update_directory_agent(self, slug: str, data: UpdateDirectoryAgentRequest) -> DirectoryAgent:
+        result = await self._client.patch(f"/v1/directory/agents/{_enc(slug)}", data.model_dump(exclude_none=True))
+        return DirectoryAgent.model_validate(result)
+
+    async def delete_directory_agent(self, slug: str) -> None:
+        await self._client.delete(f"/v1/directory/agents/{_enc(slug)}")
+
+    async def list_directory_ratings(self, slug: str) -> list[DirectoryRating]:
+        result = await self._client.get(f"/v1/directory/agents/{_enc(slug)}/ratings")
+        return [DirectoryRating.model_validate(r) for r in result]
+
+    async def rate_directory_agent(self, slug: str, data: RateDirectoryAgentRequest) -> DirectoryRating:
+        result = await self._client.post(f"/v1/directory/agents/{_enc(slug)}/ratings", data.model_dump(exclude_none=True))
+        return DirectoryRating.model_validate(result)
+
+    async def get_routing_config(self) -> RoutingConfig:
+        result = await self._client.get("/v1/routing/config")
+        return RoutingConfig.model_validate(result)
+
+    async def update_routing_config(self, data: UpdateRoutingConfigRequest) -> RoutingConfig:
+        result = await self._client.put("/v1/routing/config", data.model_dump(exclude_none=True))
+        return RoutingConfig.model_validate(result)
 
     def as_agent(self, agent_token: str) -> AsyncAgentClient:
         agent_client = AsyncHttpClient(
