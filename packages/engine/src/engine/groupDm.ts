@@ -5,8 +5,10 @@ import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
   buildGroupDmDeliveryWrite,
-  fetchDeliveryFanoutRecords,
+  fetchGroupDeliveryOutcomes,
+  type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -114,6 +116,7 @@ export async function postGroupMessage(
   conversationId: string,
   agentId: string,
   data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  options: { mailbox?: MailboxConfig } = {},
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -190,6 +193,10 @@ export async function postGroupMessage(
 
   const messageId = generateId();
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
+  const mailbox = options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS,
+    depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the delivery insert
@@ -226,13 +233,19 @@ export async function postGroupMessage(
         conversationId,
         senderAgentId: agentId,
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        ttlMs: mailbox.ttlMs,
+        depthCap: mailbox.depthCap,
       }),
     );
 
     return writes;
   });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
-  const groupDeliveries = await fetchDeliveryFanoutRecords(db, messageId);
+  const deliveryOutcomes: DeliveryOutcomeRecords = await fetchGroupDeliveryOutcomes(db, {
+    messageId,
+    conversationId,
+    senderAgentId: agentId,
+  });
 
   const attachmentMap = hasAttachments
     ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
@@ -261,7 +274,8 @@ export async function postGroupMessage(
     attachments,
 
     // Internal: delivery records for recipients — stripped by route before response
-    _deliveries: groupDeliveries,
+    _deliveries: deliveryOutcomes.deliveries,
+    _delivery_rejections: deliveryOutcomes.rejections,
   };
 }
 

@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql, inArray } from 'drizzle-orm';
 import type { SQLiteInsertSelectQueryBuilder } from 'drizzle-orm/sqlite-core';
 import {
   agents,
@@ -15,7 +15,28 @@ type DeliveryInsertSelect = SQLiteInsertSelectQueryBuilder<typeof deliveries>;
 export interface DeliveryFanoutRecord {
   id: string;
   agentId: string;
+  agentName: string;
+  messageId: string;
+  seq: number;
+  mode: string;
   reason: string;
+  status: string;
+  locationType: string;
+  locationNodeId: string | null;
+}
+
+export interface DeliveryRejectionRecord {
+  agentId: string;
+  agentName: string;
+  messageId: string;
+  reason: 'depth_cap';
+  error: string;
+  retryable: false;
+}
+
+export interface DeliveryOutcomeRecords {
+  deliveries: DeliveryFanoutRecord[];
+  rejections: DeliveryRejectionRecord[];
 }
 
 function deliveryId(messageId: string, agentId: unknown) {
@@ -38,6 +59,29 @@ function asDeliveryInsertSelect(query: unknown): DeliveryInsertSelect {
   return query as DeliveryInsertSelect;
 }
 
+function ttlSeconds(ttlMs: number): number {
+  return Math.max(1, Math.ceil(ttlMs / 1000));
+}
+
+function nextSeqSql(workspaceId: string, agentId: unknown) {
+  return sql<number>`(
+    SELECT COALESCE(MAX(d.seq), 0) + 1
+    FROM deliveries d
+    WHERE d.workspace_id = ${workspaceId}
+      AND d.agent_id = ${agentId}
+  )`;
+}
+
+function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
+  return sql`(
+    SELECT COUNT(*)
+    FROM deliveries d
+    WHERE d.workspace_id = ${workspaceId}
+      AND d.agent_id = ${agentId}
+      AND d.status IN ('queued', 'delivered')
+  ) < ${depthCap}`;
+}
+
 export function buildChannelDeliveryWrite(
   db: EngineDb,
   input: {
@@ -46,6 +90,8 @@ export function buildChannelDeliveryWrite(
     channelId: string;
     senderAgentId: string;
     mode: DeliveryMode;
+    ttlMs: number;
+    depthCap: number;
     reason?: ChannelDeliveryReason;
     mentionHandles?: readonly string[];
   },
@@ -64,7 +110,14 @@ export function buildChannelDeliveryWrite(
           reason,
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
-          status: sql<string>`${'accepted'}`,
+          status: sql<string>`${'queued'}`,
+          seq: nextSeqSql(input.workspaceId, channelMembers.agentId),
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
           retryable: sql<null>`null`,
           availableAt: sql<null>`null`,
           error: sql<null>`null`,
@@ -78,6 +131,7 @@ export function buildChannelDeliveryWrite(
           and(
             eq(channelMembers.channelId, input.channelId),
             ne(channelMembers.agentId, input.senderAgentId),
+            belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
     )
@@ -92,6 +146,8 @@ export function buildGroupDmDeliveryWrite(
     conversationId: string;
     senderAgentId: string;
     mode: DeliveryMode;
+    ttlMs: number;
+    depthCap: number;
   },
 ): AtomicWrite {
   return db
@@ -107,7 +163,14 @@ export function buildGroupDmDeliveryWrite(
           reason: sql<string>`${'dm'}`,
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
-          status: sql<string>`${'accepted'}`,
+          status: sql<string>`${'queued'}`,
+          seq: nextSeqSql(input.workspaceId, dmParticipants.agentId),
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
           retryable: sql<null>`null`,
           availableAt: sql<null>`null`,
           error: sql<null>`null`,
@@ -116,13 +179,65 @@ export function buildGroupDmDeliveryWrite(
           updatedAt: sql<null>`null`,
         })
         .from(dmParticipants)
+        .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
         .where(
           and(
             eq(dmParticipants.conversationId, input.conversationId),
             isNull(dmParticipants.leftAt),
             ne(dmParticipants.agentId, input.senderAgentId),
+            belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
+    )
+    .onConflictDoNothing();
+}
+
+export function buildDirectDeliveryWrite(
+  db: EngineDb,
+  input: {
+    workspaceId: string;
+    messageId: string;
+    agentId: string;
+    mode: DeliveryMode;
+    reason: string;
+    ttlMs: number;
+    depthCap: number;
+    deliveryId?: string;
+  },
+): AtomicWrite {
+  return db
+    .insert(deliveries)
+    .select((qb) =>
+      asDeliveryInsertSelect(qb
+        .select({
+          id: sql<string>`${input.deliveryId ?? `del_${input.messageId}_${input.agentId}`}`,
+          workspaceId: sql<string>`${input.workspaceId}`,
+          messageId: sql<string>`${input.messageId}`,
+          agentId: agents.id,
+          mode: sql<string>`${input.mode}`,
+          reason: sql<string>`${input.reason}`,
+          priority: sql<string>`${'normal'}`,
+          deadline: sql<null>`null`,
+          status: sql<string>`${'queued'}`,
+          seq: nextSeqSql(input.workspaceId, agents.id),
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          deliveredAt: sql<null>`null`,
+          ackedAt: sql<null>`null`,
+          deadLetteredAt: sql<null>`null`,
+          retryable: sql<null>`null`,
+          availableAt: sql<null>`null`,
+          error: sql<null>`null`,
+          idempotencyKey: sql<null>`null`,
+          createdAt: sql`(unixepoch())`,
+          updatedAt: sql<null>`null`,
+        })
+        .from(agents)
+        .where(and(
+          eq(agents.id, input.agentId),
+          belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
+        ))),
     )
     .onConflictDoNothing();
 }
@@ -135,14 +250,127 @@ export async function fetchDeliveryFanoutRecords(
     .select({
       id: deliveries.id,
       agentId: deliveries.agentId,
+      agentName: agents.name,
+      messageId: deliveries.messageId,
+      seq: deliveries.seq,
+      mode: deliveries.mode,
       reason: deliveries.reason,
+      status: deliveries.status,
+      locationType: deliveries.locationType,
+      locationNodeId: deliveries.locationNodeId,
     })
     .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .where(eq(deliveries.messageId, messageId));
 
   return rows.map((row) => ({
     id: row.id,
     agentId: row.agentId,
+    agentName: row.agentName,
+    messageId: row.messageId,
+    seq: row.seq,
+    mode: row.mode,
     reason: row.reason ?? 'message',
+    status: row.status,
+    locationType: row.locationType,
+    locationNodeId: row.locationNodeId,
   }));
+}
+
+function missingDepthCapRejections(
+  intended: Array<{ agentId: string; agentName: string }>,
+  deliveries: DeliveryFanoutRecord[],
+  messageId: string,
+): DeliveryRejectionRecord[] {
+  const inserted = new Set(deliveries.map((delivery) => delivery.agentId));
+  return intended
+    .filter((recipient) => !inserted.has(recipient.agentId))
+    .map((recipient) => ({
+      agentId: recipient.agentId,
+      agentName: recipient.agentName,
+      messageId,
+      reason: 'depth_cap' as const,
+      error: 'mailbox depth cap exceeded',
+      retryable: false as const,
+    }));
+}
+
+export async function fetchChannelDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    channelId: string;
+    senderAgentId: string;
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: channelMembers.agentId,
+        agentName: agents.name,
+      })
+      .from(channelMembers)
+      .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+      .where(and(
+        eq(channelMembers.channelId, input.channelId),
+        ne(channelMembers.agentId, input.senderAgentId),
+      )),
+  ]);
+  return {
+    deliveries,
+    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+  };
+}
+
+export async function fetchGroupDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    conversationId: string;
+    senderAgentId: string;
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: dmParticipants.agentId,
+        agentName: agents.name,
+      })
+      .from(dmParticipants)
+      .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+      .where(and(
+        eq(dmParticipants.conversationId, input.conversationId),
+        isNull(dmParticipants.leftAt),
+        ne(dmParticipants.agentId, input.senderAgentId),
+      )),
+  ]);
+  return {
+    deliveries,
+    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+  };
+}
+
+export async function fetchDirectDeliveryOutcomes(
+  db: EngineDb,
+  input: {
+    messageId: string;
+    recipientAgentId: string;
+  },
+): Promise<DeliveryOutcomeRecords> {
+  const [deliveries, intended] = await Promise.all([
+    fetchDeliveryFanoutRecords(db, input.messageId),
+    db
+      .select({
+        agentId: agents.id,
+        agentName: agents.name,
+      })
+      .from(agents)
+      .where(inArray(agents.id, [input.recipientAgentId])),
+  ]);
+  return {
+    deliveries,
+    rejections: missingDepthCapRejections(intended, deliveries, input.messageId),
+  };
 }

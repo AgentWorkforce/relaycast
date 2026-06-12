@@ -109,4 +109,17 @@ export interface EngineConfig {
    * enabled per workspace via the KV override.
    */
   workspaceStreamEnabled?: boolean;
+  /**
+   * Bounded durable mailbox tuning. Hosted adapters may provide workspace
+   * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries
+   * per agent.
+   */
+  mailbox?: {
+    deliveryTtlMs?: number;
+    depthCap?: number;
+    workspaces?: Record<string, {
+      deliveryTtlMs?: number;
+      depthCap?: number;
+    }>;
+  };
 }

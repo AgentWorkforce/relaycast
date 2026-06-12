@@ -20,6 +20,7 @@ import { isNodeLive, nodeHasCapability } from './placement.js';
 import { completeNodeInvocation, rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from './action.js';
 import { emitInvocationCompletionEffects } from './invocationCompletion.js';
 import type { InvocationCompletionDeps } from './invocationCompletion.js';
+import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -608,6 +609,7 @@ export async function handleNodeControlMessage(args: {
           ok: true,
           data: registered,
         });
+        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
         return;
       }
       case 'agent.deregister':
@@ -622,6 +624,7 @@ export async function handleNodeControlMessage(args: {
           ok: true,
           data: result,
         });
+        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
         return;
       }
       case 'action.result': {
@@ -635,6 +638,7 @@ export async function handleNodeControlMessage(args: {
         return;
       }
       case 'delivery.ack':
+        await ackDeliveriesUpToSeq(args.db, args.workspaceId, args.nodeId, message.agent, message.up_to_seq);
         return;
     }
   } catch (err) {

@@ -1,11 +1,19 @@
-import { eq, ne, and, not, asc, isNull, inArray, notInArray } from 'drizzle-orm';
+import { eq, ne, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents } from '../db/schema.js';
+import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations, messageAttachments, files } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
+import { runAtomic } from '../ports/database.js';
+import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
+import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type DeliveryRow = typeof deliveries.$inferSelect;
+type DeliveryWithChannel = DeliveryRow & { channelId: string };
+
+const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
+const TERMINAL_SUCCESS_STATUS = 'acked';
 
 function toIso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
@@ -18,6 +26,9 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
     channel_id: row.channelId ?? '',
     agent_id: row.agentId,
     status: row.status as DeliveryStatus,
+    seq: row.seq,
+    location_type: row.locationType,
+    location_node_id: row.locationNodeId,
     mode: row.mode,
     reason: row.reason,
     priority: row.priority,
@@ -25,6 +36,10 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
     error: row.error,
     available_at: toIso(row.availableAt),
     deadline: toIso(row.deadline),
+    expires_at: toIso(row.expiresAt),
+    delivered_at: toIso(row.deliveredAt),
+    acked_at: toIso(row.ackedAt),
+    dead_lettered_at: toIso(row.deadLetteredAt),
     created_at: toIso(row.createdAt) ?? new Date(0).toISOString(),
     updated_at: toIso(row.updatedAt),
   };
@@ -32,7 +47,7 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
 
 /**
  * List durable delivery items for an agent. Defaults to the non-terminal
- * (`accepted` + `deferred`) queue so an offline consumer can replay what it
+ * (`queued` + `delivered`) queue so an offline consumer can replay what it
  * missed on reconnect, oldest first (FIFO). Each item carries the message
  * payload so the consumer does not need a second round-trip.
  */
@@ -45,7 +60,7 @@ export async function listDeliveries(
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const statusFilter = opts.status
     ? eq(deliveries.status, opts.status)
-    : inArray(deliveries.status, ['accepted', 'deferred']);
+    : inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]);
 
   const rows = await db
     .select()
@@ -107,7 +122,7 @@ async function getOwnedDelivery(
   workspaceId: string,
   agentId: string,
   deliveryId: string,
-): Promise<(DeliveryRow & { channelId: string }) | null> {
+): Promise<DeliveryWithChannel | null> {
   const [row] = await db
     .select({ delivery: deliveries, channelId: messages.channelId })
     .from(deliveries)
@@ -128,7 +143,7 @@ async function getOwnedDelivery(
 export type TransitionResult = { delivery: ReturnType<typeof serializeDelivery>; changed: boolean };
 
 /**
- * Idempotently transition a delivery to `delivered`. `delivered` is terminal,
+ * Idempotently transition a delivery to `acked`. `acked` is terminal,
  * so repeated acks are no-ops (reported as `changed: false`). Returns null if
  * the delivery is not found / not owned.
  */
@@ -140,23 +155,15 @@ export async function ackDelivery(
 ): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
+  if (existing.status === TERMINAL_SUCCESS_STATUS) return { delivery: serializeDelivery(existing), changed: false };
 
-  // The `status != 'delivered'` predicate lives in the UPDATE so the DB decides
-  // atomically whether this call transitioned the row. Under concurrent acks
-  // only one update matches (SQLite serializes writes); the loser sees no row
-  // and reports `changed: false`, so the delivered event fires exactly once.
-  const [updated] = await db
-    .update(deliveries)
-    .set({ status: 'delivered', updatedAt: new Date() })
-    .where(and(eq(deliveries.id, deliveryId), ne(deliveries.status, 'delivered')))
-    .returning();
+  const [updated] = await ackRows(db, workspaceId, agentId, [existing], existing.seq);
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
 /**
  * Idempotently record a delivery as `failed`, capturing error text and
- * retryability. Both `delivered` and `failed` are treated as settled: once a
+ * retryability. `acked`, `dead_lettered`, and `failed` are treated as settled: once a
  * delivery has failed, repeated calls are no-ops that preserve the original
  * failure metadata (no `null` overwrite, no `updatedAt` churn, no duplicate
  * event). The WHERE guard also closes the read→write race against a concurrent
@@ -171,7 +178,7 @@ export async function failDelivery(
 ): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered' || existing.status === 'failed') {
+  if (['acked', 'dead_lettered', 'failed'].includes(existing.status)) {
     return { delivery: serializeDelivery(existing), changed: false };
   }
 
@@ -187,15 +194,15 @@ export async function failDelivery(
       retryable: opts.retryable ?? null,
       updatedAt: new Date(),
     })
-    .where(and(eq(deliveries.id, deliveryId), notInArray(deliveries.status, ['delivered', 'failed'])))
+    .where(and(eq(deliveries.id, deliveryId), notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed'])))
     .returning();
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
 /**
- * Idempotently record a delivery as `deferred` with the time it next becomes
- * available. A re-defer to the same `available_at`/reason is a no-op (reported
- * as `changed: false`); deferring to a new time is a real change. `delivered`
+ * Compatibility shim for the old defer endpoint. The durable state remains
+ * `queued`; `available_at` gates client-side retries. A re-defer to the same
+ * `available_at`/reason is a no-op (reported as `changed: false`). `acked`
  * is terminal, so a defer never resurrects an already-acked delivery (the WHERE
  * guard also closes the read→write race against a concurrent ack). Returns null
  * if not found / not owned.
@@ -209,7 +216,9 @@ export async function deferDelivery(
 ): Promise<TransitionResult | null> {
   const existing = await getOwnedDelivery(db, workspaceId, agentId, deliveryId);
   if (!existing) return null;
-  if (existing.status === 'delivered') return { delivery: serializeDelivery(existing), changed: false };
+  if (['acked', 'dead_lettered'].includes(existing.status)) {
+    return { delivery: serializeDelivery(existing), changed: false };
+  }
 
   // The defer reason is its own concept; don't inherit the acceptance reason
   // (message/mention/dm/...) when the caller omits one, or deferred records and
@@ -223,25 +232,390 @@ export async function deferDelivery(
   // UPDATE makes it atomic — identical concurrent defers match no row on the
   // loser and report `changed: false`, so no duplicate event fires.
   const isNoop = and(
-    eq(deliveries.status, 'deferred'),
+    eq(deliveries.status, 'queued'),
     eq(deliveries.availableAt, opts.availableAt),
     reasonMatches,
   )!;
   const [updated] = await db
     .update(deliveries)
     .set({
-      status: 'deferred',
+      status: 'queued',
       availableAt: opts.availableAt,
       reason: targetReason,
       updatedAt: new Date(),
     })
     .where(and(
       eq(deliveries.id, deliveryId),
-      ne(deliveries.status, 'delivered'),
+      notInArray(deliveries.status, ['acked', 'dead_lettered']),
       not(isNoop),
     ))
     .returning();
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+}
+
+async function markRowsRead(tx: Db, agentId: string, rows: DeliveryWithChannel[]) {
+  for (const row of rows) {
+    await tx
+      .insert(readReceipts)
+      .values({ messageId: row.messageId, agentId })
+      .onConflictDoNothing();
+
+    await tx
+      .update(channelMembers)
+      .set({ lastReadId: row.messageId })
+      .where(and(
+        eq(channelMembers.channelId, row.channelId),
+        eq(channelMembers.agentId, agentId),
+        sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
+      ));
+  }
+}
+
+async function ackRows(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  rows: DeliveryWithChannel[],
+  upToSeq: number,
+): Promise<DeliveryRow[]> {
+  const ids = rows.map((row) => row.id);
+  return runAtomic(db, async (tx) => {
+    await tx
+      .update(agents)
+      .set({
+        deliveryAckSeq: sql<number>`CASE
+          WHEN ${agents.deliveryAckSeq} < ${upToSeq} THEN ${upToSeq}
+          ELSE ${agents.deliveryAckSeq}
+        END`,
+        lastSeen: new Date(),
+      })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
+
+    const updated = ids.length > 0
+      ? await tx
+        .update(deliveries)
+        .set({
+          status: TERMINAL_SUCCESS_STATUS,
+          ackedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(deliveries.workspaceId, workspaceId),
+          inArray(deliveries.id, ids),
+          notInArray(deliveries.status, ['acked', 'dead_lettered']),
+        ))
+        .returning()
+      : [];
+
+    if (rows.length > 0) await markRowsRead(tx, agentId, rows);
+    return updated;
+  });
+}
+
+export async function ackDeliveriesUpToSeq(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  agentName: string,
+  upToSeq: number,
+): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number } | null> {
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, agentName),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+    ));
+  if (!agent) return null;
+
+  if (upToSeq <= agent.deliveryAckSeq) {
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0 };
+  }
+
+  const rows = await db
+    .select({ delivery: deliveries, channelId: messages.channelId })
+    .from(deliveries)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, agent.id),
+      lte(deliveries.seq, upToSeq),
+      notInArray(deliveries.status, ['acked', 'dead_lettered']),
+    ))
+    .orderBy(asc(deliveries.seq));
+
+  const updated = await ackRows(
+    db,
+    workspaceId,
+    agent.id,
+    rows.map((row) => ({ ...row.delivery, channelId: row.channelId })),
+    upToSeq,
+  );
+  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: updated.length };
+}
+
+export async function markDeliveriesDelivered(
+  db: Db,
+  workspaceId: string,
+  deliveryIds: string[],
+): Promise<number> {
+  if (deliveryIds.length === 0) return 0;
+  const updated = await db
+    .update(deliveries)
+    .set({
+      status: 'delivered',
+      deliveredAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      inArray(deliveries.id, deliveryIds),
+      eq(deliveries.status, 'queued'),
+    ))
+    .returning();
+  return updated.length;
+}
+
+export interface DeliveryFailureNotice {
+  delivery_id: string;
+  message_id: string;
+  sender_agent_id: string;
+  target_agent_id: string;
+  target_agent_name: string;
+  seq: number;
+  reason: 'ttl_expired';
+  error: string;
+  retryable: false;
+}
+
+export async function expireDueDeliveries(
+  db: Db,
+  workspaceId: string,
+  now: Date = new Date(),
+): Promise<DeliveryFailureNotice[]> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const due = await db
+    .select({
+      delivery: deliveries,
+      senderAgentId: messages.agentId,
+      targetAgentName: agents.name,
+    })
+    .from(deliveries)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+      sql`${deliveries.expiresAt} IS NOT NULL AND ${deliveries.expiresAt} <= ${nowSeconds}`,
+    ));
+
+  if (due.length === 0) return [];
+
+  const ids = due.map((row) => row.delivery.id);
+  await db
+    .update(deliveries)
+    .set({
+      status: 'dead_lettered',
+      error: 'delivery TTL expired',
+      retryable: false,
+      deadLetteredAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, ids)));
+
+  return due
+    .filter((row) => row.senderAgentId)
+    .map((row) => ({
+      delivery_id: row.delivery.id,
+      message_id: row.delivery.messageId,
+      sender_agent_id: row.senderAgentId,
+      target_agent_id: row.delivery.agentId,
+      target_agent_name: row.targetAgentName,
+      seq: row.delivery.seq,
+      reason: 'ttl_expired' as const,
+      error: 'delivery TTL expired',
+      retryable: false as const,
+    }));
+}
+
+function wireMode(mode: string): 'wait' | 'steer' {
+  return mode === 'next-tool-call' ? 'steer' : 'wait';
+}
+
+type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
+
+async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
+  const map = new Map<string, AttachmentRow[]>();
+  if (msgIds.length === 0) return map;
+
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      fileId: messageAttachments.fileId,
+      filename: files.filename,
+      contentType: files.contentType,
+      sizeBytes: files.sizeBytes,
+    })
+    .from(messageAttachments)
+    .innerJoin(files, eq(messageAttachments.fileId, files.id))
+    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
+
+  for (const row of rows) {
+    const list = map.get(row.messageId) || [];
+    list.push({
+      file_id: row.fileId,
+      filename: row.filename,
+      content_type: row.contentType,
+      size_bytes: row.sizeBytes,
+    });
+    map.set(row.messageId, list);
+  }
+  return map;
+}
+
+export async function deliverPendingToNode(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+): Promise<number> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const rows = await db
+    .select({
+      delivery: deliveries,
+      recipientAgentName: agents.name,
+      ackSeq: agents.deliveryAckSeq,
+      body: messages.body,
+      blocks: messages.blocks,
+      metadata: messages.metadata,
+      hasAttachments: messages.hasAttachments,
+      threadId: messages.threadId,
+      createdAt: messages.createdAt,
+      channelId: messages.channelId,
+      channelName: channels.name,
+      conversationId: dmConversations.id,
+      dmType: dmConversations.dmType,
+      senderAgentId: messages.agentId,
+      senderAgentName: sql<string | null>`(
+        SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
+      )`,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+      gt(deliveries.seq, agents.deliveryAckSeq),
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
+    ))
+    .orderBy(asc(agents.name), asc(deliveries.seq));
+
+  const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
+
+  const deliveredIds: string[] = [];
+  for (const row of rows) {
+    const senderName = row.senderAgentName ?? 'unknown';
+    const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
+    const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
+    const eventType = row.dmType ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received') : (row.threadId ? 'thread.reply' : 'message.created');
+    let eventData: Record<string, unknown>;
+
+    if (eventType === 'dm.received') {
+      const payload = {
+        conversation_id: row.conversationId,
+        message: {
+          id: row.delivery.messageId,
+          agent_id: row.senderAgentId,
+          agent_name: senderName,
+          text: row.body,
+          injection_mode: injectionMode,
+          attachments,
+        },
+        created_at: row.createdAt.toISOString(),
+        id: row.delivery.messageId,
+        from_agent_id: row.senderAgentId,
+        to: row.recipientAgentName,
+        text: row.body,
+        injection_mode: injectionMode,
+        attachments,
+      };
+      eventData = buildDmReceivedEventData(payload, { fromName: senderName });
+    } else if (eventType === 'group_dm.received') {
+      const payload = {
+        conversation_id: row.conversationId,
+        message: {
+          id: row.delivery.messageId,
+          agent_id: row.senderAgentId,
+          agent_name: senderName,
+          text: row.body,
+          injection_mode: injectionMode,
+          attachments,
+        },
+        created_at: row.createdAt.toISOString(),
+        id: row.delivery.messageId,
+        agent_id: row.senderAgentId,
+        text: row.body,
+        injection_mode: injectionMode,
+        attachments,
+      };
+      eventData = buildGroupDmReceivedEventData(payload, { fromName: senderName });
+    } else if (eventType === 'thread.reply') {
+      const payload = {
+        id: row.delivery.messageId,
+        channel_id: row.channelId,
+        channel_name: row.channelName,
+        agent_id: row.senderAgentId,
+        agent_name: senderName,
+        thread_id: row.threadId,
+        text: row.body,
+        blocks: (row.blocks as unknown[] | null) || null,
+        metadata: publicMessageMetadata(row.metadata),
+        has_attachments: row.hasAttachments,
+        created_at: row.createdAt.toISOString(),
+      };
+      eventData = buildThreadReplyEventData(payload, { channelName: row.channelName, fromName: senderName });
+    } else {
+      const mentionPattern = /@(\w+)/g;
+      const mentions = row.body.match(mentionPattern) || [];
+      const payload = {
+        id: row.delivery.messageId,
+        channel_id: row.channelId,
+        agent_id: row.senderAgentId,
+        agent_name: senderName,
+        text: row.body,
+        blocks: (row.blocks as unknown[] | null) || null,
+        metadata: publicMessageMetadata(row.metadata),
+        has_attachments: row.hasAttachments,
+        thread_id: row.threadId,
+        created_at: row.createdAt.toISOString(),
+        mentions: mentions.map((m) => m.slice(1)),
+        attachments,
+        injection_mode: injectionMode,
+      };
+      eventData = buildMessageCreatedEventData(payload, { channelName: row.channelName, fromName: senderName, mode: injectionMode });
+    }
+
+    const sent = await registry.sendToNode(workspaceId, nodeId, {
+      v: 1,
+      type: 'deliver',
+      agent: row.recipientAgentName,
+      msg_id: row.delivery.messageId,
+      seq: row.delivery.seq,
+      mode: wireMode(row.delivery.mode),
+      payload: buildDeliverPayload(eventType, eventData),
+    });
+    if (sent) deliveredIds.push(row.delivery.id);
+  }
+
+  await markDeliveriesDelivered(db, workspaceId, deliveredIds);
+  return deliveredIds.length;
 }
 
 /**

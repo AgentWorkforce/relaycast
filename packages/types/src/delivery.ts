@@ -1,16 +1,13 @@
 import { z } from 'zod';
 
 // Durable delivery status lifecycle:
-//   accepted  -> queued for the recipient, awaiting handling
-//   delivered -> recipient acked (terminal success)
-//   deferred  -> recipient asked to retry no earlier than available_at
-//   failed    -> recipient failed to handle; retryable indicates whether a retry is sane
+//   queued    -> durable row accepted, not yet sent to the current location
+//   delivered -> sent to the current location, awaiting cumulative ack
+//   acked     -> recipient location acknowledged through the seq cursor
 //
-// `delivered` is the only terminal state — nothing reopens an acked delivery.
-// `failed` is intentionally NOT terminal: a retryable failure may later be acked
-// (the retry succeeded) or deferred (retry later). `failDelivery` is still
-// idempotent — repeating a fail preserves the original error/retryable.
-export const DeliveryStatusSchema = z.enum(['accepted', 'delivered', 'deferred', 'failed']);
+// Failed/dead-lettered rows are terminal failure states used for explicit
+// failure reports and TTL expiry respectively.
+export const DeliveryStatusSchema = z.enum(['queued', 'delivered', 'acked', 'failed', 'dead_lettered']);
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 
 // The message payload carried alongside a queued delivery item so an offline
@@ -32,6 +29,9 @@ export const DeliverySchema = z.object({
   channel_id: z.string(),
   agent_id: z.string(),
   status: DeliveryStatusSchema,
+  seq: z.number(),
+  location_type: z.string(),
+  location_node_id: z.string().nullable(),
   mode: z.string(),
   reason: z.string().nullable(),
   priority: z.string(),
@@ -39,6 +39,10 @@ export const DeliverySchema = z.object({
   error: z.string().nullable(),
   available_at: z.string().nullable(),
   deadline: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  delivered_at: z.string().nullable(),
+  acked_at: z.string().nullable(),
+  dead_lettered_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string().nullable(),
 });

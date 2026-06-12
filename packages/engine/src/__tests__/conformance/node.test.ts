@@ -497,6 +497,30 @@ describe('node adapter conformance', () => {
         invocation_id: echoBody.data.invocation_id,
         action: 'echo',
       });
+
+      await beta.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoBody.data.invocation_id,
+        output: { winner: 'beta' },
+      }));
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoBody.data.invocation_id,
+        output: { winner: 'alpha-late' },
+      }));
+
+      const echoStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(echoStatus.status).toBe(200);
+      expect(((await echoStatus.json()) as {
+        data: { status: string; output: { winner: string } };
+      }).data).toMatchObject({
+        status: 'completed',
+        output: { winner: 'beta' },
+      });
     });
 
     it('drains an offline-queued invoke into dispatched state so the timeout sweep reschedules it', async () => {

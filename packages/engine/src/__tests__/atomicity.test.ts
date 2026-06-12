@@ -241,7 +241,7 @@ describe('atomic write paths', () => {
       // The receipt insert and delivery transition were rolled back with it.
       expect(await db.select().from(readReceipts)).toHaveLength(0);
       const [delivery] = await db.select().from(deliveries);
-      expect(delivery.status).toBe('accepted');
+      expect(delivery.status).toBe('queued');
 
       // And the path still completes once nothing fails.
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
@@ -380,7 +380,7 @@ describe('atomic write paths', () => {
 
       expect(receipt?.message_id).toBe(sent.id);
       const [delivery] = await db.select().from(deliveries);
-      expect(delivery.status).toBe('delivered');
+      expect(delivery.status).toBe('acked');
     });
 
     it('a failed batch applies nothing — no orphan message rows', async () => {
@@ -423,7 +423,7 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
       expect(receipt?.message_id).toBe(sent.id);
       const [delivery] = await db.select().from(deliveries);
-      expect(delivery.status).toBe('delivered');
+      expect(delivery.status).toBe('acked');
     });
 
     it('leaves the orphan message on mid-send failure (pre-capability behavior)', async () => {

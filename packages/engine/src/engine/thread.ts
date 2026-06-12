@@ -5,9 +5,11 @@ import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
   buildChannelDeliveryWrite,
-  fetchDeliveryFanoutRecords,
+  fetchChannelDeliveryOutcomes,
+  type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -17,6 +19,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
+  options: { mailbox?: MailboxConfig } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -37,6 +40,10 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
+  const mailbox = options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS,
+    depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
 
   const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId));
 
@@ -68,6 +75,8 @@ export async function postReply(
         channelId: parent.channelId,
         senderAgentId: agentId,
         mode: 'immediate',
+        ttlMs: mailbox.ttlMs,
+        depthCap: mailbox.depthCap,
         reason: 'thread-reply',
       }),
     );
@@ -75,7 +84,11 @@ export async function postReply(
     return writes;
   });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
-  const replyDeliveries = await fetchDeliveryFanoutRecords(db, replyId);
+  const deliveryOutcomes: DeliveryOutcomeRecords = await fetchChannelDeliveryOutcomes(db, {
+    messageId: replyId,
+    channelId: parent.channelId,
+    senderAgentId: agentId,
+  });
 
   return {
     id: reply.id,
@@ -90,7 +103,8 @@ export async function postReply(
     has_attachments: reply.hasAttachments,
     created_at: reply.createdAt.toISOString(),
     // Internal: delivery records for recipients — stripped by route before response
-    _deliveries: replyDeliveries,
+    _deliveries: deliveryOutcomes.deliveries,
+    _delivery_rejections: deliveryOutcomes.rejections,
   };
 }
 

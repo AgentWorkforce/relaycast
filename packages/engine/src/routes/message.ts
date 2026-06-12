@@ -8,7 +8,10 @@ import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import * as triggerEngine from '../engine/trigger.js';
-import { fanoutToChannel, fanoutToAgents } from './fanout.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
+import { fanoutToChannel } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -72,15 +75,12 @@ messageRoutes.post(
         }, 403);
       }
 
-      const toMessageCreatedEventData = (data: Awaited<ReturnType<typeof messageEngine.postMessage>>) => {
-        const { _deliveries, ...publicData } = data;
-        return {
-          ...publicData,
-          channel_name: channelName,
-          from_name: agent?.name,
-          injection_mode: publicData.injection_mode ?? mode,
-        };
-      };
+      const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const toMessageCreatedEventData = (data: Awaited<ReturnType<typeof messageEngine.postMessage>>) => buildMessageCreatedEventData(data, {
+        channelName,
+        fromName: agent?.name ?? 'unknown',
+        mode,
+      });
 
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
@@ -97,6 +97,7 @@ messageRoutes.post(
             channel.id,
             agentId,
             { text, blocks, attachments, data, content_type, mode },
+            { mailbox },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
@@ -114,25 +115,29 @@ messageRoutes.post(
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
-        const { _deliveries, ...publicData } = idempotent.data as typeof idempotent.data & { _deliveries?: Array<{ id: string; agentId: string; reason: string }> };
+        const {
+          _deliveries,
+          _delivery_rejections,
+          ...publicData
+        } = idempotent.data as typeof idempotent.data & {
+          _deliveries?: Parameters<typeof routeDeliveryOutcomes>[1];
+          _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
+        };
         const eventData = toMessageCreatedEventData(idempotent.data);
         runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
-
-        // Emit delivery.accepted to each recipient's AgentDO individually —
-        // each agent sees only its own delivery entry, not other recipients'.
         if (_deliveries && _deliveries.length > 0) {
-          for (const d of _deliveries) {
-            runInBackground(
-              c,
-              fanoutToAgents(c, [d.agentId], 'delivery.accepted', {
-                delivery_id: d.id,
-                message_id: String(publicData.id),
-                channel_id: channel.id,
-                reason: d.reason,
-              }),
-              'fanout delivery.accepted',
-            );
-          }
+          runInBackground(
+            c,
+            routeDeliveryOutcomes(c, _deliveries, 'message.created', eventData),
+            'route message deliveries',
+          );
+        }
+        if (_delivery_rejections && _delivery_rejections.length > 0) {
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, agentId, _delivery_rejections),
+            'fanout delivery rejected',
+          );
         }
 
         emitServerEvent(c, workspace.id, 'relaycast_server_message_created', {
@@ -165,7 +170,14 @@ messageRoutes.post(
       }
 
       // Strip internal _deliveries field before returning to client
-      const { _deliveries: _drop, ...responseData } = idempotent.data as typeof idempotent.data & { _deliveries?: unknown };
+      const {
+        _deliveries: _dropDeliveries,
+        _delivery_rejections: _dropRejections,
+        ...responseData
+      } = idempotent.data as typeof idempotent.data & {
+        _deliveries?: unknown;
+        _delivery_rejections?: unknown;
+      };
       return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);
