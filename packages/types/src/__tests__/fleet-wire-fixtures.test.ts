@@ -26,7 +26,7 @@ const BROKER_TO_RELAYCAST_TYPES = new Set([
   'inventory.sync',
 ]);
 
-const RELAYCAST_TO_BROKER_TYPES = new Set(['deliver', 'action.invoke', 'ping']);
+const RELAYCAST_TO_BROKER_TYPES = new Set(['deliver', 'action.invoke', 'ping', 'reply', 'error']);
 
 const EXPECTED_FIXTURES = [
   'action.invoke.json',
@@ -36,11 +36,13 @@ const EXPECTED_FIXTURES = [
   'agent.register.json',
   'deliver.json',
   'delivery.ack.json',
+  'error.json',
   'inventory.sync.json',
   'node.deregister.json',
   'node.heartbeat.json',
   'node.register.json',
   'ping.json',
+  'reply.json',
 ];
 
 function readFixture(file: string): unknown {
@@ -204,14 +206,20 @@ describe('fleet wire fixtures', () => {
     ).toThrow();
   });
 
-  it('accepts node.register without a resume cursor', () => {
+  it('accepts node.register without a resume cursor or request id', () => {
     expect(
       parseFleetBrokerToRelaycastMessage({
         v: 1,
         type: 'node.register',
         name: 'builder-1',
         node_id: 'node_01J7FLEET000000000000001',
-        capabilities: ['spawn:codex'],
+        capabilities: [
+          {
+            name: 'spawn:codex',
+            kind: 'spawn',
+            metadata: { agent: 'codex', priority: 1 },
+          },
+        ],
         max_agents: 8,
         tags: ['darwin'],
         version: 'relay-broker/0.7.0',
@@ -221,10 +229,32 @@ describe('fleet wire fixtures', () => {
       type: 'node.register',
       name: 'builder-1',
       node_id: 'node_01J7FLEET000000000000001',
-      capabilities: ['spawn:codex'],
+      capabilities: [
+        {
+          name: 'spawn:codex',
+          kind: 'spawn',
+          metadata: { agent: 'codex', priority: 1 },
+        },
+      ],
       max_agents: 8,
       tags: ['darwin'],
       version: 'relay-broker/0.7.0',
+    });
+  });
+
+  it('accepts broker requests with request ids', () => {
+    expect(
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        id: 'req_agent_register_001',
+        type: 'agent.register',
+        name: 'codex-builder-1',
+      }),
+    ).toEqual({
+      v: 1,
+      id: 'req_agent_register_001',
+      type: 'agent.register',
+      name: 'codex-builder-1',
     });
   });
 });
