@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
   parseFleetRelaycastToBrokerMessage,
 } from '../index.js';
+import type { FleetActionResultMessage } from '../index.js';
 
 const FIXTURE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -121,6 +122,30 @@ describe('fleet wire fixtures', () => {
     });
   });
 
+  it('models action.result as a type-level XOR', () => {
+    expectTypeOf<{
+      v: 1;
+      type: 'action.result';
+      invocation_id: string;
+      output: null;
+    }>().toMatchTypeOf<FleetActionResultMessage>();
+
+    expectTypeOf<{
+      v: 1;
+      type: 'action.result';
+      invocation_id: string;
+      error: string;
+    }>().toMatchTypeOf<FleetActionResultMessage>();
+
+    expectTypeOf<{
+      v: 1;
+      type: 'action.result';
+      invocation_id: string;
+      output: null;
+      error: string;
+    }>().not.toMatchTypeOf<FleetActionResultMessage>();
+  });
+
   it('rejects action.result messages without exactly one result field', () => {
     expect(() =>
       parseFleetBrokerToRelaycastMessage({
@@ -139,5 +164,67 @@ describe('fleet wire fixtures', () => {
         error: 'handler_unavailable',
       }),
     ).toThrow();
+
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'action.result',
+        invocation_id: 'inv_spawn_codex_001',
+        output: undefined,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'action.result',
+        invocation_id: 'inv_spawn_codex_001',
+        error: undefined,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'action.result',
+        invocation_id: 'inv_spawn_codex_001',
+        output: null,
+        error: undefined,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'action.result',
+        invocation_id: 'inv_spawn_codex_001',
+        error: 'handler_unavailable',
+        output: undefined,
+      }),
+    ).toThrow();
+  });
+
+  it('accepts node.register without a resume cursor', () => {
+    expect(
+      parseFleetBrokerToRelaycastMessage({
+        v: 1,
+        type: 'node.register',
+        name: 'builder-1',
+        node_id: 'node_01J7FLEET000000000000001',
+        capabilities: ['spawn:codex'],
+        max_agents: 8,
+        tags: ['darwin'],
+        version: 'relay-broker/0.7.0',
+      }),
+    ).toEqual({
+      v: 1,
+      type: 'node.register',
+      name: 'builder-1',
+      node_id: 'node_01J7FLEET000000000000001',
+      capabilities: ['spawn:codex'],
+      max_agents: 8,
+      tags: ['darwin'],
+      version: 'relay-broker/0.7.0',
+    });
   });
 });

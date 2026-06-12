@@ -29,6 +29,18 @@ const FleetWireEnvelopeFields = {
   v: FleetWireVersionSchema,
 } as const;
 
+function forbidOwnProperty(property: string) {
+  return (message: object, ctx: z.RefinementCtx): void => {
+    if (Object.prototype.hasOwnProperty.call(message, property)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [property],
+        message: `action.result must omit ${property} for this variant`,
+      });
+    }
+  };
+}
+
 export const FleetNodeRegisterMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
@@ -39,7 +51,8 @@ export const FleetNodeRegisterMessageSchema = z
     max_agents: z.number().int().nonnegative(),
     tags: z.array(z.string()),
     version: z.string(),
-    resume_cursor: z.string().nullable(),
+    // Absent and null both mean a fresh node with no resume cursor.
+    resume_cursor: z.string().nullable().optional(),
   })
   .strict();
 export type FleetNodeRegisterMessage = z.infer<typeof FleetNodeRegisterMessageSchema>;
@@ -94,26 +107,34 @@ export const FleetDeliveryAckMessageSchema = z
   .strict();
 export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSchema>;
 
-export const FleetActionResultMessageSchema = z
+export const FleetActionResultOutputMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('action.result'),
     invocation_id: z.string(),
-    output: FleetWireJsonValueSchema.optional(),
-    error: z.string().optional(),
+    output: FleetWireJsonValueSchema,
+    error: z.never().optional(),
   })
   .strict()
-  .superRefine((message, ctx) => {
-    const hasOutput = Object.prototype.hasOwnProperty.call(message, 'output');
-    const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
+  .superRefine(forbidOwnProperty('error'));
+export type FleetActionResultOutputMessage = z.infer<typeof FleetActionResultOutputMessageSchema>;
 
-    if (hasOutput === hasError) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'action.result must include exactly one of output or error',
-      });
-    }
-  });
+export const FleetActionResultErrorMessageSchema = z
+  .object({
+    ...FleetWireEnvelopeFields,
+    type: z.literal('action.result'),
+    invocation_id: z.string(),
+    error: z.string(),
+    output: z.never().optional(),
+  })
+  .strict()
+  .superRefine(forbidOwnProperty('output'));
+export type FleetActionResultErrorMessage = z.infer<typeof FleetActionResultErrorMessageSchema>;
+
+export const FleetActionResultMessageSchema = z.union([
+  FleetActionResultOutputMessageSchema,
+  FleetActionResultErrorMessageSchema,
+]);
 export type FleetActionResultMessage = z.infer<typeof FleetActionResultMessageSchema>;
 
 export const FleetInventoryAgentSchema = z
@@ -167,15 +188,22 @@ export const FleetPingMessageSchema = z
   .strict();
 export type FleetPingMessage = z.infer<typeof FleetPingMessageSchema>;
 
-export const FleetBrokerToRelaycastMessageSchema = z.discriminatedUnion('type', [
+export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminatedUnion('type', [
   FleetNodeRegisterMessageSchema,
   FleetNodeHeartbeatMessageSchema,
   FleetNodeDeregisterMessageSchema,
   FleetAgentRegisterMessageSchema,
   FleetAgentDeregisterMessageSchema,
   FleetDeliveryAckMessageSchema,
-  FleetActionResultMessageSchema,
   FleetInventorySyncMessageSchema,
+]);
+export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
+  typeof FleetBrokerToRelaycastNonActionResultMessageSchema
+>;
+
+export const FleetBrokerToRelaycastMessageSchema = z.union([
+  FleetBrokerToRelaycastNonActionResultMessageSchema,
+  FleetActionResultMessageSchema,
 ]);
 export type FleetBrokerToRelaycastMessage = z.infer<typeof FleetBrokerToRelaycastMessageSchema>;
 export type FleetBrokerToRelaycastMessageType = FleetBrokerToRelaycastMessage['type'];
