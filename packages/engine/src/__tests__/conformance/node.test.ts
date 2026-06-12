@@ -7,7 +7,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, agents } from '../../db/schema.js';
+import { actionInvocations, agents, nodes } from '../../db/schema.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
@@ -560,6 +560,86 @@ describe('node adapter conformance', () => {
       const rescheduled = await sweepTimedOutInvocations(db, stack.runtime.realtime, 0);
       expect(rescheduled).toBeGreaterThanOrEqual(1);
       expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
+    });
+
+    it('drains a queued spawn only once the node is back online, arming a retry backstop meanwhile', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-drain-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+
+      // Take alpha offline so a targeted spawn can only queue (not dispatch).
+      await alpha.handle.handleClose();
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-drain', task: 'hi', target_node: 'alpha' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      const db = stack.runtime.handle.db;
+      const queued = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
+      expect(queued.spawnReservedAt).toBeNull();
+
+      // Reconnect the socket but DO NOT register yet: the node is still offline,
+      // so the drain can't reserve spawn capacity. It must keep the frame queued
+      // and arm a retry_after_at backstop rather than delivering or dropping it.
+      const alphaSock = new FakeSocket();
+      const alphaHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
+      await new Promise((r) => setTimeout(r, 25));
+      expect(alphaSock.ofType('action.invoke')).toHaveLength(0);
+      const armed = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(armed.status).toBe('pending');
+      expect(armed.spawnReservedAt).toBeNull();
+      expect(armed.retryAfterAt).toBeInstanceOf(Date); // sweeper backstop armed
+
+      // Register → node is marked online and the post-register drain reserves
+      // capacity and dispatches the queued spawn with the same invocation id.
+      await alphaHandle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'reg-reconnect',
+        type: 'node.register',
+        name: 'alpha',
+        node_id: 'node_alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        max_agents: 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+
+      expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'spawn:claude' });
+      const dispatched = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(dispatched.status).toBe('dispatched');
+      expect(dispatched.dispatchedAt).toBeInstanceOf(Date);
+      expect(dispatched.spawnReservedAt).toBeInstanceOf(Date);
+
+      const node = await db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_alpha'))
+        .then((rows) => rows[0]);
+      expect(node.reservedAgents ?? 0).toBeGreaterThanOrEqual(1);
     });
 
     it('reserves spawn capacity atomically across concurrent invocations', async () => {

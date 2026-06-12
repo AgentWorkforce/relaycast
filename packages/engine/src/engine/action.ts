@@ -5,7 +5,7 @@ import { actions, actionInvocations, agents, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -397,6 +397,13 @@ export async function invokeAction(
       caller_id: data.caller_id,
       caller_name: data.caller_name,
     });
+    // Only mark the reservation held when we actually incremented the node's
+    // reserved-capacity counter, so completion/reschedule release stays balanced.
+    // If the reservation can't be taken (node offline / at capacity) the queued
+    // frame reserves later on drain via the spawnReservedAt check.
+    const reservedNode = isSpawnInvocation(action.name)
+      ? await reserveNodeCapacity(db, workspaceId, action.handlerNodeId)
+      : null;
     const dispatched = await dispatchNodeInvocation({
       db,
       registry: options.nodeConnections,
@@ -405,7 +412,7 @@ export async function invokeAction(
       nodeId: action.handlerNodeId,
       action: action.name,
       input: recordInput(invocation.input),
-      reservationHeld: isSpawnInvocation(action.name),
+      reservationHeld: !!reservedNode,
     });
     return {
       invocation_id: invocation.id,

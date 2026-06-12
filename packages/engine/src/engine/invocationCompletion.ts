@@ -53,7 +53,10 @@ export async function emitInvocationCompletionEffects(
     fanoutTasks.push(deps.realtime.publishToWorkspaceStream({ workspaceId, event: payload }));
   }
   try {
-    const onlineAgentIds = await deps.presence.getOnline(workspaceId);
+    // The caller already receives a targeted delivery above; exclude it here so
+    // an online caller isn't delivered the same action.completed/failed twice.
+    const onlineAgentIds = (await deps.presence.getOnline(workspaceId))
+      .filter((agentId) => agentId !== result.caller_id);
     if (onlineAgentIds.length > 0) {
       fanoutTasks.push(deps.realtime.deliverToAgents({ workspaceId, agentIds: onlineAgentIds, event: payload }));
     }

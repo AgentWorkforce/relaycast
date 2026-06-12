@@ -140,4 +140,12 @@ export interface NodeConnectionRegistry {
 
   /** Force-close all sockets for a node. */
   disconnectNode(workspaceId: string, nodeId: string): Promise<void>;
+
+  /**
+   * Flush any queued `action.invoke` frames to the node's live connection.
+   * Must be invoked once the node is marked online (post node.register /
+   * node.heartbeat) so capacity reservation for queued spawns can succeed.
+   * Implementations serialize concurrent drains per node.
+   */
+  drainNode(workspaceId: string, nodeId: string): Promise<void>;
 }

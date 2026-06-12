@@ -54,6 +54,9 @@ interface QueuedNodeMessage {
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
 }
 
+/** Backstop delay armed on a queued spawn whose capacity reservation deferred. */
+const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
+
 interface ChannelState {
   seq: number;
   members: string[];
@@ -78,6 +81,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
   private readonly nodeSockets = new Map<string, NodeConn>();
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
+  /** Serializes drains per node so concurrent triggers never overlap. */
+  private readonly nodeDrainChains = new Map<string, Promise<void>>();
   private presence: PresenceTracker | undefined;
   private nodeCompletionDeps: InvocationCompletionDeps | undefined;
 
@@ -364,8 +369,27 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         }
       },
     };
-    void this.drainNodeQueue(workspaceId, nodeId);
+    // Best-effort early flush (covers non-spawn frames that need no capacity);
+    // the authoritative drain fires post node.register/heartbeat once the node
+    // is marked online, so queued spawns can reserve capacity. See drainNode.
+    void this.drainNode(workspaceId, nodeId);
     return handle;
+  }
+
+  /**
+   * Public, serialized drain entrypoint. Concurrent calls for the same node are
+   * chained so two drains never run at once (which could double-reserve spawn
+   * capacity); each caller's promise resolves after its own drain pass runs.
+   */
+  drainNode(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const prior = this.nodeDrainChains.get(key) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId));
+    this.nodeDrainChains.set(key, next);
+    void next.finally(() => {
+      if (this.nodeDrainChains.get(key) === next) this.nodeDrainChains.delete(key);
+    });
+    return next;
   }
 
   private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
@@ -392,6 +416,18 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         if (isSpawnAction && !row.spawnReservedAt) {
           const reserved = await reserveNodeCapacity(this.db, workspaceId, nodeId);
           if (!reserved) {
+            // Node not yet online (drain ran before register) or genuinely at
+            // capacity: keep the frame queued, but arm retry_after_at so the
+            // dispatch sweeper reschedules this pending spawn as a backstop if
+            // no later drain trigger (register/heartbeat) delivers it first.
+            await this.db
+              .update(actionInvocations)
+              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
+              .where(and(
+                eq(actionInvocations.workspaceId, workspaceId),
+                eq(actionInvocations.id, item.message.invocation_id),
+                eq(actionInvocations.status, 'pending'),
+              ));
             remaining.push(item);
             continue;
           }

@@ -392,34 +392,45 @@ export async function reconcileInventory(
     agent.invocation_id ? [agent.invocation_id] : []
   )));
   let completedInvocations = 0;
+
+  // Pre-validate every item against the current state BEFORE mutating anything,
+  // so a conflict on a later item can't leave earlier items partially
+  // reconciled (the control handler turns a throw into an error reply). Existing
+  // rows are cached for reuse in the apply pass below.
+  const existingByName = new Map<string, typeof agents.$inferSelect>();
   for (const item of inventoryAgents) {
     const [existing] = await db
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
+    if (!existing) continue;
+    existingByName.set(item.name, existing);
+    if (existing.status !== 'active') continue;
+    const [boundNode] = await db
+      .select()
+      .from(nodes)
+      .where(and(
+        eq(nodes.workspaceId, workspaceId),
+        eq(nodes.id, existing.locationNodeId ?? ''),
+      ));
+    const boundNodeLive = !!boundNode && isNodeLive(boundNode);
+    const conflict = existing.locationType !== 'via_node' || !existing.locationNodeId || (existing.locationNodeId !== nodeId && boundNodeLive);
+    if (conflict) {
+      console.warn('[node.inventory] rejected active-name claim', {
+        workspace_id: workspaceId,
+        node_id: nodeId,
+        agent_id: existing.id,
+        agent_name: existing.name,
+        existing_location_type: existing.locationType,
+        existing_location_node_id: existing.locationNodeId,
+      });
+      throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+    }
+  }
+
+  for (const item of inventoryAgents) {
+    const existing = existingByName.get(item.name);
     if (existing) {
-      if (existing.status === 'active') {
-        const [boundNode] = await db
-          .select()
-          .from(nodes)
-          .where(and(
-            eq(nodes.workspaceId, workspaceId),
-            eq(nodes.id, existing.locationNodeId ?? ''),
-          ));
-        const boundNodeLive = !!boundNode && isNodeLive(boundNode);
-        const conflict = existing.locationType !== 'via_node' || !existing.locationNodeId || (existing.locationNodeId !== nodeId && boundNodeLive);
-        if (conflict) {
-          console.warn('[node.inventory] rejected active-name claim', {
-            workspace_id: workspaceId,
-            node_id: nodeId,
-            agent_id: existing.id,
-            agent_name: existing.name,
-            existing_location_type: existing.locationType,
-            existing_location_node_id: existing.locationNodeId,
-          });
-          throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
-        }
-      }
       await db
         .update(agents)
         .set({
@@ -574,10 +585,16 @@ export async function handleNodeControlMessage(args: {
           ok: true,
           data: registered,
         });
+        // Node is now marked online: flush any queued action.invoke frames so
+        // spawns queued while it was offline can reserve capacity and dispatch.
+        await args.registry.drainNode(args.workspaceId, args.nodeId);
         return;
       }
       case 'node.heartbeat':
         await heartbeatNode(args.db, args.workspaceId, args.nodeId, message);
+        // Heartbeat refreshes online/capacity state; re-drain as a backstop in
+        // case a queued spawn could not reserve capacity at register time.
+        await args.registry.drainNode(args.workspaceId, args.nodeId);
         return;
       case 'node.deregister':
         await deregisterNode(args.db, args.registry, args.workspaceId, args.nodeId);
