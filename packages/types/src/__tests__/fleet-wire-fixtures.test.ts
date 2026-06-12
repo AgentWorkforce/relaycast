@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  AgentRegisterReplyDataSchema,
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
@@ -42,6 +43,7 @@ const EXPECTED_FIXTURES = [
   'node.heartbeat.json',
   'node.register.json',
   'ping.json',
+  'reply.agent_register.json',
   'reply.json',
 ];
 
@@ -105,6 +107,14 @@ describe('fleet wire fixtures', () => {
       expectSnakeCaseKeys(serialized);
       expect(serialized).toEqual(fixture);
       expect(schema.parse(serialized)).toEqual(parsed);
+
+      if (fixtureFile === 'reply.agent_register.json') {
+        expect(AgentRegisterReplyDataSchema.parse((parsed as { data: unknown }).data)).toEqual({
+          agent_id: 'agt_01J7FLEET000000000000101',
+          token: 'at_live_0123456789abcdef01234567',
+          name: 'codex-builder-1',
+        });
+      }
     });
   }
 

@@ -7,7 +7,8 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { agents } from '../../db/schema.js';
+import { actionInvocations, agents } from '../../db/schema.js';
+import { sweepTimedOutInvocations } from '../../engine/action.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -496,6 +497,69 @@ describe('node adapter conformance', () => {
         invocation_id: echoBody.data.invocation_id,
         action: 'echo',
       });
+    });
+
+    it('drains an offline-queued invoke into dispatched state so the timeout sweep reschedules it', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-drain-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      // alpha owns the `echo` action; beta is a live fallback handler.
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+
+      // Take alpha offline so the next invoke can only be queued, not delivered.
+      await alpha.handle.handleClose();
+
+      const echo = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'drain me' } }),
+      });
+      expect(echo.status).toBe(201);
+      const invocationId = (await echo.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      const db = stack.runtime.handle.db;
+      const queued = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      // Queued for the offline node: pending, no dispatch timestamp yet.
+      expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
+      expect(queued.dispatchedAt).toBeNull();
+
+      // alpha reconnects → the queued frame drains and the invocation moves to
+      // dispatched via the shared transition (dispatched_at + retry_after_at set).
+      const alphaSock = new FakeSocket();
+      stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
+      await new Promise((r) => setTimeout(r, 25));
+      expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
+
+      const drained = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(drained.status).toBe('dispatched');
+      expect(drained.dispatchedAt).toBeInstanceOf(Date);
+      expect(drained.retryAfterAt).toBeInstanceOf(Date);
+
+      // With the invocation now in dispatched state, the dispatch-timeout sweep
+      // (timeout 0 ⇒ already overdue) reschedules it onto the live fallback node.
+      beta.sock.received.length = 0;
+      const rescheduled = await sweepTimedOutInvocations(db, stack.runtime.realtime, 0);
+      expect(rescheduled).toBeGreaterThanOrEqual(1);
+      expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
     });
 
     it('reserves spawn capacity atomically across concurrent invocations', async () => {

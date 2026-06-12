@@ -14,6 +14,7 @@ import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
 import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
 import { reserveNodeCapacity } from '../../engine/placement.js';
+import { markDrainedInvocationDispatched } from '../../engine/action.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -400,6 +401,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
         }
         conn.send(JSON.stringify(item.message));
+        // The frame is now actually on the wire: move the invocation out of the
+        // queued `pending` state into `dispatched` via the shared transition so
+        // the dispatch-timeout sweep/reschedule covers it like a live dispatch.
+        await markDrainedInvocationDispatched(this.db, workspaceId, item.message.invocation_id, nodeId);
       } catch {
         remaining.push(item);
         remaining.push(...queued.slice(queued.indexOf(item) + 1));

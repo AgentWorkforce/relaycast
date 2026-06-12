@@ -38,6 +38,25 @@ function nextRetryAfter(attempts: number): Date {
   return new Date(Date.now() + backoff);
 }
 
+/**
+ * Field set that moves an invocation into the live `dispatched` state once its
+ * `action.invoke` frame has actually been delivered to the node. Shared by the
+ * live dispatch path (`dispatchNodeAttempt`) and the offline-queue drain path
+ * (`markDrainedInvocationDispatched`) so the dispatch-timeout sweep — which keys
+ * off `dispatchedAt` — and the reschedule path cover drained invocations too.
+ */
+function dispatchedStateFields(opts: { retryAfterAt?: Date | null } = {}): {
+  status: 'dispatched';
+  dispatchedAt: Date;
+  retryAfterAt: Date | null;
+} {
+  return {
+    status: 'dispatched',
+    dispatchedAt: new Date(),
+    retryAfterAt: opts.retryAfterAt ?? null,
+  };
+}
+
 function isActionVisibleToCaller(availableTo: string[] | null, callerName?: string): boolean {
   if (!availableTo || availableTo.length === 0) return true;
   return !!callerName && availableTo.includes(callerName);
@@ -448,16 +467,17 @@ async function dispatchNodeAttempt(
   nodeId: string,
   opts: { pending?: boolean; retryAfterAt?: Date | null; reservationHeld?: boolean } = {},
 ) {
+  const stateFields = opts.pending
+    ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: opts.retryAfterAt ?? null }
+    : dispatchedStateFields({ retryAfterAt: opts.retryAfterAt });
   const [updated] = await db
     .update(actionInvocations)
     .set({
-      status: opts.pending ? 'pending' : 'dispatched',
+      ...stateFields,
       dispatchedNodeId: nodeId,
-      dispatchedAt: opts.pending ? null : new Date(),
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
       attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
       dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
-      retryAfterAt: opts.retryAfterAt ?? null,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -465,6 +485,35 @@ async function dispatchNodeAttempt(
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ))
     .returning();
+  return !!updated;
+}
+
+/**
+ * Transition a drained offline-queue invocation into the live `dispatched` state
+ * once its queued `action.invoke` frame is actually delivered on node
+ * reconnect/drain. Reuses the same dispatched-state fields as the live dispatch
+ * path (stamping `dispatchedAt` and `retryAfterAt`) so the dispatch-timeout sweep
+ * and reschedule cover drained invocations. This is the SAME attempt that was
+ * queued, so `dispatchAttempts`/`attemptedNodeIds` are intentionally left intact.
+ * Guarded on the invocation still being `pending` on this node so a completion or
+ * reschedule that raced the drain is never clobbered.
+ */
+export async function markDrainedInvocationDispatched(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+  nodeId: string,
+): Promise<boolean> {
+  const [updated] = await db
+    .update(actionInvocations)
+    .set(dispatchedStateFields({ retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS) }))
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.status, 'pending'),
+    ))
+    .returning({ id: actionInvocations.id });
   return !!updated;
 }
 
