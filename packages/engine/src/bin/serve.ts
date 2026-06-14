@@ -57,11 +57,28 @@ async function main(): Promise<void> {
   }
 
   const baseUrl = opts.baseUrl ?? `http://localhost:${opts.port}`;
+  // Optional self-host tuning via env: the fleet rollout default and the bounded
+  // mailbox TTL / depth cap. Lets operators (and the fleet E2E) configure a short
+  // TTL / small depth cap without code changes.
+  const num = (v: string | undefined): number | undefined => {
+    if (v == null || v.trim() === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const mailbox = {
+    ...(num(process.env.RELAYCAST_MAILBOX_TTL_MS) !== undefined ? { deliveryTtlMs: num(process.env.RELAYCAST_MAILBOX_TTL_MS) } : {}),
+    ...(num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) !== undefined ? { depthCap: num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) } : {}),
+  };
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
     baseUrl,
-    config: { environment: opts.environment },
+    config: {
+      environment: opts.environment,
+      ...(process.env.RELAYCAST_FLEET_NODES_ENABLED === '1' ? { fleetNodesEnabled: true } : {}),
+      ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
+    },
   });
 
   process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${opts.db})\n`);
