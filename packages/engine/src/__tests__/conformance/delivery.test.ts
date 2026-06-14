@@ -114,14 +114,17 @@ describe('durable delivery api', () => {
       resumable: true,
       session_ref: `sess-${name}`,
     }));
+    // The engine answers agent.register with a `reply` frame (the shape the
+    // relay broker's node_control client consumes): { ok, data: {agent_id, token, name} }.
     const reply = node.sock.ofType('reply').at(-1) as {
-      data?: { agent_id: string; token: string; name?: string };
-    } | undefined;
-    const registered = reply?.data;
-    expect(registered).toMatchObject({ name });
+      ok: boolean;
+      data: { agent_id: string; token: string; name?: string };
+    };
+    expect(reply?.ok).toBe(true);
+    expect(reply.data).toMatchObject({ name });
     return {
-      agentId: registered!.agent_id,
-      token: registered!.token,
+      agentId: reply.data.agent_id,
+      token: reply.data.token,
       name,
     };
   }
