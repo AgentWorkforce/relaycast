@@ -175,7 +175,15 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return c.text('Expected WebSocket upgrade', 426);
     }
 
-    const token = c.req.query('token');
+    // Accept the node token from the `?token=` query param (SDK/Pear convention)
+    // OR an `Authorization: Bearer <token>` header (the relay Rust broker's
+    // node_control client sends it this way). Supporting both keeps the engine
+    // compatible with every node client without changing the shipped broker.
+    const authHeader = c.req.header('Authorization') ?? c.req.header('authorization');
+    const bearer = authHeader && /^bearer\s+/i.test(authHeader)
+      ? authHeader.replace(/^bearer\s+/i, '').trim()
+      : undefined;
+    const token = c.req.query('token') ?? bearer;
     if (!token) {
       return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
     }
