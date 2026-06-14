@@ -14,12 +14,19 @@ export interface TestStack {
 export function makeNodeStack(options?: {
   ttlMs?: number;
   mailbox?: EngineConfig['mailbox'];
+  /** Phase 6 rollout flag default. Defaults to true so node tests run unchanged. */
+  fleetNodesEnabled?: boolean;
 }): TestStack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
     migrate: true,
-    config: { environment: 'test', workspaceStreamEnabled: true, mailbox: options?.mailbox },
+    config: {
+      environment: 'test',
+      workspaceStreamEnabled: true,
+      fleetNodesEnabled: options?.fleetNodesEnabled ?? true,
+      mailbox: options?.mailbox,
+    },
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
     presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
   });

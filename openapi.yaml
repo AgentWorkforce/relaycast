@@ -2117,6 +2117,51 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /workspace/fleet-nodes:
+    get:
+      summary: Get workspace fleet node rollout flag
+      description: >
+        Get the effective per-workspace fleet node control rollout flag
+        (Phase 6). When disabled, the node registry, node control WS,
+        declarative triggers, and spawn/node-action placement are inert.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Fleet node config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    put:
+      summary: Set workspace fleet node rollout flag
+      description: Enable/disable the fleet node control surface for this workspace, or inherit the engine default
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                mode:
+                  type: string
+                  enum: [inherit]
+      responses:
+        '200':
+          description: Fleet node config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
   /activity:
     get:
       summary: Get workspace activity feed

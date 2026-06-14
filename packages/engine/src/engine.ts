@@ -9,6 +9,7 @@ import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
 import { agents, nodes, workspaces } from './db/schema.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
+import { isFleetNodesEnabled } from './lib/fleetNodes.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError } from './lib/httpError.js';
 import { requiredOriginInfo } from './lib/origin.js';
@@ -182,12 +183,21 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token format' } }, 401);
     }
 
-    const { auth, nodeConnections } = c.get('engine');
+    const { auth, nodeConnections, kv, config } = c.get('engine');
     const db = c.get('db');
     const hash = await auth.hashToken(token);
     const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
     if (!node) {
       return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token' } }, 401);
+    }
+
+    // Phase 6 rollout flag: the node control surface is inert until a workspace
+    // opts in. A node with a valid token still cannot attach while the flag is off.
+    if (!(await isFleetNodesEnabled(kv, node.workspaceId, config.fleetNodesEnabled ?? false))) {
+      return c.json(
+        { ok: false, error: { code: 'fleet_nodes_disabled', message: 'Fleet nodes are disabled for this workspace' } },
+        404,
+      );
     }
 
     const originInfo = requiredOriginInfo(c.req.raw);

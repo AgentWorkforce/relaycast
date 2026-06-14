@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { requireFleetNodes } from '../middleware/fleetNodes.js';
 import { errorResponse } from '../lib/httpError.js';
 import * as nodeEngine from '../engine/node.js';
 
@@ -18,7 +19,7 @@ const createNodeSchema = z.object({
 });
 
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)
-nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
+nodeRoutes.post('/nodes', requireWorkspaceKey, requireFleetNodes, rateLimit, async (c) => {
   try {
     const parsed = createNodeSchema.safeParse(await c.req.json());
     if (!parsed.success) {
@@ -32,7 +33,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
 });
 
 // GET /v1/nodes?capability=&name= - node roster
-nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes', requireAuth, requireFleetNodes, rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodes(c.get('db'), c.get('workspace').id, {
       capability: c.req.query('capability'),
@@ -45,7 +46,7 @@ nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
 });
 
 // GET /v1/nodes/:name - single node roster entry
-nodeRoutes.get('/nodes/:name', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name', requireAuth, requireFleetNodes, rateLimit, async (c) => {
   try {
     const result = await nodeEngine.getPublicNode(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {

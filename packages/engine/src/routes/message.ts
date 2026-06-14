@@ -13,6 +13,7 @@ import { fanoutToChannel } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
+import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -149,22 +150,31 @@ messageRoutes.post(
 
         runInBackground(
           c,
-          triggerEngine.fireMessageTriggers({
-            db,
-            nodeConnections: c.get('engine').nodeConnections,
-            workspaceId: workspace.id,
-            message: {
-              id: String(publicData.id),
-              channel_id: channel.id,
-              channel_name: channelName,
-              agent_id: agentId,
-              agent_name: agent?.name,
-              text: String(publicData.text ?? text),
-              mentions: Array.isArray(publicData.mentions) ? publicData.mentions as string[] : [],
-              metadata: (publicData.metadata ?? null) as Record<string, unknown> | null,
-              created_at: String(publicData.created_at),
-            },
-          }),
+          // Phase 6 rollout flag: declarative trigger evaluation is part of the
+          // fleet node control surface, so it is skipped entirely when the flag is
+          // off. Checked here (not per-trigger) so the policy lives at one boundary.
+          (async () => {
+            const { kv, config, nodeConnections } = c.get('engine');
+            if (!(await isFleetNodesEnabled(kv, workspace.id, config.fleetNodesEnabled ?? false))) {
+              return;
+            }
+            await triggerEngine.fireMessageTriggers({
+              db,
+              nodeConnections,
+              workspaceId: workspace.id,
+              message: {
+                id: String(publicData.id),
+                channel_id: channel.id,
+                channel_name: channelName,
+                agent_id: agentId,
+                agent_name: agent?.name,
+                text: String(publicData.text ?? text),
+                mentions: Array.isArray(publicData.mentions) ? publicData.mentions as string[] : [],
+                metadata: (publicData.metadata ?? null) as Record<string, unknown> | null,
+                created_at: String(publicData.created_at),
+              },
+            });
+          })(),
           'fire message triggers',
         );
       }
