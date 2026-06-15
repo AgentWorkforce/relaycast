@@ -753,7 +753,7 @@ export class AgentClient {
 
   /**
    * List durable delivery items queued for this agent. Defaults to the
-   * non-terminal queue (accepted + deferred) so an offline consumer can replay
+   * non-terminal queue (queued + delivered) so an offline consumer can replay
    * what it missed on reconnect. Each item carries the message payload.
    */
   async deliveries(options?: { status?: DeliveryStatus; limit?: number }): Promise<DeliveryItem[]> {
@@ -763,7 +763,7 @@ export class AgentClient {
     return this.client.get('/v1/deliveries', params);
   }
 
-  /** Idempotently acknowledge a delivery, transitioning it to `delivered`. */
+  /** Idempotently acknowledge a delivery, transitioning it to `acked`. */
   async ackDelivery(deliveryId: string): Promise<Delivery> {
     return this.client.post(
       `/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`,

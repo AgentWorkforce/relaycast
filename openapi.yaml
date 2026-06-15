@@ -383,7 +383,14 @@ components:
           type: string
         status:
           type: string
-          enum: [accepted, delivered, deferred, failed]
+          enum: [queued, delivered, acked, failed, dead_lettered]
+        seq:
+          type: integer
+        location_type:
+          type: string
+        location_node_id:
+          type: string
+          nullable: true
         mode:
           type: string
         reason:
@@ -402,6 +409,22 @@ components:
           format: date-time
           nullable: true
         deadline:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        acked_at:
+          type: string
+          format: date-time
+          nullable: true
+        dead_lettered_at:
           type: string
           format: date-time
           nullable: true
@@ -2094,6 +2117,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /workspace/fleet-nodes:
+    get:
+      summary: Get workspace fleet node rollout flag
+      description: >
+        Get the effective per-workspace fleet node control rollout flag
+        (Phase 6). When disabled, the node registry, node control WS,
+        declarative triggers, and spawn/node-action placement are inert.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Fleet node config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    put:
+      summary: Set workspace fleet node rollout flag
+      description: Enable/disable the fleet node control surface for this workspace, or inherit the engine default
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                mode:
+                  type: string
+                  enum: [inherit]
+              anyOf:
+                - required: [enabled]
+                - required: [mode]
+      responses:
+        '200':
+          description: Fleet node config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /activity:
     get:
       summary: Get workspace activity feed
@@ -2325,7 +2402,7 @@ paths:
       summary: List durable deliveries
       description: >
         List durable delivery items queued for the calling agent. Defaults to
-        the non-terminal queue (`accepted` + `deferred`) so an offline consumer
+        the non-terminal queue (`queued` + `delivered`) so an offline consumer
         can replay what it missed after reconnect, oldest first. Each item
         carries the message payload.
       tags:
@@ -2339,7 +2416,7 @@ paths:
           description: Filter by a single delivery status.
           schema:
             type: string
-            enum: [accepted, delivered, deferred, failed]
+            enum: [queued, delivered, acked, failed, dead_lettered]
         - name: limit
           in: query
           required: false
@@ -2366,7 +2443,7 @@ paths:
   /deliveries/{id}/ack:
     post:
       summary: Acknowledge a delivery
-      description: Idempotently transition a delivery to `delivered`.
+      description: Idempotently transition a delivery to `acked`.
       tags:
         - Deliveries
       security:
@@ -2446,8 +2523,8 @@ paths:
     post:
       summary: Defer a delivery
       description: >
-        Idempotently record a delivery as `deferred` with the time it next
-        becomes available for retry.
+        Compatibility endpoint that keeps the delivery `queued` while recording
+        the time it next becomes available for retry.
       tags:
         - Deliveries
       security:
@@ -2821,6 +2898,247 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /nodes:
+    post:
+      summary: Enroll or rotate a fleet node token
+      description: Enroll a fleet node in the workspace or rotate the token for an existing node name.
+      tags:
+        - Nodes
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                node_id:
+                  type: string
+                name:
+                  type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                max_agents:
+                  type: integer
+                  minimum: 0
+                tags:
+                  type: array
+                  items:
+                    type: string
+                version:
+                  type: string
+      responses:
+        '201':
+          description: Node enrolled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List fleet nodes
+      description: List fleet nodes in the workspace, optionally filtered by capability or name.
+      tags:
+        - Nodes
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: capability
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: name
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Node roster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /nodes/{name}:
+    get:
+      summary: Get fleet node
+      description: Get one fleet node roster entry by name.
+      tags:
+        - Nodes
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Node roster entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /triggers:
+    post:
+      summary: Create message trigger
+      description: Create a declarative message trigger that invokes an action when matched.
+      tags:
+        - Triggers
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action_name
+              properties:
+                channel:
+                  type: string
+                  nullable: true
+                pattern:
+                  type: string
+                  nullable: true
+                mention:
+                  type: boolean
+                  nullable: true
+                action_name:
+                  type: string
+                enabled:
+                  type: boolean
+      responses:
+        '201':
+          description: Trigger created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    get:
+      summary: List message triggers
+      description: List declarative message triggers for the workspace.
+      tags:
+        - Triggers
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Trigger list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /triggers/{id}:
+    get:
+      summary: Get message trigger
+      tags:
+        - Triggers
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Trigger
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Trigger not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      summary: Update message trigger
+      tags:
+        - Triggers
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel:
+                  type: string
+                  nullable: true
+                pattern:
+                  type: string
+                  nullable: true
+                mention:
+                  type: boolean
+                  nullable: true
+                action_name:
+                  type: string
+                enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: Trigger updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Trigger not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: Delete message trigger
+      tags:
+        - Triggers
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Trigger deleted
 
   /agents/{name}/events:
     post:
@@ -3577,6 +3895,10 @@ tags:
     description: File upload and file metadata APIs
   - name: Actions
     description: Action (agent-to-agent RPC) registration, invocation, and completion
+  - name: Nodes
+    description: Fleet node enrollment and roster APIs
+  - name: Triggers
+    description: Declarative message-triggered action APIs
   - name: Subscriptions
     description: Outbound event subscription management
   - name: Webhooks

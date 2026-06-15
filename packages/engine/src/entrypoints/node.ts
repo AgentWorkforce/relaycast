@@ -6,6 +6,7 @@ import { serve, type ServerType } from '@hono/node-server';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { createEngine } from '../engine.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
+import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
@@ -18,6 +19,7 @@ import {
   type InProcessPresenceOptions,
   type NodeRuntime,
 } from '../adapters/node/index.js';
+import { getNodeByTokenHash } from '../engine/node.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -96,17 +98,50 @@ export function startServer(options: StartServerOptions): RunningServer {
     'upgrade',
     (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const url = new URL(req.url ?? '/', baseUrl);
-      if (url.pathname !== '/v1/ws') {
+      if (url.pathname !== '/v1/ws' && url.pathname !== '/v1/node/ws') {
         rejectUpgrade(socket, 426, 'Upgrade Required');
         return;
       }
-      const token = url.searchParams.get('token');
+      // Accept the token from the `?token=` query param (SDK/Pear convention)
+      // OR an `Authorization: Bearer <token>` header. The relay Rust broker's
+      // node_control client authenticates the node control connection with the
+      // header form, so the self-host upgrade path must honour both.
+      const authHeader = req.headers['authorization'];
+      const bearer = typeof authHeader === 'string' && /^bearer\s+/i.test(authHeader)
+        ? authHeader.replace(/^bearer\s+/i, '').trim()
+        : undefined;
+      const token = url.searchParams.get('token') ?? bearer;
       if (!token) {
         rejectUpgrade(socket, 401, 'Unauthorized');
         return;
       }
 
       void (async () => {
+        if (url.pathname === '/v1/node/ws') {
+          if (!token.startsWith('nt_live_')) {
+            rejectUpgrade(socket, 401, 'Unauthorized');
+            return;
+          }
+          const hash = await auth.hashToken(token);
+          const node = await getNodeByTokenHash(db, hash);
+          if (!node) {
+            rejectUpgrade(socket, 401, 'Unauthorized');
+            return;
+          }
+          // Phase 6 rollout flag: the node control surface is inert until the
+          // workspace opts in (mirrors the rk_live stream gate below).
+          if (!(await isFleetNodesEnabled(kv, node.workspaceId, config?.fleetNodesEnabled ?? false))) {
+            rejectUpgrade(socket, 404, 'Not Found');
+            return;
+          }
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            const handle = runtime.realtime.attachNodeSocket(node.workspaceId, node.id, toEngineSocket(ws));
+            ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
+            ws.on('close', () => { void handle.handleClose(); });
+          });
+          return;
+        }
+
         if (token.startsWith('at_live_')) {
           const res = await auth.authenticate({ token, require: 'agent', db });
           if (!res.ok || !res.agent) {

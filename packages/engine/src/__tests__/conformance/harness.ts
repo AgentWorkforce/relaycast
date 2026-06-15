@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
+import type { EngineConfig } from '../../ports/index.js';
 
 export interface TestStack {
   app: Hono<AppEnv>;
@@ -10,14 +11,24 @@ export interface TestStack {
 }
 
 /** Build an in-memory engine on the Node adapter with a fast presence sweep disabled. */
-export function makeNodeStack(presence?: { ttlMs?: number }): TestStack {
+export function makeNodeStack(options?: {
+  ttlMs?: number;
+  mailbox?: EngineConfig['mailbox'];
+  /** Phase 6 rollout flag default. Defaults to true so node tests run unchanged. */
+  fleetNodesEnabled?: boolean;
+}): TestStack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
     migrate: true,
-    config: { environment: 'test', workspaceStreamEnabled: true },
+    config: {
+      environment: 'test',
+      workspaceStreamEnabled: true,
+      fleetNodesEnabled: options?.fleetNodesEnabled ?? true,
+      mailbox: options?.mailbox,
+    },
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
-    presence: { ttlMs: presence?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
+    presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
   });
   const app = createEngine(runtime.deps);
   return { app, runtime, close: () => runtime.close() };

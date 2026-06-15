@@ -1,6 +1,20 @@
 import type * as Raw from '@relaycast/types';
 import type { Camelize } from './casing.js';
 
+/**
+ * Any JSON value — scalars, arrays, objects, or `null` — exactly mirroring the
+ * runtime wire contract (`FleetWireJsonValue`). Action invocation outputs are
+ * unconstrained JSON, so this is intentionally wider than `Record<string, unknown>`.
+ */
+export type JsonValue = Raw.FleetWireJsonValue;
+
+/**
+ * A capability advertised by a fleet node on the roster. The runtime emits and
+ * stores structured capability objects (`{ name, kind?, metadata? }`), never bare
+ * capability-name strings, so the SDK roster type must match.
+ */
+export type NodeCapability = Raw.FleetCapability;
+
 export interface A2aAgentCardSkill {
   id?: string;
   name: string;
@@ -229,7 +243,9 @@ export interface ActionDefinition {
   id: string;
   name: string;
   description: string;
-  handlerAgent: string;
+  handlerAgent: string | null;
+  handlerNode: string | null;
+  handlerNodeId: string | null;
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
   availableTo: string[] | null;
@@ -240,7 +256,8 @@ export interface ActionDefinition {
 export interface RegisterActionRequest {
   name: string;
   description: string;
-  handlerAgent: string;
+  handlerAgent?: string;
+  handlerNode?: string;
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   availableTo?: string[];
@@ -249,14 +266,16 @@ export interface RegisterActionRequest {
 export interface InvokeActionResult {
   invocationId: string;
   actionName: string;
-  handlerAgentId: string;
+  handlerAgentId: string | null;
+  handlerNodeId?: string | null;
+  dispatchedNodeId?: string | null;
   input: Record<string, unknown>;
   status: string;
   createdAt: string;
 }
 
 export interface CompleteInvocationRequest {
-  output?: Record<string, unknown>;
+  output?: JsonValue;
   error?: string;
   durationMs?: number;
 }
@@ -267,13 +286,60 @@ export interface ActionInvocation {
   callerId: string | null;
   callerName?: string | null;
   input?: Record<string, unknown>;
-  output: Record<string, unknown> | null;
+  output: JsonValue;
   status: string;
   error: string | null;
   durationMs: number | null;
+  dispatchedNodeId?: string | null;
+  dispatchedAt?: string | null;
   createdAt?: string;
   completedAt: string | null;
 }
+
+// === Fleet nodes / triggers ===
+
+export interface NodeRosterEntry {
+  id: string;
+  name: string;
+  capabilities: NodeCapability[];
+  tags: string[];
+  version: string;
+  status: 'online' | 'offline' | string;
+  live: boolean;
+  handlersLive: boolean;
+  load: number;
+  activeAgents: number;
+  maxAgents: number;
+  lastHeartbeatAt: string | null;
+  createdAt: string;
+}
+
+export interface NodeListQuery {
+  capability?: string;
+  name?: string;
+}
+
+export interface Trigger {
+  id: string;
+  channel: string | null;
+  pattern: string | null;
+  mention: boolean | null;
+  actionName: string;
+  enabled: boolean;
+  lastTriggeredAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CreateTriggerRequest {
+  channel?: string | null;
+  pattern?: string | null;
+  mention?: boolean | null;
+  actionName: string;
+  enabled?: boolean;
+}
+
+export type UpdateTriggerRequest = Partial<CreateTriggerRequest>;
 
 // === Agent session events ===
 
@@ -524,3 +590,20 @@ export type WsOpenEvent = Camelize<Raw.WsOpenEvent>;
 export type WsPermanentlyDisconnectedEvent = Camelize<Raw.WsPermanentlyDisconnectedEvent>;
 export type WsReconnectingEvent = Camelize<Raw.WsReconnectingEvent>;
 export type WsResyncedEvent = Camelize<Raw.WsResyncedEvent>;
+
+// === Compile-level contract assertions =====================================
+// These are type-only checks (zero JS emit) enforced on every `tsc` build, so
+// the fleet node + action SDK types can never silently drift from the runtime
+// wire contract again. A mismatch fails the build with `Type 'false' does not
+// satisfy the constraint 'true'`. (`src/__tests__` is excluded from the build,
+// so the matching `expectTypeOf` checks there are documentation, not enforcement.)
+type Assert<T extends true> = T;
+type Equals<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false;
+
+// Node roster capabilities are structured objects, not capability-name strings.
+type _AssertRosterCapabilities = Assert<Equals<NodeRosterEntry['capabilities'], Raw.FleetCapability[]>>;
+type _AssertNodeCapability = Assert<Equals<NodeCapability, Raw.FleetCapability>>;
+// Action output is any JSON value (scalars/arrays/null legal), not object-only.
+type _AssertInvocationOutput = Assert<Equals<ActionInvocation['output'], Raw.FleetWireJsonValue>>;
+type _AssertCompletionOutput = Assert<Equals<CompleteInvocationRequest['output'], Raw.FleetWireJsonValue | undefined>>;

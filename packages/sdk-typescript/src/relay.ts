@@ -60,6 +60,11 @@ import type {
   SkillSearchResult,
   ActionDefinition,
   RegisterActionRequest,
+  NodeListQuery,
+  NodeRosterEntry,
+  Trigger,
+  CreateTriggerRequest,
+  UpdateTriggerRequest,
   SessionEvent,
   EmitSessionEventRequest,
   ListSessionEventsQuery,
@@ -734,6 +739,35 @@ export class RelayCast {
 
     delete: (name: string): Promise<void> =>
       this.client.delete(`/v1/actions/${encodeURIComponent(name)}`),
+  };
+
+  nodes = {
+    list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
+      const params: Record<string, string> = {};
+      if (query?.capability) params.capability = query.capability;
+      if (query?.name) params.name = query.name;
+      return this.client.get('/v1/nodes', params);
+    },
+
+    get: (name: string): Promise<NodeRosterEntry> =>
+      this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+  };
+
+  triggers = {
+    create: (data: CreateTriggerRequest): Promise<Trigger> =>
+      this.client.post('/v1/triggers', data),
+
+    list: (): Promise<Trigger[]> =>
+      this.client.get('/v1/triggers'),
+
+    get: (id: string): Promise<Trigger> =>
+      this.client.get(`/v1/triggers/${encodeURIComponent(id)}`),
+
+    update: (id: string, data: UpdateTriggerRequest): Promise<Trigger> =>
+      this.client.patch(`/v1/triggers/${encodeURIComponent(id)}`, data),
+
+    delete: (id: string): Promise<void> =>
+      this.client.delete(`/v1/triggers/${encodeURIComponent(id)}`),
   };
 
   certify = {

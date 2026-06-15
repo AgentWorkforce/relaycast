@@ -59,18 +59,17 @@ export async function markRead(
       .values({ messageId, agentId })
       .onConflictDoNothing(),
 
-    // Transition delivery status to delivered. Reading consumes the message, so
-    // clear both still-queued states (accepted and deferred) — otherwise a
-    // deferred delivery would linger in the durable replay queue after the agent
-    // has already seen the message. `delivered`/`failed` are left untouched.
+    // Transition delivery status to acked. Reading consumes the message, so
+    // clear any in-flight mailbox state; otherwise a delivery would linger in
+    // the durable replay queue after the agent has already seen the message.
     writeDb
       .update(deliveries)
-      .set({ status: 'delivered', updatedAt: new Date() })
+      .set({ status: 'acked', ackedAt: new Date(), updatedAt: new Date() })
       .where(
         and(
           eq(deliveries.messageId, messageId),
           eq(deliveries.agentId, agentId),
-          inArray(deliveries.status, ['accepted', 'deferred']),
+          inArray(deliveries.status, ['queued', 'delivered']),
         ),
       ),
 

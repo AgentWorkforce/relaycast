@@ -7,8 +7,9 @@ import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
-import { agents, workspaces } from './db/schema.js';
+import { agents, nodes, workspaces } from './db/schema.js';
 import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
+import { isFleetNodesEnabled } from './lib/fleetNodes.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError } from './lib/httpError.js';
 import { requiredOriginInfo } from './lib/origin.js';
@@ -34,6 +35,8 @@ import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { actionRoutes } from './routes/action.js';
+import { nodeRoutes } from './routes/node.js';
+import { triggerRoutes } from './routes/trigger.js';
 import { a2aRoutes } from './routes/a2a.js';
 import { certifyRoutes } from './routes/certify.js';
 import { consoleRoutes } from './routes/console.js';
@@ -58,6 +61,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     db: deps.db,
     realtime: deps.realtime,
     connections: deps.connections,
+    nodeConnections: deps.nodeConnections,
     presence: deps.presence,
     rateLimiter: deps.rateLimiter,
     files: deps.files,
@@ -164,6 +168,69 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
   });
 
+  app.get('/v1/node/ws', async (c) => {
+    const upgradeHeader = c.req.header('Upgrade');
+    if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+      return c.text('Expected WebSocket upgrade', 426);
+    }
+
+    // Accept the node token from the `?token=` query param (SDK/Pear convention)
+    // OR an `Authorization: Bearer <token>` header (the relay Rust broker's
+    // node_control client sends it this way). Supporting both keeps the engine
+    // compatible with every node client without changing the shipped broker.
+    const authHeader = c.req.header('Authorization') ?? c.req.header('authorization');
+    const bearer = authHeader && /^bearer\s+/i.test(authHeader)
+      ? authHeader.replace(/^bearer\s+/i, '').trim()
+      : undefined;
+    const token = c.req.query('token') ?? bearer;
+    if (!token) {
+      return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
+    }
+    if (!token.startsWith('nt_live_')) {
+      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token format' } }, 401);
+    }
+
+    const { auth, nodeConnections, kv, config } = c.get('engine');
+    const db = c.get('db');
+    const hash = await auth.hashToken(token);
+    const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
+    if (!node) {
+      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token' } }, 401);
+    }
+
+    // Phase 6 rollout flag: the node control surface is inert until a workspace
+    // opts in. A node with a valid token still cannot attach while the flag is off.
+    if (!(await isFleetNodesEnabled(kv, node.workspaceId, config.fleetNodesEnabled ?? false))) {
+      return c.json(
+        { ok: false, error: { code: 'fleet_nodes_disabled', message: 'Fleet nodes are disabled for this workspace' } },
+        404,
+      );
+    }
+
+    const originInfo = requiredOriginInfo(c.req.raw);
+    const origin = {
+      surface: originInfo.origin_surface,
+      client: originInfo.origin_client,
+      version: originInfo.origin_version,
+    };
+    const originActor = c.get('originActor') ?? 'unknown';
+    const response = await nodeConnections.upgradeNode({
+      request: c.req.raw,
+      workspaceId: node.workspaceId,
+      nodeId: node.id,
+      nodeName: node.name,
+      origin,
+      originActor,
+    });
+    if (response.status === 101) {
+      emitServerEvent(c, node.workspaceId, 'relaycast_server_ws_session_started', {
+        node_id: node.id,
+        session_scope: 'node',
+      });
+    }
+    return response;
+  });
+
   // API v1 routes — specific routes before parameterized routes
   const v1 = new Hono<AppEnv>();
   v1.route('/', presenceRoutes);
@@ -184,6 +251,8 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', inboundWebhookRoutes);
   v1.route('/', eventSubscriptionRoutes);
   v1.route('/', actionRoutes);
+  v1.route('/', nodeRoutes);
+  v1.route('/', triggerRoutes);
   v1.route('/', certifyRoutes);
   v1.route('/', consoleRoutes);
   v1.route('/', directoryRoutes);

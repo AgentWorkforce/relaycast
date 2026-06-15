@@ -24,8 +24,10 @@ export type {
   EngineEvent,
   RealtimeBus,
   ConnectionRegistry,
+  NodeConnectionRegistry,
   BroadcastToChannelArgs,
   UpgradeArgs,
+  NodeUpgradeArgs,
 } from './realtime.js';
 export type { PresenceTracker } from './presence.js';
 export type { RateLimiter, RateLimitResult } from './rate-limit.js';
@@ -47,7 +49,7 @@ export type {
 export type { TelemetrySink, TelemetryEvent } from './telemetry.js';
 
 import type { EngineDb } from './database.js';
-import type { RealtimeBus, ConnectionRegistry } from './realtime.js';
+import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
 import type { PresenceTracker } from './presence.js';
 import type { RateLimiter } from './rate-limit.js';
 import type { FileStorage } from './files.js';
@@ -62,6 +64,7 @@ export interface EnginePorts {
   db: EngineDb;
   realtime: RealtimeBus;
   connections: ConnectionRegistry;
+  nodeConnections: NodeConnectionRegistry;
   presence: PresenceTracker;
   rateLimiter: RateLimiter;
   files: FileStorage;
@@ -106,4 +109,25 @@ export interface EngineConfig {
    * enabled per workspace via the KV override.
    */
   workspaceStreamEnabled?: boolean;
+  /**
+   * Engine-wide default for the fleet node control surface (Phase 6 rollout flag).
+   * When false (the default), the node registry, node control WS, declarative
+   * triggers, and spawn/node-action placement are inert unless a workspace opts in
+   * via the per-workspace KV override. Lets fleet ship dark and roll out per
+   * workspace; legacy per-agent WS delivery is unaffected either way.
+   */
+  fleetNodesEnabled?: boolean;
+  /**
+   * Bounded durable mailbox tuning. Hosted adapters may provide workspace
+   * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries
+   * per agent.
+   */
+  mailbox?: {
+    deliveryTtlMs?: number;
+    depthCap?: number;
+    workspaces?: Record<string, {
+      deliveryTtlMs?: number;
+      depthCap?: number;
+    }>;
+  };
 }

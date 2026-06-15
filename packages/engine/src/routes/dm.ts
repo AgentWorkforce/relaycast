@@ -6,9 +6,12 @@ import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -61,10 +64,10 @@ dmRoutes.post(
         }, 400);
       }
 
-      const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => {
-        const { _delivery, ...publicDmData } = data;
-        return { ...publicDmData, from_name: agent!.name };
-      };
+      const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const toDmReceivedEventData = (data: Awaited<ReturnType<typeof dmEngine.sendDm>>) => buildDmReceivedEventData(data, {
+        fromName: agent!.name,
+      });
 
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
@@ -83,7 +86,7 @@ dmRoutes.post(
           text,
           attachments: normalizedAttachments,
           mode,
-        }),
+        }, { mailbox }),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
             type: 'dm.received',
@@ -98,7 +101,14 @@ dmRoutes.post(
       }
 
       if (!idempotent.replayed) {
-        const { _delivery, ...publicDmData } = idempotent.data as typeof idempotent.data & { _delivery?: { id: string; agentId: string } | null };
+        const {
+          _delivery,
+          _delivery_rejections,
+          ...publicDmData
+        } = idempotent.data as typeof idempotent.data & {
+          _delivery?: Parameters<typeof routeDeliveryOutcomes>[1][number] | null;
+          _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
+        };
         const eventData = toDmReceivedEventData(idempotent.data);
         try {
           const rows = await db
@@ -115,16 +125,18 @@ dmRoutes.post(
           // Ignore fanout failures
         }
 
-        // Emit delivery.accepted directly to the recipient's AgentDO
         if (_delivery) {
           runInBackground(
             c,
-            fanoutToAgents(c, [_delivery.agentId], 'delivery.accepted', {
-              delivery_id: _delivery.id,
-              message_id: String(publicDmData.id),
-              reason: 'dm',
-            }),
-            'fanout delivery.accepted',
+            routeDeliveryOutcomes(c, [_delivery], 'dm.received', eventData),
+            'route dm delivery',
+          );
+        }
+        if (_delivery_rejections && _delivery_rejections.length > 0) {
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, agent!.id, _delivery_rejections),
+            'fanout delivery rejected',
           );
         }
 
@@ -136,7 +148,14 @@ dmRoutes.post(
         });
       }
 
-      const { _delivery: _drop, ...responseData } = idempotent.data as typeof idempotent.data & { _delivery?: unknown };
+      const {
+        _delivery: _dropDelivery,
+        _delivery_rejections: _dropRejections,
+        ...responseData
+      } = idempotent.data as typeof idempotent.data & {
+        _delivery?: unknown;
+        _delivery_rejections?: unknown;
+      };
       return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);

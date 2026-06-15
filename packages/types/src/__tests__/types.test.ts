@@ -313,7 +313,10 @@ describe('Type definitions', () => {
       message_id: 'm_1',
       channel_id: 'c_1',
       agent_id: 'a_1',
-      status: 'accepted',
+      status: 'queued',
+      seq: 1,
+      location_type: 'self_connected',
+      location_node_id: null,
       mode: 'immediate',
       reason: 'mention',
       priority: 'normal',
@@ -321,6 +324,10 @@ describe('Type definitions', () => {
       error: null,
       available_at: null,
       deadline: null,
+      expires_at: '2026-06-01T01:00:00.000Z',
+      delivered_at: null,
+      acked_at: null,
+      dead_lettered_at: null,
       created_at: '2026-06-01T00:00:00.000Z',
       updated_at: null,
     });
@@ -330,8 +337,10 @@ describe('Type definitions', () => {
   it('DeliverySchema rejects an unknown status', () => {
     const parsed = DeliverySchema.safeParse({
       id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
+      seq: 1, location_type: 'self_connected', location_node_id: null,
       status: 'bogus', mode: 'immediate', reason: null, priority: 'normal',
       retryable: null, error: null, available_at: null, deadline: null,
+      expires_at: null, delivered_at: null, acked_at: null, dead_lettered_at: null,
       created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
     });
     expect(parsed.success).toBe(false);
@@ -340,9 +349,12 @@ describe('Type definitions', () => {
   it('DeliveryItemSchema carries an optional message payload', () => {
     const parsed = DeliveryItemSchema.safeParse({
       id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
-      status: 'deferred', mode: 'immediate', reason: null, priority: 'normal',
+      seq: 1, location_type: 'self_connected', location_node_id: null,
+      status: 'delivered', mode: 'immediate', reason: null, priority: 'normal',
       retryable: null, error: null, available_at: '2026-06-01T00:01:00.000Z',
-      deadline: null, created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
+      deadline: null, expires_at: '2026-06-01T01:00:00.000Z',
+      delivered_at: '2026-06-01T00:00:01.000Z', acked_at: null, dead_lettered_at: null,
+      created_at: '2026-06-01T00:00:00.000Z', updated_at: null,
       message: null,
     });
     expect(parsed.success).toBe(true);

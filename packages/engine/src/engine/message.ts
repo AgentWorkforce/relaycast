@@ -6,9 +6,11 @@ import { generateId } from './snowflake.js';
 import { buildMessageLogWrite } from './console.js';
 import {
   buildChannelDeliveryWrite,
-  fetchDeliveryFanoutRecords,
+  fetchChannelDeliveryOutcomes,
+  type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -89,6 +91,7 @@ export async function postMessage(
     content_type?: string;
     mode?: 'wait' | 'steer';
   },
+  options: { mailbox?: MailboxConfig } = {},
 ) {
   const startedAtMs = Date.now();
   const messageId = generateId();
@@ -101,6 +104,10 @@ export async function postMessage(
   const metadata = sanitizeUserMessageMetadata(data.data);
 
   const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
+  const mailbox = options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS,
+    depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
 
   const [attachments, [agent]] = await Promise.all([
     fetchAttachmentDetails(db, data.attachments ?? []),
@@ -143,6 +150,8 @@ export async function postMessage(
         channelId,
         senderAgentId: agentId,
         mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        ttlMs: mailbox.ttlMs,
+        depthCap: mailbox.depthCap,
         mentionHandles: Array.from(mentionedHandles),
       }),
     );
@@ -169,7 +178,11 @@ export async function postMessage(
     return writes;
   });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
-  const deliveryRecords = await fetchDeliveryFanoutRecords(db, messageId);
+  const deliveryOutcomes: DeliveryOutcomeRecords = await fetchChannelDeliveryOutcomes(db, {
+    messageId,
+    channelId,
+    senderAgentId: agentId,
+  });
 
   return {
     id: message.id,
@@ -185,7 +198,8 @@ export async function postMessage(
     mentions: mentionMatches.map((m: string) => m.slice(1)),
     attachments,
     injection_mode: data.mode ?? 'wait',
-    _deliveries: deliveryRecords,
+    _deliveries: deliveryOutcomes.deliveries,
+    _delivery_rejections: deliveryOutcomes.rejections,
   };
 }
 
