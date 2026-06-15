@@ -116,7 +116,7 @@ export interface NodeUpgradeArgs {
   workspaceId: string;
   nodeId: string;
   nodeName: string;
-  origin: { surface: string; client: string; version: string };
+  origin: { client: string; version: string };
   originActor?: string;
 }
 
