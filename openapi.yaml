@@ -2154,6 +2154,9 @@ paths:
                 mode:
                   type: string
                   enum: [inherit]
+              anyOf:
+                - required: [enabled]
+                - required: [mode]
       responses:
         '200':
           description: Fleet node config updated
@@ -2161,6 +2164,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /activity:
     get:
