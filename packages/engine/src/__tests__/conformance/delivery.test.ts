@@ -114,14 +114,17 @@ describe('durable delivery api', () => {
       resumable: true,
       session_ref: `sess-${name}`,
     }));
+    // The engine answers agent.register with a `reply` frame (the shape the
+    // relay broker's node_control client consumes): { ok, data: {agent_id, token, name} }.
     const reply = node.sock.ofType('reply').at(-1) as {
-      data?: { agent_id: string; token: string; name?: string };
-    } | undefined;
-    const registered = reply?.data;
-    expect(registered).toMatchObject({ name });
+      ok: boolean;
+      data: { agent_id: string; token: string; name?: string };
+    };
+    expect(reply?.ok).toBe(true);
+    expect(reply.data).toMatchObject({ name });
     return {
-      agentId: registered!.agent_id,
-      token: registered!.token,
+      agentId: reply.data.agent_id,
+      token: reply.data.token,
       name,
     };
   }
@@ -783,6 +786,93 @@ describe('durable delivery api', () => {
 
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(2);
+  });
+
+  it('does not skip a lower-seq queued delivery on node replay after an out-of-order per-delivery ack', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-ooo-single-ack');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['first', 'second']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await new Promise((r) => setTimeout(r, 75));
+    expect(node.sock.ofType('deliver').map((event) => event.seq)).toEqual([1, 2]);
+
+    // Ack ONLY seq 2 via the per-delivery REST path, out of order — seq 1 stays queued.
+    const queued = await listDeliveries(bob.token);
+    const seq2 = queued.find((item) => item.seq === 2);
+    expect(seq2).toBeDefined();
+    const ackRes = await stack.app.request(`/v1/deliveries/${seq2!.id}/ack`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(ackRes.status).toBe(200);
+
+    // The cumulative cursor must NOT have advanced past seq 1: on node reconnect the
+    // still-queued seq 1 must replay rather than be skipped forever (only seq 2 is acked).
+    await node.handle.handleClose();
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(reconnected.sock.ofType('deliver').map((event) => event.seq)).toEqual([1]);
+  });
+
+  it('excludes expired (unswept) rows from the mailbox depth cap', async () => {
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1000, depthCap: 1 };
+
+    const ws = await createWorkspace(stack.app, 'mailbox-depthcap-expiry');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const aliceSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, alice.agentId, aliceSock);
+
+    const createRes = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(createRes.status).toBeLessThan(300);
+    for (const token of [alice.token, bob.token]) {
+      await stack.app.request('/v1/channels/team-chat/join', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
+    // Fill bob's mailbox to the cap (1), then let that row's TTL lapse WITHOUT
+    // sweeping it (no GET/inbox/replay) so it lingers as an expired queued row.
+    const first = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'will expire' }),
+    });
+    expect(first.status).toBe(201);
+    await new Promise((r) => setTimeout(r, 1200)); // > deliveryTtlMs, second-granular
+
+    // A new send must not be rejected as depth_cap: the expired row is not active depth.
+    const second = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'fresh' }),
+    });
+    expect(second.status).toBe(201);
+    await new Promise((r) => setTimeout(r, 75));
+
+    expect(aliceSock.ofType('delivery.failed').filter((event) => event.reason === 'depth_cap')).toHaveLength(0);
+    const bobQueued = await listDeliveries(bob.token);
+    expect(bobQueued.some((item) => (item.message as { text?: string }).text === 'fresh')).toBe(true);
   });
 
   it('does not dead-letter an acked delivery when ack and TTL expiry race', async () => {

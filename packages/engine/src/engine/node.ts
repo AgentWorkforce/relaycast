@@ -602,12 +602,19 @@ export async function handleNodeControlMessage(args: {
         return;
       case 'agent.register': {
         const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
+        // The relay broker's node_control client awaits a `reply` frame keyed by
+        // the request id (it matches `pending_agent_registrations` by `reply.id`
+        // and parses `data` as {agent_id, token, name} with deny_unknown_fields).
+        // A bare `agent.registered` frame leaves the token-authority handshake
+        // hanging until the 30s timeout, so spawn never completes. Reply in the
+        // shape the shipped broker consumes; the broker already holds the
+        // invocation_id/session_ref it sent, so only the minted identity is echoed.
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
           type: 'reply',
           ok: true,
-          data: registered,
+          data: { agent_id: registered.agent_id, token: registered.token, name: registered.name },
         });
         await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
         return;

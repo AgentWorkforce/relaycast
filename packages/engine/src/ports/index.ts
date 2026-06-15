@@ -110,6 +110,14 @@ export interface EngineConfig {
    */
   workspaceStreamEnabled?: boolean;
   /**
+   * Engine-wide default for the fleet node control surface (Phase 6 rollout flag).
+   * When false (the default), the node registry, node control WS, declarative
+   * triggers, and spawn/node-action placement are inert unless a workspace opts in
+   * via the per-workspace KV override. Lets fleet ship dark and roll out per
+   * workspace; legacy per-agent WS delivery is unaffected either way.
+   */
+  fleetNodesEnabled?: boolean;
+  /**
    * Bounded durable mailbox tuning. Hosted adapters may provide workspace
    * overrides; self-host defaults to one hour TTL and 1000 in-flight deliveries
    * per agent.

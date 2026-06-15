@@ -40,13 +40,26 @@ UPDATE deliveries
 SET expires_at = COALESCE(deadline, created_at + 3600)
 WHERE status IN ('queued', 'delivered') AND expires_at IS NULL;
 
+-- Seed the cumulative cursor from the contiguous acked prefix, not the max acked
+-- seq: node replay sends rows with seq > delivery_ack_seq, so if an older row is
+-- still queued/delivered below a newer acked row, MAX(acked seq) would skip it
+-- forever. The contiguous prefix is (lowest still-active seq) - 1; when nothing
+-- is active, every row is settled so the cursor can advance to the max seq.
 UPDATE agents
-SET delivery_ack_seq = COALESCE((
-  SELECT MAX(seq)
-  FROM deliveries
-  WHERE deliveries.agent_id = agents.id
-    AND deliveries.status = 'acked'
-), 0);
+SET delivery_ack_seq = COALESCE(
+  (
+    SELECT MIN(seq) - 1
+    FROM deliveries
+    WHERE deliveries.agent_id = agents.id
+      AND deliveries.status IN ('queued', 'delivered')
+  ),
+  (
+    SELECT MAX(seq)
+    FROM deliveries
+    WHERE deliveries.agent_id = agents.id
+  ),
+  0
+);
 
 CREATE UNIQUE INDEX IF NOT EXISTS deliveries_agent_seq_unique
   ON deliveries(workspace_id, agent_id, seq);

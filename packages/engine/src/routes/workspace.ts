@@ -14,6 +14,10 @@ import {
   getWorkspaceStreamConfig,
   setWorkspaceStreamOverride,
 } from '../lib/workspaceStream.js';
+import {
+  getFleetNodesConfig,
+  setFleetNodesOverride,
+} from '../lib/fleetNodes.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse, asCodedError } from '../lib/httpError.js';
@@ -30,6 +34,11 @@ const updateWorkspaceSchema = z.object({
 });
 
 const updateWorkspaceStreamSchema = z.object({
+  enabled: z.boolean().optional(),
+  mode: z.string().optional(),
+}).passthrough();
+
+const updateFleetNodesSchema = z.object({
   enabled: z.boolean().optional(),
   mode: z.string().optional(),
 }).passthrough();
@@ -355,6 +364,92 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
   } catch (err: unknown) {
     const error = asCodedError(err);
     logger.error('Failed to update stream config', {
+      workspaceId,
+      code: error.code,
+      status: error.status,
+      ...toErrorDetails(error),
+    });
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as ContentfulStatusCode);
+  }
+});
+
+// GET /workspace/fleet-nodes - effective fleet node control rollout flag (Phase 6)
+workspaceRoutes.get('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.fleet_nodes.get');
+  const workspaceId = c.get('workspace').id;
+  try {
+    const { kv, config: engineConfig } = c.get('engine');
+    const config = await getFleetNodesConfig(kv, workspaceId, engineConfig.fleetNodesEnabled ?? false);
+    return c.json({
+      ok: true,
+      data: {
+        enabled: config.enabled,
+        default_enabled: config.defaultEnabled,
+        override: config.override,
+      },
+    });
+  } catch (err: unknown) {
+    const error = asCodedError(err);
+    logger.error('Failed to get fleet nodes config', {
+      workspaceId,
+      code: error.code,
+      status: error.status,
+      ...toErrorDetails(error),
+    });
+    return c.json({
+      ok: false,
+      error: { code: error.code || 'internal_error', message: error.message },
+    }, (error.status || 500) as ContentfulStatusCode);
+  }
+});
+
+// PUT /workspace/fleet-nodes - set the per-workspace fleet node control override
+workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, async (c) => {
+  const logger = getRequestLogger(c, 'workspace.fleet_nodes.put');
+  const workspaceId = c.get('workspace').id;
+  try {
+    const parsed = updateFleetNodesSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
+      }, 400);
+    }
+    const body = parsed.data;
+
+    let override: boolean | null;
+    if (body?.mode === 'inherit') {
+      override = null;
+    } else if (typeof body?.enabled === 'boolean') {
+      override = body.enabled;
+    } else {
+      return c.json({
+        ok: false,
+        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
+      }, 400);
+    }
+
+    const { kv, config: engineConfig } = c.get('engine');
+    await setFleetNodesOverride(kv, workspaceId, override);
+    const config = await getFleetNodesConfig(kv, workspaceId, engineConfig.fleetNodesEnabled ?? false);
+    emitServerEvent(c, workspaceId, 'relaycast_server_workspace_fleet_nodes_updated', {
+      fleet_nodes_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
+    });
+
+    return c.json({
+      ok: true,
+      data: {
+        enabled: config.enabled,
+        default_enabled: config.defaultEnabled,
+        override: config.override,
+      },
+    });
+  } catch (err: unknown) {
+    const error = asCodedError(err);
+    logger.error('Failed to update fleet nodes config', {
       workspaceId,
       code: error.code,
       status: error.status,

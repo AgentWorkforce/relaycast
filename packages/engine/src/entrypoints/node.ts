@@ -6,6 +6,7 @@ import { serve, type ServerType } from '@hono/node-server';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { createEngine } from '../engine.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
+import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
@@ -101,7 +102,15 @@ export function startServer(options: StartServerOptions): RunningServer {
         rejectUpgrade(socket, 426, 'Upgrade Required');
         return;
       }
-      const token = url.searchParams.get('token');
+      // Accept the token from the `?token=` query param (SDK/Pear convention)
+      // OR an `Authorization: Bearer <token>` header. The relay Rust broker's
+      // node_control client authenticates the node control connection with the
+      // header form, so the self-host upgrade path must honour both.
+      const authHeader = req.headers['authorization'];
+      const bearer = typeof authHeader === 'string' && /^bearer\s+/i.test(authHeader)
+        ? authHeader.replace(/^bearer\s+/i, '').trim()
+        : undefined;
+      const token = url.searchParams.get('token') ?? bearer;
       if (!token) {
         rejectUpgrade(socket, 401, 'Unauthorized');
         return;
@@ -117,6 +126,12 @@ export function startServer(options: StartServerOptions): RunningServer {
           const node = await getNodeByTokenHash(db, hash);
           if (!node) {
             rejectUpgrade(socket, 401, 'Unauthorized');
+            return;
+          }
+          // Phase 6 rollout flag: the node control surface is inert until the
+          // workspace opts in (mirrors the rk_live stream gate below).
+          if (!(await isFleetNodesEnabled(kv, node.workspaceId, config?.fleetNodesEnabled ?? false))) {
+            rejectUpgrade(socket, 404, 'Not Found');
             return;
           }
           wss.handleUpgrade(req, socket, head, (ws) => {

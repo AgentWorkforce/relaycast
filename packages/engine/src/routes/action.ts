@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
 import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
+import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -164,6 +165,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       );
     }
 
+    const { nodeConnections, kv, config } = c.get('engine');
     const result = await actionEngine.invokeAction(
       db,
       workspace.id,
@@ -173,7 +175,12 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         caller_id: agent.id,
         caller_name: agent.name,
       },
-      { nodeConnections: c.get('engine').nodeConnections },
+      {
+        nodeConnections,
+        // Phase 6 rollout flag: spawn placement and node-handler dispatch refuse
+        // when fleet is off for the workspace. Agent-handler actions are unaffected.
+        fleetNodesEnabled: await isFleetNodesEnabled(kv, workspace.id, config.fleetNodesEnabled ?? false),
+      },
     );
 
     const eventData = {
