@@ -212,7 +212,6 @@ export class RelayCast {
         baseUrl: this.client.baseUrl,
       },
       {
-        surface: this.client.originSurface,
         client: this.client.originClient,
         version: this.client.originVersion,
         ...(this.client.originActor ? { originActor: this.client.originActor } : {}),
@@ -300,7 +299,6 @@ export class RelayCast {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         'X-SDK-Version': SDK_VERSION,
-        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
         ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),
@@ -353,7 +351,6 @@ export class RelayCast {
       headers: {
         'Content-Type': 'application/json',
         'X-SDK-Version': SDK_VERSION,
-        'X-Relaycast-Origin-Surface': SDK_ORIGIN.surface,
         'X-Relaycast-Origin-Client': SDK_ORIGIN.client,
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
         ...(agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: agentRelayDistinctId } : {}),

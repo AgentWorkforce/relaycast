@@ -68,7 +68,6 @@ def test_http_client_sends_x_sdk_version_header():
 
     req = route.calls[0].request
     assert req.headers["X-SDK-Version"] == SDK_VERSION
-    assert req.headers["X-Relaycast-Origin-Surface"] == "sdk"
     assert req.headers["X-Relaycast-Origin-Client"] == "@relaycast/python-sdk"
     assert req.headers["X-Relaycast-Origin-Version"] == SDK_VERSION
 
@@ -310,7 +309,6 @@ async def test_async_http_client_sends_x_sdk_version_header():
     await c.get("/v1/version")
     req = route.calls[0].request
     assert req.headers["X-SDK-Version"] == SDK_VERSION
-    assert req.headers["X-Relaycast-Origin-Surface"] == "sdk"
     assert req.headers["X-Relaycast-Origin-Client"] == "@relaycast/python-sdk"
     assert req.headers["X-Relaycast-Origin-Version"] == SDK_VERSION
     await c.close()

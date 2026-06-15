@@ -121,7 +121,6 @@ describe('originActor — HTTP', () => {
     const relay = createInternalRelayCast(
       { apiKey: 'rk_live_test' },
       {
-        surface: 'mcp',
         client: '@agent-relay/relaycast-mcp',
         version: '6.0.0',
         originActor: 'agent-relay-cli/agent/claude-code@2.3.1-opus4.8',
@@ -173,7 +172,7 @@ describe('originActor — HTTP', () => {
     const { createInternalRelayCast } = await import('../internal.js');
     const relay = createInternalRelayCast(
       { apiKey: 'rk_live_test', originActor: 'human' },
-      { surface: 'mcp', client: '@agent-relay/relaycast-mcp', version: '6.0.0', originActor: 'claude-code' },
+      { client: '@agent-relay/relaycast-mcp', version: '6.0.0', originActor: 'claude-code' },
     );
 
     mockFetch.mockImplementation(() => jsonOk([]));
@@ -200,7 +199,6 @@ describe('originActor — HTTP', () => {
     const relay = createInternalRelayCast(
       { apiKey: 'rk_live_test' },
       {
-        surface: 'mcp',
         client: '@agent-relay/relaycast-mcp',
         version: '6.0.0',
         agentRelayDistinctId: 'abc123def4567890',

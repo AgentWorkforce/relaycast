@@ -90,7 +90,6 @@ describe('AgentClient WebSocket integration', () => {
     expect(url.origin).toBe('ws://localhost:8080');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
-    expect(url.searchParams.get('origin_surface')).toBe('sdk');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
@@ -107,7 +106,6 @@ describe('AgentClient WebSocket integration', () => {
     expect(url.origin).toBe('wss://pr28-gateway.relaycast.dev');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
-    expect(url.searchParams.get('origin_surface')).toBe('sdk');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });

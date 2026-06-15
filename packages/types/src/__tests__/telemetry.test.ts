@@ -48,7 +48,6 @@ describe('telemetry schemas', () => {
     expect(() => parseInternalTelemetryEvent({
       event: 'relaycast_server_search_executed',
       distinct_id: 'workspace:ws_123',
-      origin_surface: 'sdk',
       origin_client: '@relaycast/sdk-ts',
       origin_version: '0.3.1',
       properties: {
@@ -60,7 +59,6 @@ describe('telemetry schemas', () => {
   it('normalizes missing origin values to unknown', () => {
     const origin = normalizeTelemetryOrigin({});
     expect(origin).toEqual({
-      origin_surface: 'unknown',
       origin_client: 'unknown',
       origin_version: 'unknown',
     });

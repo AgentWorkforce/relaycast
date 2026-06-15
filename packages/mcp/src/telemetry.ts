@@ -18,7 +18,6 @@ interface TelemetryState {
 export interface McpTelemetryOptions {
   posthogHost?: string;
   posthogApiKey?: string;
-  originSurface?: 'mcp';
   originClient?: string;
   originVersion?: string;
 }
@@ -210,7 +209,6 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
   const distinctId = process.env.RELAYCAST_TELEMETRY_DISTINCT_ID || state.anonymousId;
   const posthogHost = getPosthogHost(options);
   const posthogApiKey = getPosthogApiKey(options);
-  const originSurface = options.originSurface ?? 'mcp';
   const originClient = options.originClient ?? '@relaycast/mcp';
   const originVersion = options.originVersion ?? version;
 
@@ -237,7 +235,6 @@ export function createMcpTelemetry(version = 'unknown', options: McpTelemetryOpt
       distinct_id: parsed.distinct_id,
       properties: {
         ...parsed.properties,
-        origin_surface: originSurface,
         origin_client: originClient,
         origin_version: originVersion,
       },

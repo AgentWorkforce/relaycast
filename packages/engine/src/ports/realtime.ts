@@ -76,7 +76,7 @@ export interface UpgradeArgs {
   agentId?: string;
   /** Display name, used for presence events. */
   agentName?: string;
-  origin: { surface: string; client: string; version: string };
+  origin: { client: string; version: string };
   /** Cloud-only origin-actor path (`{app}/{type}[/{name}]`); defaults to `'unknown'`. */
   originActor?: string;
 }

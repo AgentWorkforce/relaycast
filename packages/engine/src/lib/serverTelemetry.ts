@@ -65,7 +65,6 @@ export function emitServerEvent(
       workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
       origin_actor: originActor,
-      origin_surface: origin.origin_surface,
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,
       ...normalizedProperties,

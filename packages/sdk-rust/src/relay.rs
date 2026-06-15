@@ -7,7 +7,6 @@ use crate::types::*;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
-const DEFAULT_ORIGIN_SURFACE: &str = "sdk";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
@@ -107,7 +106,6 @@ impl RelayCast {
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
-            .header("X-Relaycast-Origin-Surface", DEFAULT_ORIGIN_SURFACE)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
             .json(&serde_json::json!({ "name": name }))

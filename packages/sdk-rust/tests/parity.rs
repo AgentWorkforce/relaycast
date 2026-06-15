@@ -503,7 +503,6 @@ async fn create_workspace_sends_origin_headers() {
         .and(path("/v1/workspaces"))
         .and(header("content-type", "application/json"))
         .and(header("x-sdk-version", env!("CARGO_PKG_VERSION")))
-        .and(header("x-relaycast-origin-surface", "sdk"))
         .and(header("x-relaycast-origin-client", "@relaycast/sdk-rust"))
         .respond_with(ok(json!({
             "workspace_id": "ws_123",
