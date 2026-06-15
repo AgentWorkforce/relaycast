@@ -288,7 +288,7 @@ class TestAgentClientChannels:
     @respx.mock
     def test_channels_set_topic(self):
         updated = {**CHANNEL, "topic": "New topic"}
-        respx.patch(f"{BASE}/v1/channels/general").mock(return_value=ok(updated))
+        respx.patch(f"{BASE}/v1/channels/general/topic").mock(return_value=ok(updated))
         c = AgentClient(HttpClient(TOKEN, BASE))
         result = c.channels.set_topic("general", "New topic")
         assert result.topic == "New topic"

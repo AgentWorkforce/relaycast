@@ -337,7 +337,13 @@ class InboxResponse(BaseModel):
 
 # ── Durable Delivery ──────────────────────────────────────────────
 
-DeliveryStatus = Literal["accepted", "delivered", "deferred", "failed"]
+# Durable delivery status lifecycle (mirrors packages/types/src/delivery.ts):
+#   queued        -> durable row accepted, not yet sent to the current location
+#   delivered     -> sent to the current location, awaiting cumulative ack
+#   acked         -> recipient location acknowledged through the seq cursor (terminal success)
+#   failed        -> explicit failure report (terminal failure)
+#   dead_lettered -> TTL expiry / undeliverable (terminal failure)
+DeliveryStatus = Literal["queued", "delivered", "acked", "failed", "dead_lettered"]
 
 
 class DeliveryMessage(BaseModel):
@@ -356,6 +362,9 @@ class Delivery(BaseModel):
     channel_id: str
     agent_id: str
     status: DeliveryStatus
+    seq: int
+    location_type: str
+    location_node_id: str | None = None
     mode: str
     reason: str | None = None
     priority: str
@@ -363,6 +372,10 @@ class Delivery(BaseModel):
     error: str | None = None
     available_at: str | None = None
     deadline: str | None = None
+    expires_at: str | None = None
+    delivered_at: str | None = None
+    acked_at: str | None = None
+    dead_lettered_at: str | None = None
     created_at: str
     updated_at: str | None = None
 

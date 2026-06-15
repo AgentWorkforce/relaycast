@@ -130,14 +130,14 @@ class _ChannelsNamespace:
         self._client.post(f"/v1/channels/{_enc(name)}/leave")
 
     def set_topic(self, name: str, topic: str) -> Channel:
-        result = self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        result = self._client.patch(f"/v1/channels/{_enc(name)}/topic", {"topic": topic})
         return Channel.model_validate(result)
 
     def archive(self, name: str) -> None:
         self._client.delete(f"/v1/channels/{_enc(name)}")
 
     def invite(self, channel: str, agent: str) -> Any:
-        return self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+        return self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent_name": agent})
 
     def members(self, name: str) -> list[ChannelMemberInfo]:
         result = self._client.get(f"/v1/channels/{_enc(name)}/members")
@@ -523,14 +523,14 @@ class _AsyncChannelsNamespace:
         await self._client.post(f"/v1/channels/{_enc(name)}/leave")
 
     async def set_topic(self, name: str, topic: str) -> Channel:
-        result = await self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        result = await self._client.patch(f"/v1/channels/{_enc(name)}/topic", {"topic": topic})
         return Channel.model_validate(result)
 
     async def archive(self, name: str) -> None:
         await self._client.delete(f"/v1/channels/{_enc(name)}")
 
     async def invite(self, channel: str, agent: str) -> Any:
-        return await self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+        return await self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent_name": agent})
 
     async def members(self, name: str) -> list[ChannelMemberInfo]:
         result = await self._client.get(f"/v1/channels/{_enc(name)}/members")
