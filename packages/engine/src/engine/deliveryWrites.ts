@@ -73,12 +73,17 @@ function nextSeqSql(workspaceId: string, agentId: unknown) {
 }
 
 function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
+  // Expired-but-not-yet-swept rows are not active mailbox depth: TTL expiry is
+  // only swept lazily (GET /deliveries, /inbox, node replay), so an idle/offline
+  // recipient would otherwise keep rejecting new sends as `depth_cap` long after
+  // its queued rows should have dead-lettered. Exclude expired rows from the count.
   return sql`(
     SELECT COUNT(*)
     FROM deliveries d
     WHERE d.workspace_id = ${workspaceId}
       AND d.agent_id = ${agentId}
       AND d.status IN ('queued', 'delivered')
+      AND (d.expires_at IS NULL OR d.expires_at > unixepoch())
   ) < ${depthCap}`;
 }
 

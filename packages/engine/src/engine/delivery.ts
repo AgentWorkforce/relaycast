@@ -187,7 +187,12 @@ export async function ackDelivery(
   if (!existing) return null;
   if (existing.status === TERMINAL_SUCCESS_STATUS) return { delivery: serializeDelivery(existing), changed: false };
 
-  const [updated] = await ackRows(db, workspaceId, agentId, [existing], existing.seq);
+  // A single per-delivery ack may be out of order (e.g. acking seq 2 while seq 1
+  // is still queued). Mark this row acked but do NOT advance the cumulative
+  // cursor — `deliverPendingToNode` filters `seq > delivery_ack_seq`, so an
+  // over-advanced cursor would skip the lower unacked row forever on node
+  // replay. The row's `acked` status already excludes it from replay.
+  const [updated] = await ackRows(db, workspaceId, agentId, [existing]);
   return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
 }
 
@@ -306,17 +311,24 @@ async function ackRows(
   workspaceId: string,
   agentId: string,
   rows: DeliveryWithChannel[],
-  upToSeq: number,
+  // Cumulative cursor target. Pass the contiguous up-to-seq only for a genuine
+  // cumulative ack (the node `delivery.ack {up_to_seq}` path). Omit for single /
+  // out-of-order acks so the cursor is never advanced past a still-unacked
+  // lower-seq row (which `deliverPendingToNode` would then skip forever).
+  advanceCursorTo?: number,
 ): Promise<DeliveryRow[]> {
   const ids = rows.map((row) => row.id);
   return runAtomic(db, async (tx) => {
     await tx
       .update(agents)
       .set({
-        deliveryAckSeq: sql<number>`CASE
-          WHEN ${agents.deliveryAckSeq} < ${upToSeq} THEN ${upToSeq}
-          ELSE ${agents.deliveryAckSeq}
-        END`,
+        deliveryAckSeq:
+          advanceCursorTo === undefined
+            ? sql<number>`${agents.deliveryAckSeq}`
+            : sql<number>`CASE
+              WHEN ${agents.deliveryAckSeq} < ${advanceCursorTo} THEN ${advanceCursorTo}
+              ELSE ${agents.deliveryAckSeq}
+            END`,
         lastSeen: new Date(),
       })
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
@@ -529,9 +541,14 @@ export async function deliverPendingToNode(
     const senderName = row.senderAgentName ?? 'unknown';
     const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
     const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
-    const eventType = row.dmType
-      ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received')
-      : (row.threadId ? 'thread.reply' : 'message.created');
+    // Thread replies route as `thread.reply` in the live path even inside a DM /
+    // group DM (see routes/thread.ts fanout), so a missed thread reply must
+    // replay with the same event type/shape. Check `threadId` before `dmType`.
+    const eventType = row.threadId
+      ? 'thread.reply'
+      : (row.dmType
+        ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received')
+        : 'message.created');
 
     let eventData: Record<string, unknown>;
     if (eventType === 'dm.received') {
