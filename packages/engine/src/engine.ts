@@ -209,7 +209,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
-      surface: originInfo.origin_surface,
       client: originInfo.origin_client,
       version: originInfo.origin_version,
     };

@@ -7,7 +7,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { agents } from '../../db/schema.js';
+import { agents, deliveries } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
@@ -830,7 +830,7 @@ describe('durable delivery api', () => {
   });
 
   it('excludes expired (unswept) rows from the mailbox depth cap', async () => {
-    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1000, depthCap: 1 };
+    stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1 };
 
     const ws = await createWorkspace(stack.app, 'mailbox-depthcap-expiry');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -859,7 +859,14 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'will expire' }),
     });
     expect(first.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 1200)); // > deliveryTtlMs, second-granular
+    await new Promise((r) => setTimeout(r, 50)); // let the delivery row land
+    // Deterministically age bob's queued row past its TTL (no wall-clock race on
+    // the second-granular unixepoch boundary) without sweeping it — it lingers as
+    // an expired-but-present queued row.
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 3_600_000) })
+      .where(eq(deliveries.agentId, bob.agentId));
 
     // A new send must not be rejected as depth_cap: the expired row is not active depth.
     const second = await stack.app.request('/v1/channels/team-chat/messages', {
