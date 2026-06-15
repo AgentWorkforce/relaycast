@@ -9,13 +9,18 @@ import {
   dmParticipants,
   messageAttachments,
   files,
-  deliveries,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { buildMessageLogWrite } from './console.js';
+import {
+  buildDirectDeliveryWrite,
+  fetchDirectDeliveryOutcomes,
+  type DeliveryOutcomeRecords,
+} from './deliveryWrites.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -23,6 +28,7 @@ type AttachmentRow = { file_id: string; filename: string; content_type: string; 
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
+  mailbox?: MailboxConfig;
 }
 
 async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
@@ -259,6 +265,10 @@ export async function sendDm(
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
 
   const messageId = generateId();
+  const mailbox = options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS,
+    depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
 
   if (a2aTarget) {
     const payload = a2aEngine.translateRelayToA2a({
@@ -296,16 +306,16 @@ export async function sendDm(
 
     if (deliveryId) {
       writes.push(
-        writeDb.insert(deliveries).values({
-          id: deliveryId,
+        buildDirectDeliveryWrite(writeDb, {
+          deliveryId,
           workspaceId,
           messageId,
           agentId: toAgent.id,
           mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
           reason: 'dm',
-          priority: 'normal',
-          status: 'accepted',
-        }).onConflictDoNothing(),
+          ttlMs: mailbox.ttlMs,
+          depthCap: mailbox.depthCap,
+        }),
       );
     }
 
@@ -333,7 +343,10 @@ export async function sendDm(
     return writes;
   });
   const [message] = results[0] as (typeof messages.$inferSelect)[];
-  const dmDelivery = deliveryId ? { id: deliveryId, agentId: toAgent.id } : null;
+  const deliveryOutcomes: DeliveryOutcomeRecords = deliveryId
+    ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
+    : { deliveries: [], rejections: [] };
+  const dmDelivery = deliveryOutcomes.deliveries[0] ?? null;
 
   const injectionMode = data.mode ?? 'wait';
   return {
@@ -359,6 +372,7 @@ export async function sendDm(
 
     // Internal: delivery record for the recipient — stripped by route before response
     _delivery: dmDelivery,
+    _delivery_rejections: deliveryOutcomes.rejections,
   };
 }
 

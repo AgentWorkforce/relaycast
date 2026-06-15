@@ -7,9 +7,12 @@ import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { dmParticipants } from '../db/schema.js';
 import { fanoutToAgents } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -106,10 +109,10 @@ groupDmRoutes.post(
       }
 
       const conversationId = c.req.param('conversation_id');
-      const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => {
-        const { _deliveries, ...publicGroupData } = data;
-        return { ...publicGroupData, from_name: agent!.name };
-      };
+      const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => buildGroupDmReceivedEventData(data, {
+        fromName: agent!.name,
+      });
 
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
@@ -132,6 +135,7 @@ groupDmRoutes.post(
               attachments: normalizedAttachments,
               mode,
             },
+            { mailbox },
           ),
         afterOperation: async (data) => {
           await sendWebhookEvent(c, {
@@ -147,7 +151,14 @@ groupDmRoutes.post(
       }
 
       if (!idempotent.replayed) {
-        const { _deliveries, ...publicGroupData } = idempotent.data as typeof idempotent.data & { _deliveries?: Array<{ id: string; agentId: string }> };
+        const {
+          _deliveries,
+          _delivery_rejections,
+          ...publicGroupData
+        } = idempotent.data as typeof idempotent.data & {
+          _deliveries?: Parameters<typeof routeDeliveryOutcomes>[1];
+          _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
+        };
         const eventData = toGroupDmReceivedEventData(idempotent.data);
         try {
           const rows = await db
@@ -168,19 +179,19 @@ groupDmRoutes.post(
           // Ignore fanout failures
         }
 
-        // Emit delivery.accepted individually to each recipient's AgentDO
         if (_deliveries && _deliveries.length > 0) {
-          for (const d of _deliveries) {
-            runInBackground(
-              c,
-              fanoutToAgents(c, [d.agentId], 'delivery.accepted', {
-                delivery_id: d.id,
-                message_id: String(publicGroupData.id),
-                reason: 'dm',
-              }),
-              'fanout delivery.accepted',
-            );
-          }
+          runInBackground(
+            c,
+            routeDeliveryOutcomes(c, _deliveries, 'group_dm.received', eventData),
+            'route group dm deliveries',
+          );
+        }
+        if (_delivery_rejections && _delivery_rejections.length > 0) {
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, agent!.id, _delivery_rejections),
+            'fanout delivery rejected',
+          );
         }
 
         emitServerEvent(c, workspace.id, 'relaycast_server_group_dm_message_sent', {
@@ -190,7 +201,14 @@ groupDmRoutes.post(
         });
       }
 
-      const { _deliveries: _drop, ...responseData } = idempotent.data as typeof idempotent.data & { _deliveries?: unknown };
+      const {
+        _deliveries: _dropDeliveries,
+        _delivery_rejections: _dropRejections,
+        ...responseData
+      } = idempotent.data as typeof idempotent.data & {
+        _deliveries?: unknown;
+        _delivery_rejections?: unknown;
+      };
       return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);

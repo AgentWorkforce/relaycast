@@ -35,12 +35,12 @@ describe('AgentClient durable delivery', () => {
     it('passes status and limit as query params', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));
 
-      await me.deliveries({ status: 'accepted', limit: 25 });
+      await me.deliveries({ status: 'queued', limit: 25 });
 
       const [url] = mockFetch.mock.calls[0]!;
       const parsed = new URL(url as string);
       expect(parsed.pathname).toBe('/v1/deliveries');
-      expect(parsed.searchParams.get('status')).toBe('accepted');
+      expect(parsed.searchParams.get('status')).toBe('queued');
       expect(parsed.searchParams.get('limit')).toBe('25');
     });
 
@@ -58,7 +58,7 @@ describe('AgentClient durable delivery', () => {
 
   describe('ackDelivery()', () => {
     it('POSTs to /v1/deliveries/:id/ack', async () => {
-      mockFetch.mockImplementation(() => mockResponse({ id: 'del_1', status: 'delivered' }));
+      mockFetch.mockImplementation(() => mockResponse({ id: 'del_1', status: 'acked' }));
 
       await me.ackDelivery('del_1');
 
@@ -101,7 +101,7 @@ describe('AgentClient durable delivery', () => {
 
   describe('deferDelivery()', () => {
     it('decamelizes availableAt -> available_at in the body', async () => {
-      mockFetch.mockImplementation(() => mockResponse({ id: 'del_1', status: 'deferred' }));
+      mockFetch.mockImplementation(() => mockResponse({ id: 'del_1', status: 'queued' }));
       const availableAt = '2026-06-01T00:01:00.000Z';
 
       await me.deferDelivery('del_1', { availableAt, reason: 'busy' });
