@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { RelayCast, AgentClient } from '@relaycast/sdk';
+import type { RelayCast, AgentClient, JsonValue } from '@relaycast/sdk';
 import { SubscribableEventTypeSchema } from '@relaycast/types';
 import {
   identityOverrideInputShape,
@@ -309,7 +309,9 @@ export function registerProgrammabilityTools(
   }, async ({ name, invocation_id, output, error, duration_ms, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
     const result = await client.actions.completeInvocation(name, invocation_id, {
-      output,
+      // The tool accepts an output object; the SDK/contract output type is the
+      // wider JsonValue (scalars/arrays/null also legal), and an object is one.
+      output: output as JsonValue | undefined,
       error,
       durationMs: duration_ms,
     });

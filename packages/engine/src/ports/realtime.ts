@@ -10,11 +10,13 @@
  *  - Cloudflare DO adapter (cloud, lives in the cloud repo): translates each
  *    call back into `env.X_DO.idFromName(...).fetch(...)`.
  *
- * `RealtimeBus` and `ConnectionRegistry` are intentionally separate interfaces
+ * `RealtimeBus`, `ConnectionRegistry`, and `NodeConnectionRegistry` are intentionally separate interfaces
  * with different callers (routes drive the bus; the WS upgrade route drives the
  * registry) even though a single in-process adapter implements both over shared
  * state (an agent's seq counter and its socket set must live together).
  */
+
+import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /** A client-facing event payload, already passed through `transformForClient`. */
 export type EngineEvent = Record<string, unknown>;
@@ -107,4 +109,43 @@ export interface ConnectionRegistry {
 
   /** Force-close all of an agent's sockets (e.g. on token rotation). Replaces AgentDO `/force-disconnect`. */
   disconnectAgent(workspaceId: string, agentId: string): Promise<void>;
+}
+
+export interface NodeUpgradeArgs {
+  request: Request;
+  workspaceId: string;
+  nodeId: string;
+  nodeName: string;
+  origin: { surface: string; client: string; version: string };
+  originActor?: string;
+}
+
+export interface NodeConnectionRegistry {
+  /**
+   * Upgrade an incoming node-control request. Cloudflare adapters own the 101
+   * response; the Node adapter handles upgrades in the HTTP server and exposes
+   * attachNodeSocket instead.
+   */
+  upgradeNode(args: NodeUpgradeArgs): Promise<Response>;
+
+  /** Push a typed fleet control message to the node's live broker connection. */
+  sendToNode(
+    workspaceId: string,
+    nodeId: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean>;
+
+  /** True when the node currently has a live control connection. */
+  isNodeConnected(workspaceId: string, nodeId: string): boolean;
+
+  /** Force-close all sockets for a node. */
+  disconnectNode(workspaceId: string, nodeId: string): Promise<void>;
+
+  /**
+   * Flush any queued `action.invoke` frames to the node's live connection.
+   * Must be invoked once the node is marked online (post node.register /
+   * node.heartbeat) so capacity reservation for queued spawns can succeed.
+   * Implementations serialize concurrent drains per node.
+   */
+  drainNode(workspaceId: string, nodeId: string): Promise<void>;
 }

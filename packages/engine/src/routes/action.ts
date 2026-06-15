@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
+import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
 import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -16,7 +18,8 @@ export const actionRoutes = new Hono<AppEnv>();
 const registerActionSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  handler_agent: z.string().min(1),
+  handler_agent: z.string().min(1).optional(),
+  handler_node: z.string().min(1).optional(),
   input_schema: z.record(z.string(), z.unknown()).optional(),
   output_schema: z.record(z.string(), z.unknown()).optional(),
   available_to: z.array(z.string().min(1)).optional(),
@@ -27,7 +30,7 @@ const invokeActionSchema = z.object({
 });
 
 const completeInvocationSchema = z.object({
-  output: z.record(z.string(), z.unknown()).optional(),
+  output: FleetWireJsonValueSchema.optional(),
   error: z.string().optional(),
   duration_ms: z.number().int().nonnegative().optional(),
 });
@@ -41,13 +44,13 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
     if (!parsed.success) {
       const hasNameIssue = parsed.error.issues.some((i) => i.path[0] === 'name');
       const hasDescIssue = parsed.error.issues.some((i) => i.path[0] === 'description');
-      const hasHandlerIssue = parsed.error.issues.some((i) => i.path[0] === 'handler_agent');
+      const hasHandlerIssue = parsed.error.issues.some((i) => i.path[0] === 'handler_agent' || i.path[0] === 'handler_node');
       const message = hasNameIssue
         ? 'name is required'
         : hasDescIssue
           ? 'description is required'
           : hasHandlerIssue
-            ? 'handler_agent is required'
+            ? 'handler_agent or handler_node is required'
             : 'invalid action registration body';
       return c.json({ ok: false, error: { code: 'invalid_request', message } }, 400);
     }
@@ -65,7 +68,8 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
 
     emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
       action_name: result.name,
-      handler_agent_name: parsed.data.handler_agent,
+      handler_agent_name: parsed.data.handler_agent ?? null,
+      handler_node_name: parsed.data.handler_node ?? null,
     });
     runInBackground(
       c,
@@ -169,6 +173,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         caller_id: agent.id,
         caller_name: agent.name,
       },
+      { nodeConnections: c.get('engine').nodeConnections },
     );
 
     const eventData = {
@@ -176,13 +181,16 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       action_name: result.action_name,
       caller_name: agent.name,
       handler_agent_id: result.handler_agent_id,
+      handler_node_id: result.handler_node_id,
     };
 
-    runInBackground(
-      c,
-      fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
-      'fanout action.invoked',
-    );
+    if (result.handler_agent_id) {
+      runInBackground(
+        c,
+        fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
+        'fanout action.invoked',
+      );
+    }
     await sendWebhookEvent(c, {
       type: 'action.invoked',
       workspaceId: workspace.id,
@@ -245,30 +253,7 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
       );
     }
 
-    const eventType = result.status === 'failed' ? 'action.failed' : 'action.completed';
-    const eventPayload = {
-      invocation_id: result.invocation_id,
-      action_name: result.action_name,
-      status: result.status,
-      output: result.output,
-      error: result.error,
-    };
-
-    // Push directly to the invoking agent's AgentDO (targeted delivery)
-    if (result.caller_id) {
-      runInBackground(
-        c,
-        fanoutToAgents(c, [result.caller_id], eventType, eventPayload),
-        `fanout ${eventType} to caller`,
-      );
-    }
-    // Also broadcast on workspace stream for dashboard/workspace-key subscribers
-    runInBackground(
-      c,
-      fanoutToWorkspace(c, eventType, eventPayload),
-      `fanout ${eventType} workspace`,
-    );
-    await sendWebhookEvent(c, { type: eventType, workspaceId: workspace.id, data: result });
+    await emitInvocationCompletionEffects(c.get('engine'), workspace.id, result);
 
     // Strip caller_id from client response (internal routing detail)
     const { caller_id: _drop, ...publicResult } = result;

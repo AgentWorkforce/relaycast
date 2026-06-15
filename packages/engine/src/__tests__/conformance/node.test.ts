@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
@@ -6,6 +7,12 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
+import { actionInvocations, agents, nodes } from '../../db/schema.js';
+import { sweepTimedOutInvocations } from '../../engine/action.js';
+
+function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
+  return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
+}
 
 /**
  * Conformance suite for the in-process Node adapter. These assert the
@@ -203,6 +210,513 @@ describe('node adapter conformance', () => {
       expect(delivered.length).toBeGreaterThanOrEqual(1);
       expect(typeof delivered[0].channel_seq).toBe('number');
       expect(typeof delivered[0].agent_seq).toBe('number');
+    });
+  });
+
+  describe('fleet node control', () => {
+    async function enrollAndAttachNode(
+      ws: { workspaceKey: string; workspaceId: string },
+      opts: {
+        id: string;
+        name: string;
+        capabilities: Array<ReturnType<typeof capability>>;
+        load?: number;
+        maxAgents?: number;
+      },
+    ) {
+      const create = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          node_id: opts.id,
+          name: opts.name,
+          capabilities: opts.capabilities.map((cap) => cap.name),
+          max_agents: opts.maxAgents ?? 4,
+          tags: ['test'],
+          version: 'test-node',
+        }),
+      });
+      expect(create.status).toBe(201);
+
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, opts.id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'node-register-1',
+        type: 'node.register',
+        name: opts.name,
+        node_id: opts.id,
+        capabilities: opts.capabilities,
+        max_agents: opts.maxAgents ?? 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      expect(sock.ofType('reply')).toHaveLength(1);
+      expect(sock.ofType('reply')[0]).toMatchObject({
+        id: 'node-register-1',
+        ok: true,
+        data: expect.objectContaining({ name: opts.name }),
+      });
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'node-register-bad',
+        type: 'node.register',
+        name: opts.name,
+        node_id: 'wrong-node',
+        capabilities: opts.capabilities,
+        max_agents: opts.maxAgents ?? 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      expect(sock.ofType('error')).toHaveLength(1);
+      expect(sock.ofType('error')[0]).toMatchObject({
+        id: 'node-register-bad',
+        ok: false,
+        code: 'node_id_mismatch',
+      });
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: opts.load ?? 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      return { sock, handle };
+    }
+
+    it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' }), capability('echo', 'tool')],
+        load: 0,
+      });
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-1', task: 'say hi' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const spawnBody = await spawn.json() as { data: { invocation_id: string } };
+      const spawnInvoke = alpha.sock.ofType('action.invoke').at(-1);
+      expect(spawnInvoke).toMatchObject({
+        invocation_id: spawnBody.data.invocation_id,
+        action: 'spawn:claude',
+      });
+
+      const blockedCompletion = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ output: { agent: 'should-be-rejected' } }),
+      });
+      expect(blockedCompletion.status).toBe(403);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [
+          {
+            agent_id: 'agt_worker_1',
+            name: 'worker-1',
+            invocation_id: spawnBody.data.invocation_id,
+            session_ref: 'pty://alpha/sessions/worker-1',
+          },
+        ],
+      }));
+
+      const spawnAfterInventory = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(spawnAfterInventory.status).toBe(200);
+      expect(((await spawnAfterInventory.json()) as { data: { status: string } }).data.status).toBe('completed');
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: spawnBody.data.invocation_id,
+        output: { agent: 'worker-1', token: 'at_live_child' },
+      }));
+
+      const spawnStatus = await stack.app.request(`/v1/actions/spawn/invocations/${spawnBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect(spawnStatus.status).toBe(200);
+      expect(((await spawnStatus.json()) as { data: { status: string } }).data.status).toBe('completed');
+
+      const echoScalar = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'scalar' } }),
+      });
+      expect(echoScalar.status).toBe(201);
+      const echoScalarBody = await echoScalar.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoScalarBody.data.invocation_id,
+        output: 'ok',
+      }));
+      const echoScalarStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoScalarBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoScalarStatus.json() as { data: { output: unknown } }).data.output).toBe('ok');
+
+      const echoArray = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'array' } }),
+      });
+      expect(echoArray.status).toBe(201);
+      const echoArrayBody = await echoArray.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoArrayBody.data.invocation_id,
+        output: ['a', 1, null],
+      }));
+      const echoArrayStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoArrayBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoArrayStatus.json() as { data: { output: unknown } }).data.output).toEqual(['a', 1, null]);
+
+      const echoNull = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'null' } }),
+      });
+      expect(echoNull.status).toBe(201);
+      const echoNullBody = await echoNull.json() as { data: { invocation_id: string } };
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'action.result',
+        invocation_id: echoNullBody.data.invocation_id,
+        output: null,
+      }));
+      const echoNullStatus = await stack.app.request(`/v1/actions/echo/invocations/${echoNullBody.data.invocation_id}`, {
+        headers: { authorization: `Bearer ${caller.token}` },
+      });
+      expect((await echoNullStatus.json() as { data: { output: unknown } }).data.output).toBeNull();
+
+      const roster = await stack.app.request('/v1/nodes?capability=spawn%3Aclaude', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(roster.status).toBe(200);
+      const rosterBody = await roster.json() as { data: Array<{ name: string; live: boolean; handlers_live: boolean }> };
+      expect(rosterBody.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'alpha', live: true, handlers_live: true }),
+      ]));
+
+      const trigger = await stack.app.request('/v1/triggers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ channel: 'general', pattern: 'ship', action_name: 'echo' }),
+      });
+      expect(trigger.status).toBe(201);
+
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ text: 'ship it' }),
+      });
+      expect(post.status).toBe(201);
+      await new Promise((r) => setTimeout(r, 75));
+      const triggerInvoke = alpha.sock.ofType('action.invoke').find((event) => event.action === 'echo');
+      expect(triggerInvoke).toMatchObject({ action: 'echo' });
+
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'agent.register',
+        name: 'claimed-agent',
+        session_ref: 'pty://alpha/sessions/claimed-agent',
+        resumable: true,
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        ok: true,
+        data: expect.objectContaining({ name: 'claimed-agent' }),
+      });
+
+      beta.sock.received.length = 0;
+      await beta.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'inventory.sync',
+        agents: [
+          {
+            agent_id: 'agt_conflict',
+            name: 'claimed-agent',
+            session_ref: 'pty://beta/sessions/claimed-agent',
+          },
+        ],
+      }));
+      expect(beta.sock.ofType('error').at(-1)).toMatchObject({
+        code: 'agent_location_conflict',
+      });
+
+      const worker = await stack.runtime.handle.db
+        .select({
+          locationNodeId: agents.locationNodeId,
+          locationType: agents.locationType,
+          status: agents.status,
+        })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'claimed-agent')))
+        .then((rows) => rows[0]);
+      expect(worker).toMatchObject({
+        locationNodeId: 'node_alpha',
+        locationType: 'via_node',
+        status: 'active',
+      });
+
+      const echo = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'reschedule me' } }),
+      });
+      expect(echo.status).toBe(201);
+      const echoBody = await echo.json() as { data: { invocation_id: string } };
+      expect(alpha.sock.ofType('action.invoke').at(-1)).toMatchObject({
+        invocation_id: echoBody.data.invocation_id,
+        action: 'echo',
+      });
+
+      await alpha.handle.handleClose();
+      await new Promise((r) => setTimeout(r, 25));
+      expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({
+        invocation_id: echoBody.data.invocation_id,
+        action: 'echo',
+      });
+    });
+
+    it('drains an offline-queued invoke into dispatched state so the timeout sweep reschedules it', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-drain-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      // alpha owns the `echo` action; beta is a live fallback handler.
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+
+      // Take alpha offline so the next invoke can only be queued, not delivered.
+      await alpha.handle.handleClose();
+
+      const echo = await stack.app.request('/v1/actions/echo/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { value: 'drain me' } }),
+      });
+      expect(echo.status).toBe(201);
+      const invocationId = (await echo.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      const db = stack.runtime.handle.db;
+      const queued = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      // Queued for the offline node: pending, no dispatch timestamp yet.
+      expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
+      expect(queued.dispatchedAt).toBeNull();
+
+      // alpha reconnects → the queued frame drains and the invocation moves to
+      // dispatched via the shared transition (dispatched_at + retry_after_at set).
+      const alphaSock = new FakeSocket();
+      stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
+      await new Promise((r) => setTimeout(r, 25));
+      expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
+
+      const drained = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(drained.status).toBe('dispatched');
+      expect(drained.dispatchedAt).toBeInstanceOf(Date);
+      expect(drained.retryAfterAt).toBeInstanceOf(Date);
+
+      // With the invocation now in dispatched state, the dispatch-timeout sweep
+      // (timeout 0 ⇒ already overdue) reschedules it onto the live fallback node.
+      beta.sock.received.length = 0;
+      const rescheduled = await sweepTimedOutInvocations(db, stack.runtime.realtime, 0);
+      expect(rescheduled).toBeGreaterThanOrEqual(1);
+      expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
+    });
+
+    it('drains a queued spawn only once the node is back online, arming a retry backstop meanwhile', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-drain-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+
+      // Take alpha offline so a targeted spawn can only queue (not dispatch).
+      await alpha.handle.handleClose();
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'worker-drain', task: 'hi', target_node: 'alpha' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      const db = stack.runtime.handle.db;
+      const queued = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
+      expect(queued.spawnReservedAt).toBeNull();
+
+      // Reconnect the socket but DO NOT register yet: the node is still offline,
+      // so the drain can't reserve spawn capacity. It must keep the frame queued
+      // and arm a retry_after_at backstop rather than delivering or dropping it.
+      const alphaSock = new FakeSocket();
+      const alphaHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
+      await new Promise((r) => setTimeout(r, 25));
+      expect(alphaSock.ofType('action.invoke')).toHaveLength(0);
+      const armed = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(armed.status).toBe('pending');
+      expect(armed.spawnReservedAt).toBeNull();
+      expect(armed.retryAfterAt).toBeInstanceOf(Date); // sweeper backstop armed
+
+      // Register → node is marked online and the post-register drain reserves
+      // capacity and dispatches the queued spawn with the same invocation id.
+      await alphaHandle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'reg-reconnect',
+        type: 'node.register',
+        name: 'alpha',
+        node_id: 'node_alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        max_agents: 4,
+        tags: ['test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+
+      expect(alphaSock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'spawn:claude' });
+      const dispatched = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(dispatched.status).toBe('dispatched');
+      expect(dispatched.dispatchedAt).toBeInstanceOf(Date);
+      expect(dispatched.spawnReservedAt).toBeInstanceOf(Date);
+
+      const node = await db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.id, 'node_alpha'))
+        .then((rows) => rows[0]);
+      expect(node.reservedAgents ?? 0).toBeGreaterThanOrEqual(1);
+    });
+
+    it('reserves spawn capacity atomically across concurrent invocations', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-node-capacity-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 1,
+      });
+
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta',
+        name: 'beta',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+        maxAgents: 1,
+      });
+
+      const [first, second] = await Promise.all([
+        stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'worker-a', task: 'one' } }),
+        }),
+        stack.app.request('/v1/actions/spawn/invoke', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ input: { cli: 'claude', name: 'worker-b', task: 'two' } }),
+        }),
+      ]);
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      const spawnNodes = [await first.json(), await second.json()] as Array<{ data: { handler_node_id: string } }>;
+      expect(new Set(spawnNodes.map((entry) => entry.data.handler_node_id))).toEqual(new Set(['node_alpha', 'node_beta']));
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn')).length).toBe(1);
+      expect(beta.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn')).length).toBe(1);
+    });
+
+    it('fires a trigger only once when concurrent posts match the same rate-limited trigger', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-trigger-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('echo', 'tool')],
+        load: 0,
+      });
+
+      const trigger = await stack.app.request('/v1/triggers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ channel: 'general', pattern: 'ship', action_name: 'echo' }),
+      });
+      expect(trigger.status).toBe(201);
+
+      await Promise.all([
+        stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ text: 'ship it once' }),
+        }),
+        stack.app.request('/v1/channels/general/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+          body: JSON.stringify({ text: 'ship it twice' }),
+        }),
+      ]);
+
+      await new Promise((r) => setTimeout(r, 75));
+      const triggerInvokes = alpha.sock.ofType('action.invoke').filter((event) => event.action === 'echo');
+      expect(triggerInvokes).toHaveLength(1);
     });
   });
 });

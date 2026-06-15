@@ -24,8 +24,10 @@ export type {
   EngineEvent,
   RealtimeBus,
   ConnectionRegistry,
+  NodeConnectionRegistry,
   BroadcastToChannelArgs,
   UpgradeArgs,
+  NodeUpgradeArgs,
 } from './realtime.js';
 export type { PresenceTracker } from './presence.js';
 export type { RateLimiter, RateLimitResult } from './rate-limit.js';
@@ -47,7 +49,7 @@ export type {
 export type { TelemetrySink, TelemetryEvent } from './telemetry.js';
 
 import type { EngineDb } from './database.js';
-import type { RealtimeBus, ConnectionRegistry } from './realtime.js';
+import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
 import type { PresenceTracker } from './presence.js';
 import type { RateLimiter } from './rate-limit.js';
 import type { FileStorage } from './files.js';
@@ -62,6 +64,7 @@ export interface EnginePorts {
   db: EngineDb;
   realtime: RealtimeBus;
   connections: ConnectionRegistry;
+  nodeConnections: NodeConnectionRegistry;
   presence: PresenceTracker;
   rateLimiter: RateLimiter;
   files: FileStorage;

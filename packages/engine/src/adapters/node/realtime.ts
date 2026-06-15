@@ -1,14 +1,22 @@
 import type {
   RealtimeBus,
   ConnectionRegistry,
+  NodeConnectionRegistry,
   EngineEvent,
   BroadcastToChannelArgs,
   UpgradeArgs,
+  NodeUpgradeArgs,
 } from '../../ports/realtime.js';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
+import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
+import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import { reserveNodeCapacity } from '../../engine/placement.js';
+import { markDrainedInvocationDispatched } from '../../engine/action.js';
+import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
+import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
 /** Matches the Cloudflare AgentDO resync ring size. */
 const RESYNC_BUFFER_SIZE = 500;
@@ -37,6 +45,18 @@ interface AgentConn {
   ring: Array<{ seq: number; payload: EngineEvent }>;
 }
 
+interface NodeConn {
+  socket: EngineSocket;
+}
+
+interface QueuedNodeMessage {
+  key: string;
+  message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
+}
+
+/** Backstop delay armed on a queued spawn whose capacity reservation deferred. */
+const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
+
 interface ChannelState {
   seq: number;
   members: string[];
@@ -55,17 +75,26 @@ interface ChannelState {
  * backend (Redis pub/sub for fanout, a shared counter store) plugged in behind
  * these same two interfaces.
  */
-export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
+export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly agents = new Map<string, AgentConn>();
   private readonly channels = new Map<string, ChannelState>();
   private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
+  private readonly nodeSockets = new Map<string, NodeConn>();
+  private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
+  /** Serializes drains per node so concurrent triggers never overlap. */
+  private readonly nodeDrainChains = new Map<string, Promise<void>>();
   private presence: PresenceTracker | undefined;
+  private nodeCompletionDeps: InvocationCompletionDeps | undefined;
 
   constructor(private readonly db: EngineDb) {}
 
   /** Wire the presence tracker after construction (ping → heartbeat, close → offline). */
   setPresence(presence: PresenceTracker): void {
     this.presence = presence;
+  }
+
+  setNodeCompletionDeps(deps: InvocationCompletionDeps): void {
+    this.nodeCompletionDeps = deps;
   }
 
   private agentKey(workspaceId: string, agentId: string): string {
@@ -90,6 +119,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
       this.channels.set(key, ch);
     }
     return ch;
+  }
+
+  private nodeKey(workspaceId: string, nodeId: string): string {
+    return `${workspaceId}:${nodeId}`;
   }
 
   /* ---------------------------- RealtimeBus ---------------------------- */
@@ -221,6 +254,58 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
     }
   }
 
+  /* ---------------------- NodeConnectionRegistry ---------------------- */
+
+  async upgradeNode(_args: NodeUpgradeArgs): Promise<Response> {
+    return new Response('WebSocket upgrade is handled by the Node server', { status: 426 });
+  }
+
+  async sendToNode(
+    workspaceId: string,
+    nodeId: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const current = this.nodeSockets.get(key)?.socket;
+    if (current) {
+      try {
+        current.send(JSON.stringify(message));
+        return true;
+      } catch {
+        this.nodeSockets.delete(key);
+      }
+    }
+
+    if (message.type !== 'action.invoke') {
+      return false;
+    }
+
+    const queue = this.nodeQueues.get(key) ?? [];
+    const queueKey = `${message.type}:${message.invocation_id}`;
+    if (!queue.some((item) => item.key === queueKey)) {
+      queue.push({ key: queueKey, message });
+    }
+    while (queue.length > 100) queue.shift();
+    this.nodeQueues.set(key, queue);
+    return true;
+  }
+
+  isNodeConnected(workspaceId: string, nodeId: string): boolean {
+    return !!this.nodeSockets.get(this.nodeKey(workspaceId, nodeId));
+  }
+
+  async disconnectNode(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const conn = this.nodeSockets.get(key);
+    if (!conn) return;
+    this.nodeSockets.delete(key);
+    try {
+      conn.socket.close(1000, 'force-disconnect');
+    } catch {
+      // already closed
+    }
+  }
+
   /* --------------------- Node transport attach helpers ----------------- */
 
   /** Register a live agent socket; returns handlers the transport drives. */
@@ -252,6 +337,121 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry {
         set!.delete(socket);
       },
     };
+  }
+
+  /** Register a live fleet node control socket; returns handlers the transport drives. */
+  attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const previous = this.nodeSockets.get(key)?.socket;
+    this.nodeSockets.set(key, { socket });
+    if (previous && previous !== socket) {
+      try {
+        previous.close(1000, 'superseded');
+      } catch {
+        // already closed
+      }
+    }
+    const handle: SocketHandle = {
+      handleMessage: async (raw) => handleNodeControlMessage({
+        db: this.db,
+        registry: this,
+        completionDeps: this.nodeCompletionDeps,
+        workspaceId,
+        nodeId,
+        socket,
+        raw,
+      }),
+      handleClose: async () => {
+        const conn = this.nodeSockets.get(key);
+        if (conn?.socket === socket) {
+          this.nodeSockets.delete(key);
+          await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
+        }
+      },
+    };
+    // Best-effort early flush (covers non-spawn frames that need no capacity);
+    // the authoritative drain fires post node.register/heartbeat once the node
+    // is marked online, so queued spawns can reserve capacity. See drainNode.
+    void this.drainNode(workspaceId, nodeId);
+    return handle;
+  }
+
+  /**
+   * Public, serialized drain entrypoint. Concurrent calls for the same node are
+   * chained so two drains never run at once (which could double-reserve spawn
+   * capacity); each caller's promise resolves after its own drain pass runs.
+   */
+  drainNode(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const prior = this.nodeDrainChains.get(key) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(() => this.drainNodeQueue(workspaceId, nodeId));
+    this.nodeDrainChains.set(key, next);
+    void next.finally(() => {
+      if (this.nodeDrainChains.get(key) === next) this.nodeDrainChains.delete(key);
+    });
+    return next;
+  }
+
+  private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
+    const key = this.nodeKey(workspaceId, nodeId);
+    const conn = this.nodeSockets.get(key)?.socket;
+    if (!conn) return;
+    const queued = this.nodeQueues.get(key);
+    if (!queued || queued.length === 0) return;
+
+    const remaining: QueuedNodeMessage[] = [];
+    for (const item of queued) {
+      try {
+        const [row] = await this.db
+          .select({
+            dispatchedNodeId: actionInvocations.dispatchedNodeId,
+            status: actionInvocations.status,
+            spawnReservedAt: actionInvocations.spawnReservedAt,
+          })
+          .from(actionInvocations)
+          .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
+        if (!row) continue;
+        if (row.dispatchedNodeId !== nodeId || (row.status !== 'dispatched' && row.status !== 'pending')) continue;
+        const isSpawnAction = item.message.action === 'spawn' || item.message.action.startsWith('spawn:');
+        if (isSpawnAction && !row.spawnReservedAt) {
+          const reserved = await reserveNodeCapacity(this.db, workspaceId, nodeId);
+          if (!reserved) {
+            // Node not yet online (drain ran before register) or genuinely at
+            // capacity: keep the frame queued, but arm retry_after_at so the
+            // dispatch sweeper reschedules this pending spawn as a backstop if
+            // no later drain trigger (register/heartbeat) delivers it first.
+            await this.db
+              .update(actionInvocations)
+              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
+              .where(and(
+                eq(actionInvocations.workspaceId, workspaceId),
+                eq(actionInvocations.id, item.message.invocation_id),
+                eq(actionInvocations.status, 'pending'),
+              ));
+            remaining.push(item);
+            continue;
+          }
+          await this.db
+            .update(actionInvocations)
+            .set({ spawnReservedAt: new Date() })
+            .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
+        }
+        conn.send(JSON.stringify(item.message));
+        // The frame is now actually on the wire: move the invocation out of the
+        // queued `pending` state into `dispatched` via the shared transition so
+        // the dispatch-timeout sweep/reschedule covers it like a live dispatch.
+        await markDrainedInvocationDispatched(this.db, workspaceId, item.message.invocation_id, nodeId);
+      } catch {
+        remaining.push(item);
+        remaining.push(...queued.slice(queued.indexOf(item) + 1));
+        break;
+      }
+    }
+    if (remaining.length > 0) {
+      this.nodeQueues.set(key, remaining);
+    } else {
+      this.nodeQueues.delete(key);
+    }
   }
 
   private async onAgentMessage(

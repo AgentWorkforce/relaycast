@@ -7,6 +7,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
+import * as triggerEngine from '../engine/trigger.js';
 import { fanoutToChannel, fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -140,6 +141,27 @@ messageRoutes.post(
           message_kind: publicData.thread_id ? 'thread_reply' : 'channel_message',
           has_attachments: Boolean(publicData.has_attachments),
         });
+
+        runInBackground(
+          c,
+          triggerEngine.fireMessageTriggers({
+            db,
+            nodeConnections: c.get('engine').nodeConnections,
+            workspaceId: workspace.id,
+            message: {
+              id: String(publicData.id),
+              channel_id: channel.id,
+              channel_name: channelName,
+              agent_id: agentId,
+              agent_name: agent?.name,
+              text: String(publicData.text ?? text),
+              mentions: Array.isArray(publicData.mentions) ? publicData.mentions as string[] : [],
+              metadata: (publicData.metadata ?? null) as Record<string, unknown> | null,
+              created_at: String(publicData.created_at),
+            },
+          }),
+          'fire message triggers',
+        );
       }
 
       // Strip internal _deliveries field before returning to client
