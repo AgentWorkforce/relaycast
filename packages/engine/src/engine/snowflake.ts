@@ -88,6 +88,21 @@ export class SnowflakeGenerator {
   }
 }
 
+/**
+ * The smallest snowflake ID a row created at `timestampMs` could have.
+ *
+ * Snowflakes are time-ordered, so this is usable as an exclusive upper bound
+ * when selecting rows older than a cutoff: every ID generated before
+ * `timestampMs` is numerically smaller than the returned value. Note IDs are
+ * stored as decimal TEXT of varying length, so compare numerically (shorter
+ * string == smaller ID), not lexicographically — see `olderThanSnowflake` in
+ * `retention.ts`.
+ */
+export function snowflakeIdLowerBound(timestampMs: number): string {
+  const ts = BigInt(Math.max(0, timestampMs - EPOCH_MS));
+  return (ts << TIMESTAMP_SHIFT).toString();
+}
+
 let defaultGenerator: SnowflakeGenerator | null = null;
 
 export function getSnowflakeGenerator(): SnowflakeGenerator {

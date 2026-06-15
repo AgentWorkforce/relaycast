@@ -185,6 +185,12 @@ export async function sweepPendingEvents(
 
 // Cleanup completed and failed events older than given age (default 24h)
 export async function cleanupOldEvents(db: Db, maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+  // Settle exhausted pending rows first so they become prunable. A row that
+  // consumed its final attempt without settling is unclaimable forever
+  // (claims require attempts < max_attempts), so without this it would
+  // linger as `pending` and never match the delete below.
+  await failExhaustedDueEvents(db);
+
   const cutoff = new Date(Date.now() - maxAgeMs);
 
   const deleted = await db
