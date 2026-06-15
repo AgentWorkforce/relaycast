@@ -96,6 +96,8 @@ public final class RelayCast: @unchecked Sendable {
     public lazy var webhooks = RelayWebhooksService(relay: self)
     public lazy var subscriptions = RelaySubscriptionsService(relay: self)
     public lazy var actions = RelayActionsService(relay: self)
+    public lazy var nodes = RelayNodesService(relay: self)
+    public lazy var triggers = RelayTriggersService(relay: self)
     public lazy var certify = RelayCertifyService(relay: self)
     public lazy var console = RelayConsoleService(relay: self)
 
@@ -338,6 +340,24 @@ public final class RelayCast: @unchecked Sendable {
 
     public func updateRoutingConfig(_ data: UpdateRoutingConfigRequest) async throws -> RoutingConfig {
         try await client.put("/v1/routing/config", body: data)
+    }
+
+    public func activity(limit: Int? = nil) async throws -> [ActivityItem] {
+        var params: [String: String] = [:]
+        if let limit { params["limit"] = String(limit) }
+        return try await client.get("/v1/activity", query: params)
+    }
+
+    public func allDMConversations() async throws -> [WorkspaceDMConversation] {
+        try await client.get("/v1/dm/conversations/all")
+    }
+
+    public func dmMessages(conversationID: String, options: WorkspaceDMMessagesOptions = WorkspaceDMMessagesOptions()) async throws -> [WorkspaceDMMessage] {
+        var params: [String: String] = [:]
+        if let limit = options.limit { params["limit"] = String(limit) }
+        if let before = options.before { params["before"] = before }
+        if let after = options.after { params["after"] = after }
+        return try await client.get("/v1/dm/conversations/\(percentEncodePathComponent(conversationID))/messages", query: params)
     }
 
     func rememberIdentity(agentID: String, name: String) {
@@ -617,6 +637,53 @@ public final class RelayActionsService: @unchecked Sendable {
 
     public func delete(_ name: String) async throws {
         _ = try await relay.client.delete("/v1/actions/\(percentEncodePathComponent(name))")
+    }
+}
+
+public final class RelayNodesService: @unchecked Sendable {
+    private unowned let relay: RelayCast
+
+    init(relay: RelayCast) {
+        self.relay = relay
+    }
+
+    public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {
+        var params: [String: String] = [:]
+        if let capability = query.capability { params["capability"] = capability }
+        if let name = query.name { params["name"] = name }
+        return try await relay.client.get("/v1/nodes", query: params)
+    }
+
+    public func get(_ name: String) async throws -> NodeRosterEntry {
+        try await relay.client.get("/v1/nodes/\(percentEncodePathComponent(name))")
+    }
+}
+
+public final class RelayTriggersService: @unchecked Sendable {
+    private unowned let relay: RelayCast
+
+    init(relay: RelayCast) {
+        self.relay = relay
+    }
+
+    public func create(_ data: CreateTriggerRequest) async throws -> Trigger {
+        try await relay.client.post("/v1/triggers", body: data)
+    }
+
+    public func list() async throws -> [Trigger] {
+        try await relay.client.get("/v1/triggers")
+    }
+
+    public func get(_ id: String) async throws -> Trigger {
+        try await relay.client.get("/v1/triggers/\(percentEncodePathComponent(id))")
+    }
+
+    public func update(_ id: String, data: UpdateTriggerRequest) async throws -> Trigger {
+        try await relay.client.patch("/v1/triggers/\(percentEncodePathComponent(id))", body: data)
+    }
+
+    public func delete(_ id: String) async throws {
+        _ = try await relay.client.delete("/v1/triggers/\(percentEncodePathComponent(id))")
     }
 }
 

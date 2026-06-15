@@ -335,6 +335,266 @@ class InboxResponse(BaseModel):
     unread_dms: list[UnreadDm]
 
 
+# ── Durable Delivery ──────────────────────────────────────────────
+
+# Durable delivery status lifecycle (mirrors packages/types/src/delivery.ts):
+#   queued        -> durable row accepted, not yet sent to the current location
+#   delivered     -> sent to the current location, awaiting cumulative ack
+#   acked         -> recipient location acknowledged through the seq cursor (terminal success)
+#   failed        -> explicit failure report (terminal failure)
+#   dead_lettered -> TTL expiry / undeliverable (terminal failure)
+DeliveryStatus = Literal["queued", "delivered", "acked", "failed", "dead_lettered"]
+
+
+class DeliveryMessage(BaseModel):
+    id: str
+    channel_id: str
+    agent_id: str | None = None
+    agent_name: str | None = None
+    text: str
+    thread_id: str | None = None
+    created_at: str
+
+
+class Delivery(BaseModel):
+    id: str
+    message_id: str
+    channel_id: str
+    agent_id: str
+    status: DeliveryStatus
+    seq: int
+    location_type: str
+    location_node_id: str | None = None
+    mode: str
+    reason: str | None = None
+    priority: str
+    retryable: bool | None = None
+    error: str | None = None
+    available_at: str | None = None
+    deadline: str | None = None
+    expires_at: str | None = None
+    delivered_at: str | None = None
+    acked_at: str | None = None
+    dead_lettered_at: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
+class DeliveryItem(Delivery):
+    message: DeliveryMessage | None = None
+
+
+class FailDeliveryRequest(BaseModel):
+    error: str | None = None
+    retryable: bool | None = None
+
+
+class DeferDeliveryRequest(BaseModel):
+    available_at: str
+    reason: str | None = None
+
+
+# ── A2A, Directory, Routing, Skills ───────────────────────────────
+
+
+class A2aAgentCardSkill(BaseModel):
+    id: str | None = None
+    name: str
+    description: str | None = None
+    tags: list[str] | None = None
+
+
+class A2aAgentCard(BaseModel):
+    name: str
+    description: str | None = None
+    url: str
+    version: str
+    skills: list[A2aAgentCardSkill]
+    provider: dict[str, Any] | None = None
+    capabilities: dict[str, Any] | None = None
+    default_input_modes: list[str] | None = None
+    default_output_modes: list[str] | None = None
+    documentation_url: str | None = None
+
+
+class RegisterA2aOptions(BaseModel):
+    agent_card_url: str | None = None
+    agent_card: A2aAgentCard | None = None
+    auth_scheme: str | None = None
+    auth_credential: str | None = None
+
+
+class RegisterA2aResponse(BaseModel):
+    relay_name: str
+    relay_token: str
+    webhook_url: str
+    certification: Literal["level_0", "level_1"]
+
+
+class A2aAgentRecord(BaseModel):
+    id: str
+    workspace_id: str
+    relay_agent_id: str
+    relay_name: str
+    relay_status: str
+    relay_persona: str | None = None
+    relay_metadata: dict[str, Any] | None = None
+    agent_card: A2aAgentCard | None = None
+    external_url: str
+    auth_scheme: str | None = None
+    auth_credential: str | None = None
+    status: str
+    messages_sent: int
+    messages_recv: int
+    last_health: str | None = None
+    health_failures: int
+    created_at: str
+    updated_at: str
+
+
+class RemoveA2aAgentResponse(BaseModel):
+    name: str
+    removed: bool
+
+
+class DirectorySkillInput(BaseModel):
+    id: str | None = None
+    name: str
+    description: str | None = None
+    tags: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class DirectorySkill(BaseModel):
+    id: str
+    skill_id: str | None = None
+    name: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DirectoryAgent(BaseModel):
+    id: str
+    source_agent_id: str | None = None
+    slug: str
+    name: str
+    description: str | None = None
+    provider: str | None = None
+    endpoint_url: str | None = None
+    documentation_url: str | None = None
+    version: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    rating_avg: float
+    rating_count: int
+    skills: list[DirectorySkill] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class DirectorySearchResult(DirectoryAgent):
+    relevance_score: float
+
+
+class PublishToDirectoryRequest(BaseModel):
+    source_agent_name: str | None = None
+    slug: str | None = None
+    name: str
+    description: str | None = None
+    provider: str | None = None
+    endpoint_url: str | None = None
+    documentation_url: str | None = None
+    version: str | None = None
+    tags: list[str] | None = None
+    capabilities: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    status: str | None = None
+    skills: list[DirectorySkillInput] | None = None
+
+
+class ImportSkillsRequest(BaseModel):
+    agent_name: str
+    metadata: dict[str, Any] | None = None
+    status: str | None = None
+    skills: list[DirectorySkillInput] | None = None
+
+
+class RouteResult(BaseModel):
+    agent_name: str
+    score: float
+    fallback: bool
+
+
+class RoutingWeights(BaseModel):
+    skill_match: float
+    message_match: float
+    tag_match: float
+    rating: float
+    availability: float
+
+
+class RoutingConfig(BaseModel):
+    weights: RoutingWeights
+    circuit_breaker_threshold: int
+    circuit_breaker_cooldown_seconds: int
+    updated_at: str | None = None
+
+
+class UpdateRoutingWeightsRequest(BaseModel):
+    skill_match: float | None = None
+    message_match: float | None = None
+    tag_match: float | None = None
+    rating: float | None = None
+    availability: float | None = None
+
+
+class UpdateRoutingConfigRequest(BaseModel):
+    weights: UpdateRoutingWeightsRequest | None = None
+    circuit_breaker_threshold: int | None = None
+    circuit_breaker_cooldown_seconds: int | None = None
+
+
+class UpdateDirectoryAgentRequest(PublishToDirectoryRequest):
+    name: str | None = None  # type: ignore[assignment]
+    source_agent_name: str | None = None
+
+
+class DirectoryRating(BaseModel):
+    id: str
+    score: int
+    review: str | None = None
+    rater_agent_id: str
+    rater_agent_name: str
+    created_at: str
+    updated_at: str | None = None
+
+
+class RateDirectoryAgentRequest(BaseModel):
+    score: int
+    review: str | None = None
+
+
+class RouteFeedbackRequest(BaseModel):
+    agent_name: str
+    success: bool
+    error: str | None = None
+
+
+class RouteFeedbackResult(BaseModel):
+    ok: bool
+
+
+class SkillSearchResult(BaseModel):
+    agent_name: str
+    skill_name: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    relevance_score: float
+
+
 # ── API Response Wrappers ────────────────────────────────────────
 
 class ApiErrorDetail(BaseModel):

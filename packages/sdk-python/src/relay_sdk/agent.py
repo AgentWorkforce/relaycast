@@ -14,6 +14,11 @@ from .models import (
     CreateChannelRequest,
     CreateGroupDmRequest,
     DmConversationSummary,
+    Delivery,
+    DeliveryItem,
+    DeliveryStatus,
+    DeferDeliveryRequest,
+    FailDeliveryRequest,
     FileInfo,
     InboxResponse,
     MessageInjectionMode,
@@ -125,18 +130,52 @@ class _ChannelsNamespace:
         self._client.post(f"/v1/channels/{_enc(name)}/leave")
 
     def set_topic(self, name: str, topic: str) -> Channel:
-        result = self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        result = self._client.patch(f"/v1/channels/{_enc(name)}/topic", {"topic": topic})
         return Channel.model_validate(result)
 
     def archive(self, name: str) -> None:
         self._client.delete(f"/v1/channels/{_enc(name)}")
 
     def invite(self, channel: str, agent: str) -> Any:
-        return self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+        return self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent_name": agent})
 
     def members(self, name: str) -> list[ChannelMemberInfo]:
         result = self._client.get(f"/v1/channels/{_enc(name)}/members")
         return [ChannelMemberInfo.model_validate(m) for m in result]
+
+    def update(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> Channel:
+        body: dict[str, Any] = {}
+        if topic is not None:
+            body["topic"] = topic
+        if metadata is not None:
+            body["metadata"] = metadata
+        result = self._client.patch(f"/v1/channels/{_enc(name)}", body)
+        return Channel.model_validate(result)
+
+    def mute(self, name: str) -> None:
+        self._client.post(f"/v1/channels/{_enc(name)}/mute", {})
+
+    def unmute(self, name: str) -> None:
+        self._client.post(f"/v1/channels/{_enc(name)}/unmute", {})
+
+
+class _ActionsNamespace:
+    """Sync action invocation sub-operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def invoke(self, name: str, input: dict[str, Any] | None = None) -> Any:
+        return self._client.post(f"/v1/actions/{_enc(name)}/invoke", {"input": input})
+
+    def complete_invocation(self, name: str, invocation_id: str, data: dict[str, Any]) -> Any:
+        return self._client.post(
+            f"/v1/actions/{_enc(name)}/invocations/{_enc(invocation_id)}/complete",
+            data,
+        )
+
+    def get_invocation(self, name: str, invocation_id: str) -> Any:
+        return self._client.get(f"/v1/actions/{_enc(name)}/invocations/{_enc(invocation_id)}")
 
 
 class _FilesNamespace:
@@ -200,6 +239,7 @@ class AgentClient:
         self.client = client
         self.dms = _DmsNamespace(client)
         self.channels = _ChannelsNamespace(client)
+        self.actions = _ActionsNamespace(client)
         self.files = _FilesNamespace(client)
         self.presence = _PresenceNamespace(client)
 
@@ -223,6 +263,16 @@ class AgentClient:
             body["attachments"] = attachments
         result = self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
         return MessageWithMeta.model_validate(result)
+
+    def post(
+        self,
+        channel: str,
+        text: str,
+        *,
+        attachments: list[str] | None = None,
+        mode: Literal["wait", "steer"] = "wait",
+    ) -> MessageWithMeta:
+        return self.send(channel, text, attachments=attachments, mode=mode)
 
     def messages(
         self,
@@ -322,8 +372,11 @@ class AgentClient:
 
     # ── Inbox ──
 
-    def inbox(self) -> InboxResponse:
-        result = self.client.get("/v1/inbox")
+    def inbox(self, *, limit: int | None = None) -> InboxResponse:
+        query: dict[str, str] = {}
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = self.client.get("/v1/inbox", query or None)
         return InboxResponse.model_validate(result)
 
     # ── Presence ──
@@ -353,6 +406,30 @@ class AgentClient:
         name = _strip_hash(channel)
         result = self.client.get(f"/v1/channels/{_enc(name)}/read-status")
         return [ChannelReadStatus.model_validate(r) for r in result]
+
+    # ── Durable Delivery ──
+
+    def deliveries(self, *, status: DeliveryStatus | None = None, limit: int | None = None) -> list[DeliveryItem]:
+        query: dict[str, str] = {}
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = self.client.get("/v1/deliveries", query or None)
+        return [DeliveryItem.model_validate(d) for d in result]
+
+    def ack_delivery(self, delivery_id: str) -> Delivery:
+        result = self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/ack", {})
+        return Delivery.model_validate(result)
+
+    def fail_delivery(self, delivery_id: str, options: FailDeliveryRequest | None = None) -> Delivery:
+        body = options.model_dump(exclude_none=True) if options else {}
+        result = self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/fail", body)
+        return Delivery.model_validate(result)
+
+    def defer_delivery(self, delivery_id: str, options: DeferDeliveryRequest) -> Delivery:
+        result = self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/defer", options.model_dump(exclude_none=True))
+        return Delivery.model_validate(result)
 
 
 # ── Async variants ────────────────────────────────────────────────
@@ -446,18 +523,52 @@ class _AsyncChannelsNamespace:
         await self._client.post(f"/v1/channels/{_enc(name)}/leave")
 
     async def set_topic(self, name: str, topic: str) -> Channel:
-        result = await self._client.patch(f"/v1/channels/{_enc(name)}", {"topic": topic})
+        result = await self._client.patch(f"/v1/channels/{_enc(name)}/topic", {"topic": topic})
         return Channel.model_validate(result)
 
     async def archive(self, name: str) -> None:
         await self._client.delete(f"/v1/channels/{_enc(name)}")
 
     async def invite(self, channel: str, agent: str) -> Any:
-        return await self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent": agent})
+        return await self._client.post(f"/v1/channels/{_enc(channel)}/invite", {"agent_name": agent})
 
     async def members(self, name: str) -> list[ChannelMemberInfo]:
         result = await self._client.get(f"/v1/channels/{_enc(name)}/members")
         return [ChannelMemberInfo.model_validate(m) for m in result]
+
+    async def update(self, name: str, *, topic: str | None = None, metadata: dict[str, Any] | None = None) -> Channel:
+        body: dict[str, Any] = {}
+        if topic is not None:
+            body["topic"] = topic
+        if metadata is not None:
+            body["metadata"] = metadata
+        result = await self._client.patch(f"/v1/channels/{_enc(name)}", body)
+        return Channel.model_validate(result)
+
+    async def mute(self, name: str) -> None:
+        await self._client.post(f"/v1/channels/{_enc(name)}/mute", {})
+
+    async def unmute(self, name: str) -> None:
+        await self._client.post(f"/v1/channels/{_enc(name)}/unmute", {})
+
+
+class _AsyncActionsNamespace:
+    """Async action invocation sub-operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def invoke(self, name: str, input: dict[str, Any] | None = None) -> Any:
+        return await self._client.post(f"/v1/actions/{_enc(name)}/invoke", {"input": input})
+
+    async def complete_invocation(self, name: str, invocation_id: str, data: dict[str, Any]) -> Any:
+        return await self._client.post(
+            f"/v1/actions/{_enc(name)}/invocations/{_enc(invocation_id)}/complete",
+            data,
+        )
+
+    async def get_invocation(self, name: str, invocation_id: str) -> Any:
+        return await self._client.get(f"/v1/actions/{_enc(name)}/invocations/{_enc(invocation_id)}")
 
 
 class _AsyncFilesNamespace:
@@ -518,6 +629,7 @@ class AsyncAgentClient:
         self.client = client
         self.dms = _AsyncDmsNamespace(client)
         self.channels = _AsyncChannelsNamespace(client)
+        self.actions = _AsyncActionsNamespace(client)
         self.files = _AsyncFilesNamespace(client)
         self.presence = _AsyncPresenceNamespace(client)
 
@@ -541,6 +653,16 @@ class AsyncAgentClient:
             body["attachments"] = attachments
         result = await self.client.post(f"/v1/channels/{_enc(name)}/messages", body)
         return MessageWithMeta.model_validate(result)
+
+    async def post(
+        self,
+        channel: str,
+        text: str,
+        *,
+        attachments: list[str] | None = None,
+        mode: Literal["wait", "steer"] = "wait",
+    ) -> MessageWithMeta:
+        return await self.send(channel, text, attachments=attachments, mode=mode)
 
     async def messages(
         self,
@@ -640,8 +762,11 @@ class AsyncAgentClient:
 
     # ── Inbox ──
 
-    async def inbox(self) -> InboxResponse:
-        result = await self.client.get("/v1/inbox")
+    async def inbox(self, *, limit: int | None = None) -> InboxResponse:
+        query: dict[str, str] = {}
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = await self.client.get("/v1/inbox", query or None)
         return InboxResponse.model_validate(result)
 
     # ── Presence ──
@@ -671,3 +796,27 @@ class AsyncAgentClient:
         name = _strip_hash(channel)
         result = await self.client.get(f"/v1/channels/{_enc(name)}/read-status")
         return [ChannelReadStatus.model_validate(r) for r in result]
+
+    # ── Durable Delivery ──
+
+    async def deliveries(self, *, status: DeliveryStatus | None = None, limit: int | None = None) -> list[DeliveryItem]:
+        query: dict[str, str] = {}
+        if status:
+            query["status"] = status
+        if limit is not None:
+            query["limit"] = str(limit)
+        result = await self.client.get("/v1/deliveries", query or None)
+        return [DeliveryItem.model_validate(d) for d in result]
+
+    async def ack_delivery(self, delivery_id: str) -> Delivery:
+        result = await self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/ack", {})
+        return Delivery.model_validate(result)
+
+    async def fail_delivery(self, delivery_id: str, options: FailDeliveryRequest | None = None) -> Delivery:
+        body = options.model_dump(exclude_none=True) if options else {}
+        result = await self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/fail", body)
+        return Delivery.model_validate(result)
+
+    async def defer_delivery(self, delivery_id: str, options: DeferDeliveryRequest) -> Delivery:
+        result = await self.client.post(f"/v1/deliveries/{_enc(delivery_id)}/defer", options.model_dump(exclude_none=True))
+        return Delivery.model_validate(result)

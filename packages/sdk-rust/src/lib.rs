@@ -277,6 +277,62 @@ pub use types::{
     WorkspaceStreamConfig,
     // Events
     WsEvent,
+    // === Parity surfaces: A2A, directory, routing, skills, nodes, triggers, certify, console ===
+    // A2A
+    A2aAgentCard,
+    A2aAgentCardSkill,
+    A2aAgentRecord,
+    RegisterA2aOptions,
+    RegisterA2aResponse,
+    RemoveA2aAgentResponse,
+    // Directory
+    DirectoryAgent,
+    DirectoryRating,
+    DirectorySearchResult,
+    DirectorySkill,
+    DirectorySkillInput,
+    ImportSkillsRequest,
+    ListDirectoryQuery,
+    PublishToDirectoryRequest,
+    RateDirectoryAgentRequest,
+    SearchDirectoryQuery,
+    UpdateDirectoryAgentRequest,
+    // Routing
+    RouteFeedbackRequest,
+    RouteFeedbackResult,
+    RouteResult,
+    RoutingConfig,
+    RoutingWeights,
+    UpdateRoutingConfigRequest,
+    UpdateRoutingWeights,
+    // Skills
+    SkillSearchQuery,
+    SkillSearchResult,
+    // Fleet nodes
+    NodeCapability,
+    NodeListQuery,
+    NodeRosterEntry,
+    // Triggers
+    CreateTriggerRequest,
+    Trigger,
+    UpdateTriggerRequest,
+    // Certification
+    CertificationRun,
+    CertificationTestResult,
+    MonitorCertificationRequest,
+    SubmitCertificationRequest,
+    // Console / observability
+    ConsoleAgentStat,
+    ConsoleAgentStatsQuery,
+    ConsoleCostAgent,
+    ConsoleCostStats,
+    ConsoleCostTotals,
+    ConsoleMessageLog,
+    ConsoleMessagesQuery,
+    ConsoleOverview,
+    ConsoleWindowQuery,
+    // Workspace lookup
+    WorkspaceLookup,
 };
 
 /// SDK version.

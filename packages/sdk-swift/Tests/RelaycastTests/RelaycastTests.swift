@@ -237,6 +237,200 @@ final class RelaycastTests: XCTestCase {
         let message = try await agent.send("#general", text: "hello", options: SendMessageOptions(idempotencyKey: "msg-1"))
         XCTAssertEqual(message.id, "msg_1")
     }
+
+    func testNodesListSendsCapabilityFilterAndDecodesRoster() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/nodes")
+            let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["capability"], "code")
+
+            return jsonResponse([
+                "ok": true,
+                "data": [[
+                    "id": "node_1",
+                    "name": "alpha",
+                    "capabilities": [["name": "code", "kind": "executor", "metadata": ["region": "us"]]],
+                    "tags": ["primary"],
+                    "version": "1.2.3",
+                    "status": "online",
+                    "live": true,
+                    "handlers_live": true,
+                    "load": 0.25,
+                    "active_agents": 2,
+                    "max_agents": 8,
+                    "last_heartbeat_at": "2026-06-06T00:00:00Z",
+                    "created_at": "2026-06-05T00:00:00Z"
+                ]]
+            ])
+        }
+
+        let nodes = try await relay.nodes.list(NodeListQuery(capability: "code"))
+        XCTAssertEqual(nodes.count, 1)
+        XCTAssertEqual(nodes[0].name, "alpha")
+        XCTAssertEqual(nodes[0].capabilities.first?.name, "code")
+        XCTAssertEqual(nodes[0].capabilities.first?.kind, "executor")
+        XCTAssertEqual(nodes[0].activeAgents, 2)
+        XCTAssertTrue(nodes[0].handlersLive)
+    }
+
+    func testTriggersCreateAndUpdate() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v1/triggers"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["action_name"] as? String, "summarize")
+                XCTAssertEqual(json["channel"] as? String, "general")
+                return jsonResponse([
+                    "ok": true,
+                    "data": [
+                        "id": "trg_1",
+                        "channel": "general",
+                        "pattern": NSNull(),
+                        "mention": true,
+                        "action_name": "summarize",
+                        "enabled": true,
+                        "last_triggered_at": NSNull(),
+                        "created_at": "2026-06-06T00:00:00Z",
+                        "updated_at": NSNull()
+                    ]
+                ])
+            case ("PATCH", "/v1/triggers/trg_1"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["enabled"] as? Bool, false)
+                return jsonResponse([
+                    "ok": true,
+                    "data": [
+                        "id": "trg_1",
+                        "channel": "general",
+                        "pattern": NSNull(),
+                        "mention": true,
+                        "action_name": "summarize",
+                        "enabled": false,
+                        "last_triggered_at": NSNull(),
+                        "created_at": "2026-06-06T00:00:00Z",
+                        "updated_at": "2026-06-06T01:00:00Z"
+                    ]
+                ])
+            default:
+                return jsonResponse(["ok": false, "error": ["code": "not_found", "message": "Missing"]], status: 404)
+            }
+        }
+
+        let created = try await relay.triggers.create(CreateTriggerRequest(actionName: "summarize", channel: "general", mention: true))
+        XCTAssertEqual(created.id, "trg_1")
+        XCTAssertTrue(created.enabled)
+
+        let updated = try await relay.triggers.update("trg_1", data: UpdateTriggerRequest(enabled: false))
+        XCTAssertFalse(updated.enabled)
+        XCTAssertEqual(updated.updatedAt, "2026-06-06T01:00:00Z")
+    }
+
+    func testWorkspaceDMQueries() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/dm/conversations/all":
+                return jsonResponse([
+                    "ok": true,
+                    "data": [[
+                        "id": "dm_1",
+                        "channel_id": "ch_dm_1",
+                        "type": "dm",
+                        "participants": ["alice", "bob"],
+                        "last_message": ["text": "hi", "agent_name": "alice", "created_at": "2026-06-06T00:00:00Z"],
+                        "message_count": 3
+                    ]]
+                ])
+            case "/v1/dm/conversations/dm_1/messages":
+                let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+                let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+                XCTAssertEqual(query["limit"], "10")
+                return jsonResponse([
+                    "ok": true,
+                    "data": [[
+                        "id": "msg_dm_1",
+                        "agent_id": "agent_1",
+                        "agent_name": "alice",
+                        "text": "hi",
+                        "created_at": "2026-06-06T00:00:00Z"
+                    ]]
+                ])
+            default:
+                return jsonResponse(["ok": false, "error": ["code": "not_found", "message": "Missing"]], status: 404)
+            }
+        }
+
+        let conversations = try await relay.allDMConversations()
+        XCTAssertEqual(conversations.count, 1)
+        XCTAssertEqual(conversations[0].participants, ["alice", "bob"])
+        XCTAssertEqual(conversations[0].messageCount, 3)
+
+        let messages = try await relay.dmMessages(conversationID: "dm_1", options: WorkspaceDMMessagesOptions(limit: 10))
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0].agentName, "alice")
+    }
+
+    func testActivityFeed() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/activity")
+            let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["limit"], "5")
+            return jsonResponse([
+                "ok": true,
+                "data": [[
+                    "type": "message.created",
+                    "id": "act_1",
+                    "channel_name": "general",
+                    "conversation_id": NSNull(),
+                    "agent_name": "alice",
+                    "text": "hello",
+                    "created_at": "2026-06-06T00:00:00Z"
+                ]]
+            ])
+        }
+
+        let items = try await relay.activity(limit: 5)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].type, "message.created")
+    }
+
+    func testDeliveryStatusEnumUsesCurrentValues() throws {
+        XCTAssertEqual(DeliveryStatus.queued.rawValue, "queued")
+        XCTAssertEqual(DeliveryStatus.delivered.rawValue, "delivered")
+        XCTAssertEqual(DeliveryStatus.acked.rawValue, "acked")
+        XCTAssertEqual(DeliveryStatus.failed.rawValue, "failed")
+        XCTAssertEqual(DeliveryStatus.deadLettered.rawValue, "dead_lettered")
+
+        let decoded = try JSONDecoder().decode(DeliveryStatus.self, from: Data("\"dead_lettered\"".utf8))
+        XCTAssertEqual(decoded, .deadLettered)
+    }
 }
 
 private final class MockURLProtocol: URLProtocol {
