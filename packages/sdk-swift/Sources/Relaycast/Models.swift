@@ -768,10 +768,11 @@ public struct ChannelReadStatus: Codable, Equatable, Sendable {
 // MARK: - Deliveries
 
 public enum DeliveryStatus: String, Codable, Sendable {
-    case accepted
+    case queued
     case delivered
-    case deferred
+    case acked
     case failed
+    case deadLettered = "dead_lettered"
 }
 
 public struct DeliveryMessage: Codable, Equatable, Sendable {
@@ -1504,6 +1505,118 @@ public struct WsEvent: Codable, Equatable, Sendable {
         for (key, value) in payload {
             try container.encode(value, forKey: DynamicCodingKey(key))
         }
+    }
+}
+
+// MARK: - Fleet nodes
+
+public struct NodeCapability: Codable, Equatable, Sendable {
+    public let name: String
+    public let kind: String?
+    public let metadata: [String: JSONValue]?
+
+    public init(name: String, kind: String? = nil, metadata: [String: JSONValue]? = nil) {
+        self.name = name
+        self.kind = kind
+        self.metadata = metadata
+    }
+}
+
+public struct NodeRosterEntry: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let capabilities: [NodeCapability]
+    public let tags: [String]
+    public let version: String
+    public let status: String
+    public let live: Bool
+    public let handlersLive: Bool
+    public let load: Double
+    public let activeAgents: Int
+    public let maxAgents: Int
+    public let lastHeartbeatAt: String?
+    public let createdAt: String
+}
+
+public struct NodeListQuery: Equatable, Sendable {
+    public var capability: String?
+    public var name: String?
+
+    public init(capability: String? = nil, name: String? = nil) {
+        self.capability = capability
+        self.name = name
+    }
+}
+
+// MARK: - Triggers
+
+public struct Trigger: Codable, Equatable, Sendable {
+    public let id: String
+    public let channel: String?
+    public let pattern: String?
+    public let mention: Bool?
+    public let actionName: String
+    public let enabled: Bool
+    public let lastTriggeredAt: String?
+    public let createdAt: String
+    public let updatedAt: String?
+}
+
+public struct CreateTriggerRequest: Codable, Equatable, Sendable {
+    public var channel: String?
+    public var pattern: String?
+    public var mention: Bool?
+    public var actionName: String
+    public var enabled: Bool?
+
+    public init(
+        actionName: String,
+        channel: String? = nil,
+        pattern: String? = nil,
+        mention: Bool? = nil,
+        enabled: Bool? = nil
+    ) {
+        self.actionName = actionName
+        self.channel = channel
+        self.pattern = pattern
+        self.mention = mention
+        self.enabled = enabled
+    }
+}
+
+public struct UpdateTriggerRequest: Codable, Equatable, Sendable {
+    public var channel: String?
+    public var pattern: String?
+    public var mention: Bool?
+    public var actionName: String?
+    public var enabled: Bool?
+
+    public init(
+        channel: String? = nil,
+        pattern: String? = nil,
+        mention: Bool? = nil,
+        actionName: String? = nil,
+        enabled: Bool? = nil
+    ) {
+        self.channel = channel
+        self.pattern = pattern
+        self.mention = mention
+        self.actionName = actionName
+        self.enabled = enabled
+    }
+}
+
+// MARK: - Workspace DM queries
+
+public struct WorkspaceDMMessagesOptions: Equatable, Sendable {
+    public var limit: Int?
+    public var before: String?
+    public var after: String?
+
+    public init(limit: Int? = nil, before: String? = nil, after: String? = nil) {
+        self.limit = limit
+        self.before = before
+        self.after = after
     }
 }
 
