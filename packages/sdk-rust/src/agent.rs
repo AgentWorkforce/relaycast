@@ -697,7 +697,7 @@ impl AgentClient {
 
     /// Invite an agent to a channel.
     pub async fn invite_to_channel(&self, channel: &str, agent: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({ "agent": agent });
+        let body = serde_json::json!({ "agent_name": agent });
         self.client
             .post(
                 &format!("/v1/channels/{}/invite", urlencoding::encode(channel)),
@@ -705,6 +705,30 @@ impl AgentClient {
                 None,
             )
             .await
+    }
+
+    /// Mute a channel for this agent (suppress delivery notifications).
+    pub async fn mute_channel(&self, name: &str) -> Result<()> {
+        self.client
+            .post::<serde_json::Value>(
+                &format!("/v1/channels/{}/mute", urlencoding::encode(name)),
+                None::<()>,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Unmute a previously muted channel for this agent.
+    pub async fn unmute_channel(&self, name: &str) -> Result<()> {
+        self.client
+            .post::<serde_json::Value>(
+                &format!("/v1/channels/{}/unmute", urlencoding::encode(name)),
+                None::<()>,
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Get channel members.
@@ -856,7 +880,7 @@ impl AgentClient {
 
     /// List durable delivery items queued for this agent.
     ///
-    /// Defaults to the non-terminal replay queue (`accepted` + `deferred`) when
+    /// Defaults to the non-terminal replay queue (`queued` + `delivered`) when
     /// no status is provided. Each item carries the associated message payload.
     pub async fn deliveries(
         &self,
@@ -888,7 +912,7 @@ impl AgentClient {
         self.client.get("/v1/deliveries", query_ref, None).await
     }
 
-    /// Idempotently acknowledge a delivery, transitioning it to `delivered`.
+    /// Idempotently acknowledge a delivery, transitioning it to `acked`.
     pub async fn ack_delivery(&self, delivery_id: &str) -> Result<Delivery> {
         self.client
             .post(

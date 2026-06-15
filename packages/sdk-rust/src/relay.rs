@@ -715,4 +715,529 @@ impl RelayCast {
             )
             .await
     }
+
+    // === Workspace bootstrap ===
+
+    /// Look up a workspace by name. Returns `None` when no workspace matches.
+    pub async fn lookup_workspace(
+        name: &str,
+        base_url: Option<&str>,
+    ) -> Result<Option<WorkspaceLookup>> {
+        let url = format!(
+            "{}/v1/workspaces/by-name/{}",
+            base_url.unwrap_or(DEFAULT_BASE_URL),
+            urlencoding::encode(name)
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .header("Content-Type", "application/json")
+            .header("X-SDK-Version", SDK_VERSION)
+            .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
+            .header("X-Relaycast-Origin-Version", SDK_VERSION)
+            .send()
+            .await?;
+
+        let status = response.status().as_u16();
+        let json: ApiResponse<WorkspaceLookup> = response.json().await?;
+
+        if !json.ok {
+            if status == 404 {
+                return Ok(None);
+            }
+            let error = json.error.unwrap_or_else(|| ApiErrorInfo {
+                code: "unknown_error".to_string(),
+                message: "Unknown error".to_string(),
+            });
+            return Err(RelayError::api(error.code, error.message, status));
+        }
+
+        json.data
+            .map(Some)
+            .ok_or_else(|| RelayError::InvalidResponse("Response missing data field".to_string()))
+    }
+
+    // === A2A (agent-to-agent bridge) ===
+
+    /// Register an A2A agent bridge.
+    pub async fn register_a2a(&self, options: RegisterA2aOptions) -> Result<RegisterA2aResponse> {
+        self.client
+            .post("/v1/a2a/register", Some(options), None)
+            .await
+    }
+
+    /// List registered A2A agents.
+    pub async fn list_a2a_agents(&self) -> Result<Vec<A2aAgentRecord>> {
+        self.client.get("/v1/a2a/agents", None, None).await
+    }
+
+    /// Remove an A2A agent by name.
+    pub async fn remove_a2a_agent(&self, name: &str) -> Result<RemoveA2aAgentResponse> {
+        self.client
+            .request(
+                reqwest::Method::DELETE,
+                &format!("/v1/a2a/agents/{}", urlencoding::encode(name)),
+                None::<()>,
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Fetch the agent card for an A2A agent.
+    pub async fn get_a2a_agent_card(&self, name: &str) -> Result<A2aAgentCard> {
+        self.client
+            .get(
+                &format!("/v1/a2a/agents/{}/card", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    // === Routing ===
+
+    /// Route a skill (and optional message) to the best candidate agent.
+    pub async fn route(&self, skill: &str, message: Option<&str>) -> Result<RouteResult> {
+        self.client
+            .post(
+                "/v1/route",
+                Some(serde_json::json!({ "skill": skill, "message": message })),
+                None,
+            )
+            .await
+    }
+
+    /// Report route feedback (success/failure) for a routed agent.
+    pub async fn route_feedback(
+        &self,
+        request: RouteFeedbackRequest,
+    ) -> Result<RouteFeedbackResult> {
+        self.client
+            .post("/v1/route/feedback", Some(request), None)
+            .await
+    }
+
+    /// Get the workspace routing configuration.
+    pub async fn get_routing_config(&self) -> Result<RoutingConfig> {
+        self.client.get("/v1/routing/config", None, None).await
+    }
+
+    /// Update the workspace routing configuration.
+    pub async fn update_routing_config(
+        &self,
+        request: UpdateRoutingConfigRequest,
+    ) -> Result<RoutingConfig> {
+        self.client
+            .put("/v1/routing/config", Some(request), None)
+            .await
+    }
+
+    // === Directory ===
+
+    /// Search the agent directory.
+    pub async fn search_directory(
+        &self,
+        query: SearchDirectoryQuery,
+    ) -> Result<Vec<DirectorySearchResult>> {
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(q) = query.q {
+            params.push(("q".to_string(), q));
+        }
+        if let Some(tags) = query.tags {
+            if !tags.is_empty() {
+                params.push(("tags".to_string(), tags.join(",")));
+            }
+        }
+        if let Some(status) = query.status {
+            params.push(("status".to_string(), status));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get("/v1/directory/search", query_ref, None)
+            .await
+    }
+
+    /// Publish an agent to the directory.
+    pub async fn publish_to_directory(
+        &self,
+        request: PublishToDirectoryRequest,
+    ) -> Result<DirectoryAgent> {
+        self.client
+            .post("/v1/directory/agents", Some(request), None)
+            .await
+    }
+
+    /// List directory agents.
+    pub async fn list_directory(
+        &self,
+        query: Option<ListDirectoryQuery>,
+    ) -> Result<Vec<DirectoryAgent>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(status) = query.status {
+            params.push(("status".to_string(), status));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client
+            .get("/v1/directory/agents", query_ref, None)
+            .await
+    }
+
+    /// Get a directory agent by slug.
+    pub async fn get_directory_agent(&self, slug: &str) -> Result<DirectoryAgent> {
+        self.client
+            .get(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Update a directory agent.
+    pub async fn update_directory_agent(
+        &self,
+        slug: &str,
+        request: UpdateDirectoryAgentRequest,
+    ) -> Result<DirectoryAgent> {
+        self.client
+            .patch(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Delete a directory agent.
+    pub async fn delete_directory_agent(&self, slug: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!("/v1/directory/agents/{}", urlencoding::encode(slug)),
+                None,
+            )
+            .await
+    }
+
+    /// List ratings for a directory agent.
+    pub async fn list_directory_ratings(&self, slug: &str) -> Result<Vec<DirectoryRating>> {
+        self.client
+            .get(
+                &format!(
+                    "/v1/directory/agents/{}/ratings",
+                    urlencoding::encode(slug)
+                ),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Rate a directory agent.
+    pub async fn rate_directory_agent(
+        &self,
+        slug: &str,
+        request: RateDirectoryAgentRequest,
+    ) -> Result<DirectoryRating> {
+        self.client
+            .post(
+                &format!(
+                    "/v1/directory/agents/{}/ratings",
+                    urlencoding::encode(slug)
+                ),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    // === Skills ===
+
+    /// Import (sync) skills onto a directory agent.
+    pub async fn import_skills(
+        &self,
+        request: ImportSkillsRequest,
+    ) -> Result<Option<DirectoryAgent>> {
+        self.client.post("/v1/skills/sync", Some(request), None).await
+    }
+
+    /// Search skills across the directory.
+    pub async fn search_skills(
+        &self,
+        query: Option<SkillSearchQuery>,
+    ) -> Result<Vec<SkillSearchResult>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(q) = query.q {
+            params.push(("q".to_string(), q));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/skills/search", query_ref, None).await
+    }
+
+    // === Fleet nodes ===
+
+    /// List fleet nodes on the roster.
+    pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(capability) = query.capability {
+            params.push(("capability".to_string(), capability));
+        }
+        if let Some(name) = query.name {
+            params.push(("name".to_string(), name));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/nodes", query_ref, None).await
+    }
+
+    /// Get a fleet node by name.
+    pub async fn get_node(&self, name: &str) -> Result<NodeRosterEntry> {
+        self.client
+            .get(
+                &format!("/v1/nodes/{}", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    // === Triggers ===
+
+    /// Create a trigger.
+    pub async fn create_trigger(&self, request: CreateTriggerRequest) -> Result<Trigger> {
+        self.client.post("/v1/triggers", Some(request), None).await
+    }
+
+    /// List triggers.
+    pub async fn list_triggers(&self) -> Result<Vec<Trigger>> {
+        self.client.get("/v1/triggers", None, None).await
+    }
+
+    /// Get a trigger by id.
+    pub async fn get_trigger(&self, id: &str) -> Result<Trigger> {
+        self.client
+            .get(
+                &format!("/v1/triggers/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Update a trigger.
+    pub async fn update_trigger(
+        &self,
+        id: &str,
+        request: UpdateTriggerRequest,
+    ) -> Result<Trigger> {
+        self.client
+            .patch(
+                &format!("/v1/triggers/{}", urlencoding::encode(id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Delete a trigger.
+    pub async fn delete_trigger(&self, id: &str) -> Result<()> {
+        self.client
+            .delete(&format!("/v1/triggers/{}", urlencoding::encode(id)), None)
+            .await
+    }
+
+    // === Certification ===
+
+    /// Submit a certification run for an external agent.
+    pub async fn certify(&self, request: SubmitCertificationRequest) -> Result<CertificationRun> {
+        self.client.post("/v1/certify", Some(request), None).await
+    }
+
+    /// Get a certification run by id.
+    pub async fn get_certification(&self, id: &str) -> Result<CertificationRun> {
+        self.client
+            .get(
+                &format!("/v1/certify/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Public badge SVG URL for a certification run (served without an auth header).
+    pub fn certification_badge_url(&self, id: &str) -> String {
+        format!(
+            "{}/v1/certify/{}/badge.svg",
+            self.client.base_url().trim_end_matches('/'),
+            urlencoding::encode(id)
+        )
+    }
+
+    /// Enable certification monitoring for an external agent.
+    pub async fn monitor_certification(
+        &self,
+        request: MonitorCertificationRequest,
+    ) -> Result<CertificationRun> {
+        self.client
+            .post("/v1/certify/monitor", Some(request), None)
+            .await
+    }
+
+    // === Console / observability ===
+
+    /// List console message logs.
+    pub async fn console_messages(
+        &self,
+        query: Option<ConsoleMessagesQuery>,
+    ) -> Result<Vec<ConsoleMessageLog>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(before) = query.before {
+            params.push(("before".to_string(), before));
+        }
+        if let Some(agent_id) = query.agent_id {
+            params.push(("agent_id".to_string(), agent_id));
+        }
+        if let Some(channel_id) = query.channel_id {
+            params.push(("channel_id".to_string(), channel_id));
+        }
+        if let Some(conversation_id) = query.conversation_id {
+            params.push(("conversation_id".to_string(), conversation_id));
+        }
+        if let Some(delivery_kind) = query.delivery_kind {
+            params.push(("delivery_kind".to_string(), delivery_kind));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/console/messages", query_ref, None).await
+    }
+
+    /// Get console overview statistics.
+    pub async fn console_stats(
+        &self,
+        query: Option<ConsoleWindowQuery>,
+    ) -> Result<ConsoleOverview> {
+        let query = query.unwrap_or_default();
+        let days = query.days.map(|d| d.to_string());
+        let slice: Vec<(&str, &str)> = days
+            .as_ref()
+            .map(|d| vec![("days", d.as_str())])
+            .unwrap_or_default();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+        self.client.get("/v1/console/stats", query_ref, None).await
+    }
+
+    /// List per-agent console statistics.
+    pub async fn console_agents(
+        &self,
+        query: Option<ConsoleAgentStatsQuery>,
+    ) -> Result<Vec<ConsoleAgentStat>> {
+        let query = query.unwrap_or_default();
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(days) = query.days {
+            params.push(("days".to_string(), days.to_string()));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let slice: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+
+        self.client.get("/v1/console/agents", query_ref, None).await
+    }
+
+    /// Get console cost statistics.
+    pub async fn console_costs(
+        &self,
+        query: Option<ConsoleWindowQuery>,
+    ) -> Result<ConsoleCostStats> {
+        let query = query.unwrap_or_default();
+        let days = query.days.map(|d| d.to_string());
+        let slice: Vec<(&str, &str)> = days
+            .as_ref()
+            .map(|d| vec![("days", d.as_str())])
+            .unwrap_or_default();
+        let query_ref = if slice.is_empty() {
+            None
+        } else {
+            Some(slice.as_slice())
+        };
+        self.client.get("/v1/console/costs", query_ref, None).await
+    }
 }
