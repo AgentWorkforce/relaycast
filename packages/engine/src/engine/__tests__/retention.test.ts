@@ -75,6 +75,11 @@ async function insertMessage(db: Db, base: Seeded, id: string, threadId?: string
   return id;
 }
 
+// Distinct per-agent seq: the fleet mailbox migration added a
+// UNIQUE(workspace_id, agent_id, seq) index, so multiple deliveries for one
+// agent can no longer share the default seq of 0.
+let deliverySeqCounter = 0;
+
 async function insertDelivery(
   db: Db,
   base: Seeded,
@@ -89,6 +94,7 @@ async function insertDelivery(
     messageId,
     agentId: base.agent,
     status,
+    seq: ++deliverySeqCounter,
     createdAt: new Date(Date.now() - daysAgo * DAY_MS),
   });
   return id;
@@ -112,7 +118,7 @@ describe('pruneExpired', () => {
     const { db } = track(openDb());
     const base = await seedWorkspace(db);
     const oldMsg = await insertMessage(db, base, idAt(400));
-    await insertDelivery(db, base, oldMsg, 'delivered', 400);
+    await insertDelivery(db, base, oldMsg, 'acked', 400);
     await insertMessageLog(db, base, oldMsg, idAt(400, 1));
 
     const result = await pruneExpired(db, {
@@ -129,7 +135,7 @@ describe('pruneExpired', () => {
     const { db } = track(openDb());
     const base = await seedWorkspace(db);
     const oldMsg = await insertMessage(db, base, idAt(400));
-    await insertDelivery(db, base, oldMsg, 'delivered', 400);
+    await insertDelivery(db, base, oldMsg, 'acked', 400);
     await insertMessageLog(db, base, oldMsg, idAt(400, 1));
 
     const result = await pruneExpired(db);
@@ -238,16 +244,16 @@ describe('pruneExpired', () => {
     const m3 = await insertMessage(db, base, idAt(100, 2));
     const m4 = await insertMessage(db, base, idAt(100, 3));
 
-    await insertDelivery(db, base, m1, 'delivered', 100); // settled + old -> pruned
+    await insertDelivery(db, base, m1, 'acked', 100); // settled + old -> pruned
     await insertDelivery(db, base, m2, 'failed', 100); // settled + old -> pruned
-    await insertDelivery(db, base, m3, 'accepted', 100); // in-flight -> kept
-    await insertDelivery(db, base, m4, 'delivered', 10); // settled + fresh -> kept
+    await insertDelivery(db, base, m3, 'queued', 100); // in-flight -> kept
+    await insertDelivery(db, base, m4, 'acked', 10); // settled + fresh -> kept
 
     const result = await pruneExpired(db);
 
     expect(result.deliveries).toBe(2);
     const remaining = (await db.select({ status: deliveries.status }).from(deliveries)).map((r) => r.status);
-    expect(remaining.sort()).toEqual(['accepted', 'delivered']);
+    expect(remaining.sort()).toEqual(['acked', 'queued']);
   });
 
   it('lets a workspace override or disable the operational defaults', async () => {
@@ -256,11 +262,11 @@ describe('pruneExpired', () => {
     const aggressive = await seedWorkspace(db, { delivery_ttl_days: 7, message_log_ttl_days: 7 });
 
     const mA = await insertMessage(db, disabled, idAt(100));
-    await insertDelivery(db, disabled, mA, 'delivered', 100);
+    await insertDelivery(db, disabled, mA, 'acked', 100);
     await insertMessageLog(db, disabled, mA, idAt(100, 1));
 
     const mB = await insertMessage(db, aggressive, idAt(10, 2));
-    await insertDelivery(db, aggressive, mB, 'delivered', 10);
+    await insertDelivery(db, aggressive, mB, 'acked', 10);
     await insertMessageLog(db, aggressive, mB, idAt(10, 3));
 
     const result = await pruneExpired(db);

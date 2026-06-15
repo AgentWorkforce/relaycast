@@ -23,8 +23,15 @@ export const DEFAULT_MESSAGE_LOG_TTL_DAYS = 90;
 const DEFAULT_BATCH_LIMIT = 200;
 const DEFAULT_MAX_BATCHES = 5;
 
-/** Delivery statuses that are terminal — the row is only kept as history. */
-const SETTLED_DELIVERY_STATUSES = ['delivered', 'failed'];
+/**
+ * Delivery statuses that are terminal — the row is only kept as history.
+ * Mirrors the engine's settled set (delivery.ts): `acked` (recipient
+ * acknowledged), `dead_lettered` (TTL expiry), and `failed`. NOTE: `delivered`
+ * is NOT terminal under the durable-mailbox model — it means "sent to the
+ * current location, awaiting cumulative ack" (in-flight), so it must never be
+ * pruned here; only `acked` is terminal success.
+ */
+const SETTLED_DELIVERY_STATUSES = ['acked', 'failed', 'dead_lettered'];
 
 /**
  * Deployment-wide TTL fallbacks, applied to workspaces without their own
@@ -93,8 +100,8 @@ interface PrunePass {
  *   referenced as a `thread_id` parent is skipped until its replies age out,
  *   so the self-referencing FK never breaks mid-batch. Cascades take the
  *   message's receipts, reactions, attachments, deliveries, and log row.
- * - settled `deliveries` (`delivered`/`failed`) older than the effective TTL.
- *   In-flight rows (`accepted`/`deferred`) are never touched.
+ * - settled `deliveries` (`acked`/`failed`/`dead_lettered`) older than the
+ *   effective TTL. In-flight rows (`queued`/`delivered`) are never touched.
  * - `message_logs` older than the effective TTL.
  * - `read_receipts` whose message no longer exists (defensive sweep for rows
  *   written while FK enforcement was off).
