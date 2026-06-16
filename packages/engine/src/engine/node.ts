@@ -15,6 +15,8 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import type { EngineDeps } from '../ports/index.js';
+import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 import { generateId } from './snowflake.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
 import { completeNodeInvocation, rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from './action.js';
@@ -24,6 +26,44 @@ import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
+type PublicNode = ReturnType<typeof publicNode>;
+
+/**
+ * Deps needed to fan a node lifecycle event out to the workspace stream. A subset
+ * of {@link InvocationCompletionDeps}, so the node-control handler can pass the
+ * same `completionDeps` it already holds. Optional everywhere: when absent (or the
+ * workspace stream is disabled) emission is simply skipped.
+ */
+export type NodeEventDeps = Pick<EngineDeps, 'realtime' | 'kv' | 'config'>;
+
+type NodeEventType = 'node.online' | 'node.heartbeat' | 'node.offline';
+
+/**
+ * Publish a node lifecycle event to workspace-key (`rk_live_`) subscribers — the
+ * observer/fleet dashboard listens for these to track node presence live. The
+ * payload is already client-shaped (mirrors how presence emits `agent.status.*`),
+ * so it bypasses `transformForClient`. Best-effort and gated on the workspace
+ * stream flag, exactly like every other workspace-stream emission.
+ */
+async function publishNodeEvent(
+  deps: NodeEventDeps | undefined,
+  workspaceId: string,
+  type: NodeEventType,
+  node: PublicNode,
+): Promise<void> {
+  if (!deps) return;
+  try {
+    if (!(await isWorkspaceStreamEnabled(deps.kv, workspaceId, deps.config?.workspaceStreamEnabled ?? false))) {
+      return;
+    }
+    await deps.realtime.publishToWorkspaceStream({
+      workspaceId,
+      event: { type, node, timestamp: new Date().toISOString() },
+    });
+  } catch {
+    // Best-effort: node state is authoritative in the DB and pollable via GET /v1/nodes.
+  }
+}
 
 interface NodeSocketLike {
   send(data: string): void;
@@ -168,6 +208,7 @@ export async function registerNode(
   workspaceId: string,
   authenticatedNodeId: string,
   message: FleetNodeRegisterMessage,
+  deps?: NodeEventDeps,
 ) {
   if (message.node_id !== authenticatedNodeId) {
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
@@ -203,7 +244,9 @@ export async function registerNode(
   }
 
   await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
-  return publicNode(updated);
+  const node = publicNode(updated);
+  await publishNodeEvent(deps, workspaceId, 'node.online', node);
+  return node;
 }
 
 export async function heartbeatNode(
@@ -211,6 +254,7 @@ export async function heartbeatNode(
   workspaceId: string,
   nodeId: string,
   message: FleetNodeHeartbeatMessage,
+  deps?: NodeEventDeps,
 ) {
   const [updated] = await db
     .update(nodes)
@@ -223,7 +267,10 @@ export async function heartbeatNode(
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
     .returning();
-  return updated ? publicNode(updated) : null;
+  if (!updated) return null;
+  const node = publicNode(updated);
+  await publishNodeEvent(deps, workspaceId, 'node.heartbeat', node);
+  return node;
 }
 
 export async function markNodeOffline(
@@ -231,8 +278,9 @@ export async function markNodeOffline(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  deps?: NodeEventDeps,
 ) {
-  await db
+  const [updated] = await db
     .update(nodes)
     .set({
       status: 'offline',
@@ -241,7 +289,12 @@ export async function markNodeOffline(
       activeAgents: 0,
       lastHeartbeatAt: new Date(),
     })
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+    .returning();
+
+  if (updated) {
+    await publishNodeEvent(deps, workspaceId, 'node.offline', publicNode(updated));
+  }
 
   await db
     .update(agents)
@@ -260,15 +313,20 @@ export async function deregisterNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  deps?: NodeEventDeps,
 ) {
-  await markNodeOffline(db, registry, workspaceId, nodeId);
+  await markNodeOffline(db, registry, workspaceId, nodeId, deps);
 }
 
-export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry): Promise<number> {
+export async function sweepOfflineNodes(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  deps?: NodeEventDeps,
+): Promise<number> {
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
   const stale = rows.filter((node) => !isNodeLive(node));
   for (const node of stale) {
-    await markNodeOffline(db, registry, node.workspaceId, node.id);
+    await markNodeOffline(db, registry, node.workspaceId, node.id, deps);
   }
   return stale.length;
 }
@@ -578,7 +636,7 @@ export async function handleNodeControlMessage(args: {
   try {
     switch (message.type) {
       case 'node.register': {
-        const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message);
+        const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
@@ -592,13 +650,13 @@ export async function handleNodeControlMessage(args: {
         return;
       }
       case 'node.heartbeat':
-        await heartbeatNode(args.db, args.workspaceId, args.nodeId, message);
+        await heartbeatNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
         // Heartbeat refreshes online/capacity state; re-drain as a backstop in
         // case a queued spawn could not reserve capacity at register time.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
         return;
       case 'node.deregister':
-        await deregisterNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        await deregisterNode(args.db, args.registry, args.workspaceId, args.nodeId, args.completionDeps);
         return;
       case 'agent.register': {
         const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, message);

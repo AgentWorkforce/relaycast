@@ -744,3 +744,112 @@ describe('node adapter conformance', () => {
     });
   });
 });
+
+describe('node lifecycle events', () => {
+  let stack: TestStack;
+  beforeEach(() => { stack = makeNodeStack({ ttlMs: 1_000 }); });
+  afterEach(() => stack.close());
+
+  async function enrollNode(ws: { workspaceKey: string; workspaceId: string }) {
+    const create = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        node_id: 'node_evt',
+        name: 'evt-node',
+        capabilities: ['spawn:claude'],
+        max_agents: 4,
+        tags: ['darwin', 'arm64'],
+        version: 'test-node',
+      }),
+    });
+    expect(create.status).toBe(201);
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_evt', sock);
+    return { sock, handle };
+  }
+
+  it('publishes node.online / node.heartbeat / node.offline to the workspace stream', async () => {
+    const ws = await createWorkspace(stack.app, 'fleet-evt-ws');
+    const wsSock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, wsSock);
+
+    const { handle } = await enrollNode(ws);
+
+    // node.register → node.online
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'reg-1',
+      type: 'node.register',
+      name: 'evt-node',
+      node_id: 'node_evt',
+      capabilities: [capability('spawn:claude', 'spawn')],
+      max_agents: 4,
+      tags: ['darwin', 'arm64'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+    const online = wsSock.ofType('node.online');
+    expect(online).toHaveLength(1);
+    expect(online[0].node).toMatchObject({
+      name: 'evt-node',
+      status: 'online',
+      live: true,
+      capabilities: [expect.objectContaining({ name: 'spawn:claude' })],
+    });
+
+    // node.heartbeat → node.heartbeat
+    await handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      load: 0.5,
+      active_agents: 2,
+      handlers_live: true,
+    }));
+    const heartbeat = wsSock.ofType('node.heartbeat');
+    expect(heartbeat).toHaveLength(1);
+    expect(heartbeat[0].node).toMatchObject({ load: 0.5, active_agents: 2, status: 'online' });
+
+    // socket close → node.offline
+    await handle.handleClose();
+    const offline = wsSock.ofType('node.offline');
+    expect(offline).toHaveLength(1);
+    expect(offline[0].node).toMatchObject({ name: 'evt-node', status: 'offline', live: false });
+  });
+
+  it('does not publish node events when the workspace stream is disabled', async () => {
+    const disabledStack = makeNodeStack({ ttlMs: 1_000 });
+    // Override the deployment default to off for this workspace.
+    const ws = await createWorkspace(disabledStack.app, 'fleet-evt-off');
+    await disabledStack.app.request('/v1/workspace/fleet-nodes', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ enabled: true }),
+    }).catch(() => {});
+
+    const wsSock = new FakeSocket();
+    disabledStack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, wsSock);
+    // Disable the workspace stream itself.
+    await disabledStack.app.request('/v1/workspace/stream', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ enabled: false }),
+    }).catch(() => {});
+
+    const create = await disabledStack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'node_off', name: 'off-node', capabilities: ['spawn:claude'], max_agents: 1 }),
+    });
+    expect(create.status).toBe(201);
+    const sock = new FakeSocket();
+    const handle = disabledStack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_off', sock);
+    await handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg-off', type: 'node.register', name: 'off-node', node_id: 'node_off',
+      capabilities: [capability('spawn:claude', 'spawn')], max_agents: 1, tags: [], version: 'x', resume_cursor: null,
+    }));
+
+    expect(wsSock.ofType('node.online')).toHaveLength(0);
+    disabledStack.close();
+  });
+});

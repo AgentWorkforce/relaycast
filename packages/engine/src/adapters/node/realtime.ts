@@ -365,7 +365,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         const conn = this.nodeSockets.get(key);
         if (conn?.socket === socket) {
           this.nodeSockets.delete(key);
-          await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
+          await markNodeOffline(this.db, this, workspaceId, nodeId, this.nodeCompletionDeps).catch(() => {});
         }
       },
     };

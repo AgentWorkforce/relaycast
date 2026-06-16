@@ -137,7 +137,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   realtime.setNodeCompletionDeps(deps);
 
   const sweepTimer = setInterval(() => {
-    void sweepOfflineNodes(db, realtime).catch(() => {});
+    void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime).catch(() => {});
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();

@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, MessageSquareText, PanelLeft, PanelRight } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket, useRelay } from '@relaycast/react';
-import { AgentSidebar } from './AgentSidebar';
+import { AgentSidebar, type DashboardView } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
 import { ConsolePanel } from './ConsolePanel';
 import { ThreadPanel } from './ThreadPanel';
 import { AgentPanel } from './AgentPanel';
+import { FleetView } from './FleetView';
 import { cn, formatDmLabel } from '../lib/utils';
 import type { Agent as ApiAgent, MessageCreatedEvent, DmConversationSummary, WorkspaceDmConversation } from '@relaycast/sdk';
 
@@ -30,6 +31,7 @@ export function DashboardLayout() {
   const { agents: rawAgents } = usePresence();
   const { channels } = useChannels({ includeArchived: true });
   const [mobilePane, setMobilePane] = useState<'browse' | 'chat' | 'details'>('chat');
+  const [view, setView] = useState<DashboardView>('workspace');
   const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
   const { status: wsStatus } = useWebSocket();
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
@@ -228,27 +230,33 @@ export function DashboardLayout() {
           selectedAgent={selectedAgent}
           unreadChannelCounts={unreadChannelCounts}
           wsStatus={wsStatus}
+          view={view}
+          onSelectView={setView}
           onSelectChannel={handleSelectChannel}
           onSelectAgent={handleSelectAgent}
           className="m-3 mr-0"
         />
 
-        <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">
-          {streamEnabled === false && <StreamBanner className="mb-3" />}
+        {view === 'fleet' ? (
+          <FleetView className="min-w-0 flex-1 py-3 pr-3" />
+        ) : (
+          <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">
+            {streamEnabled === false && <StreamBanner className="mb-3" />}
 
-          <div className="flex min-h-0 flex-1 gap-3">
-            <ChatFeed
-              selectedChannel={selectedChannel}
-              selectedChannelMemberCount={selectedChannelMemberCount}
-              selectedChannelArchived={selectedChannelArchived}
-              dmLabel={selectedDmLabel}
-              onOpenThread={(id) => setThreadMessageId(id)}
-              mentionNames={mentionNames}
-              onOpenAgent={handleSelectAgent}
-            />
-            {rightPanel}
-          </div>
-        </main>
+            <div className="flex min-h-0 flex-1 gap-3">
+              <ChatFeed
+                selectedChannel={selectedChannel}
+                selectedChannelMemberCount={selectedChannelMemberCount}
+                selectedChannelArchived={selectedChannelArchived}
+                dmLabel={selectedDmLabel}
+                onOpenThread={(id) => setThreadMessageId(id)}
+                mentionNames={mentionNames}
+                onOpenAgent={handleSelectAgent}
+              />
+              {rightPanel}
+            </div>
+          </main>
+        )}
       </div>
 
       <div className="flex min-h-screen flex-col gap-3 p-3 lg:hidden">
@@ -276,7 +284,9 @@ export function DashboardLayout() {
         </div>
 
         <div className="flex min-h-0 flex-1">
-          {mobilePane === 'browse' ? (
+          {view === 'fleet' && mobilePane !== 'browse' ? (
+            <FleetView className="h-full w-full" />
+          ) : mobilePane === 'browse' ? (
             <AgentSidebar
               channels={channels}
               agents={agents}
@@ -285,6 +295,8 @@ export function DashboardLayout() {
               selectedAgent={selectedAgent}
               unreadChannelCounts={unreadChannelCounts}
               wsStatus={wsStatus}
+              view={view}
+              onSelectView={setView}
               onSelectChannel={handleSelectChannel}
               onSelectAgent={handleSelectAgent}
               className="h-full w-full"

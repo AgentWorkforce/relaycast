@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CoreMessagePayloadSchema } from './message.js';
 import { FileAttachmentSchema } from './file.js';
+import { FleetCapabilitySchema } from './fleet-wire.js';
 
 // WebSocket client -> server
 export const SubscribeEventSchema = z.object({
@@ -143,6 +144,47 @@ export type AgentStatusEvent =
   | AgentStatusWaitingEvent
   | AgentStatusOfflineEvent
   | AgentStatusChangedEvent;
+
+// --- Fleet node presence ----------------------------------------------------
+// Broadcast to workspace-key subscribers (the observer/fleet dashboard) on the
+// node lifecycle transitions. The `node` payload mirrors the GET /v1/nodes
+// roster entry so a single frame fully refreshes a node's row.
+export const NodeRosterEntryEventSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  capabilities: z.array(FleetCapabilitySchema),
+  tags: z.array(z.string()),
+  version: z.string(),
+  status: z.enum(['online', 'offline']),
+  live: z.boolean(),
+  handlers_live: z.boolean(),
+  load: z.number(),
+  active_agents: z.number().int().nonnegative(),
+  max_agents: z.number().int().nonnegative(),
+  last_heartbeat_at: z.string().nullable(),
+  created_at: z.string(),
+});
+export type NodeRosterEntryEventPayload = z.infer<typeof NodeRosterEntryEventSchema>;
+
+export const NodeOnlineEventSchema = z.object({
+  type: z.literal('node.online'),
+  node: NodeRosterEntryEventSchema,
+});
+export type NodeOnlineEvent = z.infer<typeof NodeOnlineEventSchema>;
+
+export const NodeHeartbeatEventSchema = z.object({
+  type: z.literal('node.heartbeat'),
+  node: NodeRosterEntryEventSchema,
+});
+export type NodeHeartbeatEvent = z.infer<typeof NodeHeartbeatEventSchema>;
+
+export const NodeOfflineEventSchema = z.object({
+  type: z.literal('node.offline'),
+  node: NodeRosterEntryEventSchema,
+});
+export type NodeOfflineEvent = z.infer<typeof NodeOfflineEventSchema>;
+
+export type NodeEvent = NodeOnlineEvent | NodeHeartbeatEvent | NodeOfflineEvent;
 
 export const AgentSpawnRequestedEventSchema = z.object({
   type: z.literal('agent.spawn_requested'),
@@ -390,6 +432,9 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
+  NodeOnlineEventSchema,
+  NodeHeartbeatEventSchema,
+  NodeOfflineEventSchema,
   AgentSpawnRequestedEventSchema,
   AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
@@ -441,6 +486,9 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
+  NodeOnlineEventSchema,
+  NodeHeartbeatEventSchema,
+  NodeOfflineEventSchema,
   AgentSpawnRequestedEventSchema,
   AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,

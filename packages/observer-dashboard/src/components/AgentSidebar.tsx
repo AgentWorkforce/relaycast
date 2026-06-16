@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Hash, MessageSquare, LogOut, Sun, Moon } from 'lucide-react';
+import { Hash, MessageSquare, LogOut, Sun, Moon, MessagesSquare, Server } from 'lucide-react';
 import { cn, formatDmLabel } from '../lib/utils';
 import { AgentAvatar } from './AgentAvatar';
 import { clearAuth } from '../lib/auth';
@@ -9,6 +9,8 @@ import { useRouter } from 'next/navigation';
 import type { Agent, Channel, DmConversationSummary } from '@relaycast/sdk';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+
+export type DashboardView = 'workspace' | 'fleet';
 
 interface AgentSidebarProps {
   channels: Channel[];
@@ -18,6 +20,8 @@ interface AgentSidebarProps {
   selectedAgent: string | null;
   unreadChannelCounts: Record<string, number>;
   wsStatus: ConnectionStatus;
+  view: DashboardView;
+  onSelectView: (view: DashboardView) => void;
   onSelectChannel: (name: string | null) => void;
   onSelectAgent: (name: string | null) => void;
   className?: string;
@@ -64,6 +68,8 @@ export function AgentSidebar({
   selectedAgent,
   unreadChannelCounts,
   wsStatus,
+  view,
+  onSelectView,
   onSelectChannel,
   onSelectAgent,
   className,
@@ -116,7 +122,24 @@ export function AgentSidebar({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4">
+      <div className="px-3 pt-3">
+        <div className="brand-soft flex items-center gap-1 p-1">
+          <ViewTab
+            label="Workspace"
+            icon={<MessagesSquare className="h-3.5 w-3.5" />}
+            active={view === 'workspace'}
+            onClick={() => onSelectView('workspace')}
+          />
+          <ViewTab
+            label="Fleet"
+            icon={<Server className="h-3.5 w-3.5" />}
+            active={view === 'fleet'}
+            onClick={() => onSelectView('fleet')}
+          />
+        </div>
+      </div>
+
+      <div className={cn('flex-1 overflow-y-auto px-3 py-4', view === 'fleet' && 'hidden')}>
         <SidebarSection title="Channels">
           {channels.map((ch) => (
             <button
@@ -200,6 +223,14 @@ export function AgentSidebar({
         </SidebarSection>
       </div>
 
+      {view === 'fleet' && (
+        <div className="flex-1 px-6 py-8">
+          <p className="text-xs leading-5 text-[var(--text-faint)]">
+            Showing fleet nodes connected to this workspace and the capabilities they advertise.
+          </p>
+        </div>
+      )}
+
       <div className="border-t border-[var(--border-default)] px-3 py-3">
         <button
           onClick={toggleTheme}
@@ -217,6 +248,33 @@ export function AgentSidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+function ViewTab({
+  label,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all',
+        active
+          ? 'bg-[var(--brand-primary-faint)] text-[var(--foreground)] ring-1 ring-[var(--border-strong)]'
+          : 'text-[var(--text-secondary)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--foreground)]',
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
 
