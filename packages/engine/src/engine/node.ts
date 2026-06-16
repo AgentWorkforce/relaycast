@@ -212,9 +212,29 @@ export async function heartbeatNode(
   nodeId: string,
   message: FleetNodeHeartbeatMessage,
 ) {
+  // A heartbeat may carry the node's roster snapshot so the engine can keep its
+  // node descriptor fresh between (or in the absence of a fresh) node.register —
+  // e.g. after an engine restart where the broker keeps heartbeating an
+  // already-registered node. The roster fields are optional; a minimal heartbeat
+  // updates only liveness/capacity. lastHeartbeatAt is always stamped
+  // server-side here as the authoritative receipt time — the broker never sends
+  // it, and any client-supplied value would be ignored.
+  if (message.node_id !== undefined && message.node_id !== nodeId) {
+    throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
+  }
+
+  const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
+  if (message.name !== undefined) rosterUpdate.name = message.name;
+  if (message.capabilities !== undefined) {
+    rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+  }
+  if (message.max_agents !== undefined) rosterUpdate.maxAgents = message.max_agents;
+  if (message.version !== undefined) rosterUpdate.version = message.version;
+
   const [updated] = await db
     .update(nodes)
     .set({
+      ...rosterUpdate,
       status: 'online',
       load: message.load,
       activeAgents: message.active_agents,
@@ -223,6 +243,11 @@ export async function heartbeatNode(
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
     .returning();
+
+  if (updated && message.capabilities !== undefined) {
+    await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
+  }
+
   return updated ? publicNode(updated) : null;
 }
 

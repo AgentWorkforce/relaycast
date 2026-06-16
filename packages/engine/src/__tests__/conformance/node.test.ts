@@ -742,5 +742,98 @@ describe('node adapter conformance', () => {
       const triggerInvokes = alpha.sock.ofType('action.invoke').filter((event) => event.action === 'echo');
       expect(triggerInvokes).toHaveLength(1);
     });
+
+    it('refreshes the node roster snapshot from a roster-carrying heartbeat and stamps receipt time server-side', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-heartbeat-roster-ws');
+
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        maxAgents: 4,
+      });
+
+      // enrollAndAttachNode intentionally provokes one error frame (a bad
+      // node.register), so baseline from the current count.
+      const errorsBefore = alpha.sock.ofType('error').length;
+      // lastHeartbeatAt is persisted at second granularity (unixepoch), so floor
+      // the baseline to the second to compare against the server stamp.
+      const before = Math.floor(Date.now() / 1000) * 1000;
+      // Roster-carrying heartbeat: a new capability appears, capacity grows, and
+      // the version bumps. The engine must adopt these from the heartbeat without
+      // a fresh node.register, and must ignore any broker-sent last_heartbeat_at
+      // in favor of its own server stamp.
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0.5,
+        active_agents: 1,
+        handlers_live: true,
+        node_id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [
+          capability('spawn:claude', 'spawn', { agent: 'claude' }),
+          capability('echo', 'tool'),
+        ],
+        max_agents: 8,
+        version: 'test-node-v2',
+      }));
+
+      // No new error frame from the strict schema: the roster fields are accepted.
+      expect(alpha.sock.ofType('error')).toHaveLength(errorsBefore);
+
+      const [node] = await stack.runtime.handle.db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node).toBeDefined();
+      expect(node.maxAgents).toBe(8);
+      expect(node.version).toBe('test-node-v2');
+      expect(node.load).toBe(0.5);
+      expect(node.activeAgents).toBe(1);
+      expect(node.capabilities.map((cap) => cap.name).sort()).toEqual(['echo', 'spawn:claude']);
+      // Receipt time is stamped server-side, not trusted from the wire.
+      expect(node.lastHeartbeatAt?.getTime()).toBeGreaterThanOrEqual(before);
+
+      // The newly-advertised capability became a node-handled action.
+      const echoAction = await stack.app.request('/v1/nodes?capability=echo', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(echoAction.status).toBe(200);
+      const echoBody = await echoAction.json() as { data: Array<{ id: string }> };
+      expect(echoBody.data.map((n) => n.id)).toContain('node_alpha');
+
+      // A roster_id mismatch on the heartbeat is rejected like node.register.
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'heartbeat-bad-node-id',
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+        node_id: 'wrong-node',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'heartbeat-bad-node-id',
+        ok: false,
+        code: 'node_id_mismatch',
+      });
+
+      // A minimal heartbeat (no roster) remains valid and preserves the roster.
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0.1,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      const [stillNode] = await stack.runtime.handle.db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(stillNode.maxAgents).toBe(8);
+      expect(stillNode.version).toBe('test-node-v2');
+      expect(stillNode.capabilities.map((cap) => cap.name).sort()).toEqual(['echo', 'spawn:claude']);
+    });
   });
 });
