@@ -83,6 +83,20 @@ export const FleetNodeHeartbeatMessageSchema = z
     load: z.number().finite().nonnegative(),
     active_agents: z.number().int().nonnegative(),
     handlers_live: z.boolean(),
+    // Roster snapshot carried for liveness: lets the engine refresh a node's
+    // descriptor (name/capabilities/max_agents/version) from the steady-state
+    // heartbeat without waiting for a fresh node.register — important after an
+    // engine restart where the broker keeps heartbeating an already-registered
+    // node. All optional and backward-compatible: a minimal heartbeat
+    // (load/active_agents/handlers_live only) is still valid.
+    //
+    // NOTE: the broker does NOT send last_heartbeat_at — receipt time is stamped
+    // server-side by the engine as the single source of truth for liveness.
+    name: z.string().optional(),
+    node_id: z.string().optional(),
+    capabilities: z.array(FleetCapabilitySchema).optional(),
+    max_agents: z.number().int().nonnegative().optional(),
+    version: z.string().optional(),
   })
   .strict();
 export type FleetNodeHeartbeatMessage = z.infer<typeof FleetNodeHeartbeatMessageSchema>;
