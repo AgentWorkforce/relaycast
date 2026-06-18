@@ -382,6 +382,10 @@ so a single event fully refreshes a node's row. These mirror node register /
 heartbeat / disconnect (including the heartbeat-TTL sweep) and are emitted only
 when the workspace stream is enabled.
 
+Enable the fleet-node control surface per workspace with
+`await relay.workspace.fleetNodes.set(true)`; call
+`relay.workspace.fleetNodes.inherit()` to return to the deployment default.
+
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id`, emits `action.invoked` to the handler agent, and completion emits
 `action.completed` or `action.failed` to listeners and subscriptions. Action discovery
