@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents, routingConfigs, routingFailures } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { codedError } from '../lib/httpError.js';
+import { toIso } from '../lib/serialize.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -83,11 +84,6 @@ function safeJsonArray(value: string): string[] {
     return [];
   }
 }
-
-function toIso(date?: Date | null): string | null {
-  return date ? date.toISOString() : null;
-}
-
 
 function withDefaultWeights(value: unknown): RoutingWeights {
   if (!value || typeof value !== 'object') return { ...DEFAULT_WEIGHTS };

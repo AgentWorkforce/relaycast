@@ -1,9 +1,9 @@
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
-import type { FleetWireJsonValue } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
+import { toFleetWireJson } from './deliveryWire.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 
@@ -74,21 +74,6 @@ function recordInput(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function toFleetWireJson(value: unknown): FleetWireJsonValue {
-  if (value === null) return null;
-  if (typeof value === 'string' || typeof value === 'boolean') return value;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (Array.isArray(value)) return value.map(toFleetWireJson);
-  if (value && typeof value === 'object') {
-    const out: Record<string, FleetWireJsonValue> = {};
-    for (const [key, nested] of Object.entries(value)) {
-      out[key] = toFleetWireJson(nested);
-    }
-    return out;
-  }
-  return null;
 }
 
 function publicAction(row: {

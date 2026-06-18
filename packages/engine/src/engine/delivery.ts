@@ -1,4 +1,4 @@
-import { eq, ne, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
+import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations, messageAttachments, files } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -6,6 +6,7 @@ import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
+import { toIso } from '../lib/serialize.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -15,10 +16,6 @@ type AttachmentRow = { file_id: string; filename: string; content_type: string; 
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
-
-function toIso(value: Date | null | undefined): string | null {
-  return value ? value.toISOString() : null;
-}
 
 function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
