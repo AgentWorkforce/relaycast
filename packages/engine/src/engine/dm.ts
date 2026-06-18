@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, isNull, inArray, asc } from 'drizzle-orm';
+import { eq, and, sql, lt, gt, isNull, inArray } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -22,44 +22,13 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
+import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
-
-type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
 interface SendDmOptions {
   skipA2aIntercept?: boolean;
   mailbox?: MailboxConfig;
-}
-
-async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
-  const map = new Map<string, AttachmentRow[]>();
-  if (msgIds.length === 0) return map;
-
-  const rows = await db
-    .select({
-      messageId: messageAttachments.messageId,
-      fileId: messageAttachments.fileId,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)))
-    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position));
-
-  for (const row of rows) {
-    const list = map.get(row.messageId) || [];
-    list.push({
-      file_id: row.fileId,
-      filename: row.filename,
-      content_type: row.contentType,
-      size_bytes: row.sizeBytes,
-    });
-    map.set(row.messageId, list);
-  }
-  return map;
 }
 
 async function getDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {

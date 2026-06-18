@@ -11,39 +11,9 @@ import {
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
-
-type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
-
-async function fetchAttachmentsBatch(db: Db, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
-  const map = new Map<string, AttachmentRow[]>();
-  if (msgIds.length === 0) return map;
-
-  const rows = await db
-    .select({
-      messageId: messageAttachments.messageId,
-      fileId: messageAttachments.fileId,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(inArray(messageAttachments.messageId, msgIds));
-
-  for (const row of rows) {
-    const list = map.get(row.messageId) || [];
-    list.push({
-      file_id: row.fileId,
-      filename: row.filename,
-      content_type: row.contentType,
-      size_bytes: row.sizeBytes,
-    });
-    map.set(row.messageId, list);
-  }
-  return map;
-}
 
 /**
  * Fetch attachment details straight from `files` by id, preserving the
@@ -305,7 +275,7 @@ export async function getMessages(
 
   // Batch: attachments (single query for all messages with attachments)
   const attachmentMsgIds = rows.filter((r) => r.hasAttachments).map((r) => r.id);
-  const attachmentMap = await fetchAttachmentsBatch(db, attachmentMsgIds);
+  const attachmentMap = await fetchAttachmentsBatch(db, workspaceId, attachmentMsgIds);
 
   return rows.map((row) => ({
     id: row.id,
@@ -365,7 +335,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
       .select({ count: sql<number>`count(*)` })
       .from(readReceipts)
       .where(eq(readReceipts.messageId, row.id)),
-    row.hasAttachments ? fetchAttachmentsBatch(db, [row.id]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
+    row.hasAttachments ? fetchAttachmentsBatch(db, workspaceId, [row.id]) : Promise.resolve(new Map<string, AttachmentRow[]>()),
   ]);
 
   return {
