@@ -148,6 +148,12 @@ export interface WorkspaceStreamConfig {
   override: boolean | null;
 }
 
+export interface WorkspaceFleetNodesConfig {
+  enabled: boolean;
+  defaultEnabled: boolean;
+  override: boolean | null;
+}
+
 export interface WorkspaceBootstrapOptions {
   apiKey?: string;
   baseUrl?: string;
@@ -599,6 +605,13 @@ export class RelayCast {
         this.client.put('/v1/workspace/stream', { enabled }),
       inherit: (): Promise<WorkspaceStreamConfig> =>
         this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
+    },
+    fleetNodes: {
+      get: (): Promise<WorkspaceFleetNodesConfig> => this.client.get('/v1/workspace/fleet-nodes'),
+      set: (enabled: boolean): Promise<WorkspaceFleetNodesConfig> =>
+        this.client.put('/v1/workspace/fleet-nodes', { enabled }),
+      inherit: (): Promise<WorkspaceFleetNodesConfig> =>
+        this.client.put('/v1/workspace/fleet-nodes', { mode: 'inherit' }),
     },
   };
 
