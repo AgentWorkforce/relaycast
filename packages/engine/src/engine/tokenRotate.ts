@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -12,9 +13,7 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
 
   if (!agent) {
-    const err = new Error(`Agent "${agentName}" not found`);
-    Object.assign(err, { code: 'agent_not_found', status: 404 });
-    throw err;
+    throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
   }
 
   const newToken = `at_live_${randomHex(16)}`;

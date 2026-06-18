@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { generateId } from './snowflake.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -62,11 +63,6 @@ export interface DirectoryRatingInput {
 
 type DirectoryAgentRow = typeof directoryAgents.$inferSelect;
 
-function createError(message: string, code: string, status: number) {
-  const err = new Error(message);
-  Object.assign(err, { code, status });
-  return err;
-}
 
 function slugify(value: string): string {
   return value
@@ -126,7 +122,7 @@ async function resolveSourceAgentId(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, sourceAgentName)));
 
   if (!agent) {
-    throw createError(`Agent "${sourceAgentName}" not found`, 'agent_not_found', 404);
+    throw codedError(`Agent "${sourceAgentName}" not found`, 'agent_not_found', 404);
   }
 
   return agent.id;
@@ -277,7 +273,7 @@ export async function createDirectoryAgent(
 ) {
   const slug = slugify(data.slug || data.name);
   if (!slug) {
-    throw createError('slug could not be derived from name', 'invalid_request', 400);
+    throw codedError('slug could not be derived from name', 'invalid_request', 400);
   }
 
   const sourceAgentId = await resolveSourceAgentId(db, workspaceId, data.source_agent_name);
@@ -353,7 +349,7 @@ export async function updateDirectoryAgent(
 
   const nextSlug = data.slug || (data.name ? slugify(data.name) : existing.slug);
   if (!nextSlug) {
-    throw createError('slug could not be derived from name', 'invalid_request', 400);
+    throw codedError('slug could not be derived from name', 'invalid_request', 400);
   }
 
   const sourceAgentId = data.source_agent_name === undefined
@@ -407,7 +403,7 @@ export async function listDirectoryRatings(
 ) {
   const row = await getDirectoryAgentRow(db, workspaceId, slug);
   if (!row) {
-    throw createError(`Directory agent "${slug}" not found`, 'directory_agent_not_found', 404);
+    throw codedError(`Directory agent "${slug}" not found`, 'directory_agent_not_found', 404);
   }
 
   const ratings = await db
@@ -444,7 +440,7 @@ export async function upsertDirectoryRating(
 ) {
   const row = await getDirectoryAgentRow(db, workspaceId, slug);
   if (!row) {
-    throw createError(`Directory agent "${slug}" not found`, 'directory_agent_not_found', 404);
+    throw codedError(`Directory agent "${slug}" not found`, 'directory_agent_not_found', 404);
   }
 
   const [existingRating] = await db
@@ -701,7 +697,7 @@ export async function syncSourceAgentDirectoryEntry(
 
   const slug = slugify(sourceAgent.name);
   if (!slug) {
-    throw createError('slug could not be derived from source agent name', 'invalid_request', 400);
+    throw codedError('slug could not be derived from source agent name', 'invalid_request', 400);
   }
 
   const tags = normalizeTags([

@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, routingConfigs, routingFailures } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -87,11 +88,6 @@ function toIso(date?: Date | null): string | null {
   return date ? date.toISOString() : null;
 }
 
-function createError(message: string, code: string, status: number) {
-  const err = new Error(message);
-  Object.assign(err, { code, status });
-  return err;
-}
 
 function withDefaultWeights(value: unknown): RoutingWeights {
   if (!value || typeof value !== 'object') return { ...DEFAULT_WEIGHTS };
@@ -282,7 +278,7 @@ export async function recordRoutingSuccess(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
 
   if (!agent) {
-    throw createError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
+    throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
   }
 
   const now = new Date();
@@ -326,7 +322,7 @@ export async function recordRoutingFailure(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
 
   if (!agent) {
-    throw createError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
+    throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
   }
 
   const config = await getRoutingConfig(db, workspaceId);
@@ -384,7 +380,7 @@ export async function routeBySkill(
 }> {
   const normalizedSkill = normalizeText(skill);
   if (!normalizedSkill) {
-    throw createError('skill is required', 'invalid_request', 400);
+    throw codedError('skill is required', 'invalid_request', 400);
   }
 
   const config = await getRoutingConfig(db, workspaceId);
@@ -458,7 +454,7 @@ export async function routeBySkill(
   }));
 
   if (rows.length === 0) {
-    throw createError(`No active agents found for skill "${skill}"`, 'route_not_found', 404);
+    throw codedError(`No active agents found for skill "${skill}"`, 'route_not_found', 404);
   }
 
   const nowEpochSeconds = Math.floor(Date.now() / 1000);
@@ -491,7 +487,7 @@ export async function routeBySkill(
       || left.row.agent_name.localeCompare(right.row.agent_name));
 
   if (candidates.length === 0) {
-    throw createError(`No healthy agents found for skill "${skill}"`, 'route_not_found', 404);
+    throw codedError(`No healthy agents found for skill "${skill}"`, 'route_not_found', 404);
   }
 
   const best = candidates[0];

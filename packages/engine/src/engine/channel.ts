@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { channels, channelMembers, agents } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -14,11 +15,7 @@ export async function createChannel(
 ) {
   // Validate channel name: lowercase alphanumeric + hyphens
   if (!/^[a-z0-9][a-z0-9-]*$/.test(data.name)) {
-    const err = new Error(
-      'Channel name must be lowercase alphanumeric and hyphens, starting with a letter or number',
-    );
-    Object.assign(err, { code: 'invalid_channel_name', status: 400 });
-    throw err;
+    throw codedError('Channel name must be lowercase alphanumeric and hyphens, starting with a letter or number', 'invalid_channel_name', 400);
   }
 
   // Check for duplicate name within workspace
@@ -29,9 +26,7 @@ export async function createChannel(
       and(eq(channels.workspaceId, workspaceId), eq(channels.name, data.name)),
     );
   if (existing) {
-    const err = new Error(`Channel "${data.name}" already exists`);
-    Object.assign(err, { code: 'channel_already_exists', status: 409 });
-    throw err;
+    throw codedError(`Channel "${data.name}" already exists`, 'channel_already_exists', 409);
   }
 
   const channelId = generateId();
@@ -186,9 +181,7 @@ export async function updateChannel(
   if (!channel) return null;
 
   if (channel.isArchived) {
-    const err = new Error('Cannot update an archived channel');
-    Object.assign(err, { code: 'channel_archived', status: 400 });
-    throw err;
+    throw codedError('Cannot update an archived channel', 'channel_archived', 400);
   }
 
   const setClause: Record<string, unknown> = {};
@@ -221,9 +214,7 @@ export async function updateChannel(
 export async function archiveChannel(db: Db, workspaceId: string, name: string) {
   // #general cannot be deleted
   if (name === 'general') {
-    const err = new Error('The #general channel cannot be archived');
-    Object.assign(err, { code: 'cannot_archive_general', status: 400 });
-    throw err;
+    throw codedError('The #general channel cannot be archived', 'cannot_archive_general', 400);
   }
 
   const [channel] = await db
@@ -262,15 +253,11 @@ export async function joinChannel(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   if (channel.isArchived) {
-    const err = new Error('Cannot join an archived channel');
-    Object.assign(err, { code: 'channel_archived', status: 400 });
-    throw err;
+    throw codedError('Cannot join an archived channel', 'channel_archived', 400);
   }
 
   // Check if already a member
@@ -316,9 +303,7 @@ export async function leaveChannel(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   await db
@@ -345,9 +330,7 @@ export async function getMembers(db: Db, workspaceId: string, channelName: strin
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   const members = await db
@@ -389,15 +372,11 @@ export async function inviteAgent(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   if (channel.isArchived) {
-    const err = new Error('Cannot invite to an archived channel');
-    Object.assign(err, { code: 'channel_archived', status: 400 });
-    throw err;
+    throw codedError('Cannot invite to an archived channel', 'channel_archived', 400);
   }
 
   // Check inviter is a member
@@ -412,9 +391,7 @@ export async function inviteAgent(
     );
 
   if (!inviterMembership) {
-    const err = new Error('You must be a member of the channel to invite others');
-    Object.assign(err, { code: 'not_a_member', status: 403 });
-    throw err;
+    throw codedError('You must be a member of the channel to invite others', 'not_a_member', 403);
   }
 
   // Find invitee agent
@@ -429,9 +406,7 @@ export async function inviteAgent(
     );
 
   if (!invitee) {
-    const err = new Error(`Agent "${inviteeAgentName}" not found`);
-    Object.assign(err, { code: 'agent_not_found', status: 404 });
-    throw err;
+    throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
 
   // Check if already a member
@@ -474,9 +449,7 @@ export async function muteChannel(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   const [membership] = await db
@@ -490,9 +463,7 @@ export async function muteChannel(
     );
 
   if (!membership) {
-    const err = new Error('You must be a member of the channel to mute it');
-    Object.assign(err, { code: 'not_a_member', status: 403 });
-    throw err;
+    throw codedError('You must be a member of the channel to mute it', 'not_a_member', 403);
   }
 
   await db
@@ -527,9 +498,7 @@ export async function unmuteChannel(
     );
 
   if (!channel) {
-    const err = new Error(`Channel "${channelName}" not found`);
-    Object.assign(err, { code: 'channel_not_found', status: 404 });
-    throw err;
+    throw codedError(`Channel "${channelName}" not found`, 'channel_not_found', 404);
   }
 
   const [membership] = await db
@@ -543,9 +512,7 @@ export async function unmuteChannel(
     );
 
   if (!membership) {
-    const err = new Error('You must be a member of the channel to unmute it');
-    Object.assign(err, { code: 'not_a_member', status: 403 });
-    throw err;
+    throw codedError('You must be a member of the channel to unmute it', 'not_a_member', 403);
   }
 
   await db

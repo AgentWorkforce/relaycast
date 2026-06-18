@@ -1,6 +1,7 @@
 import type { getDb } from '../db/index.js';
 import { hmacSha256Hex } from '../lib/crypto.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -162,11 +163,7 @@ export async function deliverEvent(
   const retryableFailures = deliveryResults.filter((r) => !r.ok && r.retryable).length;
 
   if (retryableFailures > 0) {
-    const err = new Error(
-      `Retryable webhook delivery failures: ${retryableFailures} of ${attempted}`,
-    );
-    Object.assign(err, { code: 'event_delivery_retryable_failure', status: 503 });
-    throw err;
+    throw codedError(`Retryable webhook delivery failures: ${retryableFailures} of ${attempted}`, 'event_delivery_retryable_failure', 503);
   }
 
   return { attempted, succeeded, failed, retryableFailures };

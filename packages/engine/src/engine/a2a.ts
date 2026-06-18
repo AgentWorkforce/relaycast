@@ -26,6 +26,7 @@ import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { randomUuid, sha256Hex } from '../lib/crypto.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -110,9 +111,7 @@ export interface A2aAgentRecord {
 
 function ensureString(value: string | undefined, message: string): string {
   if (!value) {
-    const err = new Error(message);
-    Object.assign(err, { code: 'invalid_request', status: 400 });
-    throw err;
+    throw codedError(message, 'invalid_request', 400);
   }
   return value;
 }
@@ -147,9 +146,7 @@ function sleep(ms: number): Promise<void> {
 
 export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard> {
   if (!isSafeExternalUrl(agentCardUrl)) {
-    const err = new Error(`Refusing to fetch agent card from non-public URL: ${agentCardUrl}`);
-    Object.assign(err, { code: 'a2a_agent_url_forbidden', status: 400 });
-    throw err;
+    throw codedError(`Refusing to fetch agent card from non-public URL: ${agentCardUrl}`, 'a2a_agent_url_forbidden', 400);
   }
   const response = await globalThis.fetch(agentCardUrl, {
     method: 'GET',
@@ -158,9 +155,7 @@ export async function fetchAgentCard(agentCardUrl: string): Promise<A2aAgentCard
   });
 
   if (!response.ok) {
-    const err = new Error(`Failed to fetch agent card from ${agentCardUrl}: ${response.status}`);
-    Object.assign(err, { code: 'a2a_agent_card_fetch_failed', status: 502 });
-    throw err;
+    throw codedError(`Failed to fetch agent card from ${agentCardUrl}: ${response.status}`, 'a2a_agent_card_fetch_failed', 502);
   }
 
   const payload = await response.json();
@@ -285,9 +280,7 @@ export async function registerA2aAgent(
     .where(and(eq(a2aAgents.workspaceId, workspaceId), eq(agents.name, relayName)));
 
   if (existing) {
-    const err = new Error(`A2A agent "${relayName}" already exists in this workspace`);
-    Object.assign(err, { code: 'a2a_agent_already_exists', status: 409 });
-    throw err;
+    throw codedError(`A2A agent "${relayName}" already exists in this workspace`, 'a2a_agent_already_exists', 409);
   }
 
   const proxyMetadata = {
@@ -311,9 +304,7 @@ export async function registerA2aAgent(
     // type 'external', so an unrelated agent can never be hijacked by name.
     const isA2aProxy = existingProxy.type === 'external' && meta.a2a === true;
     if (!isA2aProxy) {
-      const err = new Error(`Agent "${relayName}" already exists in this workspace`);
-      Object.assign(err, { code: 'agent_already_exists', status: 409 });
-      throw err;
+      throw codedError(`Agent "${relayName}" already exists in this workspace`, 'agent_already_exists', 409);
     }
     await updateAgent(db, workspaceId, relayName, { status: 'active', metadata: proxyMetadata });
     const rotated = await rotateAgentToken(db, workspaceId, relayName);
@@ -521,9 +512,7 @@ export async function sendToExternalAgent(
   const targetUrl = normalizeBaseUrl(agentUrl);
 
   if (!isSafeExternalUrl(targetUrl)) {
-    const err = new Error(`Refusing to send to non-public A2A URL: ${targetUrl}`);
-    Object.assign(err, { code: 'a2a_agent_url_forbidden', status: 400 });
-    throw err;
+    throw codedError(`Refusing to send to non-public A2A URL: ${targetUrl}`, 'a2a_agent_url_forbidden', 400);
   }
 
   let lastError: unknown;

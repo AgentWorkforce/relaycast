@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents, channels, channelMembers, actions, deliveries } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -66,9 +67,7 @@ export async function registerAgent(
     // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
     // and the message may contain 'UNIQUE constraint failed' or 'D1_ERROR: UNIQUE'
     if (isUniqueConstraintError(insertErr)) {
-      const err = new Error(`Agent "${data.name}" already exists in this workspace`);
-      Object.assign(err, { code: 'agent_already_exists', status: 409 });
-      throw err;
+      throw codedError(`Agent "${data.name}" already exists in this workspace`, 'agent_already_exists', 409);
     }
     throw insertErr;
   }

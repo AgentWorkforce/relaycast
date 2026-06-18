@@ -21,6 +21,7 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -132,9 +133,7 @@ async function resolveConversation(
     );
 
   if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
+    throw codedError('Conversation not found', 'not_found', 404);
   }
 
   return conv;
@@ -149,9 +148,7 @@ async function resolveAttachments(
 
   const unique = new Set(attachmentIds);
   if (unique.size !== attachmentIds.length) {
-    const err = new Error('Invalid attachments: duplicate file ids are not allowed');
-    Object.assign(err, { code: 'invalid_attachments', status: 400 });
-    throw err;
+    throw codedError('Invalid attachments: duplicate file ids are not allowed', 'invalid_attachments', 400);
   }
 
   const validFiles = await db
@@ -173,9 +170,7 @@ async function resolveAttachments(
   const validIds = new Set(validFiles.map((f) => f.file_id));
   const invalid = attachmentIds.filter((id) => !validIds.has(id));
   if (invalid.length > 0) {
-    const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
-    Object.assign(err, { code: 'invalid_attachments', status: 400 });
-    throw err;
+    throw codedError('Invalid attachments: file ids must exist in workspace and be complete', 'invalid_attachments', 400);
   }
 
   const ordered = new Map(validFiles.map((file) => [file.file_id, file]));
@@ -242,9 +237,7 @@ export async function sendDm(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.to)));
 
   if (!toAgent) {
-    const err = new Error(`Agent "${data.to}" not found`);
-    Object.assign(err, { code: 'agent_not_found', status: 404 });
-    throw err;
+    throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
 
   const [fromAgent] = await db
@@ -253,9 +246,7 @@ export async function sendDm(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
 
   if (!fromAgent?.name) {
-    const err = new Error('Sender agent not found');
-    Object.assign(err, { code: 'internal_error', status: 500 });
-    throw err;
+    throw codedError('Sender agent not found', 'internal_error', 500);
   }
 
   const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
@@ -496,9 +487,7 @@ export async function getDmMessages(
     );
 
   if (!participant) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
+    throw codedError('Not a participant in this conversation', 'forbidden', 403);
   }
 
   // Get the conversation to find the channel
@@ -513,9 +502,7 @@ export async function getDmMessages(
     );
 
   if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
+    throw codedError('Conversation not found', 'not_found', 404);
   }
 
   const conditions = [eq(messages.channelId, conv.channelId)];
