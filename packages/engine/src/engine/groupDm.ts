@@ -1,4 +1,4 @@
-import { eq, and, isNull, inArray, asc } from 'drizzle-orm';
+import { eq, and, isNull, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -9,40 +9,10 @@ import {
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
+import { codedError } from '../lib/httpError.js';
+import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
-
-type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
-
-async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
-  const map = new Map<string, AttachmentRow[]>();
-  if (msgIds.length === 0) return map;
-
-  const rows = await db
-    .select({
-      messageId: messageAttachments.messageId,
-      fileId: messageAttachments.fileId,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)))
-    .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position));
-
-  for (const row of rows) {
-    const list = map.get(row.messageId) || [];
-    list.push({
-      file_id: row.fileId,
-      filename: row.filename,
-      content_type: row.contentType,
-      size_bytes: row.sizeBytes,
-    });
-    map.set(row.messageId, list);
-  }
-  return map;
-}
 
 export async function createGroupDm(
   db: Db,
@@ -59,9 +29,7 @@ export async function createGroupDm(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
 
     if (!agent) {
-      const err = new Error(`Agent "${name}" not found`);
-      Object.assign(err, { code: 'agent_not_found', status: 404 });
-      throw err;
+      throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
     }
     participantAgents.push(agent);
   }
@@ -131,9 +99,7 @@ export async function postGroupMessage(
     );
 
   if (!participant) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
+    throw codedError('Not a participant in this conversation', 'forbidden', 403);
   }
 
   // Get the conversation to find the channel
@@ -148,9 +114,7 @@ export async function postGroupMessage(
     );
 
   if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
+    throw codedError('Conversation not found', 'not_found', 404);
   }
 
   const [fromAgent] = await db
@@ -159,17 +123,13 @@ export async function postGroupMessage(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
 
   if (!fromAgent?.name) {
-    const err = new Error('Sender agent not found');
-    Object.assign(err, { code: 'internal_error', status: 500 });
-    throw err;
+    throw codedError('Sender agent not found', 'internal_error', 500);
   }
 
   if (data.attachments && data.attachments.length > 0) {
     const unique = new Set(data.attachments);
     if (unique.size !== data.attachments.length) {
-      const err = new Error('Invalid attachments: duplicate file ids are not allowed');
-      Object.assign(err, { code: 'invalid_attachments', status: 400 });
-      throw err;
+      throw codedError('Invalid attachments: duplicate file ids are not allowed', 'invalid_attachments', 400);
     }
 
     const validFiles = await db
@@ -185,9 +145,7 @@ export async function postGroupMessage(
     const validIds = new Set(validFiles.map((f) => f.id));
     const invalid = data.attachments.filter((id) => !validIds.has(id));
     if (invalid.length > 0) {
-      const err = new Error('Invalid attachments: file ids must exist in workspace and be complete');
-      Object.assign(err, { code: 'invalid_attachments', status: 400 });
-      throw err;
+      throw codedError('Invalid attachments: file ids must exist in workspace and be complete', 'invalid_attachments', 400);
     }
   }
 
@@ -299,9 +257,7 @@ export async function addParticipant(
     );
 
   if (!requester) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
+    throw codedError('Not a participant in this conversation', 'forbidden', 403);
   }
 
   // Find the invitee agent
@@ -311,9 +267,7 @@ export async function addParticipant(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, inviteeAgentName)));
 
   if (!invitee) {
-    const err = new Error(`Agent "${inviteeAgentName}" not found`);
-    Object.assign(err, { code: 'agent_not_found', status: 404 });
-    throw err;
+    throw codedError(`Agent "${inviteeAgentName}" not found`, 'agent_not_found', 404);
   }
 
   // Check if already a participant
@@ -371,9 +325,7 @@ export async function removeParticipant(
     );
 
   if (!participant) {
-    const err = new Error('Not a participant in this conversation');
-    Object.assign(err, { code: 'forbidden', status: 403 });
-    throw err;
+    throw codedError('Not a participant in this conversation', 'forbidden', 403);
   }
 
   // Set left_at timestamp

@@ -7,6 +7,7 @@ import {
   messages,
   agents,
 } from '../db/schema.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -117,9 +118,7 @@ export async function getDmMessagesForWorkspace(
     );
 
   if (!conv) {
-    const err = new Error('Conversation not found');
-    Object.assign(err, { code: 'not_found', status: 404 });
-    throw err;
+    throw codedError('Conversation not found', 'not_found', 404);
   }
 
   // Compare/sort on the indexed text PK directly: snowflake ids are fixed-width

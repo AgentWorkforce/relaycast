@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { workspaces, channels } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
+import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -38,9 +39,7 @@ export async function createWorkspace(
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
   if (providedOwnerApiKeyHash && derivedOwnerApiKeyHash && providedOwnerApiKeyHash !== derivedOwnerApiKeyHash) {
-    const err = new Error('ownerApiKeyHash must match the provided ownerApiKey');
-    Object.assign(err, { code: 'invalid_owner_api_key_hash', status: 400 });
-    throw err;
+    throw codedError('ownerApiKeyHash must match the provided ownerApiKey', 'invalid_owner_api_key_hash', 400);
   }
 
   const ownerApiKeyHash = providedOwnerApiKeyHash ?? derivedOwnerApiKeyHash;

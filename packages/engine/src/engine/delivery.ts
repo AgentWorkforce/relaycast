@@ -1,24 +1,21 @@
-import { eq, ne, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
+import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations, messageAttachments, files } from '../db/schema.js';
+import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
+import { toIso } from '../lib/serialize.js';
+import { fetchAttachmentsBatch } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
-type AttachmentRow = { file_id: string; filename: string; content_type: string; size_bytes: number };
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
-
-function toIso(value: Date | null | undefined): string | null {
-  return value ? value.toISOString() : null;
-}
 
 function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
@@ -46,34 +43,6 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   };
 }
 
-async function fetchAttachmentsBatch(db: Db, workspaceId: string, msgIds: string[]): Promise<Map<string, AttachmentRow[]>> {
-  const map = new Map<string, AttachmentRow[]>();
-  if (msgIds.length === 0) return map;
-
-  const rows = await db
-    .select({
-      messageId: messageAttachments.messageId,
-      fileId: messageAttachments.fileId,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, msgIds), eq(files.workspaceId, workspaceId)));
-
-  for (const row of rows) {
-    const list = map.get(row.messageId) || [];
-    list.push({
-      file_id: row.fileId,
-      filename: row.filename,
-      content_type: row.contentType,
-      size_bytes: row.sizeBytes,
-    });
-    map.set(row.messageId, list);
-  }
-  return map;
-}
 
 /**
  * List durable delivery items for an agent. Defaults to the non-terminal
