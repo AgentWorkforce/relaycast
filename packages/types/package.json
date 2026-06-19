@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/types",
-  "version": "4.1.2",
+  "version": "4.1.4",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
