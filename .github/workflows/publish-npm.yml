@@ -303,7 +303,30 @@ jobs:
           git add package.json package-lock.json packages/*/package.json
           if ! git diff --staged --quiet; then
             git commit -m "chore(release): v${NEW_VERSION}"
-            git push origin HEAD:main
+            # main can advance during the (multi-minute) build — e.g. a
+            # concurrent SDK publish — so rebase onto the latest main and retry
+            # to avoid non-fast-forward rejections. The release commit only
+            # touches version metadata, so it rebases cleanly onto another
+            # release's commit.
+            pushed=false
+            for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              if ! git rebase origin/main; then
+                git rebase --abort
+                echo "::error::rebase onto origin/main failed (unexpected conflict)"
+                exit 1
+              fi
+              if git push origin HEAD:main; then
+                pushed=true
+                break
+              fi
+              echo "push rejected (main moved); retry ${attempt}"
+              sleep $(( attempt * 3 ))
+            done
+            if [ "$pushed" != "true" ]; then
+              echo "::error::failed to push release commit to main after retries"
+              exit 1
+            fi
           fi
 
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
