@@ -90,6 +90,10 @@ export async function registerAgent(
 
   return {
     id: agentId,
+    // Return the workspace id so a client that joined by workspace key (and
+    // thus has no id locally) can record which workspace it registered into,
+    // instead of falling back to an "unknown workspace" placeholder.
+    workspace_id: workspaceId,
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
     token,
@@ -191,6 +195,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
 
   return {
     id: agent.id,
+    workspace_id: workspaceId,
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
     type: agent.type,

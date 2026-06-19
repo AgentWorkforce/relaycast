@@ -423,6 +423,7 @@ impl RelayCast {
                 let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
                 Ok(CreateAgentResponse {
                     id: agent.id,
+                    workspace_id: agent.workspace_id,
                     name: agent.name,
                     token: token_response.token,
                     status: agent.status,
@@ -1239,5 +1240,74 @@ impl RelayCast {
             Some(slice.as_slice())
         };
         self.client.get("/v1/console/costs", query_ref, None).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{CreateAgentRequest, RelayCast, RelayCastOptions};
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ok(data: serde_json::Value) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({ "ok": true, "data": data }))
+    }
+
+    fn request() -> CreateAgentRequest {
+        CreateAgentRequest {
+            name: "scout".to_string(),
+            agent_type: Some("agent".to_string()),
+            persona: None,
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn register_agent_parses_workspace_id() {
+        let server = MockServer::start().await;
+        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+            .expect("relay init");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ok(json!({
+                "id": "a1",
+                "workspace_id": "ws_123",
+                "name": "scout",
+                "token": "at_live_1",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = relay.register_agent(request()).await.expect("register");
+        assert_eq!(response.workspace_id.as_deref(), Some("ws_123"));
+    }
+
+    #[tokio::test]
+    async fn register_agent_without_workspace_id_defaults_to_none() {
+        // Engines that predate the field omit it; the client must still parse.
+        let server = MockServer::start().await;
+        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+            .expect("relay init");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .respond_with(ok(json!({
+                "id": "a1",
+                "name": "scout",
+                "token": "at_live_1",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = relay.register_agent(request()).await.expect("register");
+        assert_eq!(response.workspace_id, None);
     }
 }
