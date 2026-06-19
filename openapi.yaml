@@ -95,6 +95,12 @@ components:
       properties:
         id:
           type: string
+        workspace_id:
+          type: string
+          description: >-
+            Snowflake ID of the workspace the agent belongs to. Returned on
+            registration so a client that joined by workspace key (and has no id
+            locally) can record which workspace it registered into.
         name:
           type: string
         type:

@@ -147,6 +147,8 @@ pub struct TokenRotateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub name: String,
     #[serde(rename = "type")]
     pub agent_type: String,
@@ -184,6 +186,11 @@ pub struct CreateAgentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentResponse {
     pub id: String,
+    /// Workspace the agent registered into. `None` against engines that predate
+    /// this field — callers that joined by workspace key rely on it to avoid an
+    /// "unknown workspace" fallback.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub name: String,
     pub token: String,
     pub status: String,
