@@ -331,7 +331,7 @@ agentRoutes.post(
       }
       const { name, cli, task, channel, persona, model, metadata } = parsed.data;
 
-      const validClis = ['claude', 'codex', 'opencode', 'gemini', 'aider', 'goose'];
+      const validClis = ['claude', 'codex', 'opencode', 'gemini', 'aider', 'goose', 'grok'];
       if (!validClis.includes(cli)) {
         return c.json({
           ok: false,
