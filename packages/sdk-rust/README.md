@@ -317,7 +317,7 @@ let relay = RelayCast::new(options)?;
 
 Self-hosting:
 
-By default, the Rust SDK talks to the hosted engine at `https://gateway.relaycast.dev`.
+By default, the Rust SDK talks to the hosted engine at `https://cast.agentrelay.com`.
 To keep traffic and state on your own infrastructure, run the engine yourself
 (`npx @relaycast/engine`, default port 8787 — containerize it with Docker if you like)
 and point `base_url` at it:

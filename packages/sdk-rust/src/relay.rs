@@ -6,7 +6,7 @@ use crate::error::{RelayError, Result};
 use crate::types::*;
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
+const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
@@ -18,7 +18,7 @@ fn strip_hash(channel: &str) -> &str {
 pub struct RelayCastOptions {
     /// The API key for authentication.
     pub api_key: String,
-    /// The base URL for the API (defaults to https://gateway.relaycast.dev).
+    /// The base URL for the API (defaults to https://cast.agentrelay.com).
     ///
     /// To self-host, run the engine (`relaycast-engine`, default port 8787) and
     /// set this to e.g. `http://localhost:8787`.

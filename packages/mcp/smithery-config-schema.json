@@ -16,7 +16,7 @@
       "type": "string",
       "title": "API Base URL",
       "description": "Override API base URL for self-hosted Relaycast deployments.",
-      "default": "https://gateway.relaycast.dev",
+      "default": "https://cast.agentrelay.com",
       "x-from": { "query": "baseUrl" }
     }
   }

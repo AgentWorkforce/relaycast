@@ -50,7 +50,7 @@ describe('Programmability SDK', () => {
       const created = await relay.webhooks.create({ name: 'GitHub', channel: 'dev' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
+      expect(url).toBe('https://cast.agentrelay.com/v1/webhooks');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'GitHub', channel: 'dev' }));
       expect(created.token).toBe('wh_live_1');
@@ -65,7 +65,7 @@ describe('Programmability SDK', () => {
           webhook_id: 'wh_1',
           name: 'dev',
           channel: 'dev',
-          url: 'https://gateway.relaycast.dev/v1/hooks/wh_1',
+          url: 'https://cast.agentrelay.com/v1/hooks/wh_1',
           token: 'wh_live_1',
           is_active: true,
           created_at: '2025-01-01',
@@ -74,7 +74,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.createInbound({ channel: 'dev' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
+      expect(url).toBe('https://cast.agentrelay.com/v1/webhooks');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ channel: 'dev' }));
     });
@@ -87,7 +87,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks');
+      expect(url).toBe('https://cast.agentrelay.com/v1/webhooks');
       expect(init.method).toBe('GET');
     });
 
@@ -99,7 +99,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.delete('wh_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/webhooks/wh_1');
+      expect(url).toBe('https://cast.agentrelay.com/v1/webhooks/wh_1');
       expect(init.method).toBe('DELETE');
     });
 
@@ -120,7 +120,7 @@ describe('Programmability SDK', () => {
       await relay.webhooks.trigger('wh_1', { message: 'alert', author: 'GitHub' }, 'wh_live_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/hooks/wh_1');
+      expect(url).toBe('https://cast.agentrelay.com/v1/hooks/wh_1');
       expect(init.method).toBe('POST');
       expect(init.headers.Authorization).toBe('Bearer wh_live_1');
       expect(init.body).toBe(JSON.stringify({ message: 'alert', author: 'GitHub' }));
@@ -144,7 +144,7 @@ describe('Programmability SDK', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions');
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({
         events: ['message.created'],
@@ -161,7 +161,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions');
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions');
       expect(init.method).toBe('GET');
     });
 
@@ -175,7 +175,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.get('sub_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions/sub_1');
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub_1');
       expect(init.method).toBe('GET');
     });
 
@@ -187,7 +187,7 @@ describe('Programmability SDK', () => {
       await relay.subscriptions.delete('sub_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/subscriptions/sub_1');
+      expect(url).toBe('https://cast.agentrelay.com/v1/subscriptions/sub_1');
       expect(init.method).toBe('DELETE');
     });
   });
@@ -209,7 +209,7 @@ describe('Programmability SDK', () => {
       });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/actions');
+      expect(url).toBe('https://cast.agentrelay.com/v1/actions');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({
         name: 'deploy',
@@ -226,7 +226,7 @@ describe('Programmability SDK', () => {
       await relay.actions.list();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/actions');
+      expect(url).toBe('https://cast.agentrelay.com/v1/actions');
       expect(init.method).toBe('GET');
     });
 
@@ -238,7 +238,7 @@ describe('Programmability SDK', () => {
       await relay.actions.delete('deploy');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy');
+      expect(url).toBe('https://cast.agentrelay.com/v1/actions/deploy');
       expect(init.method).toBe('DELETE');
     });
 
@@ -258,7 +258,7 @@ describe('Programmability SDK', () => {
       await me.actions.invoke('deploy', { force: true });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy/invoke');
+      expect(url).toBe('https://cast.agentrelay.com/v1/actions/deploy/invoke');
       expect(init.method).toBe('POST');
       expect(init.headers.Authorization).toBe('Bearer at_live_agent123');
       expect(JSON.parse(init.body)).toEqual({ input: { force: true } });
@@ -274,7 +274,7 @@ describe('Programmability SDK', () => {
       await me.actions.completeInvocation('deploy', 'inv_1', { output: { ok: true }, durationMs: 12 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/actions/deploy/invocations/inv_1/complete');
+      expect(url).toBe('https://cast.agentrelay.com/v1/actions/deploy/invocations/inv_1/complete');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ output: { ok: true }, duration_ms: 12 });
     });
@@ -286,7 +286,7 @@ describe('Programmability SDK', () => {
       await relay.agents.events.emit('Worker', { type: 'status.active' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Worker/events');
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/Worker/events');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ type: 'status.active' });
     });
@@ -298,7 +298,7 @@ describe('Programmability SDK', () => {
       await relay.agents.events.list('Worker', { type: 'status.active', limit: 50 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/agents/Worker/events?type=status.active&limit=50');
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/Worker/events?type=status.active&limit=50');
       expect(init.method).toBe('GET');
     });
 
@@ -309,7 +309,7 @@ describe('Programmability SDK', () => {
       await relay.certify.submit({ agentUrl: 'https://a.dev', level: 1 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/certify');
+      expect(url).toBe('https://cast.agentrelay.com/v1/certify');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ agent_url: 'https://a.dev', level: 1 });
     });
@@ -317,7 +317,7 @@ describe('Programmability SDK', () => {
     it('certify.badgeUrl() builds the public badge URL', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-      expect(relay.certify.badgeUrl('cert_1')).toBe('https://gateway.relaycast.dev/v1/certify/cert_1/badge.svg');
+      expect(relay.certify.badgeUrl('cert_1')).toBe('https://cast.agentrelay.com/v1/certify/cert_1/badge.svg');
     });
 
     it('listDirectory() gets /v1/directory/agents with status filter', async () => {
@@ -327,7 +327,7 @@ describe('Programmability SDK', () => {
       await relay.listDirectory({ status: 'active', limit: 10 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/agents?status=active&limit=10');
+      expect(url).toBe('https://cast.agentrelay.com/v1/directory/agents?status=active&limit=10');
       expect(init.method).toBe('GET');
     });
 
@@ -338,7 +338,7 @@ describe('Programmability SDK', () => {
       await relay.rateDirectoryAgent('my-agent', { score: 5, review: 'great' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/directory/agents/my-agent/ratings');
+      expect(url).toBe('https://cast.agentrelay.com/v1/directory/agents/my-agent/ratings');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ score: 5, review: 'great' });
     });
@@ -350,7 +350,7 @@ describe('Programmability SDK', () => {
       await relay.searchSkills({ q: 'deploy', limit: 5 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/skills/search?q=deploy&limit=5');
+      expect(url).toBe('https://cast.agentrelay.com/v1/skills/search?q=deploy&limit=5');
       expect(init.method).toBe('GET');
     });
 
@@ -361,7 +361,7 @@ describe('Programmability SDK', () => {
       await relay.routeFeedback({ agentName: 'Worker', success: true });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/route/feedback');
+      expect(url).toBe('https://cast.agentrelay.com/v1/route/feedback');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ agent_name: 'Worker', success: true });
     });
@@ -373,7 +373,7 @@ describe('Programmability SDK', () => {
       await relay.console.stats({ days: 7 });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/console/stats?days=7');
+      expect(url).toBe('https://cast.agentrelay.com/v1/console/stats?days=7');
       expect(init.method).toBe('GET');
     });
   });
@@ -398,7 +398,7 @@ describe('Programmability SDK', () => {
       await me.send('#ops', 'Deploy complete', { blocks });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/channels/ops/messages');
+      expect(url).toBe('https://cast.agentrelay.com/v1/channels/ops/messages');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
       expect(body.text).toBe('Deploy complete');
@@ -434,7 +434,7 @@ describe('Programmability SDK', () => {
       await me.reply('m_1', 'Please review', { blocks });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/messages/m_1/replies');
+      expect(url).toBe('https://cast.agentrelay.com/v1/messages/m_1/replies');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
       expect(body.text).toBe('Please review');

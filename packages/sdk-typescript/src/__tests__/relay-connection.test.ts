@@ -52,7 +52,7 @@ describe('RelayCast baseUrl options', () => {
     await RelayCast.createWorkspace('Test Workspace');
 
     const [url] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces');
+    expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
   });
 
   it('createWorkspace supports options object with auth', async () => {

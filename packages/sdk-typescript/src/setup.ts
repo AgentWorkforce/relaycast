@@ -26,7 +26,7 @@ import type {
 } from './setup-types.js';
 import type { WorkspaceLookup } from './types.js';
 
-const DEFAULT_CLOUD_BASE_URL = 'https://gateway.relaycast.dev';
+const DEFAULT_CLOUD_BASE_URL = 'https://cast.agentrelay.com';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 500;

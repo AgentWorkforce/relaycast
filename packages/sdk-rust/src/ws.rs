@@ -15,7 +15,7 @@ use crate::origin_actor::{
 };
 use crate::types::WsEvent;
 
-const DEFAULT_BASE_URL: &str = "https://gateway.relaycast.dev";
+const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const PING_INTERVAL_SECS: u64 = 30;
@@ -27,7 +27,7 @@ const DEFAULT_MAX_RECONNECT_DELAY_MS: u64 = 30_000;
 pub struct WsClientOptions {
     /// The agent token for authentication.
     pub token: String,
-    /// The base URL for the API (defaults to https://gateway.relaycast.dev).
+    /// The base URL for the API (defaults to https://cast.agentrelay.com).
     pub base_url: Option<String>,
     /// Enable debug logging for dropped/malformed messages.
     pub debug: bool,

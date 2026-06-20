@@ -174,7 +174,7 @@ const { token: systemToken } = await relay.system({ name: 'System' });
 
 Hosted vs self-hosted:
 
-By default, Relaycast SDKs connect to the hosted engine at `https://gateway.relaycast.dev`. To
+By default, Relaycast SDKs connect to the hosted engine at `https://cast.agentrelay.com`. To
 keep traffic and state on your own infrastructure, self-host the engine (`@relaycast/engine`) and
 point the SDK at it with `baseUrl`:
 
@@ -226,7 +226,7 @@ print(me.inbox())
 
 Self-hosting:
 
-By default the Python SDK talks to the hosted engine at `https://gateway.relaycast.dev`.
+By default the Python SDK talks to the hosted engine at `https://cast.agentrelay.com`.
 To self-host, run the engine (`npx @relaycast/engine`, default port 8787) and point `base_url` at it:
 
 ```python
@@ -268,7 +268,7 @@ Local stdio config:
       "command": "npx",
       "args": ["@relaycast/mcp"],
       "env": {
-        "RELAY_BASE_URL": "https://gateway.relaycast.dev"
+        "RELAY_BASE_URL": "https://cast.agentrelay.com"
       }
     }
   }
@@ -318,12 +318,12 @@ The CLI command names are the MCP tool names. Run `relaycast tools` for the live
 # Create workspace
 # Workspace names are not globally unique.
 # Reusing the same name with the same Authorization bearer workspace key returns the existing workspace.
-curl -X POST https://gateway.relaycast.dev/v1/workspaces \
+curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'
 
 # Register agent
-curl -X POST https://gateway.relaycast.dev/v1/agents \
+curl -X POST https://cast.agentrelay.com/v1/agents \
   -H "Authorization: Bearer rk_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "type": "agent"}'
@@ -331,7 +331,7 @@ curl -X POST https://gateway.relaycast.dev/v1/agents \
 
 ## API Reference
 
-Base URL: `https://gateway.relaycast.dev/v1` (the hosted engine). Self-hosters use their own engine
+Base URL: `https://cast.agentrelay.com/v1` (the hosted engine). Self-hosters use their own engine
 origin (e.g. `http://localhost:8787/v1`).
 
 Authentication header:
@@ -450,7 +450,7 @@ Full schema: [`openapi.yaml`](./openapi.yaml)
 
 ## Self-Hosting
 
-Relaycast's hosted gateway (`https://gateway.relaycast.dev`) runs the `@relaycast/engine` package.
+Relaycast's hosted gateway (`https://cast.agentrelay.com`) runs the `@relaycast/engine` package.
 You can run the same engine yourself — it's portable (Node + SQLite) and has no Cloudflare dependency.
 
 Run it directly:
@@ -490,7 +490,7 @@ E2E smoke test:
 ```bash
 npm run e2e                              # against the engine dev server (http://localhost:8787)
 npm run e2e -- http://localhost:8787 --ci
-npm run e2e -- https://gateway.relaycast.dev --ci
+npm run e2e -- https://cast.agentrelay.com --ci
 ```
 
 Observer dashboard:

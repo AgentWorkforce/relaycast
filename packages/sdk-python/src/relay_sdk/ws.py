@@ -42,7 +42,7 @@ class WsClient:
         agent_relay_distinct_id: str | None = None,
     ) -> None:
         self._token = token
-        base = (base_url or "https://gateway.relaycast.dev").rstrip("/")
+        base = (base_url or "https://cast.agentrelay.com").rstrip("/")
         self._base_url = base.replace("https://", "wss://").replace("http://", "ws://")
         self._origin_client = (origin_client or "@relaycast/python-sdk").strip()[:80]
         self._origin_version = (origin_version or SDK_VERSION).strip()[:48]

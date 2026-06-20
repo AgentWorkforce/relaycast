@@ -152,7 +152,7 @@ export class HttpClient {
   constructor(options: ClientOptions) {
     const origin = readInternalOrigin(options) ?? SDK_ORIGIN;
     this._apiKey = options.apiKey;
-    this._baseUrl = options.baseUrl ?? 'https://gateway.relaycast.dev';
+    this._baseUrl = options.baseUrl ?? 'https://cast.agentrelay.com';
     this._originClient = origin.client;
     this._originVersion = origin.version;
     // A wrapping host's internal origin is authoritative about the originActor;

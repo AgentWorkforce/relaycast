@@ -20,13 +20,14 @@ function isLocalHost(host: string): boolean {
 /**
  * Resolve the ordered list of Relay engine base URLs to try for an observer host.
  *
- * The new hosted engine (`gateway.relaycast.dev`) is the happy path and comes
- * first; the legacy engine (`api.relaycast.dev`) runs alongside it for
- * workspaces that have not migrated and is used as a fallback. Callers probe the
- * candidates in order and keep the first one that accepts the workspace key.
+ * The hosted engine (`cast.agentrelay.com`) is the happy path and comes first;
+ * the legacy engines (`gateway.relaycast.dev`, `api.relaycast.dev`) run
+ * alongside it for workspaces that have not migrated and are used as fallbacks.
+ * Callers probe the candidates in order and keep the first one that accepts the
+ * workspace key.
  *
  * Examples:
- * - observer.relaycast.dev -> [gateway.relaycast.dev, api.relaycast.dev]
+ * - observer.relaycast.dev -> [cast.agentrelay.com, gateway.relaycast.dev, api.relaycast.dev]
  * - pr23-observer.relaycast.dev -> [pr23-gateway.relaycast.dev, pr23-api.relaycast.dev]
  *
  * Per-environment gateway hostnames (`staging-gateway`, `prNN-gateway`) are
@@ -67,10 +68,18 @@ export function resolveRelayServerCandidatesFromHost(
   }
 
   if (normalized === 'observer.relaycast.dev') {
-    return ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'];
+    return [
+      'https://cast.agentrelay.com',
+      'https://gateway.relaycast.dev',
+      'https://api.relaycast.dev',
+    ];
   }
 
-  return ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'];
+  return [
+    'https://cast.agentrelay.com',
+    'https://gateway.relaycast.dev',
+    'https://api.relaycast.dev',
+  ];
 }
 
 export function resolveRelayServerCandidatesFromRequest(

@@ -760,7 +760,7 @@ private extension RelayCast {
         body: Body?,
         options: WorkspaceBootstrapOptions
     ) async throws -> (T, Int) {
-        let base = options.baseURL ?? "https://gateway.relaycast.dev"
+        let base = options.baseURL ?? "https://cast.agentrelay.com"
         guard let baseURL = URL(string: base),
               let url = URL(string: path.hasPrefix("/") ? String(path.dropFirst()) : path, relativeTo: baseURL.appendingPathComponent(""))?.absoluteURL
         else {

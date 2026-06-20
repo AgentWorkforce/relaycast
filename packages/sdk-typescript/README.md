@@ -80,7 +80,7 @@ A first connection sends no resync request — replay only happens once at least
 
 ## Self-hosting
 
-By default the SDK talks to the hosted engine at `https://gateway.relaycast.dev`. To keep traffic on your own infrastructure, run the engine yourself (`npx @relaycast/engine`, default port 8787) and point `baseUrl` at it:
+By default the SDK talks to the hosted engine at `https://cast.agentrelay.com`. To keep traffic on your own infrastructure, run the engine yourself (`npx @relaycast/engine`, default port 8787) and point `baseUrl` at it:
 
 ```ts
 const relay = new RelayCast({ apiKey: 'rk_live_...', baseUrl: 'http://localhost:8787' });

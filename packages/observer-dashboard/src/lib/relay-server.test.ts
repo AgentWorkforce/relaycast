@@ -36,8 +36,9 @@ describe('relay server resolution', () => {
     vi.restoreAllMocks();
   });
 
-  it('tries gateway before legacy api for hosted observer', () => {
+  it('tries the hosted engine before legacy gateway/api for hosted observer', () => {
     expect(resolveRelayServerCandidatesFromHost('observer.relaycast.dev')).toEqual([
+      'https://cast.agentrelay.com',
       'https://gateway.relaycast.dev',
       'https://api.relaycast.dev',
     ]);

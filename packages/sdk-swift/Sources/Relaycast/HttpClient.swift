@@ -81,7 +81,7 @@ public final class HttpClient: @unchecked Sendable {
     private let decoder: JSONDecoder
 
     public init(options: ClientOptions, session: URLSession = .shared) throws {
-        guard let baseURL = URL(string: options.baseURL ?? "https://gateway.relaycast.dev") else {
+        guard let baseURL = URL(string: options.baseURL ?? "https://cast.agentrelay.com") else {
             throw RelayError.invalidRequest("Invalid Relaycast baseURL")
         }
         self.apiKey = options.apiKey

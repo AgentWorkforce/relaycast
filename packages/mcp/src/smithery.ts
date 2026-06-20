@@ -19,7 +19,7 @@ export const configSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Override API base URL for self-hosted Relaycast deployments (defaults to https://gateway.relaycast.dev).',
+      'Override API base URL for self-hosted Relaycast deployments (defaults to https://cast.agentrelay.com).',
     ),
 });
 
