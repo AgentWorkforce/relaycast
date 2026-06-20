@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
-import { AgentTypeSchema } from '@relaycast/types';
+import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -52,7 +52,7 @@ const sessionEventSchema = z.object({
 
 const spawnAgentSchema = z.object({
   name: z.string().min(1),
-  cli: z.string().min(1),
+  cli: CliTypeSchema,
   task: z.string().min(1),
   channel: z.string().nullable().optional(),
   persona: z.string().nullable().optional(),
@@ -320,7 +320,7 @@ agentRoutes.post(
         const message = hasNameIssue
           ? 'name is required'
           : hasCliIssue
-            ? 'cli is required'
+            ? `cli must be one of: ${CliTypeSchema.options.join(', ')}`
             : hasTaskIssue
               ? 'task is required'
               : 'invalid spawn request';
@@ -330,14 +330,6 @@ agentRoutes.post(
         }, 400);
       }
       const { name, cli, task, channel, persona, model, metadata } = parsed.data;
-
-      const validClis = ['claude', 'codex', 'opencode', 'gemini', 'aider', 'goose', 'grok'];
-      if (!validClis.includes(cli)) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: `cli must be one of: ${validClis.join(', ')}` },
-        }, 400);
-      }
 
       const result = await agentEngine.spawnAgent(db, workspace.id, {
         name,

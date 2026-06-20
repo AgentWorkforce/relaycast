@@ -881,7 +881,7 @@ paths:
                   description: Unique name for the new agent
                 cli:
                   type: string
-                  enum: [claude, codex, opencode, gemini, aider, goose]
+                  enum: [claude, codex, gemini, aider, goose, opencode, grok]
                   description: Which AI CLI tool to use
                 task:
                   type: string
