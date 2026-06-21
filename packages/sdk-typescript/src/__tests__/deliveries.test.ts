@@ -28,7 +28,7 @@ describe('AgentClient durable delivery', () => {
       await me.deliveries();
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/deliveries');
+      expect(url).toBe('https://cast.agentrelay.com/v1/deliveries');
       expect(init.method).toBe('GET');
     });
 
@@ -63,7 +63,7 @@ describe('AgentClient durable delivery', () => {
       await me.ackDelivery('del_1');
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/deliveries/del_1/ack');
+      expect(url).toBe('https://cast.agentrelay.com/v1/deliveries/del_1/ack');
       expect(init.method).toBe('POST');
     });
 
@@ -73,7 +73,7 @@ describe('AgentClient durable delivery', () => {
       await me.ackDelivery('del/1');
 
       const [url] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/deliveries/del%2F1/ack');
+      expect(url).toBe('https://cast.agentrelay.com/v1/deliveries/del%2F1/ack');
     });
   });
 
@@ -84,7 +84,7 @@ describe('AgentClient durable delivery', () => {
       await me.failDelivery('del_1', { error: 'boom', retryable: true });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/deliveries/del_1/fail');
+      expect(url).toBe('https://cast.agentrelay.com/v1/deliveries/del_1/fail');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ error: 'boom', retryable: true });
     });
@@ -107,7 +107,7 @@ describe('AgentClient durable delivery', () => {
       await me.deferDelivery('del_1', { availableAt, reason: 'busy' });
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/deliveries/del_1/defer');
+      expect(url).toBe('https://cast.agentrelay.com/v1/deliveries/del_1/defer');
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body)).toEqual({ available_at: availableAt, reason: 'busy' });
     });

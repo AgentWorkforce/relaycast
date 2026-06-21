@@ -85,14 +85,14 @@ This spec does **not** cover: self-hosted server setup, Python SDK changes, or c
 └────────────────────┬─────────────────────────────────┘
                      │
 ┌────────────────────▼─────────────────────────────────┐
-│  Relaycast API  (gateway.relaycast.dev / :8787)     │
+│  Relaycast API  (cast.agentrelay.com / :8787)     │
 │  /v1/workspaces, /v1/agents, /v1/channels, etc.     │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Cloud API base URL
 
-`RelaycastSetup` defaults to `https://gateway.relaycast.dev` (the hosted engine). This is overridable via the `baseUrl` constructor option for staging/dev environments or for a self-hosted engine (`http://localhost:8787`).
+`RelaycastSetup` defaults to `https://cast.agentrelay.com` (the hosted engine). This is overridable via the `baseUrl` constructor option for staging/dev environments or for a self-hosted engine (`http://localhost:8787`).
 
 ---
 
@@ -106,7 +106,7 @@ The entry point. Stateless — creates workspaces and returns handles.
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://gateway.relaycast.dev"
+   * @default "https://cast.agentrelay.com"
    */
   baseUrl?: string
 

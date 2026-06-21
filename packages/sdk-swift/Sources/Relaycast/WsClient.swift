@@ -367,7 +367,7 @@ public final class WsClient: @unchecked Sendable {
     }
 
     private func websocketURL() -> URL? {
-        let rawBase = (options.baseURL ?? "https://gateway.relaycast.dev")
+        let rawBase = (options.baseURL ?? "https://cast.agentrelay.com")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")

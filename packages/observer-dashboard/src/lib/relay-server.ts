@@ -20,19 +20,19 @@ function isLocalHost(host: string): boolean {
 /**
  * Resolve the ordered list of Relay engine base URLs to try for an observer host.
  *
- * The new hosted engine (`gateway.relaycast.dev`) is the happy path and comes
- * first; the legacy engine (`api.relaycast.dev`) runs alongside it for
- * workspaces that have not migrated and is used as a fallback. Callers probe the
- * candidates in order and keep the first one that accepts the workspace key.
+ * Production resolves to the hosted engine (`cast.agentrelay.com`); the legacy
+ * `gateway.relaycast.dev` / `api.relaycast.dev` engines have been decommissioned
+ * and are no longer probed. Callers probe the candidates in order and keep the
+ * first one that accepts the workspace key.
  *
  * Examples:
- * - observer.relaycast.dev -> [gateway.relaycast.dev, api.relaycast.dev]
+ * - observer.relaycast.dev -> [cast.agentrelay.com]
  * - pr23-observer.relaycast.dev -> [pr23-gateway.relaycast.dev, pr23-api.relaycast.dev]
  *
  * Per-environment gateway hostnames (`staging-gateway`, `prNN-gateway`) are
- * assumed to mirror the legacy `-api` naming. If a gateway host does not exist
- * for an environment, the probe simply fails over to its `-api` counterpart, so
- * the assumption carries no risk.
+ * assumed to mirror the `-api` naming. If a gateway host does not exist for an
+ * environment, the probe simply fails over to its `-api` counterpart, so the
+ * assumption carries no risk.
  */
 export function resolveRelayServerCandidatesFromHost(
   host: string | null | undefined
@@ -66,11 +66,7 @@ export function resolveRelayServerCandidatesFromHost(
     ];
   }
 
-  if (normalized === 'observer.relaycast.dev') {
-    return ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'];
-  }
-
-  return ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'];
+  return ['https://cast.agentrelay.com'];
 }
 
 export function resolveRelayServerCandidatesFromRequest(
@@ -87,7 +83,7 @@ export function resolveRelayServerCandidatesFromRequest(
 /**
  * Resolve the single happy-path engine URL for an observer host (first
  * candidate). Prefer {@link resolveRelayServerCandidatesFromRequest} when a key
- * is available so legacy workspaces can fall back to the `api` engine.
+ * is available so per-environment hosts can fall back to their `-api` engine.
  */
 export function resolveRelayServerUrlFromHost(
   host: string | null | undefined

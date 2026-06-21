@@ -70,7 +70,7 @@ encoding and decoding centrally.
 
 ## Self-Hosting
 
-By default, the SDK talks to `https://gateway.relaycast.dev`. To self-host, run the engine and pass
+By default, the SDK talks to `https://cast.agentrelay.com`. To self-host, run the engine and pass
 your base URL:
 
 ```swift

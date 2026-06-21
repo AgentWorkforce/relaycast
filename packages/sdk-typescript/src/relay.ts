@@ -295,7 +295,7 @@ export class RelayCast {
   ): Promise<{ data: CreateWorkspaceResponse; statusCode: number }> {
     const { apiKey, baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
       resolveWorkspaceBootstrapOptions(options);
-    const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
+    const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
 
     const url = new URL('/v1/workspaces', requestBaseUrl);
@@ -348,7 +348,7 @@ export class RelayCast {
   ): Promise<WorkspaceLookup | null> {
     const { baseUrl, agentRelayDistinctId: rawAgentRelayDistinctId } =
       resolveWorkspaceLookupOptions(options);
-    const requestBaseUrl = baseUrl ?? 'https://gateway.relaycast.dev';
+    const requestBaseUrl = baseUrl ?? 'https://cast.agentrelay.com';
     const agentRelayDistinctId = sanitizeAgentRelayDistinctId(rawAgentRelayDistinctId);
 
     const url = new URL(`/v1/workspaces/by-name/${encodeURIComponent(name)}`, requestBaseUrl);

@@ -36,10 +36,16 @@ describe('relay server resolution', () => {
     vi.restoreAllMocks();
   });
 
-  it('tries gateway before legacy api for hosted observer', () => {
+  it('resolves the hosted engine for the production observer', () => {
     expect(resolveRelayServerCandidatesFromHost('observer.relaycast.dev')).toEqual([
-      'https://gateway.relaycast.dev',
-      'https://api.relaycast.dev',
+      'https://cast.agentrelay.com',
+    ]);
+  });
+
+  it('resolves the per-environment gateway/api candidates for preview observers', () => {
+    expect(resolveRelayServerCandidatesFromHost('pr23-observer.relaycast.dev')).toEqual([
+      'https://pr23-gateway.relaycast.dev',
+      'https://pr23-api.relaycast.dev',
     ]);
   });
 
@@ -53,12 +59,12 @@ describe('relay server resolution', () => {
 
   it('only accepts remembered engines from the current host candidates', () => {
     const candidates = [
-      'https://gateway.relaycast.dev',
-      'https://api.relaycast.dev',
+      'https://pr23-gateway.relaycast.dev',
+      'https://pr23-api.relaycast.dev',
     ];
 
-    expect(pickRememberedEngine('https://api.relaycast.dev', candidates)).toBe(
-      'https://api.relaycast.dev'
+    expect(pickRememberedEngine('https://pr23-api.relaycast.dev', candidates)).toBe(
+      'https://pr23-api.relaycast.dev'
     );
     expect(
       pickRememberedEngine('https://attacker.example.com', candidates)
@@ -68,10 +74,10 @@ describe('relay server resolution', () => {
   it('orders remembered engine first without duplicating candidates', () => {
     expect(
       orderByRemembered(
-        ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'],
-        'https://api.relaycast.dev'
+        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
+        'https://pr23-api.relaycast.dev'
       )
-    ).toEqual(['https://api.relaycast.dev', 'https://gateway.relaycast.dev']);
+    ).toEqual(['https://pr23-api.relaycast.dev', 'https://pr23-gateway.relaycast.dev']);
   });
 });
 
@@ -80,7 +86,7 @@ describe('selectEngineForKey', () => {
     vi.unstubAllGlobals();
   });
 
-  it('falls back to the legacy api engine when gateway rejects the key', async () => {
+  it('falls back to the -api engine when the gateway rejects the key', async () => {
     const fetchMock = mockFetch(
       new Response(null, { status: 401 }),
       new Response(null, { status: 200 })
@@ -88,11 +94,11 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'],
+        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
         'rk_live_test'
       )
     ).resolves.toEqual({
-      baseUrl: 'https://api.relaycast.dev',
+      baseUrl: 'https://pr23-api.relaycast.dev',
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
@@ -100,12 +106,12 @@ describe('selectEngineForKey', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      'https://gateway.relaycast.dev/v1/workspace',
+      'https://pr23-gateway.relaycast.dev/v1/workspace',
       expect.objectContaining({ cache: 'no-store' })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      'https://api.relaycast.dev/v1/workspace',
+      'https://pr23-api.relaycast.dev/v1/workspace',
       expect.objectContaining({ cache: 'no-store' })
     );
   });
@@ -118,7 +124,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'],
+        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
         'rk_live_test'
       )
     ).resolves.toEqual({
@@ -137,7 +143,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'],
+        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
         'rk_live_test'
       )
     ).resolves.toEqual({
@@ -153,7 +159,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://gateway.relaycast.dev', 'https://api.relaycast.dev'],
+        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
         'rk_live_test'
       )
     ).resolves.toEqual({

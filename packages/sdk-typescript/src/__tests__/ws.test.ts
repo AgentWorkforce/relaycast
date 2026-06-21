@@ -55,7 +55,7 @@ describe('WsClient', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const url = new URL(MockWebSocket.instances[0]!.url);
-    expect(url.origin).toBe('wss://gateway.relaycast.dev');
+    expect(url.origin).toBe('wss://cast.agentrelay.com');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');

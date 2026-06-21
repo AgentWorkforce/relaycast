@@ -29,7 +29,7 @@ describe('strict identity APIs', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ name: 'Bot' }));
     });
@@ -137,9 +137,9 @@ describe('strict identity APIs', () => {
 
       // Verify get + rotateToken were called
       const [getUrl] = mockFetch.mock.calls[1]!;
-      expect(getUrl).toBe('https://gateway.relaycast.dev/v1/agents/Bot');
+      expect(getUrl).toBe('https://cast.agentrelay.com/v1/agents/Bot');
       const [rotateUrl] = mockFetch.mock.calls[2]!;
-      expect(rotateUrl).toBe('https://gateway.relaycast.dev/v1/agents/Bot/rotate-token');
+      expect(rotateUrl).toBe('https://cast.agentrelay.com/v1/agents/Bot/rotate-token');
     });
 
     it('rethrows non-conflict errors', async () => {

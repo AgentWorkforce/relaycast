@@ -15,7 +15,7 @@ SDK_VERSION = "0.1.1"
 AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id"
 AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id"
 
-_DEFAULT_BASE_URL = "https://gateway.relaycast.dev"
+_DEFAULT_BASE_URL = "https://cast.agentrelay.com"
 _RETRY_BACKOFFS = [0.2, 0.4, 0.8]
 _DEFAULT_ORIGIN_CLIENT = "@relaycast/python-sdk"
 _AGENT_RELAY_DISTINCT_ID_ALLOWED = re.compile(r"^[a-z0-9._:-]+$", re.IGNORECASE)

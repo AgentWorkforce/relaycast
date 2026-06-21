@@ -3,7 +3,7 @@ import type { CreateAgentRequest, CreateAgentResponse } from './types.js';
 export interface RelaycastSetupOptions {
   /**
    * Base URL for the Relaycast API.
-   * @default "https://gateway.relaycast.dev"
+   * @default "https://cast.agentrelay.com"
    */
   baseUrl?: string;
 

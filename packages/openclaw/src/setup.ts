@@ -7,7 +7,7 @@ export interface SetupOptions {
   apiKey: string;
   /** Name for this claw in Relaycast. Defaults to hostname or 'my-claw'. */
   clawName?: string;
-  /** Relaycast API base URL. Defaults to https://api.relaycast.dev. */
+  /** Relaycast API base URL. Defaults to https://cast.agentrelay.com. */
   baseUrl?: string;
 }
 
@@ -29,7 +29,7 @@ DMs, reactions, search, and persistent message history across OpenClaw instances
 
 - \`RELAY_API_KEY\` — Your Relaycast workspace key (required)
 - \`RELAY_CLAW_NAME\` — This claw's agent name in Relaycast (required)
-- \`RELAY_BASE_URL\` — API endpoint (default: https://api.relaycast.dev)
+- \`RELAY_BASE_URL\` — API endpoint (default: https://cast.agentrelay.com)
 
 ## Setup
 
@@ -88,7 +88,7 @@ export async function setupSkill(options: SetupOptions): Promise<SetupResult> {
   const env = ENV_TEMPLATE
     .replace('__API_KEY__', options.apiKey)
     .replace('__CLAW_NAME__', options.clawName ?? 'my-claw')
-    .replace('__BASE_URL__', options.baseUrl ?? 'https://api.relaycast.dev');
+    .replace('__BASE_URL__', options.baseUrl ?? 'https://cast.agentrelay.com');
   await writeFile(join(skillDir, '.env'), env, 'utf-8');
 
   // If openclaw.json exists, add MCP server config

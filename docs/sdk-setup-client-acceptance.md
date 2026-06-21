@@ -52,7 +52,7 @@ packages/sdk-typescript/src/
 **`RelaycastSetupOptions`**
 ```ts
 {
-  baseUrl?: string                                 // overrides the hosted default (https://gateway.relaycast.dev)
+  baseUrl?: string                                 // overrides the hosted default (https://cast.agentrelay.com)
   apiKey?: string | (() => string | Promise<string>)
   requestTimeoutMs?: number                        // default 30_000, applied via AbortSignal.timeout
   retry?: { maxRetries: number; baseDelayMs: number }  // default { 3, 500 }
@@ -177,7 +177,7 @@ Each bullet is a single test case. **All must pass before this step is COMPLETE.
 16. `relayCast()` — returns `RelayCast` configured with workspace `apiKey` and `baseUrl`.
 17. `getAgentToken('Alice')` after register — returns the stored token; unknown name returns `undefined`.
 18. `listRegisteredAgents()` — returns all registered records in registration order.
-19. Default base URL — `new RelaycastSetup()` produces `baseUrl === 'https://gateway.relaycast.dev'`.
+19. Default base URL — `new RelaycastSetup()` produces `baseUrl === 'https://cast.agentrelay.com'`.
 20. Explicit `baseUrl` (e.g. a self-hosted engine) overrides the default.
 21. `apiKey` as function — invoked once per request (or memoized; assert behavior the impl chooses) and bearer header reflects the resolved value.
 22. Origin headers — every direct fetch carries `X-SDK-Version`, `X-Relaycast-Origin-Surface/Client/Version`.

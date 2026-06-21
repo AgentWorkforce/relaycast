@@ -59,7 +59,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.info).toEqual({
       workspaceId: 'ws_1',
       apiKey: 'rk_live_workspace',
-      baseUrl: 'https://gateway.relaycast.dev',
+      baseUrl: 'https://cast.agentrelay.com',
       createdAt: '2026-04-30T12:00:00.000Z',
       name: 'Acme Ops',
     });
@@ -67,7 +67,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.apiKey).toBe('rk_live_workspace');
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces');
+    expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
     expect(init.method).toBe('POST');
     expect(init.headers['Content-Type']).toBe('application/json');
     expect(init.headers['X-SDK-Version']).toBeDefined();
@@ -327,7 +327,7 @@ describe('RelaycastSetup', () => {
     expect(workspace.info).toEqual({
       workspaceId: 'ws_join',
       apiKey: 'rk_live_join',
-      baseUrl: 'https://gateway.relaycast.dev',
+      baseUrl: 'https://cast.agentrelay.com',
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -356,7 +356,7 @@ describe('RelaycastSetup', () => {
     });
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://gateway.relaycast.dev/v1/workspaces/by-name/Lookup%20Workspace');
+    expect(url).toBe('https://cast.agentrelay.com/v1/workspaces/by-name/Lookup%20Workspace');
     expect(init.method).toBe('GET');
   });
 
@@ -430,7 +430,7 @@ describe('WorkspaceHandle', () => {
     expect(workspace.getAgentToken('Alice')).toBe('at_live_alice');
 
     const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://gateway.relaycast.dev/v1/agents');
+    expect(url).toBe('https://cast.agentrelay.com/v1/agents');
     expect(init.method).toBe('POST');
     expect(init.headers.Authorization).toBe('Bearer rk_live_workspace');
     expect(JSON.parse(init.body)).toEqual({

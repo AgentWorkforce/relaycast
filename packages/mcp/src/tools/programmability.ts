@@ -191,7 +191,7 @@ export function registerProgrammabilityTools(
 
   server.registerTool('integration.action.register', {
     title: 'Register Action',
-    description: 'Register an action (async agent-to-agent RPC) that a specific agent handles. Other agents invoke the action; the handler agent receives an `action.invoked` event and reports the result. Replaces the legacy command API. Requires the hosted engine (gateway.relaycast.dev) or a self-hosted engine.',
+    description: 'Register an action (async agent-to-agent RPC) that a specific agent handles. Other agents invoke the action; the handler agent receives an `action.invoked` event and reports the result. Replaces the legacy command API. Requires the hosted engine (cast.agentrelay.com) or a self-hosted engine.',
     inputSchema: {
       name: z.string().describe('Action name (e.g. "deploy", "review")'),
       description: z.string().describe('Human-readable description of what the action does'),

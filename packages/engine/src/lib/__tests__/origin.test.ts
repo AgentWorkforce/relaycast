@@ -13,7 +13,7 @@ function req(
     query?: string;
   } = {},
 ): Request {
-  const url = new URL("https://gateway.relaycast.dev/v1/activity");
+  const url = new URL("https://cast.agentrelay.com/v1/activity");
   if (init.query !== undefined) url.searchParams.set("origin_actor", init.query);
   if (init.agentRelayDistinctQuery !== undefined) {
     url.searchParams.set("agent_relay_distinct_id", init.agentRelayDistinctQuery);

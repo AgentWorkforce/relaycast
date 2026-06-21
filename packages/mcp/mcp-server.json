@@ -11,7 +11,7 @@
       "command": "npx",
       "args": ["-y", "@relaycast/mcp"],
       "env": {
-        "RELAY_BASE_URL": "https://gateway.relaycast.dev"
+        "RELAY_BASE_URL": "https://cast.agentrelay.com"
       }
     }
   }
