@@ -22,7 +22,7 @@ info:
     name: Apache 2.0
 
 servers:
-  - url: https://gateway.relaycast.dev/v1
+  - url: https://cast.agentrelay.com/v1
     description: Hosted engine gateway (production)
   - url: http://localhost:8787/v1
     description: Self-hosted engine (@relaycast/engine)
@@ -3452,7 +3452,7 @@ paths:
   # ── A2A ──────────────────────────────────────────────────────────────
   /.well-known/agent-card.json:
     servers:
-      - url: https://gateway.relaycast.dev
+      - url: https://cast.agentrelay.com
         description: Production server (root, no /v1 prefix)
       - url: http://localhost:8787
         description: Local development server
@@ -3529,7 +3529,7 @@ paths:
 
   /a2a/rpc:
     servers:
-      - url: https://gateway.relaycast.dev
+      - url: https://cast.agentrelay.com
         description: Production server (root, no /v1 prefix)
       - url: http://localhost:8787
         description: Local development server
@@ -3546,7 +3546,7 @@ paths:
 
   /a2a/webhook/{workspace_id}/{name}:
     servers:
-      - url: https://gateway.relaycast.dev
+      - url: https://cast.agentrelay.com
         description: Production server (root, no /v1 prefix)
       - url: http://localhost:8787
         description: Local development server

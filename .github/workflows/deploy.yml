@@ -105,7 +105,7 @@ jobs:
         run: |
           sleep 15
           for i in $(seq 1 10); do
-            RESP=$(curl -s -D /tmp/mcp-headers -X POST 'https://api.relaycast.dev/mcp' \
+            RESP=$(curl -s -D /tmp/mcp-headers -X POST 'https://cast.agentrelay.com/mcp' \
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json, text/event-stream' \
               --max-time 10 \
@@ -120,14 +120,14 @@ jobs:
 
           SESSION_ID=$(grep -i 'mcp-session-id' /tmp/mcp-headers | tr -d '\r' | awk '{print $2}')
           if [ -n "$SESSION_ID" ]; then
-            curl -s -X POST 'https://api.relaycast.dev/mcp' \
+            curl -s -X POST 'https://cast.agentrelay.com/mcp' \
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json, text/event-stream' \
               -H "Mcp-Session-Id: $SESSION_ID" \
               --max-time 5 \
               -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' 2>/dev/null > /dev/null
 
-            TOOLS_RESP=$(curl -s -X POST 'https://api.relaycast.dev/mcp' \
+            TOOLS_RESP=$(curl -s -X POST 'https://cast.agentrelay.com/mcp' \
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json, text/event-stream' \
               -H "Mcp-Session-Id: $SESSION_ID" \
@@ -146,7 +146,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             echo "=== Attempt $attempt of 5 ==="
             OUTPUT=$(npx @smithery/cli@3 publish \
-              -u https://api.relaycast.dev/mcp \
+              -u https://cast.agentrelay.com/mcp \
               -n "relaycast/relay" \
               -k "$SMITHERY_API_KEY" \
               --config-schema packages/mcp/smithery-config-schema.json 2>&1) || true

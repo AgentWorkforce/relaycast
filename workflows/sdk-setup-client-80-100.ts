@@ -69,7 +69,7 @@ need_regex "createWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "joinWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "lookupWorkspace\\(" packages/sdk-typescript/src/setup.ts
 need_regex "registerAgent\\(" packages/sdk-typescript/src/setup.ts
-need_fixed "https://gateway.relaycast.dev" packages/sdk-typescript/src/setup.ts
+need_fixed "https://cast.agentrelay.com" packages/sdk-typescript/src/setup.ts
 need_fixed "CreateWorkspaceResponseSchema" packages/sdk-typescript/src/setup.ts
 need_fixed "WorkspaceLookupSchema" packages/sdk-typescript/src/setup.ts
 need_fixed "camelizeKeys" packages/sdk-typescript/src/setup.ts
@@ -306,7 +306,7 @@ echo "communicate Relay contract present"
     dependsOn: ['verify-setup-types', 'verify-setup-errors', 'verify-communicate-relay'],
     task: `Create packages/sdk-typescript/src/setup.ts.
 Implement RelaycastSetup and WorkspaceHandle exactly as the accepted contract states.
-Default cloud base URL is https://gateway.relaycast.dev (the hosted engine); a self-hosted engine is reached by passing baseUrl (e.g. http://localhost:8787).
+Default cloud base URL is https://cast.agentrelay.com (the hosted engine); a self-hosted engine is reached by passing baseUrl (e.g. http://localhost:8787).
 Use fetch with JSON headers, X-SDK-Version, optional Authorization, timeout, retry, Retry-After, and jitter.
 Wrap non-2xx API envelopes in RelaycastApiError and validate required fields.
 WorkspaceHandle must manage agent tokens for registerAgent(), relay(), getAgentToken(), and listRegisteredAgents().
