@@ -9,7 +9,7 @@
  *   npm run e2e                                   # defaults to the engine dev server (http://localhost:8787)
  *   npm run e2e -- http://localhost:8787 --ci     # self-hosted engine in CI
  *   npm run e2e -- --continue-on-failure          # keep running after step failures
- *   npm run e2e -- https://gateway.relaycast.dev --ci
+ *   npm run e2e -- https://cast.agentrelay.com --ci
  */
 
 import { createServer } from 'node:http';
@@ -50,10 +50,6 @@ function resolveDashboardUrl(baseUrl: string): string {
 
   if (host === 'staging-api.relaycast.dev') {
     return 'https://staging-observer.relaycast.dev';
-  }
-
-  if (host === 'api.relaycast.dev') {
-    return 'https://observer.relaycast.dev';
   }
 
   return 'https://observer.relaycast.dev';
