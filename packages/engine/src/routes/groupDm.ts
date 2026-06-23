@@ -16,6 +16,13 @@ import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const groupDmRoutes = new Hono<AppEnv>();
 
@@ -44,12 +51,13 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = createGroupDmSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'participants array is required with at least 1 member' },
-        }, 400);
+      const parsed = await parseJsonBody(
+        c,
+        createGroupDmSchema,
+        'participants array is required with at least 1 member',
+      );
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { participants, name } = parsed.data;
 
@@ -63,7 +71,7 @@ groupDmRoutes.post(
         conversation_id: result.id,
         participant_count: result.participants.length,
       });
-      return c.json({ ok: true, data: result }, 201);
+      return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -80,32 +88,27 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = postGroupDmMessageSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
-        const hasModeIssue = parsed.error.issues.some((issue) => issue.path[0] === 'mode');
-        const hasAttachmentsIssue = parsed.error.issues.some((issue) => issue.path[0] === 'attachments');
-        const message = hasTextIssue
+      const parsed = await parseJsonBody(c, postGroupDmMessageSchema, (failure) => {
+        const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
+        const hasModeIssue = failure.error.issues.some((issue) => issue.path[0] === 'mode');
+        const hasAttachmentsIssue = failure.error.issues.some((issue) => issue.path[0] === 'attachments');
+        return hasTextIssue
           ? 'text is required'
           : hasModeIssue
             ? 'mode must be one of: wait, steer'
             : hasAttachmentsIssue
               ? 'attachments must be an array of file ids'
               : 'invalid group dm body';
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message },
-        }, 400);
+      });
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { text, attachments, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const conversationId = c.req.param('conversation_id');
@@ -209,7 +212,7 @@ groupDmRoutes.post(
         _deliveries?: unknown;
         _delivery_rejections?: unknown;
       };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonOk(c, responseData, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -226,12 +229,9 @@ groupDmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agentCtx = c.get('agent');
-      const parsed = addGroupDmParticipantSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'agent_name is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, addGroupDmParticipantSchema, 'agent_name is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { agent_name: agentName } = parsed.data;
 
@@ -248,7 +248,7 @@ groupDmRoutes.post(
         agent_name: agentName,
         invited_by_agent_id: agentCtx!.id,
       });
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -276,7 +276,7 @@ groupDmRoutes.delete(
         conversation_id: conversationId,
         agent_id: agent!.id,
       });
-      return c.body(null, 204);
+      return jsonNoContent(c);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
