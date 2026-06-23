@@ -26,6 +26,7 @@ from relay_sdk.models import (
     MessageWithMeta,
     PongEvent,
     ReactionGroup,
+    RecentReaction,
     ThreadReplyEvent,
     ThreadResponse,
     UnreadChannel,
@@ -258,14 +259,30 @@ def test_inbox_response_with_nested_unread_channel_mention_and_unread_dm():
                     "conversation_id": "dm_1",
                     "from": "ag_2",
                     "unread_count": 5,
-                    "last_message": "yo",
+                    "last_message": {
+                        "id": "m_9",
+                        "text": "yo",
+                        "created_at": "2026-02-08T00:00:00Z",
+                    },
                 }
+            )
+        ],
+        recent_reactions=[
+            RecentReaction(
+                message_id="m_1",
+                channel_name="general",
+                emoji="👍",
+                agent_name="Alpha",
+                created_at="2026-02-08 00:00:00",
             )
         ],
     )
     assert inbox.unread_channels[0].unread_count == 2
     assert inbox.mentions[0].text == "@you hi"
     assert inbox.unread_dms[0].from_ == "ag_2"
+    assert inbox.unread_dms[0].last_message is not None
+    assert inbox.unread_dms[0].last_message.text == "yo"
+    assert inbox.recent_reactions[0].emoji == "👍"
 
 
 def test_unread_dm_alias_from_maps_to_from_attribute():
