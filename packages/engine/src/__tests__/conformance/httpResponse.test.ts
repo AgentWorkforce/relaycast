@@ -99,6 +99,38 @@ describe('route response helpers', () => {
     });
   });
 
+  it('returns invalid_json for malformed channel update request bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-channel-update-ws');
+
+    const create = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'malformed-update-channel' }),
+    });
+    expect(create.status).toBe(201);
+
+    const res = await stack.app.request('/v1/channels/malformed-update-channel', {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
+
   it('keeps custom validation messages when routes use the shared parser', async () => {
     const ws = await createWorkspace(stack.app, 'subscription-validation-ws');
 
