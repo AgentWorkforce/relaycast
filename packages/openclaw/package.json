@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/openclaw",
-  "version": "4.1.6",
+  "version": "4.2.0",
   "description": "Drop-in Relaycast integration for OpenClaw — structured messaging for multi-claw setups.",
   "keywords": [
     "openclaw",
@@ -36,8 +36,8 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@relaycast/sdk": "4.1.6",
-    "@relaycast/types": "4.1.6"
+    "@relaycast/sdk": "4.2.0",
+    "@relaycast/types": "4.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
