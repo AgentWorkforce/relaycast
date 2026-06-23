@@ -320,19 +320,34 @@ class InboxMention(BaseModel):
     created_at: str
 
 
+class UnreadDmLastMessage(BaseModel):
+    id: str
+    text: str
+    created_at: str
+
+
 class UnreadDm(BaseModel):
     conversation_id: str
     from_: str = Field(alias="from")
     unread_count: int
-    last_message: str | None = None
+    last_message: UnreadDmLastMessage | None = None
 
     model_config = {"populate_by_name": True}
+
+
+class RecentReaction(BaseModel):
+    message_id: str
+    channel_name: str
+    emoji: str
+    agent_name: str
+    created_at: str
 
 
 class InboxResponse(BaseModel):
     unread_channels: list[UnreadChannel]
     mentions: list[InboxMention]
     unread_dms: list[UnreadDm]
+    recent_reactions: list[RecentReaction] = Field(default_factory=list)
 
 
 # ── Durable Delivery ──────────────────────────────────────────────

@@ -97,7 +97,10 @@ class WsClient:
                 async for raw in ws:
                     try:
                         data = json.loads(raw)
-                        self._emit(data.get("type", ""), data)
+                        event_type = data.get("type", "")
+                        if event_type == "ping":
+                            await self._send_json({"type": "pong"})
+                        self._emit(event_type, data)
                     except (json.JSONDecodeError, TypeError):
                         pass
             finally:
@@ -123,6 +126,13 @@ class WsClient:
         self._pending_subscriptions = [c for c in self._pending_subscriptions if c not in channels]
         if self._ws:
             asyncio.ensure_future(self._send_json({"type": "unsubscribe", "channels": channels}))
+
+    async def send(self, frame: dict[str, Any]) -> None:
+        """Send an arbitrary JSON frame over the socket.
+
+        No-op if the client is not currently connected.
+        """
+        await self._send_json(frame)
 
     def on(self, event: str, handler: EventHandler) -> Callable[[], None]:
         """Register an event handler. Returns an unsubscribe callable."""

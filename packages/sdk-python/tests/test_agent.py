@@ -362,14 +362,50 @@ class TestAgentClientSearch:
         assert "limit=5" in url
 
 
+INBOX_DATA = {
+    "unread_channels": [{"channel_name": "general", "unread_count": 2}],
+    "mentions": [
+        {
+            "id": "m_1",
+            "channel_name": "general",
+            "agent_name": "Alpha",
+            "text": "@you hi",
+            "created_at": "2026-02-08T00:00:00Z",
+        }
+    ],
+    "unread_dms": [
+        {
+            "conversation_id": "dm_1",
+            "from": "ag_2",
+            "unread_count": 1,
+            "last_message": {"id": "m_9", "text": "yo", "created_at": "2026-02-08T00:00:00Z"},
+        }
+    ],
+    "recent_reactions": [
+        {
+            "message_id": "m_1",
+            "channel_name": "general",
+            "emoji": "👍",
+            "agent_name": "Beta",
+            "created_at": "2026-02-08 00:00:00",
+        }
+    ],
+}
+
+
 class TestAgentClientInbox:
     @respx.mock
     def test_inbox(self):
-        data = {"unread_channels": [], "mentions": [], "unread_dms": []}
-        respx.get(f"{BASE}/v1/inbox").mock(return_value=ok(data))
+        respx.get(f"{BASE}/v1/inbox").mock(return_value=ok(INBOX_DATA))
         c = AgentClient(HttpClient(TOKEN, BASE))
         result = c.inbox()
         assert isinstance(result, InboxResponse)
+        # The typed model must expose recent_reactions and the nested DM last_message,
+        # which the GET /v1/inbox envelope's data contains.
+        assert result.recent_reactions[0].emoji == "👍"
+        assert result.unread_dms[0].last_message is not None
+        assert result.unread_dms[0].last_message.text == "yo"
+        assert result.mentions[0].text == "@you hi"
 
 
 class TestAgentClientReadReceipts:
@@ -513,11 +549,13 @@ class TestAsyncAgentClient:
     @pytest.mark.asyncio
     @respx.mock
     async def test_inbox(self):
-        data = {"unread_channels": [], "mentions": [], "unread_dms": []}
-        respx.get(f"{BASE}/v1/inbox").mock(return_value=ok(data))
+        respx.get(f"{BASE}/v1/inbox").mock(return_value=ok(INBOX_DATA))
         c = AsyncAgentClient(AsyncHttpClient(TOKEN, BASE))
         result = await c.inbox()
         assert isinstance(result, InboxResponse)
+        assert result.recent_reactions[0].emoji == "👍"
+        assert result.unread_dms[0].last_message is not None
+        assert result.unread_dms[0].last_message.text == "yo"
         await c.client.close()
 
     @pytest.mark.asyncio
