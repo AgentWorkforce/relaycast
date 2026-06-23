@@ -55,4 +55,48 @@ describe('route response helpers', () => {
       },
     });
   });
+
+  it('keeps custom validation messages when routes use the shared parser', async () => {
+    const ws = await createWorkspace(stack.app, 'subscription-validation-ws');
+
+    const missingEvents = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ url: 'https://example.test/relay' }),
+    });
+
+    expect(missingEvents.status).toBe(400);
+    await expect(missingEvents.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'events array is required',
+      },
+    });
+  });
+
+  it('returns invalid_json for another route migrated to the shared parser', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-subscription-ws');
+
+    const res = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
 });

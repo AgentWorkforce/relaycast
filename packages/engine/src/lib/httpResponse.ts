@@ -2,8 +2,19 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 interface SafeParseSchema<T> {
-  safeParse(value: unknown): { success: true; data: T } | { success: false };
+  safeParse(value: unknown): { success: true; data: T } | SafeParseFailure;
 }
+
+interface ValidationIssue {
+  path: Array<string | number | symbol>;
+}
+
+interface SafeParseFailure {
+  success: false;
+  error?: { issues?: ValidationIssue[] };
+}
+
+type InvalidRequestMessage = string | ((failure: SafeParseFailure) => string);
 
 type ParsedJsonBody<T> =
   | { ok: true; data: T }
@@ -40,7 +51,7 @@ export function jsonMalformedBody(c: Context) {
 export async function parseJsonBody<T>(
   c: Context,
   schema: SafeParseSchema<T>,
-  invalidMessage: string,
+  invalidMessage: InvalidRequestMessage,
 ): Promise<ParsedJsonBody<T>> {
   let body: unknown;
 
@@ -52,7 +63,8 @@ export async function parseJsonBody<T>(
 
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return { ok: false, response: jsonInvalidRequest(c, invalidMessage) };
+    const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
+    return { ok: false, response: jsonInvalidRequest(c, message) };
   }
 
   return { ok: true, data: parsed.data };
