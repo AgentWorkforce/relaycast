@@ -32,6 +32,10 @@ __pycache__/
 target/
 Cargo.lock
 
+# Swift Package Manager
+.build/
+.swiftpm/
+
 # Relaycast local runtime generated state
 .agent-relay/
 
