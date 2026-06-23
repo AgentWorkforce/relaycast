@@ -163,4 +163,26 @@ describe('route response helpers', () => {
       },
     });
   });
+
+  it('returns invalid_json for malformed routing request bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-routing-ws');
+
+    const res = await stack.app.request('/v1/route', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
 });
