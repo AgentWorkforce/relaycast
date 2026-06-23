@@ -13,6 +13,15 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+  parseOptionalJsonBody,
+} from '../lib/httpResponse.js';
 
 export const actionRoutes = new Hono<AppEnv>();
 
@@ -41,28 +50,26 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = registerActionSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      const hasNameIssue = parsed.error.issues.some((i) => i.path[0] === 'name');
-      const hasDescIssue = parsed.error.issues.some((i) => i.path[0] === 'description');
-      const hasHandlerIssue = parsed.error.issues.some((i) => i.path[0] === 'handler_agent' || i.path[0] === 'handler_node');
-      const message = hasNameIssue
+    const parsed = await parseJsonBody(c, registerActionSchema, (failure) => {
+      const hasNameIssue = failure.error.issues.some((i) => i.path[0] === 'name');
+      const hasDescIssue = failure.error.issues.some((i) => i.path[0] === 'description');
+      const hasHandlerIssue = failure.error.issues.some((i) => i.path[0] === 'handler_agent' || i.path[0] === 'handler_node');
+      return hasNameIssue
         ? 'name is required'
         : hasDescIssue
           ? 'description is required'
           : hasHandlerIssue
             ? 'handler_agent or handler_node is required'
             : 'invalid action registration body';
-      return c.json({ ok: false, error: { code: 'invalid_request', message } }, 400);
+    });
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     // If called with an agent token, handler_agent must match the calling agent
     const callerAgent = c.get('agent');
     if (callerAgent && parsed.data.handler_agent !== callerAgent.name) {
-      return c.json(
-        { ok: false, error: { code: 'forbidden', message: `Agent "${callerAgent.name}" may only register actions it will handle itself` } },
-        403,
-      );
+      return jsonError(c, 'forbidden', `Agent "${callerAgent.name}" may only register actions it will handle itself`, 403);
     }
 
     const result = await actionEngine.registerAction(db, workspace.id, parsed.data);
@@ -78,7 +85,7 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       'fanout action.registered',
     );
 
-    return c.json({ ok: true, data: result }, 201);
+    return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -91,7 +98,7 @@ actionRoutes.get('/actions', requireAuth, rateLimit, async (c) => {
     const workspace = c.get('workspace');
     const agent = c.get('agent');
     const result = await actionEngine.listActions(db, workspace.id, agent?.name);
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -105,12 +112,9 @@ actionRoutes.get('/actions/:name', requireAuth, rateLimit, async (c) => {
     const agent = c.get('agent');
     const result = await actionEngine.getAction(db, workspace.id, c.req.param('name'), agent?.name);
     if (!result) {
-      return c.json(
-        { ok: false, error: { code: 'action_not_found', message: 'Action not found' } },
-        404,
-      );
+      return jsonNotFound(c, 'action_not_found', 'Action not found');
     }
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -123,15 +127,12 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
     const workspace = c.get('workspace');
     const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'));
     if (!deleted) {
-      return c.json(
-        { ok: false, error: { code: 'action_not_found', message: 'Action not found' } },
-        404,
-      );
+      return jsonNotFound(c, 'action_not_found', 'Action not found');
     }
     emitServerEvent(c, workspace.id, 'relaycast_server_action_deleted', {
       action_name: c.req.param('name'),
     });
-    return c.body(null, 204);
+    return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -145,24 +146,12 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
     const agent = c.get('agent');
 
     if (!agent) {
-      return c.json(
-        {
-          ok: false,
-          error: {
-            code: 'agent_token_required',
-            message: 'Agent token required to invoke actions',
-          },
-        },
-        403,
-      );
+      return jsonError(c, 'agent_token_required', 'Agent token required to invoke actions', 403);
     }
 
-    const parsed = invokeActionSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json(
-        { ok: false, error: { code: 'invalid_request', message: 'invalid invocation body' } },
-        400,
-      );
+    const parsed = await parseOptionalJsonBody(c, invokeActionSchema, 'invalid invocation body');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const { nodeConnections, kv, config } = c.get('engine');
@@ -209,7 +198,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       caller_agent_id: agent.id,
     });
 
-    return c.json({ ok: true, data: result }, 201);
+    return jsonCreated(c, result);
   } catch (err: unknown) {
     const error = asCodedError(err);
     if (error.code === 'action_denied') {
@@ -236,12 +225,9 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = completeInvocationSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json(
-        { ok: false, error: { code: 'invalid_request', message: 'invalid completion body' } },
-        400,
-      );
+    const parsed = await parseOptionalJsonBody(c, completeInvocationSchema, 'invalid completion body');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const agent = c.get('agent');
@@ -254,17 +240,14 @@ actionRoutes.post('/actions/:name/invocations/:id/complete', requireAuth, rateLi
     );
 
     if (!result) {
-      return c.json(
-        { ok: false, error: { code: 'invocation_not_found', message: 'Invocation not found' } },
-        404,
-      );
+      return jsonNotFound(c, 'invocation_not_found', 'Invocation not found');
     }
 
     await emitInvocationCompletionEffects(c.get('engine'), workspace.id, result);
 
     // Strip caller_id from client response (internal routing detail)
     const { caller_id: _drop, ...publicResult } = result;
-    return c.json({ ok: true, data: publicResult });
+    return jsonOk(c, publicResult);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -277,12 +260,9 @@ actionRoutes.get('/actions/:name/invocations/:id', requireAuth, rateLimit, async
     const workspace = c.get('workspace');
     const result = await actionEngine.getInvocation(db, workspace.id, c.req.param('name'), c.req.param('id'));
     if (!result) {
-      return c.json(
-        { ok: false, error: { code: 'invocation_not_found', message: 'Invocation not found' } },
-        404,
-      );
+      return jsonNotFound(c, 'invocation_not_found', 'Invocation not found');
     }
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
