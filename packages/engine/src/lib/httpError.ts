@@ -35,6 +35,15 @@ export function codedError(message: string, code: string, status: number): Coded
   return Object.assign(new Error(message), { code, status });
 }
 
+interface ErrorResponseOptions {
+  includeCause?: boolean;
+}
+
+function messageWithCause(error: CodedError) {
+  const cause = error.cause instanceof Error ? error.cause.message : (error.cause ? String(error.cause) : '');
+  return cause ? `${error.message} [cause: ${cause}]` : error.message;
+}
+
 /**
  * Render a thrown value as the standard `{ ok: false, error: { code, message } }`
  * envelope with the carried (or default 500) status. Centralizes the single
@@ -42,7 +51,7 @@ export function codedError(message: string, code: string, status: number): Coded
  * real `instanceof` narrowing instead of the unchecked `err as Error & {...}`
  * assertion that was duplicated across every route handler.
  */
-export function errorResponse(c: Context, err: unknown) {
+export function errorResponse(c: Context, err: unknown, options: ErrorResponseOptions = {}) {
   const error = asCodedError(err);
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
@@ -50,7 +59,7 @@ export function errorResponse(c: Context, err: unknown) {
   return jsonError(
     c,
     error.code || 'internal_error',
-    error.message,
+    options.includeCause ? messageWithCause(error) : error.message,
     (error.status || 500) as ContentfulStatusCode,
   );
 }
