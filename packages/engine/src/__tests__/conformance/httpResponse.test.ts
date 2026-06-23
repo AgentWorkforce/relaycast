@@ -501,4 +501,27 @@ describe('route response helpers', () => {
       },
     });
   });
+
+  it('returns invalid_json for malformed agent update request bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-agent-update-ws');
+    await registerAgent(stack.app, ws.workspaceKey, 'updatable-agent');
+
+    const res = await stack.app.request('/v1/agents/updatable-agent', {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
 });

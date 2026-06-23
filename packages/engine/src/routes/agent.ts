@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
@@ -13,6 +12,14 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -74,6 +81,10 @@ function canonicalStatus(status: string): 'active' | 'idle' | 'blocked' | 'waiti
   return null;
 }
 
+function agentNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
+  return jsonNotFound(c, 'agent_not_found', `Agent "${name}" not found`);
+}
+
 async function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent: { id: string; name: string }, status: string, eventId?: string): Promise<void> {
   const nextStatus = canonicalStatus(status);
   if (!nextStatus) return;
@@ -104,12 +115,9 @@ agentRoutes.get(
       const authAgent = c.get('agent');
       const agent = await agentEngine.getAgentByName(db, workspace.id, authAgent!.name);
       if (!agent) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: 'Authenticated agent not found' },
-        }, 404);
+        return jsonNotFound(c, 'agent_not_found', 'Authenticated agent not found');
       }
-      return c.json({ ok: true, data: agent });
+      return jsonOk(c, agent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -125,12 +133,9 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const parsed = registerAgentSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'name is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, registerAgentSchema, 'name is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { name, type, persona, metadata, skills, capabilities } = parsed.data;
       const nextMetadata = {
@@ -158,7 +163,7 @@ agentRoutes.post(
         agent_name: result.name,
         agent_type: type ?? 'agent',
       });
-      return c.json({ ok: true, data: result }, 201);
+      return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -176,7 +181,7 @@ agentRoutes.get(
       const workspace = c.get('workspace');
       const status = c.req.query('status');
       const agents = await agentEngine.listAgents(db, workspace.id, status);
-      return c.json({ ok: true, data: agents });
+      return jsonOk(c, agents);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -195,12 +200,9 @@ agentRoutes.get(
       const name = c.req.param('name');
       const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        }, 404);
+        return agentNotFound(c, name);
       }
-      return c.json({ ok: true, data: agent });
+      return jsonOk(c, agent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -217,19 +219,13 @@ agentRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const parsed = updateAgentSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'invalid agent update body' },
-        }, 400);
+      const parsed = await parseJsonBody(c, updateAgentSchema, 'invalid agent update body');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const existing = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!existing) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        }, 404);
+        return agentNotFound(c, name);
       }
 
       const body = parsed.data;
@@ -248,10 +244,7 @@ agentRoutes.patch(
         capabilities: body.capabilities,
       });
       if (!updated) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        }, 404);
+        return agentNotFound(c, name);
       }
       if (body.metadata !== undefined || body.skills !== undefined || body.status !== undefined) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
@@ -269,7 +262,7 @@ agentRoutes.patch(
         changed_status: typeof body?.status === 'string',
         changed_persona: typeof body?.persona === 'string',
       });
-      return c.json({ ok: true, data: updated });
+      return jsonOk(c, updated);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -288,15 +281,12 @@ agentRoutes.delete(
       const name = c.req.param('name');
       const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
       if (!deleted) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        }, 404);
+        return agentNotFound(c, name);
       }
       emitServerEvent(c, workspace.id, 'relaycast_server_agent_deleted', {
         agent_name: name,
       });
-      return c.body(null, 204);
+      return jsonNoContent(c);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -312,22 +302,20 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const parsed = spawnAgentSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        const hasNameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'name');
-        const hasCliIssue = parsed.error.issues.some((issue) => issue.path[0] === 'cli');
-        const hasTaskIssue = parsed.error.issues.some((issue) => issue.path[0] === 'task');
-        const message = hasNameIssue
+      const parsed = await parseJsonBody(c, spawnAgentSchema, (failure) => {
+        const hasNameIssue = failure.error.issues.some((issue) => issue.path[0] === 'name');
+        const hasCliIssue = failure.error.issues.some((issue) => issue.path[0] === 'cli');
+        const hasTaskIssue = failure.error.issues.some((issue) => issue.path[0] === 'task');
+        return hasNameIssue
           ? 'name is required'
           : hasCliIssue
             ? `cli must be one of: ${CliTypeSchema.options.join(', ')}`
             : hasTaskIssue
               ? 'task is required'
               : 'invalid spawn request';
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message },
-        }, 400);
+      });
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { name, cli, task, channel, persona, model, metadata } = parsed.data;
 
@@ -365,7 +353,7 @@ agentRoutes.post(
         already_existed: result.already_existed,
       });
 
-      return c.json({ ok: true, data: result }, (result.already_existed ? 200 : 201) as ContentfulStatusCode);
+      return result.already_existed ? jsonOk(c, result) : jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -383,38 +371,26 @@ agentRoutes.post(
       const workspace = c.get('workspace');
       const name = c.req.param('name');
 
-      const parsed = sessionEventSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json(
-          { ok: false, error: { code: 'invalid_request', message: 'type is required' } },
-          400,
-        );
+      const parsed = await parseJsonBody(c, sessionEventSchema, 'type is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
 
       const { type, payload } = parsed.data;
 
       if (!sessionEventEngine.isValidEventType(type)) {
-        return c.json(
-          { ok: false, error: { code: 'invalid_event_type', message: `Unknown event type: ${type}` } },
-          400,
-        );
+        return jsonError(c, 'invalid_event_type', `Unknown event type: ${type}`, 400);
       }
 
       const agentRecord = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agentRecord) {
-        return c.json(
-          { ok: false, error: { code: 'agent_not_found', message: `Agent "${name}" not found` } },
-          404,
-        );
+        return agentNotFound(c, name);
       }
 
       // Agent tokens may only post events for themselves
       const callerAgent = c.get('agent');
       if (callerAgent && callerAgent.id !== agentRecord.id) {
-        return c.json(
-          { ok: false, error: { code: 'forbidden', message: 'Agent token can only post events for itself' } },
-          403,
-        );
+        return jsonError(c, 'forbidden', 'Agent token can only post events for itself', 403);
       }
 
       // Validate status events before writing — reject early so no orphan row is created
@@ -425,16 +401,10 @@ agentRoutes.post(
         const newStatus = resolved ?? fromPayload;
 
         if (!newStatus) {
-          return c.json(
-            { ok: false, error: { code: 'invalid_request', message: 'status.changed event requires payload.status' } },
-            400,
-          );
+          return jsonError(c, 'invalid_request', 'status.changed event requires payload.status', 400);
         }
         if (!VALID_STATUSES.has(newStatus)) {
-          return c.json(
-            { ok: false, error: { code: 'invalid_request', message: `Invalid status value: "${newStatus}". Must be one of: ${[...VALID_STATUSES].join(', ')}` } },
-            400,
-          );
+          return jsonError(c, 'invalid_request', `Invalid status value: "${newStatus}". Must be one of: ${[...VALID_STATUSES].join(', ')}`, 400);
         }
       }
 
@@ -475,7 +445,7 @@ agentRoutes.post(
         });
       }
 
-      return c.json({ ok: true, data: event }, 201);
+      return jsonCreated(c, event);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -497,10 +467,7 @@ agentRoutes.get(
 
       const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {
-        return c.json(
-          { ok: false, error: { code: 'agent_not_found', message: `Agent "${name}" not found` } },
-          404,
-        );
+        return agentNotFound(c, name);
       }
 
       const events = await sessionEventEngine.listSessionEvents(db, workspace.id, agent.id, {
@@ -508,7 +475,7 @@ agentRoutes.get(
         limit,
       });
 
-      return c.json({ ok: true, data: events });
+      return jsonOk(c, events);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -524,12 +491,9 @@ agentRoutes.post(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const parsed = releaseAgentSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'name is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, releaseAgentSchema, 'name is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { name, reason, delete_agent } = parsed.data;
 
@@ -540,10 +504,7 @@ agentRoutes.post(
       });
 
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_not_found', message: `Agent "${name}" not found` },
-        }, 404);
+        return agentNotFound(c, name);
       }
 
       const releaseEventData = {
@@ -563,7 +524,7 @@ agentRoutes.post(
         deleted: result.deleted,
       });
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
