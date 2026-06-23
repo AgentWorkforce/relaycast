@@ -11,7 +11,7 @@ import httpx
 
 from .errors import RelayError
 
-SDK_VERSION = "0.1.1"
+SDK_VERSION = "0.2.0"
 AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id"
 AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id"
 
