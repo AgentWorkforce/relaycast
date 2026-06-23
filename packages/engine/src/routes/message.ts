@@ -17,6 +17,12 @@ import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonError,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -39,21 +45,15 @@ messageRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = postMessageSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, postMessageSchema, 'text is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { text, blocks, attachments, data, content_type, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const channelName = c.req.param('name');
@@ -61,19 +61,13 @@ messageRoutes.post(
       // Resolve channel name to ID
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        return c.json({
-          ok: false,
-          error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        }, 404);
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
       // Determine agent ID (from agent token or body)
       const agentId = agent?.id;
       if (!agentId) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_token_required', message: 'Agent token required to post messages' },
-        }, 403);
+        return jsonError(c, 'agent_token_required', 'Agent token required to post messages', 403);
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
@@ -188,7 +182,7 @@ messageRoutes.post(
         _deliveries?: unknown;
         _delivery_rejections?: unknown;
       };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonOk(c, responseData, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -207,10 +201,7 @@ messageRoutes.get(
       const channelName = c.req.param('name');
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        return c.json({
-          ok: false,
-          error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        }, 404);
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
       const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
@@ -223,7 +214,7 @@ messageRoutes.get(
         channel.id,
         { limit, before, after },
       );
-      return c.json({ ok: true, data: messages });
+      return jsonOk(c, messages);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -242,12 +233,9 @@ messageRoutes.get(
       const messageId = c.req.param('id');
       const message = await messageEngine.getMessage(db, workspace.id, messageId);
       if (!message) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
-      return c.json({ ok: true, data: message });
+      return jsonOk(c, message);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

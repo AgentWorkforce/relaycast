@@ -211,6 +211,29 @@ describe('route response helpers', () => {
     });
   });
 
+  it('returns invalid_json for malformed channel message request bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-message-ws');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'message-agent');
+
+    const res = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
+
   it('returns invalid_json for malformed group DM request bodies', async () => {
     const ws = await createWorkspace(stack.app, 'malformed-group-dm-ws');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'group-dm-agent');
