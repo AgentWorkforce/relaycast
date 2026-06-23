@@ -211,6 +211,57 @@ describe('route response helpers', () => {
     });
   });
 
+  it('returns invalid_json for malformed thread reply request bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'malformed-thread-ws');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'thread-agent');
+
+    const createChannel = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'thread-helper-channel' }),
+    });
+    expect(createChannel.status).toBe(201);
+
+    const join = await stack.app.request('/v1/channels/thread-helper-channel/join', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect(join.status).toBe(200);
+
+    const post = await stack.app.request('/v1/channels/thread-helper-channel/messages', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'parent message' }),
+    });
+    expect(post.status).toBe(201);
+    const postBody = await post.json() as { data?: { id?: string } };
+    expect(postBody.data?.id).toBeTruthy();
+
+    const res = await stack.app.request(`/v1/messages/${postBody.data!.id}/replies`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_json',
+        message: 'Malformed JSON in request body',
+      },
+    });
+  });
+
   it('uses the shared invalid_request envelope for query validation', async () => {
     const ws = await createWorkspace(stack.app, 'invalid-console-query-ws');
 
