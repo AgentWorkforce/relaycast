@@ -22,6 +22,14 @@ type ParsedRequestValue<T> =
   | { ok: true; data: T }
   | { ok: false; response: Response };
 
+interface ParseJsonBodyOptions {
+  emptyBodyValue?: unknown;
+  malformedBodyError?: {
+    code: string;
+    message: string;
+  };
+}
+
 export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 200) {
   return c.json({ ok: true as const, data }, status);
 }
@@ -54,20 +62,21 @@ export function jsonMalformedBody(c: Context) {
   return jsonError(c, 'invalid_json', 'Malformed JSON in request body', 400);
 }
 
-export async function parseJsonBody<T>(
-  c: Context,
-  schema: SafeParseSchema<T>,
-  invalidMessage: InvalidRequestMessage,
-): Promise<ParsedRequestValue<T>> {
-  let body: unknown;
-
-  try {
-    body = await c.req.json();
-  } catch {
-    return { ok: false, response: jsonMalformedBody(c) };
+function jsonMalformedBodyForOptions(c: Context, options?: ParseJsonBodyOptions) {
+  if (options?.malformedBodyError) {
+    return jsonError(c, options.malformedBodyError.code, options.malformedBodyError.message, 400);
   }
 
-  const parsed = schema.safeParse(body);
+  return jsonMalformedBody(c);
+}
+
+function validateParsedValue<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  value: unknown,
+  invalidMessage: InvalidRequestMessage,
+): ParsedRequestValue<T> {
+  const parsed = schema.safeParse(value);
   if (!parsed.success) {
     const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
     return { ok: false, response: jsonInvalidRequest(c, message) };
@@ -76,16 +85,47 @@ export async function parseJsonBody<T>(
   return { ok: true, data: parsed.data };
 }
 
+export async function parseJsonBody<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+  options?: ParseJsonBodyOptions,
+): Promise<ParsedRequestValue<T>> {
+  let body: unknown;
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return { ok: false, response: jsonMalformedBodyForOptions(c, options) };
+  }
+
+  return validateParsedValue(c, schema, body, invalidMessage);
+}
+
+export async function parseOptionalJsonBody<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+  options?: ParseJsonBodyOptions,
+): Promise<ParsedRequestValue<T>> {
+  const bodyText = await c.req.text();
+  let body: unknown = options?.emptyBodyValue === undefined ? {} : options.emptyBodyValue;
+
+  if (bodyText.trim().length > 0) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      return { ok: false, response: jsonMalformedBodyForOptions(c, options) };
+    }
+  }
+
+  return validateParsedValue(c, schema, body, invalidMessage);
+}
+
 export function parseQueryParams<T>(
   c: Context,
   schema: SafeParseSchema<T>,
   invalidMessage: InvalidRequestMessage,
 ): ParsedRequestValue<T> {
-  const parsed = schema.safeParse(c.req.query());
-  if (!parsed.success) {
-    const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
-    return { ok: false, response: jsonInvalidRequest(c, message) };
-  }
-
-  return { ok: true, data: parsed.data };
+  return validateParsedValue(c, schema, c.req.query(), invalidMessage);
 }

@@ -7,6 +7,13 @@ import { fanoutToAgents } from './fanout.js';
 import { notifyDeliveryFailures } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+  parseOptionalJsonBody,
+  parseQueryParams,
+} from '../lib/httpResponse.js';
 import { ListDeliveriesQuerySchema, FailDeliveryRequestSchema, DeferDeliveryRequestSchema } from '@relaycast/types';
 
 export const deliveryRoutes = new Hono<AppEnv>();
@@ -20,15 +27,9 @@ deliveryRoutes.get(
   rateLimit,
   async (c) => {
     try {
-      const parsed = ListDeliveriesQuerySchema.safeParse({
-        status: c.req.query('status'),
-        limit: c.req.query('limit'),
-      });
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'Invalid status or limit' },
-        }, 400);
+      const parsed = parseQueryParams(c, ListDeliveriesQuerySchema, 'Invalid status or limit');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const db = c.get('db');
       const workspace = c.get('workspace');
@@ -38,7 +39,7 @@ deliveryRoutes.get(
         runInBackground(c, notifyDeliveryFailures(c, expired), 'fanout delivery expired');
       }
       const result = await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, parsed.data);
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -58,10 +59,7 @@ deliveryRoutes.post(
       const id = c.req.param('id');
       const result = await deliveryEngine.ackDelivery(db, workspace.id, agent!.id, id);
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'delivery_not_found', message: 'Delivery not found' },
-        }, 404);
+        return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       // Only fan out when this call actually transitioned the delivery, so
       // idempotent retries don't emit duplicate notifications.
@@ -75,7 +73,7 @@ deliveryRoutes.post(
           'fanout delivery.delivered',
         );
       }
-      return c.json({ ok: true, data: result.delivery });
+      return jsonOk(c, result.delivery);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -89,27 +87,14 @@ deliveryRoutes.post(
   rateLimit,
   async (c) => {
     try {
-      // The fail body is optional (error/retryable), so an empty body is valid
-      // and defaults to {}. But a non-empty malformed JSON body is a client
-      // error and must 400 — don't silently coerce it and mutate state.
-      const bodyText = await c.req.text();
-      let raw: unknown = {};
-      if (bodyText.trim().length > 0) {
-        try {
-          raw = JSON.parse(bodyText);
-        } catch {
-          return c.json({
-            ok: false,
-            error: { code: 'invalid_request', message: 'Invalid JSON body' },
-          }, 400);
-        }
-      }
-      const parsed = FailDeliveryRequestSchema.safeParse(raw);
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'Invalid fail payload' },
-        }, 400);
+      const parsed = await parseOptionalJsonBody(
+        c,
+        FailDeliveryRequestSchema,
+        'Invalid fail payload',
+        { malformedBodyError: { code: 'invalid_request', message: 'Invalid JSON body' } },
+      );
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const db = c.get('db');
       const workspace = c.get('workspace');
@@ -117,10 +102,7 @@ deliveryRoutes.post(
       const id = c.req.param('id');
       const result = await deliveryEngine.failDelivery(db, workspace.id, agent!.id, id, parsed.data);
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'delivery_not_found', message: 'Delivery not found' },
-        }, 404);
+        return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       if (result.changed) {
         runInBackground(
@@ -134,7 +116,7 @@ deliveryRoutes.post(
           'fanout delivery.failed',
         );
       }
-      return c.json({ ok: true, data: result.delivery });
+      return jsonOk(c, result.delivery);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -148,13 +130,19 @@ deliveryRoutes.post(
   rateLimit,
   async (c) => {
     try {
-      const raw = await c.req.json().catch(() => null);
-      const parsed = DeferDeliveryRequestSchema.safeParse(raw);
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'available_at must be an ISO-8601 timestamp' },
-        }, 400);
+      const parsed = await parseJsonBody(
+        c,
+        DeferDeliveryRequestSchema,
+        'available_at must be an ISO-8601 timestamp',
+        {
+          malformedBodyError: {
+            code: 'invalid_request',
+            message: 'available_at must be an ISO-8601 timestamp',
+          },
+        },
+      );
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const db = c.get('db');
       const workspace = c.get('workspace');
@@ -165,10 +153,7 @@ deliveryRoutes.post(
         reason: parsed.data.reason,
       });
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'delivery_not_found', message: 'Delivery not found' },
-        }, 404);
+        return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       if (result.changed) {
         runInBackground(
@@ -182,7 +167,7 @@ deliveryRoutes.post(
           'fanout delivery.deferred',
         );
       }
-      return c.json({ ok: true, data: result.delivery });
+      return jsonOk(c, result.delivery);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

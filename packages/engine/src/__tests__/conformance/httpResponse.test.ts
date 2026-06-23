@@ -10,6 +10,49 @@ describe('route response helpers', () => {
 
   afterEach(() => stack.close());
 
+  async function createDeliveryForAgent(workspaceName: string, channelName: string) {
+    const ws = await createWorkspace(stack.app, workspaceName);
+    const alice = await registerAgent(stack.app, ws.workspaceKey, `${channelName}-alice`);
+    const bob = await registerAgent(stack.app, ws.workspaceKey, `${channelName}-bob`);
+
+    const createChannel = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: channelName }),
+    });
+    expect(createChannel.status).toBe(201);
+
+    for (const token of [alice.token, bob.token]) {
+      const join = await stack.app.request(`/v1/channels/${channelName}/join`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(join.status).toBe(200);
+    }
+
+    const post = await stack.app.request(`/v1/channels/${channelName}/messages`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${alice.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'delivery helper test' }),
+    });
+    expect(post.status).toBe(201);
+
+    const list = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(list.status).toBe(200);
+    const body = await list.json() as { data?: Array<{ id: string }> };
+    expect(body.data?.length).toBeGreaterThan(0);
+
+    return { deliveryId: body.data![0]!.id, token: bob.token };
+  }
+
   it('returns invalid_json for malformed bodies handled by the shared parser', async () => {
     const ws = await createWorkspace(stack.app, 'malformed-trigger-ws');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'parser-agent');
@@ -162,6 +205,37 @@ describe('route response helpers', () => {
         message: 'Invalid console message query',
       },
     });
+  });
+
+  it('supports optional delivery fail bodies through the shared parser', async () => {
+    const delivery = await createDeliveryForAgent('delivery-parser-ws', 'delivery-parser-channel');
+
+    const malformed = await stack.app.request(`/v1/deliveries/${delivery.deliveryId}/fail`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${delivery.token}`,
+        'content-type': 'application/json',
+      },
+      body: '{',
+    });
+
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'Invalid JSON body',
+      },
+    });
+
+    const empty = await stack.app.request(`/v1/deliveries/${delivery.deliveryId}/fail`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${delivery.token}` },
+    });
+
+    expect(empty.status).toBe(200);
+    const emptyBody = await empty.json() as { data?: { status?: string } };
+    expect(emptyBody.data?.status).toBe('failed');
   });
 
   it('returns invalid_json for malformed routing request bodies', async () => {
