@@ -18,12 +18,16 @@ interface SafeParseFailure {
 
 type InvalidRequestMessage = string | ((failure: SafeParseFailure) => string);
 
-type ParsedJsonBody<T> =
+type ParsedRequestValue<T> =
   | { ok: true; data: T }
   | { ok: false; response: Response };
 
 export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 200) {
   return c.json({ ok: true as const, data }, status);
+}
+
+export function jsonSuccess(c: Context) {
+  return c.json({ ok: true as const });
 }
 
 export function jsonCreated<T>(c: Context, data: T) {
@@ -54,7 +58,7 @@ export async function parseJsonBody<T>(
   c: Context,
   schema: SafeParseSchema<T>,
   invalidMessage: InvalidRequestMessage,
-): Promise<ParsedJsonBody<T>> {
+): Promise<ParsedRequestValue<T>> {
   let body: unknown;
 
   try {
@@ -64,6 +68,20 @@ export async function parseJsonBody<T>(
   }
 
   const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
+    return { ok: false, response: jsonInvalidRequest(c, message) };
+  }
+
+  return { ok: true, data: parsed.data };
+}
+
+export function parseQueryParams<T>(
+  c: Context,
+  schema: SafeParseSchema<T>,
+  invalidMessage: InvalidRequestMessage,
+): ParsedRequestValue<T> {
+  const parsed = schema.safeParse(c.req.query());
   if (!parsed.success) {
     const message = typeof invalidMessage === 'function' ? invalidMessage(parsed) : invalidMessage;
     return { ok: false, response: jsonInvalidRequest(c, message) };

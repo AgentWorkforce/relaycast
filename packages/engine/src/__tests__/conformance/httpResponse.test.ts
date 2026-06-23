@@ -144,4 +144,23 @@ describe('route response helpers', () => {
       },
     });
   });
+
+  it('uses the shared invalid_request envelope for query validation', async () => {
+    const ws = await createWorkspace(stack.app, 'invalid-console-query-ws');
+
+    const res = await stack.app.request('/v1/console/messages?limit=not-a-number', {
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'Invalid console message query',
+      },
+    });
+  });
 });

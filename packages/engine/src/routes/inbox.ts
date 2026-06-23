@@ -7,6 +7,7 @@ import * as deliveryEngine from '../engine/delivery.js';
 import { notifyDeliveryFailures } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonOk } from '../lib/httpResponse.js';
 
 export const inboxRoutes = new Hono<AppEnv>();
 
@@ -25,7 +26,7 @@ inboxRoutes.get(
         runInBackground(c, notifyDeliveryFailures(c, expired), 'fanout delivery expired');
       }
       const result = await inboxEngine.getInbox(db, workspace.id, agent!.id);
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

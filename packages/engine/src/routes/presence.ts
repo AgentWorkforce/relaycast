@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as presenceEngine from '../engine/presence.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonOk, jsonSuccess } from '../lib/httpResponse.js';
 
 export const presenceRoutes = new Hono<AppEnv>();
 
@@ -13,7 +14,7 @@ presenceRoutes.get('/agents/presence', requireAuth, rateLimit, async (c) => {
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await presenceEngine.getPresence(db, c.get('engine').presence, workspace.id);
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -29,7 +30,7 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
       agent_id: agent.id,
       agent_name: agent.name,
     });
-    return c.json({ ok: true });
+    return jsonSuccess(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -56,7 +57,7 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
       agent_id: agent.id,
       agent_name: agent.name,
     });
-    return c.json({ ok: true });
+    return jsonSuccess(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

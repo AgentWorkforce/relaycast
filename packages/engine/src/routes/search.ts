@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonInvalidRequest, jsonOk } from '../lib/httpResponse.js';
 
 export const searchRoutes = new Hono<AppEnv>();
 
@@ -19,10 +20,7 @@ searchRoutes.get(
       const workspace = c.get('workspace');
       const q = c.req.query('q');
       if (!q || typeof q !== 'string' || !q.trim()) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'q (search query) is required' },
-        }, 400);
+        return jsonInvalidRequest(c, 'q (search query) is required');
       }
 
       const channel = c.req.query('channel');
@@ -47,7 +45,7 @@ searchRoutes.get(
         has_from_filter: Boolean(from),
       });
 
-      return c.json({ ok: true, data: results });
+      return jsonOk(c, results);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
