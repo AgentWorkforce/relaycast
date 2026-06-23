@@ -44,7 +44,7 @@ export function codedError(message: string, code: string, status: number): Coded
  */
 export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
-  if (error.message?.includes('JSON')) {
+  if (error instanceof SyntaxError && error.message?.includes('JSON')) {
     return jsonMalformedBody(c);
   }
   return jsonError(
