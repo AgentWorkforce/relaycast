@@ -127,6 +127,83 @@ class TestWsClientSubscriptions:
         assert "code-review" in ws._pending_subscriptions
 
 
+class TestWsClientSend:
+    @pytest.mark.asyncio
+    async def test_send_sends_json_frame(self):
+        ws = WsClient(token="at_xxx")
+        ws._ws = MagicMock()
+        ws._ws.send = AsyncMock()
+        await ws.send({"type": "custom", "data": 42})
+        ws._ws.send.assert_awaited_once_with(json.dumps({"type": "custom", "data": 42}))
+
+    @pytest.mark.asyncio
+    async def test_send_noop_when_not_connected(self):
+        ws = WsClient(token="at_xxx")
+        # _ws is None; should not raise
+        await ws.send({"type": "custom"})
+
+
+class TestWsClientAutoPong:
+    @pytest.mark.asyncio
+    async def test_server_ping_triggers_pong(self):
+        ws = WsClient(token="at_xxx")
+
+        # Fake connection that yields a single server ping frame.
+        sent: list[str] = []
+
+        class FakeConn:
+            async def send(self, raw):
+                sent.append(raw)
+
+            def __aiter__(self):
+                async def gen():
+                    yield json.dumps({"type": "ping"})
+
+                return gen()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        fake = FakeConn()
+        with patch("relay_sdk.ws.websockets.connect", return_value=fake):
+            with patch.object(ws, "_start_ping"), patch.object(ws, "_stop_ping"):
+                await ws._connect_once()
+
+        assert json.dumps({"type": "pong"}) in sent
+
+    @pytest.mark.asyncio
+    async def test_server_ping_also_emitted_to_handlers(self):
+        ws = WsClient(token="at_xxx")
+        handler = MagicMock()
+        ws.on("ping", handler)
+
+        class FakeConn:
+            async def send(self, raw):
+                pass
+
+            def __aiter__(self):
+                async def gen():
+                    yield json.dumps({"type": "ping"})
+
+                return gen()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        fake = FakeConn()
+        with patch("relay_sdk.ws.websockets.connect", return_value=fake):
+            with patch.object(ws, "_start_ping"), patch.object(ws, "_stop_ping"):
+                await ws._connect_once()
+
+        handler.assert_called_once_with({"type": "ping"})
+
+
 class TestWsClientDisconnect:
     def test_disconnect_sets_closed(self):
         ws = WsClient(token="at_xxx")

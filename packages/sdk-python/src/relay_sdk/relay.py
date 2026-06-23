@@ -125,6 +125,12 @@ class _AgentsNamespace:
         result = self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
 
+    def delete(self, name: str) -> None:
+        self._client.delete(f"/v1/agents/{_enc(name)}")
+
+    # Alias for TS SDK compat
+    unregister = delete
+
 
 class Relay:
     """Synchronous Relay client.
@@ -388,6 +394,12 @@ class _AsyncAgentsNamespace:
     async def rotate_token(self, name: str) -> TokenRotateResponse:
         result = await self._client.post(f"/v1/agents/{_enc(name)}/rotate-token", {})
         return TokenRotateResponse.model_validate(result)
+
+    async def delete(self, name: str) -> None:
+        await self._client.delete(f"/v1/agents/{_enc(name)}")
+
+    # Alias for TS SDK compat
+    unregister = delete
 
 
 class AsyncRelay:
