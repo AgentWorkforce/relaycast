@@ -36,7 +36,7 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
     const db = c.get('db');
     const workspace = c.get('workspace');
     const parsed = await parseJsonBody(c, createSubscriptionSchema, (failure) => {
-      const issues = failure.error?.issues ?? [];
+      const issues = failure.error.issues;
       const hasEventsIssue = issues.some((issue) => issue.path[0] === 'events');
       const hasUrlIssue = issues.some((issue) => issue.path[0] === 'url');
       return hasEventsIssue

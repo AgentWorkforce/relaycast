@@ -6,12 +6,14 @@ interface SafeParseSchema<T> {
 }
 
 interface ValidationIssue {
-  path: Array<string | number | symbol>;
+  code: string;
+  message: string;
+  path: PropertyKey[];
 }
 
 interface SafeParseFailure {
   success: false;
-  error?: { issues?: ValidationIssue[] };
+  error: { issues: ValidationIssue[] };
 }
 
 type InvalidRequestMessage = string | ((failure: SafeParseFailure) => string);
