@@ -97,6 +97,12 @@ class HttpClient:
             return self._handle_response(response)
 
     def _handle_response(self, response: httpx.Response) -> Any:
+        # Empty / no-content responses (e.g. 204 from DELETE) have no JSON body.
+        if response.status_code == 204 or not response.content:
+            if response.is_success:
+                return None
+            raise RelayError("invalid_response", "Invalid API response", response.status_code)
+
         parsed = response.json()
 
         if not isinstance(parsed, dict) or "ok" not in parsed:
@@ -198,6 +204,12 @@ class AsyncHttpClient:
             return self._handle_response(response)
 
     def _handle_response(self, response: httpx.Response) -> Any:
+        # Empty / no-content responses (e.g. 204 from DELETE) have no JSON body.
+        if response.status_code == 204 or not response.content:
+            if response.is_success:
+                return None
+            raise RelayError("invalid_response", "Invalid API response", response.status_code)
+
         parsed = response.json()
 
         if not isinstance(parsed, dict) or "ok" not in parsed:

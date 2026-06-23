@@ -120,6 +120,16 @@ class TestRelay:
         assert route.called
 
     @respx.mock
+    def test_agents_delete_204_empty_body(self):
+        # Production returns 204 No Content with an empty body for DELETE.
+        route = respx.delete(f"{BASE}/v1/agents/Coder").mock(
+            return_value=httpx.Response(204)
+        )
+        r = Relay(KEY, base_url=BASE)
+        assert r.agents.delete("Coder") is None
+        assert route.called
+
+    @respx.mock
     def test_agents_unregister_alias(self):
         route = respx.delete(f"{BASE}/v1/agents/Coder").mock(return_value=ok(None))
         r = Relay(KEY, base_url=BASE)
@@ -220,6 +230,17 @@ class TestAsyncRelay:
     @respx.mock
     async def test_agents_delete(self):
         route = respx.delete(f"{BASE}/v1/agents/Coder").mock(return_value=ok(None))
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            assert await r.agents.delete("Coder") is None
+        assert route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_agents_delete_204_empty_body(self):
+        # Production returns 204 No Content with an empty body for DELETE.
+        route = respx.delete(f"{BASE}/v1/agents/Coder").mock(
+            return_value=httpx.Response(204)
+        )
         async with AsyncRelay(KEY, base_url=BASE) as r:
             assert await r.agents.delete("Coder") is None
         assert route.called
