@@ -6,6 +6,13 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as eventSubscriptionEngine from '../engine/eventSubscription.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const eventSubscriptionRoutes = new Hono<AppEnv>();
 
@@ -28,19 +35,18 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = createSubscriptionSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      const hasEventsIssue = parsed.error.issues.some((issue) => issue.path[0] === 'events');
-      const hasUrlIssue = parsed.error.issues.some((issue) => issue.path[0] === 'url');
-      const message = hasEventsIssue
+    const parsed = await parseJsonBody(c, createSubscriptionSchema, (failure) => {
+      const issues = failure.error.issues;
+      const hasEventsIssue = issues.some((issue) => issue.path[0] === 'events');
+      const hasUrlIssue = issues.some((issue) => issue.path[0] === 'url');
+      return hasEventsIssue
         ? 'events array is required'
         : hasUrlIssue
           ? 'url is required'
           : 'invalid subscription body';
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message },
-      }, 400);
+    });
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const { events, filter, url, headers, secret } = parsed.data;
 
@@ -53,7 +59,7 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
       subscription_id: result.id,
       event_count: result.events.length,
     });
-    return c.json({ ok: true, data: result }, 201);
+    return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -65,7 +71,7 @@ eventSubscriptionRoutes.get('/subscriptions', requireAuth, rateLimit, async (c) 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await eventSubscriptionEngine.listSubscriptions(db, workspace.id);
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -82,12 +88,9 @@ eventSubscriptionRoutes.get('/subscriptions/:id', requireAuth, rateLimit, async 
       c.req.param('id'),
     );
     if (!result) {
-      return c.json({
-        ok: false,
-        error: { code: 'subscription_not_found', message: 'Subscription not found' },
-      }, 404);
+      return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -104,15 +107,12 @@ eventSubscriptionRoutes.delete('/subscriptions/:id', requireAuth, rateLimit, asy
       c.req.param('id'),
     );
     if (!deleted) {
-      return c.json({
-        ok: false,
-        error: { code: 'subscription_not_found', message: 'Subscription not found' },
-      }, 404);
+      return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }
     emitServerEvent(c, workspace.id, 'relaycast_server_subscription_deleted', {
       subscription_id: c.req.param('id'),
     });
-    return c.body(null, 204);
+    return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -10,6 +10,7 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonNotFound, jsonOk } from '../lib/httpResponse.js';
 
 export const receiptRoutes = new Hono<AppEnv>();
 
@@ -30,10 +31,7 @@ receiptRoutes.post(
         agent!.id,
       );
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
 
       const eventData = { ...result, agent_name: agent!.name };
@@ -59,7 +57,7 @@ receiptRoutes.post(
         agent_id: result.agent_id,
       });
 
-      return c.json({ ok: true, data: result }, 200);
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -81,13 +79,10 @@ receiptRoutes.get(
         c.req.param('id'),
       );
       if (result === null) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -109,13 +104,10 @@ receiptRoutes.get(
         c.req.param('name'),
       );
       if (result === null) {
-        return c.json({
-          ok: false,
-          error: { code: 'channel_not_found', message: 'Channel not found' },
-        }, 404);
+        return jsonNotFound(c, 'channel_not_found', 'Channel not found');
       }
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

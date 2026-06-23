@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { jsonError, jsonMalformedBody } from './httpResponse.js';
 
 /**
  * Errors thrown inside the engine optionally carry a stable error `code` and an
@@ -43,11 +44,13 @@ export function codedError(message: string, code: string, status: number): Coded
  */
 export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
-  return c.json(
-    {
-      ok: false as const,
-      error: { code: error.code || 'internal_error', message: error.message },
-    },
+  if (err instanceof SyntaxError) {
+    return jsonMalformedBody(c);
+  }
+  return jsonError(
+    c,
+    error.code || 'internal_error',
+    error.message,
     (error.status || 500) as ContentfulStatusCode,
   );
 }
