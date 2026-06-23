@@ -16,6 +16,7 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -36,32 +37,24 @@ dmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = sendDmSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        const hasToIssue = parsed.error.issues.some((issue) => issue.path[0] === 'to');
-        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
-        const message = hasToIssue
+      const parsed = await parseJsonBody(c, sendDmSchema, (failure) => {
+        const hasToIssue = failure.error.issues.some((issue) => issue.path[0] === 'to');
+        const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
+        return hasToIssue
           ? '"to" agent name is required'
           : hasTextIssue
             ? 'text is required'
             : 'invalid dm body';
-        return c.json({
-          ok: false,
-          error: {
-            code: 'invalid_request',
-            message,
-          },
-        }, 400);
+      });
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { to, text, attachments, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
@@ -156,7 +149,7 @@ dmRoutes.post(
         _delivery?: unknown;
         _delivery_rejections?: unknown;
       };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonOk(c, responseData, idempotent.status as ContentfulStatusCode);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -178,7 +171,7 @@ dmRoutes.get(
         workspace.id,
         agent!.id,
       );
-      return c.json({ ok: true, data: conversations });
+      return jsonOk(c, conversations);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -209,7 +202,7 @@ dmRoutes.get(
         agent!.id,
         { limit, before, after },
       );
-      return c.json({ ok: true, data: msgs });
+      return jsonOk(c, msgs);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
