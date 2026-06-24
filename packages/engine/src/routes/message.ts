@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import * as triggerEngine from '../engine/trigger.js';
@@ -103,10 +102,6 @@ messageRoutes.post(
         },
       });
 
-      if (idempotent.replayed) {
-        c.header('Idempotency-Replayed', 'true');
-      }
-
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
       if (!idempotent.replayed) {
@@ -173,16 +168,7 @@ messageRoutes.post(
         );
       }
 
-      // Strip internal _deliveries field before returning to client
-      const {
-        _deliveries: _dropDeliveries,
-        _delivery_rejections: _dropRejections,
-        ...responseData
-      } = idempotent.data as typeof idempotent.data & {
-        _deliveries?: unknown;
-        _delivery_rejections?: unknown;
-      };
-      return jsonOk(c, responseData, idempotent.status as ContentfulStatusCode);
+      return jsonIdempotentOk(c, idempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

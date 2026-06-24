@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -89,10 +88,6 @@ dmRoutes.post(
         },
       });
 
-      if (idempotent.replayed) {
-        c.header('Idempotency-Replayed', 'true');
-      }
-
       if (!idempotent.replayed) {
         const {
           _delivery,
@@ -141,15 +136,7 @@ dmRoutes.post(
         });
       }
 
-      const {
-        _delivery: _dropDelivery,
-        _delivery_rejections: _dropRejections,
-        ...responseData
-      } = idempotent.data as typeof idempotent.data & {
-        _delivery?: unknown;
-        _delivery_rejections?: unknown;
-      };
-      return jsonOk(c, responseData, idempotent.status as ContentfulStatusCode);
+      return jsonIdempotentOk(c, idempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
