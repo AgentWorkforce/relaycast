@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
@@ -9,6 +10,13 @@ import { asCodedError, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const a2aRoutes = new Hono<AppEnv>();
 
@@ -36,6 +44,15 @@ function jsonResponse(c: Context<AppEnv>, body: unknown, status = 200): Response
       'Content-Type': 'application/json',
     },
   });
+}
+
+function codedJsonError(c: Context<AppEnv>, err: unknown) {
+  const error = asCodedError(err);
+  return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+}
+
+function a2aAgentNotFound(c: Context<AppEnv>) {
+  return jsonNotFound(c, 'a2a_agent_not_found', 'A2A agent not found');
 }
 
 function buildAbsoluteUrl(c: Context<AppEnv>, path: string): string {
@@ -121,12 +138,9 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = registerA2aSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'agent_card_url or agent_card is required' },
-      }, 400);
+    const parsed = await parseJsonBody(c, registerA2aSchema, 'agent_card_url or agent_card is required');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const result = await a2aEngine.registerA2aAgent(db, workspace.id, {
@@ -136,21 +150,14 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       authCredential: parsed.data.auth_credential,
     });
 
-    return c.json({
-      ok: true,
-      data: {
-        relay_name: result.relayName,
-        relay_token: result.relayToken,
-        webhook_url: buildAbsoluteUrl(c, result.webhookUrl),
-        certification: result.certification,
-      },
-    }, 201);
+    return jsonCreated(c, {
+      relay_name: result.relayName,
+      relay_token: result.relayToken,
+      webhook_url: buildAbsoluteUrl(c, result.webhookUrl),
+      certification: result.certification,
+    });
   } catch (err: unknown) {
-    const error = asCodedError(err);
-    return jsonResponse(c, {
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, error.status || 500);
+    return codedJsonError(c, err);
   }
 });
 
@@ -159,19 +166,12 @@ a2aRoutes.delete('/v1/a2a/agents/:name', requireAuth, rateLimit, async (c) => {
   try {
     const deleted = await a2aEngine.removeA2aAgent(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!deleted) {
-      return c.json({
-        ok: false,
-        error: { code: 'a2a_agent_not_found', message: 'A2A agent not found' },
-      }, 404);
+      return a2aAgentNotFound(c);
     }
 
-    return c.json({ ok: true, data: { name: c.req.param('name'), removed: true } });
+    return jsonOk(c, { name: c.req.param('name'), removed: true });
   } catch (err: unknown) {
-    const error = asCodedError(err);
-    return jsonResponse(c, {
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, error.status || 500);
+    return codedJsonError(c, err);
   }
 });
 
@@ -179,13 +179,9 @@ a2aRoutes.delete('/v1/a2a/agents/:name', requireAuth, rateLimit, async (c) => {
 a2aRoutes.get('/v1/a2a/agents', requireAuth, rateLimit, async (c) => {
   try {
     const agentsList = await a2aEngine.listA2aAgents(c.get('db'), c.get('workspace').id);
-    return c.json({ ok: true, data: agentsList });
+    return jsonOk(c, agentsList);
   } catch (err: unknown) {
-    const error = asCodedError(err);
-    return jsonResponse(c, {
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, error.status || 500);
+    return codedJsonError(c, err);
   }
 });
 
@@ -194,19 +190,12 @@ a2aRoutes.get('/v1/a2a/agents/:name/card', requireAuth, rateLimit, async (c) => 
   try {
     const record = await a2aEngine.getA2aAgentByRelayName(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!record) {
-      return c.json({
-        ok: false,
-        error: { code: 'a2a_agent_not_found', message: 'A2A agent not found' },
-      }, 404);
+      return a2aAgentNotFound(c);
     }
 
-    return c.json({ ok: true, data: record.agent_card });
+    return jsonOk(c, record.agent_card);
   } catch (err: unknown) {
-    const error = asCodedError(err);
-    return jsonResponse(c, {
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, error.status || 500);
+    return codedJsonError(c, err);
   }
 });
 
@@ -252,20 +241,13 @@ async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
     }
 
     if (!workspace) {
-      return c.json({
-        ok: false,
-        error: { code: 'workspace_not_found', message: 'Workspace could not be inferred from request. Provide an Authorization header or ?workspace= query param.' },
-      }, 404);
+      return jsonNotFound(c, 'workspace_not_found', 'Workspace could not be inferred from request. Provide an Authorization header or ?workspace= query param.');
     }
 
     const card = await a2aEngine.getWorkspaceAgentCard(db, workspace.id, workspace.name, new URL(c.req.url).origin);
-    return c.json(card);
+    return jsonResponse(c, card);
   } catch (err: unknown) {
-    const error = asCodedError(err);
-    return jsonResponse(c, {
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, error.status || 500);
+    return codedJsonError(c, err);
   }
 }
 
@@ -280,7 +262,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
     const workspace = c.get('workspace');
     const parsed = rpcRequestSchema.safeParse(await c.req.json());
     if (!parsed.success) {
-      return c.json(a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
+      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
     }
 
     const request = parsed.data;
@@ -310,7 +292,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           credential: target.auth_credential,
         });
         await a2aEngine.incrementA2aMessagesSent(db, target.id);
-        return c.json(upstream.response ?? a2aEngine.jsonRpcSuccess(request.id, {}));
+        return jsonResponse(c, upstream.response ?? a2aEngine.jsonRpcSuccess(request.id, {}));
       }
       default: {
         const response = a2aEngine.jsonRpcError(request.id, -32601, `Unsupported method "${request.method}"`);
@@ -336,10 +318,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const relayAgent = await findWebhookAgentByName(db, relayName, workspaceId);
 
     if (!relayAgent) {
-      return c.json({
-        ok: false,
-        error: { code: 'a2a_agent_not_found', message: 'A2A agent not found' },
-      }, 404);
+      return a2aAgentNotFound(c);
     }
 
     const token = c.req.header('Authorization')?.startsWith('Bearer ')
@@ -347,15 +326,12 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       : null;
     const tokenHash = token ? await hashToken(token) : null;
     if (!tokenHash || tokenHash !== relayAgent.tokenHash) {
-      return c.json({
-        ok: false,
-        error: { code: 'unauthorized', message: 'Missing or invalid bearer token' },
-      }, 401);
+      return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
     }
 
     const parsed = rpcWebhookSchema.safeParse(await c.req.json());
     if (!parsed.success) {
-      return c.json(a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
+      return jsonResponse(c, a2aEngine.jsonRpcError(undefined, -32600, 'Invalid Request'), 400);
     }
 
     const payload = parsed.data;
@@ -424,7 +400,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       },
     });
 
-    return c.json(response);
+    return jsonResponse(c, response);
   } catch (err: unknown) {
     const error = asCodedError(err) as CodedError & { data?: unknown };
     return jsonResponse(
