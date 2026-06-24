@@ -10,6 +10,13 @@ import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import {
+  jsonCreated,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const inboundWebhookRoutes = new Hono<AppEnv>();
 
@@ -40,26 +47,19 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = createInboundWebhookSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      const hasChannelIssue = parsed.error.issues.some((issue) => issue.path[0] === 'channel');
-      const message = hasChannelIssue
-          ? 'channel is required'
-          : 'invalid webhook body';
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message },
-      }, 400);
+    const parsed = await parseJsonBody(c, createInboundWebhookSchema, (failure) => {
+      const hasChannelIssue = failure.error.issues.some((issue) => issue.path[0] === 'channel');
+      return hasChannelIssue ? 'channel is required' : 'invalid webhook body';
+    });
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const { name, channel } = parsed.data;
 
     // Resolve channel name to ID
     const ch = await channelEngine.getChannel(db, workspace.id, channel);
     if (!ch) {
-      return c.json({
-        ok: false,
-        error: { code: 'channel_not_found', message: `Channel "${channel}" not found` },
-      }, 404);
+      return jsonNotFound(c, 'channel_not_found', `Channel "${channel}" not found`);
     }
 
     const result = await inboundWebhookEngine.createWebhook(
@@ -72,7 +72,7 @@ inboundWebhookRoutes.post('/webhooks', requireWorkspaceKey, rateLimit, async (c)
       webhook_id: result.webhook_id,
       channel_name: channel,
     });
-    return c.json({ ok: true, data: { ...result, url: hookUrl(c.req.url, result.webhook_id) } }, 201);
+    return jsonCreated(c, { ...result, url: hookUrl(c.req.url, result.webhook_id) });
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -84,10 +84,7 @@ inboundWebhookRoutes.get('/webhooks', requireWorkspaceKey, rateLimit, async (c) 
     const db = c.get('db');
     const workspace = c.get('workspace');
     const result = await inboundWebhookEngine.listWebhooks(db, workspace.id);
-    return c.json({
-      ok: true,
-      data: result.map((webhook) => ({ ...webhook, url: hookUrl(c.req.url, webhook.id) })),
-    });
+    return jsonOk(c, result.map((webhook) => ({ ...webhook, url: hookUrl(c.req.url, webhook.id) })));
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -104,15 +101,12 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
       c.req.param('id'),
     );
     if (!deleted) {
-      return c.json({
-        ok: false,
-        error: { code: 'webhook_not_found', message: 'Webhook not found' },
-      }, 404);
+      return jsonNotFound(c, 'webhook_not_found', 'Webhook not found');
     }
     emitServerEvent(c, workspace.id, 'relaycast_server_inbound_webhook_deleted', {
       webhook_id: c.req.param('id'),
     });
-    return c.body(null, 204);
+    return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -123,12 +117,9 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
     const token = extractBearerToken(c.req.header('Authorization'));
-    const parsed = triggerInboundWebhookSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'invalid webhook payload' },
-      }, 400);
+    const parsed = await parseJsonBody(c, triggerInboundWebhookSchema, 'invalid webhook payload');
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const { text, message, source, author, payload } = parsed.data;
     const result = await inboundWebhookEngine.triggerWebhook(
@@ -143,10 +134,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       },
     );
     if (!result) {
-      return c.json({
-        ok: false,
-        error: { code: 'webhook_not_found', message: 'Webhook not found or inactive' },
-      }, 404);
+      return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
     const { workspace_id, channel_id, ...responseData } = result;
 
@@ -171,7 +159,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       author: result.author ?? null,
     });
 
-    return c.json({ ok: true, data: responseData }, 201);
+    return jsonCreated(c, responseData);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

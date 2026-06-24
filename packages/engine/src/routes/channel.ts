@@ -9,6 +9,14 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const channelRoutes = new Hono<AppEnv>();
 
@@ -31,6 +39,10 @@ const inviteChannelSchema = z.object({
   agent_name: z.string().min(1),
 });
 
+function channelNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
+  return jsonNotFound(c, 'channel_not_found', `Channel "${name}" not found`);
+}
+
 // POST /v1/channels - create channel
 channelRoutes.post(
   '/channels',
@@ -41,12 +53,9 @@ channelRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = createChannelSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'name is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, createChannelSchema, 'name is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { name, topic, metadata } = parsed.data;
 
@@ -78,7 +87,7 @@ channelRoutes.post(
         channel_name: result.name,
       });
 
-      return c.json({ ok: true, data: result }, 201);
+      return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -100,7 +109,7 @@ channelRoutes.get(
         workspace.id,
         includeArchived,
       );
-      return c.json({ ok: true, data: channels });
+      return jsonOk(c, channels);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -119,15 +128,9 @@ channelRoutes.get(
       const name = c.req.param('name');
       const channel = await channelEngine.getChannel(db, workspace.id, name);
       if (!channel) {
-        return c.json({
-          ok: false,
-          error: {
-            code: 'channel_not_found',
-            message: `Channel "${name}" not found`,
-          },
-        }, 404);
+        return channelNotFound(c, name);
       }
-      return c.json({ ok: true, data: channel });
+      return jsonOk(c, channel);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -144,12 +147,9 @@ channelRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const parsed = updateChannelSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'invalid channel update body' },
-        }, 400);
+      const parsed = await parseJsonBody(c, updateChannelSchema, 'invalid channel update body');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const body = parsed.data;
       const updated = await channelEngine.updateChannel(
@@ -159,13 +159,7 @@ channelRoutes.patch(
         body,
       );
       if (!updated) {
-        return c.json({
-          ok: false,
-          error: {
-            code: 'channel_not_found',
-            message: `Channel "${name}" not found`,
-          },
-        }, 404);
+        return channelNotFound(c, name);
       }
 
       const eventData = { ...updated, channel_name: updated.name };
@@ -180,7 +174,7 @@ channelRoutes.patch(
         channel_name: updated.name,
       });
 
-      return c.json({ ok: true, data: updated });
+      return jsonOk(c, updated);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -198,12 +192,9 @@ channelRoutes.patch(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const parsed = updateChannelTopicSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'topic is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, updateChannelTopicSchema, 'topic is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { topic } = parsed.data;
 
@@ -214,13 +205,7 @@ channelRoutes.patch(
         { topic },
       );
       if (!updated) {
-        return c.json({
-          ok: false,
-          error: {
-            code: 'channel_not_found',
-            message: `Channel "${name}" not found`,
-          },
-        }, 404);
+        return channelNotFound(c, name);
       }
 
       const eventData = { ...updated, channel_name: name };
@@ -235,7 +220,7 @@ channelRoutes.patch(
         channel_name: updated.name,
       });
 
-      return c.json({ ok: true, data: updated });
+      return jsonOk(c, updated);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -258,13 +243,7 @@ channelRoutes.delete(
         name,
       );
       if (!archived) {
-        return c.json({
-          ok: false,
-          error: {
-            code: 'channel_not_found',
-            message: `Channel "${name}" not found`,
-          },
-        }, 404);
+        return channelNotFound(c, name);
       }
 
       const channel = await channelEngine.getChannel(db, workspace.id, name);
@@ -281,7 +260,7 @@ channelRoutes.delete(
         channel_name: name,
       });
 
-      return c.body(null, 204);
+      return jsonNoContent(c);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -329,7 +308,7 @@ channelRoutes.post(
         agent_id: agent!.id,
       });
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -389,7 +368,7 @@ channelRoutes.post(
         agent_id: agent!.id,
       });
 
-      return c.body(null, 204);
+      return jsonNoContent(c);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -411,7 +390,7 @@ channelRoutes.get(
         workspace.id,
         name,
       );
-      return c.json({ ok: true, data: members });
+      return jsonOk(c, members);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -429,25 +408,16 @@ channelRoutes.post(
       const workspace = c.get('workspace');
       const agent = c.get('agent');
       const name = c.req.param('name');
-      const parsed = inviteChannelSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'agent_name is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, inviteChannelSchema, 'agent_name is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { agent_name: agentName } = parsed.data;
 
       // For invite, we need to know who's doing the inviting
       const inviterAgentId = agent?.id;
       if (!inviterAgentId) {
-        return c.json({
-          ok: false,
-          error: {
-            code: 'agent_token_required',
-            message: 'Agent token required to invite others',
-          },
-        }, 403);
+        return jsonError(c, 'agent_token_required', 'Agent token required to invite others', 403);
       }
 
       const result = await channelEngine.inviteAgent(
@@ -481,7 +451,7 @@ channelRoutes.post(
         invited_agent_name: agentName,
       });
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -529,7 +499,7 @@ channelRoutes.post(
         agent_id: agent!.id,
       });
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -577,7 +547,7 @@ channelRoutes.post(
         agent_id: agent!.id,
       });
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

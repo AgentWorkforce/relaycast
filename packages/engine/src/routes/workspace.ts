@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -21,6 +20,16 @@ import {
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse, asCodedError } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+  parseQueryParams,
+} from '../lib/httpResponse.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -33,15 +42,36 @@ const updateWorkspaceSchema = z.object({
   system_prompt: z.string().nullable().optional(),
 });
 
-const updateWorkspaceStreamSchema = z.object({
-  enabled: z.boolean().optional(),
-  mode: z.string().optional(),
-}).passthrough();
+const featureOverrideSchema = z.union([
+  z.object({ enabled: z.boolean() }).strict(),
+  z.object({ mode: z.literal('inherit') }).strict(),
+]);
 
-const updateFleetNodesSchema = z.object({
-  enabled: z.boolean().optional(),
-  mode: z.string().optional(),
-}).passthrough();
+const updateWorkspaceStreamSchema = featureOverrideSchema;
+
+const activityQuerySchema = z.object({
+  limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
+});
+
+const updateFleetNodesSchema = featureOverrideSchema;
+
+const WORKSPACE_OVERRIDE_MESSAGE = 'Provide { enabled: boolean } or { mode: "inherit" }';
+
+function workspaceNotFound(c: Context<AppEnv>) {
+  return jsonNotFound(c, 'workspace_not_found', 'Workspace not found');
+}
+
+function featureConfigData(config: { enabled: boolean; defaultEnabled: boolean; override: boolean | null }) {
+  return {
+    enabled: config.enabled,
+    default_enabled: config.defaultEnabled,
+    override: config.override,
+  };
+}
+
+function featureOverrideValue(body: z.infer<typeof featureOverrideSchema>) {
+  return 'mode' in body ? null : body.enabled;
+}
 
 const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
 const publicWorkspaceLookupBuckets = new Map<string, { count: number; lastSeen: number }>();
@@ -104,13 +134,7 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
     c.header('X-RateLimit-Remaining', String(remaining));
 
     if (!allowed) {
-      return c.json({
-        ok: false,
-        error: {
-          code: 'rate_limit_exceeded',
-          message: `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`,
-        },
-      }, 429);
+      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
     }
   } catch {
     const { allowed, remaining } = inMemoryPublicLookupRateCheck(clientId, limit);
@@ -118,13 +142,7 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
     c.header('X-RateLimit-Remaining', String(remaining));
 
     if (!allowed) {
-      return c.json({
-        ok: false,
-        error: {
-          code: 'rate_limit_exceeded',
-          message: `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`,
-        },
-      }, 429);
+      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for public workspace lookups.`, 429);
     }
   }
 
@@ -134,9 +152,9 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
 // POST /workspaces - create workspace (no auth required, workspace key optional)
 workspaceRoutes.post('/workspaces', async (c) => {
   try {
-    const parsed = createWorkspaceSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ ok: false, error: { code: 'invalid_request', message: 'name is required' } }, 400);
+    const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const { name } = parsed.data;
     const db = c.get('db');
@@ -151,7 +169,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
         created_via: 'api',
       });
     }
-    return c.json({ ok: true, data: result.workspace }, result.created ? 201 : 200);
+    return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -163,9 +181,9 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
     const db = c.get('db');
     const workspace = await workspaceEngine.getWorkspaceByName(db, c.req.param('name'));
     if (!workspace) {
-      return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
+      return workspaceNotFound(c);
     }
-    return c.json({ ok: true, data: workspace });
+    return jsonOk(c, workspace);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -177,9 +195,9 @@ workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
     const db = c.get('db');
     const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
     if (!workspace) {
-      return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
+      return workspaceNotFound(c);
     }
-    return c.json({ ok: true, data: workspace });
+    return jsonOk(c, workspace);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -190,20 +208,20 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const parsed = updateWorkspaceSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ ok: false, error: { code: 'invalid_request', message: 'invalid workspace update body' } }, 400);
+    const parsed = await parseJsonBody(c, updateWorkspaceSchema, 'invalid workspace update body');
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const body = parsed.data;
     const updated = await workspaceEngine.updateWorkspace(db, workspace.id, body);
     if (!updated) {
-      return c.json({ ok: false, error: { code: 'workspace_not_found', message: 'Workspace not found' } }, 404);
+      return workspaceNotFound(c);
     }
     emitServerEvent(c, workspace.id, 'relaycast_server_workspace_updated', {
       changed_name: typeof body?.name === 'string',
       changed_system_prompt: typeof body?.system_prompt === 'string',
     });
-    return c.json({ ok: true, data: updated });
+    return jsonOk(c, updated);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -218,7 +236,7 @@ workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) =
     emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
       deleted_via: 'api',
     });
-    return c.body(null, 204);
+    return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -229,11 +247,14 @@ workspaceRoutes.get('/activity', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : 20;
+    const parsed = parseQueryParams(c, activityQuerySchema, 'Invalid activity query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { limit } = parsed.data;
 
     const items = await activityEngine.getActivityFeed(db, workspace.id, limit);
-    return c.json({ ok: true, data: items });
+    return jsonOk(c, items);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -245,7 +266,7 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceKey, rateLimit, asy
     const db = c.get('db');
     const workspace = c.get('workspace');
     const conversations = await dmAllEngine.listAllDmConversations(db, workspace.id);
-    return c.json({ ok: true, data: conversations });
+    return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -257,15 +278,16 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     const db = c.get('db');
     const workspace = c.get('workspace');
     const conversationId = c.req.param('conversation_id');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
-    const before = c.req.query('before') || undefined;
-    const after = c.req.query('after') || undefined;
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
+    }
+    const { limit, before, after } = query.data;
 
     const msgs = await dmAllEngine.getDmMessagesForWorkspace(
       db, workspace.id, conversationId, { limit, before, after },
     );
-    return c.json({ ok: true, data: msgs });
+    return jsonOk(c, msgs);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -284,7 +306,7 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
     emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
       agent_name: c.req.param('name'),
     });
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -297,14 +319,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
   try {
     const { kv, config: engineConfig } = c.get('engine');
     const config = await getWorkspaceStreamConfig(kv, workspaceId, engineConfig.workspaceStreamEnabled ?? false);
-    return c.json({
-      ok: true,
-      data: {
-        enabled: config.enabled,
-        default_enabled: config.defaultEnabled,
-        override: config.override,
-      },
-    });
+    return jsonOk(c, featureConfigData(config));
   } catch (err: unknown) {
     const error = asCodedError(err);
     logger.error('Failed to get stream config', {
@@ -313,10 +328,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
       status: error.status,
       ...toErrorDetails(error),
     });
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -325,26 +337,13 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
   const logger = getRequestLogger(c, 'workspace.stream.put');
   const workspaceId = c.get('workspace').id;
   try {
-    const parsed = updateWorkspaceStreamSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
-      }, 400);
+    const parsed = await parseJsonBody(c, updateWorkspaceStreamSchema, WORKSPACE_OVERRIDE_MESSAGE);
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const body = parsed.data;
 
-    let override: boolean | null;
-    if (body?.mode === 'inherit') {
-      override = null;
-    } else if (typeof body?.enabled === 'boolean') {
-      override = body.enabled;
-    } else {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
-      }, 400);
-    }
+    const override = featureOverrideValue(body);
 
     const { kv, config: engineConfig } = c.get('engine');
     await setWorkspaceStreamOverride(kv, workspaceId, override);
@@ -353,14 +352,7 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
       stream_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
     });
 
-    return c.json({
-      ok: true,
-      data: {
-        enabled: config.enabled,
-        default_enabled: config.defaultEnabled,
-        override: config.override,
-      },
-    });
+    return jsonOk(c, featureConfigData(config));
   } catch (err: unknown) {
     const error = asCodedError(err);
     logger.error('Failed to update stream config', {
@@ -369,10 +361,7 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
       status: error.status,
       ...toErrorDetails(error),
     });
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -383,14 +372,7 @@ workspaceRoutes.get('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
   try {
     const { kv, config: engineConfig } = c.get('engine');
     const config = await getFleetNodesConfig(kv, workspaceId, engineConfig.fleetNodesEnabled ?? false);
-    return c.json({
-      ok: true,
-      data: {
-        enabled: config.enabled,
-        default_enabled: config.defaultEnabled,
-        override: config.override,
-      },
-    });
+    return jsonOk(c, featureConfigData(config));
   } catch (err: unknown) {
     const error = asCodedError(err);
     logger.error('Failed to get fleet nodes config', {
@@ -399,10 +381,7 @@ workspaceRoutes.get('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
       status: error.status,
       ...toErrorDetails(error),
     });
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -411,26 +390,13 @@ workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
   const logger = getRequestLogger(c, 'workspace.fleet_nodes.put');
   const workspaceId = c.get('workspace').id;
   try {
-    const parsed = updateFleetNodesSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
-      }, 400);
+    const parsed = await parseJsonBody(c, updateFleetNodesSchema, WORKSPACE_OVERRIDE_MESSAGE);
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const body = parsed.data;
 
-    let override: boolean | null;
-    if (body?.mode === 'inherit') {
-      override = null;
-    } else if (typeof body?.enabled === 'boolean') {
-      override = body.enabled;
-    } else {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Provide { enabled: boolean } or { mode: "inherit" }' },
-      }, 400);
-    }
+    const override = featureOverrideValue(body);
 
     const { kv, config: engineConfig } = c.get('engine');
     await setFleetNodesOverride(kv, workspaceId, override);
@@ -439,14 +405,7 @@ workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
       fleet_nodes_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
     });
 
-    return c.json({
-      ok: true,
-      data: {
-        enabled: config.enabled,
-        default_enabled: config.defaultEnabled,
-        override: config.override,
-      },
-    });
+    return jsonOk(c, featureConfigData(config));
   } catch (err: unknown) {
     const error = asCodedError(err);
     logger.error('Failed to update fleet nodes config', {
@@ -455,9 +414,6 @@ workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
       status: error.status,
       ...toErrorDetails(error),
     });
-    return c.json({
-      ok: false,
-      error: { code: error.code || 'internal_error', message: error.message },
-    }, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });

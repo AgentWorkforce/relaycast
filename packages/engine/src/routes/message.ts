@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import * as triggerEngine from '../engine/trigger.js';
@@ -17,6 +16,13 @@ import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonError,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
+import { parsePaginationQuery } from '../lib/httpQuery.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -29,6 +35,19 @@ const postMessageSchema = z.object({
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
+type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
+
+function postMessageInvalidMessage(failure: ValidationFailure) {
+  const field = failure.error.issues[0]?.path[0];
+  if (field === 'text') return 'text is required';
+  if (field === 'mode') return 'mode must be "wait" or "steer"';
+  if (field === 'attachments') return 'attachments must be an array of strings';
+  if (field === 'blocks') return 'blocks must be an array';
+  if (field === 'data') return 'data must be an object';
+  if (field === 'content_type') return 'content_type must be a string';
+  return 'invalid message body';
+}
+
 // POST /v1/channels/:name/messages - post a message
 messageRoutes.post(
   '/channels/:name/messages',
@@ -39,21 +58,15 @@ messageRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = postMessageSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, postMessageSchema, postMessageInvalidMessage);
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { text, blocks, attachments, data, content_type, mode } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const channelName = c.req.param('name');
@@ -61,19 +74,13 @@ messageRoutes.post(
       // Resolve channel name to ID
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        return c.json({
-          ok: false,
-          error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        }, 404);
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
       // Determine agent ID (from agent token or body)
       const agentId = agent?.id;
       if (!agentId) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_token_required', message: 'Agent token required to post messages' },
-        }, 403);
+        return jsonError(c, 'agent_token_required', 'Agent token required to post messages', 403);
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
@@ -108,10 +115,6 @@ messageRoutes.post(
           });
         },
       });
-
-      if (idempotent.replayed) {
-        c.header('Idempotency-Replayed', 'true');
-      }
 
       // Durable event queue for webhook delivery; real-time pub/sub still fire-and-forget.
       // Only publish for fresh writes, not idempotent replays.
@@ -179,16 +182,7 @@ messageRoutes.post(
         );
       }
 
-      // Strip internal _deliveries field before returning to client
-      const {
-        _deliveries: _dropDeliveries,
-        _delivery_rejections: _dropRejections,
-        ...responseData
-      } = idempotent.data as typeof idempotent.data & {
-        _deliveries?: unknown;
-        _delivery_rejections?: unknown;
-      };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonIdempotentOk(c, idempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -207,15 +201,14 @@ messageRoutes.get(
       const channelName = c.req.param('name');
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        return c.json({
-          ok: false,
-          error: { code: 'channel_not_found', message: `Channel "${channelName}" not found` },
-        }, 404);
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
-      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const query = parsePaginationQuery(c);
+      if (!query.ok) {
+        return query.response;
+      }
+      const { limit, before, after } = query.data;
 
       const messages = await messageEngine.getMessages(
         db,
@@ -223,7 +216,7 @@ messageRoutes.get(
         channel.id,
         { limit, before, after },
       );
-      return c.json({ ok: true, data: messages });
+      return jsonOk(c, messages);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -242,12 +235,9 @@ messageRoutes.get(
       const messageId = c.req.param('id');
       const message = await messageEngine.getMessage(db, workspace.id, messageId);
       if (!message) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
-      return c.json({ ok: true, data: message });
+      return jsonOk(c, message);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

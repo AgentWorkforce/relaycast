@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as dmEngine from '../engine/dm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -16,6 +15,8 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
+import { parsePaginationQuery } from '../lib/httpQuery.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -36,32 +37,24 @@ dmRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = sendDmSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        const hasToIssue = parsed.error.issues.some((issue) => issue.path[0] === 'to');
-        const hasTextIssue = parsed.error.issues.some((issue) => issue.path[0] === 'text');
-        const message = hasToIssue
+      const parsed = await parseJsonBody(c, sendDmSchema, (failure) => {
+        const hasToIssue = failure.error.issues.some((issue) => issue.path[0] === 'to');
+        const hasTextIssue = failure.error.issues.some((issue) => issue.path[0] === 'text');
+        return hasToIssue
           ? '"to" agent name is required'
           : hasTextIssue
             ? 'text is required'
             : 'invalid dm body';
-        return c.json({
-          ok: false,
-          error: {
-            code: 'invalid_request',
-            message,
-          },
-        }, 400);
+      });
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { to, text, attachments, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
@@ -95,10 +88,6 @@ dmRoutes.post(
           });
         },
       });
-
-      if (idempotent.replayed) {
-        c.header('Idempotency-Replayed', 'true');
-      }
 
       if (!idempotent.replayed) {
         const {
@@ -148,15 +137,7 @@ dmRoutes.post(
         });
       }
 
-      const {
-        _delivery: _dropDelivery,
-        _delivery_rejections: _dropRejections,
-        ...responseData
-      } = idempotent.data as typeof idempotent.data & {
-        _delivery?: unknown;
-        _delivery_rejections?: unknown;
-      };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonIdempotentOk(c, idempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -178,7 +159,7 @@ dmRoutes.get(
         workspace.id,
         agent!.id,
       );
-      return c.json({ ok: true, data: conversations });
+      return jsonOk(c, conversations);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -195,11 +176,11 @@ dmRoutes.get(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const limit = c.req.query('limit')
-        ? parseInt(c.req.query('limit')!, 10)
-        : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const query = parsePaginationQuery(c);
+      if (!query.ok) {
+        return query.response;
+      }
+      const { limit, before, after } = query.data;
 
       const conversationId = c.req.param('conversation_id');
       const msgs = await dmEngine.getDmMessages(
@@ -209,7 +190,7 @@ dmRoutes.get(
         agent!.id,
         { limit, before, after },
       );
-      return c.json({ ok: true, data: msgs });
+      return jsonOk(c, msgs);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

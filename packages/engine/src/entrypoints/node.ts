@@ -5,8 +5,7 @@ import { Hono } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { createEngine } from '../engine.js';
-import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
-import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
+import { jsonNotFound } from '../lib/httpResponse.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
@@ -19,7 +18,12 @@ import {
   type InProcessPresenceOptions,
   type NodeRuntime,
 } from '../adapters/node/index.js';
-import { getNodeByTokenHash } from '../engine/node.js';
+import {
+  authenticateNodeWs,
+  authenticateRealtimeWs,
+  missingWsToken,
+  queryOrBearerToken,
+} from '../engine/wsAuth.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -87,12 +91,14 @@ export function startServer(options: StartServerOptions): RunningServer {
   const app = new Hono<AppEnv>();
   app.all(FILE_ROUTE_PREFIX, (c) => runtime.fileHandler(c.req.raw));
   app.route('/', engine);
+  app.notFound((c) => jsonNotFound(c, 'not_found', 'Route not found'));
 
   const server = serve({ fetch: app.fetch, port: options.port });
 
   // WebSocket upgrades (Node owns these at the socket level).
   const wss = new WebSocketServer({ noServer: true });
   const { auth, db, kv, config } = runtime.deps;
+  const wsAuthDeps = { auth, db, kv, config };
 
   (server as unknown as Server).on(
     'upgrade',
@@ -107,78 +113,61 @@ export function startServer(options: StartServerOptions): RunningServer {
       // node_control client authenticates the node control connection with the
       // header form, so the self-host upgrade path must honour both.
       const authHeader = req.headers['authorization'];
-      const bearer = typeof authHeader === 'string' && /^bearer\s+/i.test(authHeader)
-        ? authHeader.replace(/^bearer\s+/i, '').trim()
-        : undefined;
-      const token = url.searchParams.get('token') ?? bearer;
+      const token = queryOrBearerToken(url.searchParams.get('token'), typeof authHeader === 'string' ? authHeader : undefined);
       if (!token) {
-        rejectUpgrade(socket, 401, 'Unauthorized');
+        const error = missingWsToken();
+        rejectUpgrade(socket, error.status, error.upgradeMessage);
         return;
       }
 
       void (async () => {
         if (url.pathname === '/v1/node/ws') {
-          if (!token.startsWith('nt_live_')) {
-            rejectUpgrade(socket, 401, 'Unauthorized');
-            return;
-          }
-          const hash = await auth.hashToken(token);
-          const node = await getNodeByTokenHash(db, hash);
-          if (!node) {
-            rejectUpgrade(socket, 401, 'Unauthorized');
-            return;
-          }
-          // Phase 6 rollout flag: the node control surface is inert until the
-          // workspace opts in (mirrors the rk_live stream gate below).
-          if (!(await isFleetNodesEnabled(kv, node.workspaceId, config?.fleetNodesEnabled ?? false))) {
-            rejectUpgrade(socket, 404, 'Not Found');
+          const authResult = await authenticateNodeWs(wsAuthDeps, token);
+          if (!authResult.ok) {
+            rejectUpgrade(socket, authResult.status, authResult.upgradeMessage);
             return;
           }
           wss.handleUpgrade(req, socket, head, (ws) => {
-            const handle = runtime.realtime.attachNodeSocket(node.workspaceId, node.id, toEngineSocket(ws));
+            const handle = runtime.realtime.attachNodeSocket(
+              authResult.node.workspaceId,
+              authResult.node.id,
+              toEngineSocket(ws),
+            );
             ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
             ws.on('close', () => { void handle.handleClose(); });
           });
           return;
         }
 
-        if (token.startsWith('at_live_')) {
-          const res = await auth.authenticate({ token, require: 'agent', db });
-          if (!res.ok || !res.agent) {
-            rejectUpgrade(socket, 401, 'Unauthorized');
-            return;
-          }
-          const { workspace, agent } = res;
+        const authResult = await authenticateRealtimeWs(wsAuthDeps, token);
+        if (!authResult.ok) {
+          rejectUpgrade(socket, authResult.status, authResult.upgradeMessage);
+          return;
+        }
+
+        if (authResult.scope === 'agent') {
           wss.handleUpgrade(req, socket, head, (ws) => {
-            const handle = runtime.realtime.attachAgentSocket(workspace.id, agent.id, toEngineSocket(ws));
-            runtime.deps.presence.heartbeat(workspace.id, agent.id, agent.name).catch(() => {});
+            const handle = runtime.realtime.attachAgentSocket(
+              authResult.workspace.id,
+              authResult.agent.id,
+              toEngineSocket(ws),
+            );
+            runtime.deps.presence.heartbeat(
+              authResult.workspace.id,
+              authResult.agent.id,
+              authResult.agent.name,
+            ).catch(() => {});
             ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
             ws.on('close', () => { void handle.handleClose(); });
           });
           return;
         }
 
-        if (token.startsWith('rk_live_')) {
-          const res = await auth.authenticate({ token, require: 'workspace', db });
-          if (!res.ok) {
-            rejectUpgrade(socket, 401, 'Unauthorized');
-            return;
-          }
-          const enabled = await isWorkspaceStreamEnabled(kv, res.workspace.id, config?.workspaceStreamEnabled ?? false);
-          if (!enabled) {
-            rejectUpgrade(socket, 404, 'Not Found');
-            return;
-          }
-          const { workspace } = res;
-          wss.handleUpgrade(req, socket, head, (ws) => {
-            const handle = runtime.realtime.attachWorkspaceSocket(workspace.id, toEngineSocket(ws));
-            ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
-            ws.on('close', () => { void handle.handleClose(); });
-          });
-          return;
-        }
-
-        rejectUpgrade(socket, 401, 'Unauthorized');
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          const handle = runtime.realtime.attachWorkspaceSocket(authResult.workspace.id, toEngineSocket(ws));
+          ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
+          ws.on('close', () => { void handle.handleClose(); });
+        });
       })().catch(() => rejectUpgrade(socket, 500, 'Internal Server Error'));
     },
   );

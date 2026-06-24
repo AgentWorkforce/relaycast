@@ -2,6 +2,16 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonError,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+  parseQueryParams,
+} from '../lib/httpResponse.js';
+import { LimitQuerySchema } from '../lib/httpQuery.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
@@ -18,6 +28,25 @@ const fileUploadSchema = z.object({
   size_bytes: z.number().finite().refine((value) => value !== 0),
 });
 
+const listFilesQuerySchema = LimitQuerySchema.extend({
+  uploaded_by: z.string().optional(),
+});
+
+type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
+
+function uploadInvalidMessage(failure: ValidationFailure) {
+  const hasFilenameIssue = failure.error.issues.some((issue) => issue.path[0] === 'filename');
+  const hasContentTypeIssue = failure.error.issues.some((issue) => issue.path[0] === 'content_type');
+  const hasSizeBytesIssue = failure.error.issues.some((issue) => issue.path[0] === 'size_bytes');
+  return hasFilenameIssue
+    ? 'filename is required'
+    : hasContentTypeIssue
+      ? 'content_type is required'
+      : hasSizeBytesIssue
+        ? 'size_bytes is required'
+        : 'invalid upload body';
+}
+
 // POST /v1/files/upload — Returns presigned PUT URL
 fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
   try {
@@ -25,22 +54,9 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
     const workspace = c.get('workspace');
     const agent = c.get('agent')!;
     const storage = c.get('engine').files;
-    const parsed = fileUploadSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      const hasFilenameIssue = parsed.error.issues.some((issue) => issue.path[0] === 'filename');
-      const hasContentTypeIssue = parsed.error.issues.some((issue) => issue.path[0] === 'content_type');
-      const hasSizeBytesIssue = parsed.error.issues.some((issue) => issue.path[0] === 'size_bytes');
-      const message = hasFilenameIssue
-        ? 'filename is required'
-        : hasContentTypeIssue
-          ? 'content_type is required'
-          : hasSizeBytesIssue
-            ? 'size_bytes is required'
-            : 'invalid upload body';
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message },
-      }, 400);
+    const parsed = await parseJsonBody(c, fileUploadSchema, uploadInvalidMessage);
+    if (!parsed.ok) {
+      return parsed.response;
     }
     const { filename, content_type, size_bytes } = parsed.data;
 
@@ -58,7 +74,7 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
       content_type,
     });
 
-    return c.json({ ok: true, data: result }, 201);
+    return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -80,10 +96,7 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
       agent.id,
     );
     if (!result) {
-      return c.json({
-        ok: false,
-        error: { code: 'file_not_found', message: 'File not found or not owned by you' },
-      }, 404);
+      return jsonNotFound(c, 'file_not_found', 'File not found or not owned by you');
     }
 
     const eventData = { ...result, agent_id: agent.id };
@@ -99,7 +112,7 @@ fileRoutes.post('/files/:id/complete', requireAgentToken, rateLimit, async (c) =
       content_type: result.content_type,
     });
 
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -119,13 +132,10 @@ fileRoutes.get('/files/:id', requireAuth, rateLimit, async (c) => {
       c.req.param('id'),
     );
     if (!result) {
-      return c.json({
-        ok: false,
-        error: { code: 'file_not_found', message: 'File not found' },
-      }, 404);
+      return jsonNotFound(c, 'file_not_found', 'File not found');
     }
 
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -145,19 +155,13 @@ fileRoutes.delete('/files/:id', requireAgentToken, rateLimit, async (c) => {
       agent.id,
     );
     if (result === null) {
-      return c.json({
-        ok: false,
-        error: { code: 'file_not_found', message: 'File not found' },
-      }, 404);
+      return jsonNotFound(c, 'file_not_found', 'File not found');
     }
     if (result === 'forbidden') {
-      return c.json({
-        ok: false,
-        error: { code: 'forbidden', message: 'Not the file owner' },
-      }, 403);
+      return jsonError(c, 'forbidden', 'Not the file owner', 403);
     }
 
-    return c.body(null, 204);
+    return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -169,16 +173,18 @@ fileRoutes.get('/files', requireAuth, rateLimit, async (c) => {
     const db = c.get('db');
     const workspace = c.get('workspace');
 
-    const uploaded_by = c.req.query('uploaded_by');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    const parsed = parseQueryParams(c, listFilesQuerySchema, 'Invalid file list query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { uploaded_by, limit } = parsed.data;
 
     const result = await fileEngine.listFiles(db, workspace.id, {
       uploaded_by,
       limit,
     });
 
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

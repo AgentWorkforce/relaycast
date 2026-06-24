@@ -11,6 +11,13 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonCreated,
+  jsonNoContent,
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+} from '../lib/httpResponse.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -28,12 +35,9 @@ reactionRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = addReactionSchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'emoji is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, addReactionSchema, 'emoji is required');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { emoji } = parsed.data;
 
@@ -45,10 +49,7 @@ reactionRoutes.post(
         emoji,
       );
       if (!result) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
 
       // Strip internal channel_id/channel_name before sending to client
@@ -80,7 +81,7 @@ reactionRoutes.post(
         channel_id: channel_id ?? null,
       });
 
-      return c.json({ ok: true, data: reactionData }, 201);
+      return jsonCreated(c, reactionData);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -105,10 +106,7 @@ reactionRoutes.delete(
         c.req.param('emoji'),
       );
       if (result === null) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
 
       const eventData = {
@@ -153,7 +151,7 @@ reactionRoutes.delete(
         emoji: c.req.param('emoji'),
       });
 
-      return c.body(null, 204);
+      return jsonNoContent(c);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -175,13 +173,10 @@ reactionRoutes.get(
         c.req.param('id'),
       );
       if (result === null) {
-        return c.json({
-          ok: false,
-          error: { code: 'message_not_found', message: 'Message not found' },
-        }, 404);
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
 
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

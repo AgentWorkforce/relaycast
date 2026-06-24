@@ -1,12 +1,21 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
+import { PaginationQuerySchema } from '../lib/httpQuery.js';
 
 export const searchRoutes = new Hono<AppEnv>();
+
+const searchQuerySchema = PaginationQuerySchema.extend({
+  q: z.string().trim().min(1),
+  channel: z.string().optional(),
+  from: z.string().optional(),
+});
 
 // GET /v1/search?q=...&channel=...&from=...&limit=...&before=...&after=...
 searchRoutes.get(
@@ -17,19 +26,15 @@ searchRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const q = c.req.query('q');
-      if (!q || typeof q !== 'string' || !q.trim()) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'q (search query) is required' },
-        }, 400);
+      const parsed = parseQueryParams(c, searchQuerySchema, (failure) =>
+        failure.error.issues.some((issue) => issue.path[0] === 'q')
+          ? 'q (search query) is required'
+          : 'Invalid search query',
+      );
+      if (!parsed.ok) {
+        return parsed.response;
       }
-
-      const channel = c.req.query('channel');
-      const from = c.req.query('from');
-      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const { q, channel, from, limit, before, after } = parsed.data;
 
       const results = await searchEngine.searchMessages(db, workspace.id, {
         q,
@@ -47,7 +52,7 @@ searchRoutes.get(
         has_from_filter: Boolean(from),
       });
 
-      return c.json({ ok: true, data: results });
+      return jsonOk(c, results);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

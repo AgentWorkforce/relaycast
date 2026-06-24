@@ -40,4 +40,20 @@ describe('errorResponse', () => {
       },
     });
   });
+
+  it('does not expose error causes in client responses', async () => {
+    const error = codedError('Directory write failed', 'internal_error', 500);
+    error.cause = new Error('SQLITE_CONSTRAINT');
+
+    const response = errorResponse(testContext(), error, { includeCause: true });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Directory write failed',
+      },
+    });
+  });
 });

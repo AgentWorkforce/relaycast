@@ -1,5 +1,8 @@
+import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { KeyValueStore } from '../ports/kv.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { jsonOk } from '../lib/httpResponse.js';
 
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 const IDEMPOTENCY_LOCK_TTL_SECONDS = 30;
@@ -16,6 +19,12 @@ export interface IdempotentResult<T> {
   data: T;
   replayed: boolean;
 }
+
+type DeliveryInternals = {
+  _delivery?: unknown;
+  _deliveries?: unknown;
+  _delivery_rejections?: unknown;
+};
 
 interface RunIdempotentOptions<T> {
   workspaceId: string;
@@ -67,6 +76,27 @@ export function parseIdempotencyKey(headerValue: string | undefined): { key?: st
   }
 
   return { key };
+}
+
+export function applyIdempotencyReplayHeader<T>(c: Context, result: IdempotentResult<T>) {
+  if (result.replayed) {
+    c.header('Idempotency-Replayed', 'true');
+  }
+}
+
+export function stripDeliveryInternals<T extends object>(data: T) {
+  const {
+    _delivery: _dropDelivery,
+    _deliveries: _dropDeliveries,
+    _delivery_rejections: _dropRejections,
+    ...publicData
+  } = data as T & DeliveryInternals;
+  return publicData;
+}
+
+export function jsonIdempotentOk<T extends object>(c: Context, result: IdempotentResult<T>) {
+  applyIdempotencyReplayHeader(c, result);
+  return jsonOk(c, stripDeliveryInternals(result.data), result.status as ContentfulStatusCode);
 }
 
 export async function runIdempotent<T>(

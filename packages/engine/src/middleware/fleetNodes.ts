@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
+import { jsonError } from '../lib/httpResponse.js';
 
 /**
  * Gate the fleet node control surface behind the per-workspace rollout flag
@@ -13,10 +14,7 @@ export const requireFleetNodes = createMiddleware<AppEnv>(async (c, next) => {
   const workspace = c.get('workspace');
   const { kv, config } = c.get('engine');
   if (!workspace || !(await isFleetNodesEnabled(kv, workspace.id, config.fleetNodesEnabled ?? false))) {
-    return c.json(
-      { ok: false, error: { code: 'fleet_nodes_disabled', message: 'Fleet nodes are disabled for this workspace' } },
-      404,
-    );
+    return jsonError(c, 'fleet_nodes_disabled', 'Fleet nodes are disabled for this workspace', 404);
   }
   await next();
 });

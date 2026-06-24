@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
@@ -14,6 +13,8 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
+import { parsePaginationQuery } from '../lib/httpQuery.js';
 
 export const threadRoutes = new Hono<AppEnv>();
 
@@ -33,29 +34,20 @@ threadRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = postReplySchema.safeParse(await c.req.json());
-      if (!parsed.success) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_request', message: 'text is required' },
-        }, 400);
+      const parsed = await parseJsonBody(c, postReplySchema, 'invalid reply body');
+      if (!parsed.ok) {
+        return parsed.response;
       }
       const { text, blocks, data } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
-        return c.json({
-          ok: false,
-          error: { code: 'invalid_idempotency_key', message: idempotencyError },
-        }, 400);
+        return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
       }
 
       const agentId = agent?.id;
       if (!agentId) {
-        return c.json({
-          ok: false,
-          error: { code: 'agent_token_required', message: 'Agent token required to post replies' },
-        }, 403);
+        return jsonError(c, 'agent_token_required', 'Agent token required to post replies', 403);
       }
 
       const parentId = c.req.param('id');
@@ -90,10 +82,6 @@ threadRoutes.post(
           });
         },
       });
-
-      if (idempotent.replayed) {
-        c.header('Idempotency-Replayed', 'true');
-      }
 
       if (!idempotent.replayed) {
         const {
@@ -143,15 +131,7 @@ threadRoutes.post(
         });
       }
 
-      const {
-        _deliveries: _dropDeliveries,
-        _delivery_rejections: _dropRejections,
-        ...responseData
-      } = idempotent.data as typeof idempotent.data & {
-        _deliveries?: unknown;
-        _delivery_rejections?: unknown;
-      };
-      return c.json({ ok: true, data: responseData }, idempotent.status as ContentfulStatusCode);
+      return jsonIdempotentOk(c, idempotent);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -167,9 +147,11 @@ threadRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const query = parsePaginationQuery(c);
+      if (!query.ok) {
+        return query.response;
+      }
+      const { limit, before, after } = query.data;
 
       const parentId = c.req.param('id');
       const result = await threadEngine.getThread(
@@ -178,7 +160,7 @@ threadRoutes.get(
         parentId,
         { limit, before, after },
       );
-      return c.json({ ok: true, data: result });
+      return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

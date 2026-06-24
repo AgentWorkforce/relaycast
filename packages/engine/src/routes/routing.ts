@@ -1,4 +1,4 @@
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../env.js';
@@ -9,6 +9,13 @@ import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  jsonNotFound,
+  jsonOk,
+  parseJsonBody,
+  parseQueryParams,
+} from '../lib/httpResponse.js';
+import { LimitQuerySchema } from '../lib/httpQuery.js';
 
 export const routingRoutes = new Hono<AppEnv>();
 
@@ -50,18 +57,15 @@ const syncAgentSkillsSchema = z.object({
   skills: z.array(skillSchema).optional(),
 });
 
-function handleError(c: Context<AppEnv>, err: unknown) {
-  return errorResponse(c, err);
-}
+const searchSkillsQuerySchema = LimitQuerySchema.extend({
+  q: z.string().optional(),
+});
 
 routingRoutes.post('/route', requireAuth, rateLimit, async (c) => {
   try {
-    const parsed = routeRequestSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'skill is required' },
-      }, 400);
+    const parsed = await parseJsonBody(c, routeRequestSchema, 'skill is required');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const workspace = c.get('workspace');
@@ -79,27 +83,21 @@ routingRoutes.post('/route', requireAuth, rateLimit, async (c) => {
       score: result.score,
     });
 
-    return c.json({
-      ok: true,
-      data: {
-        agent_name: result.agentName,
-        score: result.score,
-        fallback: result.fallback,
-      },
+    return jsonOk(c, {
+      agent_name: result.agentName,
+      score: result.score,
+      fallback: result.fallback,
     });
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });
 
 routingRoutes.post('/route/feedback', requireAuth, rateLimit, async (c) => {
   try {
-    const parsed = routeFeedbackSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'agent_name and success are required' },
-      }, 400);
+    const parsed = await parseJsonBody(c, routeFeedbackSchema, 'agent_name and success are required');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const workspace = c.get('workspace');
@@ -117,32 +115,32 @@ routingRoutes.post('/route/feedback', requireAuth, rateLimit, async (c) => {
       success: parsed.data.success,
     });
 
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });
 
 routingRoutes.get('/skills/search', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
-    const q = c.req.query('q') || undefined;
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+    const parsed = parseQueryParams(c, searchSkillsQuerySchema, 'Invalid skill search query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { q, limit } = parsed.data;
     const result = await routingEngine.searchSkills(c.get('db'), workspace.id, { q, limit });
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });
 
 routingRoutes.post('/skills/sync', requireWorkspaceKey, rateLimit, async (c) => {
   try {
-    const parsed = syncAgentSkillsSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'agent_name is required' },
-      }, 400);
+    const parsed = await parseJsonBody(c, syncAgentSkillsSchema, 'agent_name is required');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const workspace = c.get('workspace');
@@ -154,10 +152,7 @@ routingRoutes.post('/skills/sync', requireWorkspaceKey, rateLimit, async (c) => 
 
     const row = agent[0];
     if (!row) {
-      return c.json({
-        ok: false,
-        error: { code: 'agent_not_found', message: `Agent "${parsed.data.agent_name}" not found` },
-      }, 404);
+      return jsonNotFound(c, 'agent_not_found', `Agent "${parsed.data.agent_name}" not found`);
     }
 
     const metadata = {
@@ -173,9 +168,9 @@ routingRoutes.post('/skills/sync', requireWorkspaceKey, rateLimit, async (c) => 
       metadata,
     });
 
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });
 
@@ -183,20 +178,17 @@ routingRoutes.get('/routing/config', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const result = await routingEngine.getRoutingConfig(c.get('db'), workspace.id);
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });
 
 routingRoutes.put('/routing/config', requireWorkspaceKey, rateLimit, async (c) => {
   try {
-    const parsed = routingConfigSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'invalid routing config body' },
-      }, 400);
+    const parsed = await parseJsonBody(c, routingConfigSchema, 'invalid routing config body');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const workspace = c.get('workspace');
@@ -205,8 +197,8 @@ routingRoutes.put('/routing/config', requireWorkspaceKey, rateLimit, async (c) =
       circuit_breaker_threshold: result.circuit_breaker_threshold,
       circuit_breaker_cooldown_seconds: result.circuit_breaker_cooldown_seconds,
     });
-    return c.json({ ok: true, data: result });
+    return jsonOk(c, result);
   } catch (err: unknown) {
-    return handleError(c, err);
+    return errorResponse(c, err);
   }
 });

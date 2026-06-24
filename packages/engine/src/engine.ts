@@ -2,18 +2,21 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { eq } from 'drizzle-orm';
 import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
-import { agents, nodes, workspaces } from './db/schema.js';
-import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
-import { isFleetNodesEnabled } from './lib/fleetNodes.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError } from './lib/httpError.js';
+import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
+import {
+  authenticateNodeWs,
+  authenticateRealtimeWs,
+  missingWsToken,
+  queryOrBearerToken,
+} from './engine/wsAuth.js';
 
 // Route imports
 import { healthRoutes } from './routes/health.js';
@@ -97,75 +100,58 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     const token = c.req.query('token');
     if (!token) {
-      return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
+      return jsonError(c, 'unauthorized', 'Missing token', 401);
     }
 
-    const { auth, connections, kv, config } = c.get('engine');
+    const { auth, connections, kv, config, presence } = c.get('engine');
     const db = c.get('db');
-    const hash = await auth.hashToken(token);
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
       client: originInfo.origin_client,
       version: originInfo.origin_version,
     };
     const originActor = c.get('originActor') ?? 'unknown';
+    const authResult = await authenticateRealtimeWs({ auth, db, kv, config }, token);
 
-    if (token.startsWith('at_live_')) {
-      const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-      if (!agent) {
-        return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid agent token' } }, 401);
-      }
-      const workspaceId = agent.workspaceId;
+    if (!authResult.ok) {
+      return jsonError(c, authResult.code, authResult.message, authResult.status);
+    }
 
+    if (authResult.scope === 'agent') {
       // Register the agent online (fire-and-forget)
-      c.get('engine').presence.heartbeat(workspaceId, agent.id, agent.name).catch(() => {});
+      presence.heartbeat(authResult.workspace.id, authResult.agent.id, authResult.agent.name).catch(() => {});
 
       const response = await connections.upgrade({
         request: c.req.raw,
         scope: 'agent',
-        workspaceId,
-        agentId: agent.id,
-        agentName: agent.name,
+        workspaceId: authResult.workspace.id,
+        agentId: authResult.agent.id,
+        agentName: authResult.agent.name,
         origin,
         originActor,
       });
       if (response.status === 101) {
-        emitServerEvent(c, workspaceId, 'relaycast_server_ws_session_started', {
-          agent_id: agent.id,
+        emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
+          agent_id: authResult.agent.id,
           session_scope: 'agent',
         });
       }
       return response;
     }
 
-    if (token.startsWith('rk_live_')) {
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
-      if (!workspace) {
-        return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid workspace key' } }, 401);
-      }
-      if (!(await isWorkspaceStreamEnabled(kv, workspace.id, config.workspaceStreamEnabled ?? false))) {
-        return c.json(
-          { ok: false, error: { code: 'not_found', message: 'Workspace stream is disabled' } },
-          404,
-        );
-      }
-
-      const response = await connections.upgrade({
-        request: c.req.raw,
-        scope: 'workspace',
-        workspaceId: workspace.id,
-        origin,
-        originActor,
+    const response = await connections.upgrade({
+      request: c.req.raw,
+      scope: 'workspace',
+      workspaceId: authResult.workspace.id,
+      origin,
+      originActor,
+    });
+    if (response.status === 101) {
+      emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
+        session_scope: 'workspace',
       });
-      if (response.status === 101) {
-        emitServerEvent(c, workspace.id, 'relaycast_server_ws_session_started', {
-          session_scope: 'workspace',
-        });
-      }
-      return response;
     }
-
-    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
+    return response;
   });
 
   app.get('/v1/node/ws', async (c) => {
@@ -178,33 +164,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     // OR an `Authorization: Bearer <token>` header (the relay Rust broker's
     // node_control client sends it this way). Supporting both keeps the engine
     // compatible with every node client without changing the shipped broker.
-    const authHeader = c.req.header('Authorization') ?? c.req.header('authorization');
-    const bearer = authHeader && /^bearer\s+/i.test(authHeader)
-      ? authHeader.replace(/^bearer\s+/i, '').trim()
-      : undefined;
-    const token = c.req.query('token') ?? bearer;
+    const token = queryOrBearerToken(c.req.query('token'), c.req.header('Authorization'));
     if (!token) {
-      return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
-    }
-    if (!token.startsWith('nt_live_')) {
-      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token format' } }, 401);
+      const error = missingWsToken();
+      return jsonError(c, error.code, error.message, error.status);
     }
 
     const { auth, nodeConnections, kv, config } = c.get('engine');
     const db = c.get('db');
-    const hash = await auth.hashToken(token);
-    const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
-    if (!node) {
-      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token' } }, 401);
-    }
-
-    // Phase 6 rollout flag: the node control surface is inert until a workspace
-    // opts in. A node with a valid token still cannot attach while the flag is off.
-    if (!(await isFleetNodesEnabled(kv, node.workspaceId, config.fleetNodesEnabled ?? false))) {
-      return c.json(
-        { ok: false, error: { code: 'fleet_nodes_disabled', message: 'Fleet nodes are disabled for this workspace' } },
-        404,
-      );
+    const authResult = await authenticateNodeWs({ auth, db, kv, config }, token);
+    if (!authResult.ok) {
+      return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
 
     const originInfo = requiredOriginInfo(c.req.raw);
@@ -215,15 +185,15 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     const originActor = c.get('originActor') ?? 'unknown';
     const response = await nodeConnections.upgradeNode({
       request: c.req.raw,
-      workspaceId: node.workspaceId,
-      nodeId: node.id,
-      nodeName: node.name,
+      workspaceId: authResult.node.workspaceId,
+      nodeId: authResult.node.id,
+      nodeName: authResult.node.name,
       origin,
       originActor,
     });
     if (response.status === 101) {
-      emitServerEvent(c, node.workspaceId, 'relaycast_server_ws_session_started', {
-        node_id: node.id,
+      emitServerEvent(c, authResult.node.workspaceId, 'relaycast_server_ws_session_started', {
+        node_id: authResult.node.id,
         session_scope: 'node',
       });
     }
@@ -261,7 +231,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // 404 handler
   app.notFound((c) => {
-    return c.json({ ok: false, error: { code: 'not_found', message: 'Route not found' } }, 404);
+    return jsonNotFound(c, 'not_found', 'Route not found');
   });
 
   // Global error handler
@@ -287,16 +257,15 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       });
     }
 
-    if (error.message?.includes('JSON')) {
-      return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
+    if (error.code === 'invalid_json' || err instanceof SyntaxError) {
+      return jsonMalformedBody(c);
     }
-    return c.json({
-      ok: false,
-      error: {
-        code: error.code || 'internal_error',
-        message: error.message || 'Internal server error',
-      },
-    }, status as ContentfulStatusCode);
+    return jsonError(
+      c,
+      error.code || 'internal_error',
+      error.message || 'Internal server error',
+      status as ContentfulStatusCode,
+    );
   });
 
   return app;

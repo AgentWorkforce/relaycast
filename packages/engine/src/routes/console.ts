@@ -5,11 +5,13 @@ import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
 import { errorResponse } from '../lib/httpError.js';
+import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
+import { positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const consoleRoutes = new Hono<AppEnv>();
 
 const listLogsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).optional(),
+  limit: positiveIntQueryParam({ max: 100 }),
   before: z.string().min(1).optional(),
   agent_id: z.string().min(1).optional(),
   channel_id: z.string().min(1).optional(),
@@ -18,24 +20,21 @@ const listLogsQuerySchema = z.object({
 });
 
 const windowQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(30).default(7),
+  days: positiveIntQueryParam({ defaultValue: 7, max: 30 }),
 });
 
 const agentStatsQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(30).default(7),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  days: positiveIntQueryParam({ defaultValue: 7, max: 30 }),
+  limit: positiveIntQueryParam({ defaultValue: 20, max: 100 }),
 });
 
 consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
-    const parsed = listLogsQuerySchema.safeParse(c.req.query());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Invalid console message query' },
-      }, 400);
+    const parsed = parseQueryParams(c, listLogsQuerySchema, 'Invalid console message query');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const data = await consoleEngine.listMessageLogs(db, workspace.id, {
@@ -47,7 +46,7 @@ consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
       deliveryKind: parsed.data.delivery_kind,
     });
 
-    return c.json({ ok: true, data });
+    return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -57,16 +56,13 @@ consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
-    const parsed = windowQuerySchema.safeParse(c.req.query());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Invalid console stats query' },
-      }, 400);
+    const parsed = parseQueryParams(c, windowQuerySchema, 'Invalid console stats query');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const data = await consoleEngine.getConsoleOverview(db, workspace.id, parsed.data.days);
-    return c.json({ ok: true, data });
+    return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -76,12 +72,9 @@ consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
-    const parsed = agentStatsQuerySchema.safeParse(c.req.query());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Invalid console agent query' },
-      }, 400);
+    const parsed = parseQueryParams(c, agentStatsQuerySchema, 'Invalid console agent query');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const data = await consoleEngine.getAgentStats(
@@ -90,7 +83,7 @@ consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
       parsed.data.days,
       parsed.data.limit,
     );
-    return c.json({ ok: true, data });
+    return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -100,16 +93,13 @@ consoleRoutes.get('/console/costs', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
-    const parsed = windowQuerySchema.safeParse(c.req.query());
-    if (!parsed.success) {
-      return c.json({
-        ok: false,
-        error: { code: 'invalid_request', message: 'Invalid console cost query' },
-      }, 400);
+    const parsed = parseQueryParams(c, windowQuerySchema, 'Invalid console cost query');
+    if (!parsed.ok) {
+      return parsed.response;
     }
 
     const data = await consoleEngine.getCostStats(db, workspace.id, parsed.data.days);
-    return c.json({ ok: true, data });
+    return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
