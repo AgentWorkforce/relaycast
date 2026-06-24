@@ -14,7 +14,7 @@ use crate::origin_actor::{
     sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_QUERY,
 };
 use crate::types::WsEvent;
-use crate::DEFAULT_BASE_URL;
+use crate::{ws_base_from_http, DEFAULT_BASE_URL};
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
@@ -154,11 +154,10 @@ enum WsCommand {
 impl WsClient {
     /// Create a new WebSocket client with the given options.
     pub fn new(options: WsClientOptions) -> Self {
-        let base_url = options
-            .base_url
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-            .replace("https://", "wss://")
-            .replace("http://", "ws://");
+        // Single source of truth for HTTP(S)->WS(S) normalization (trims
+        // whitespace + trailing slashes); see `ws_base_from_http` in lib.rs.
+        let base_url =
+            ws_base_from_http(options.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL));
 
         let (event_tx, _) = broadcast::channel(1024);
         let (raw_event_tx, _) = broadcast::channel(1024);
@@ -166,7 +165,7 @@ impl WsClient {
 
         Self {
             token: Arc::new(Mutex::new(options.token)),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
             debug: options.debug,
             origin_client: options
                 .origin_client
