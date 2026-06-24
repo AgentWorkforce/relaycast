@@ -44,9 +44,9 @@ describe('node control WS upgrade auth (self-host)', () => {
   }
 
   /** Resolve to the HTTP status code of the upgrade response (101 on success). */
-  function tryUpgrade(headers: Record<string, string>, query = ''): Promise<number> {
+  function tryUpgrade(headers: Record<string, string>, query = '', path = '/v1/node/ws'): Promise<number> {
     return new Promise((resolve) => {
-      const ws = new WebSocket(`${wsBase}/v1/node/ws${query}`, { headers });
+      const ws = new WebSocket(`${wsBase}${path}${query}`, { headers });
       ws.on('open', () => { ws.close(); resolve(101); });
       ws.on('unexpected-response', (_req, res) => { resolve(res.statusCode ?? 0); });
       ws.on('error', () => { /* handled by unexpected-response */ });
@@ -82,8 +82,38 @@ describe('node control WS upgrade auth (self-host)', () => {
 
     // Broker transport: Authorization: Bearer header, no query param.
     expect(await tryUpgrade({ authorization: `Bearer ${token}` })).toBe(101);
+    // Empty query params must not shadow a valid Authorization header.
+    expect(await tryUpgrade({ authorization: `Bearer ${token}` }, '?token=')).toBe(101);
     // SDK/Pear transport: ?token= query param, no header.
     expect(await tryUpgrade({}, `?token=${token}`)).toBe(101);
+  });
+
+  it('gates agent realtime upgrades when workspace streams are disabled', async () => {
+    const ws = await api('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'stream-off' }),
+    });
+    const workspaceKey = ws.body.data.api_key as string;
+
+    const agent = await api('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ name: 'stream-agent' }),
+    });
+    expect(agent.status).toBe(201);
+    const token = agent.body.data.token as string;
+
+    expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(404);
+
+    const enabled = await api('/v1/workspace/stream', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.data.enabled).toBe(true);
+    expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(101);
   });
 
   it('rejects the upgrade while the workspace fleet flag is off (404)', async () => {

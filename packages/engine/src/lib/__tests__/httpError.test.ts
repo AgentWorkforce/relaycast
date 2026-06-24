@@ -41,7 +41,7 @@ describe('errorResponse', () => {
     });
   });
 
-  it('can include an error cause when a route opts in', async () => {
+  it('does not expose error causes in client responses', async () => {
     const error = codedError('Directory write failed', 'internal_error', 500);
     error.cause = new Error('SQLITE_CONSTRAINT');
 
@@ -52,7 +52,7 @@ describe('errorResponse', () => {
       ok: false,
       error: {
         code: 'internal_error',
-        message: 'Directory write failed [cause: SQLITE_CONSTRAINT]',
+        message: 'Directory write failed',
       },
     });
   });

@@ -40,8 +40,7 @@ interface ErrorResponseOptions {
 }
 
 function messageWithCause(error: CodedError) {
-  const cause = error.cause instanceof Error ? error.cause.message : (error.cause ? String(error.cause) : '');
-  return cause ? `${error.message} [cause: ${cause}]` : error.message;
+  return error.message;
 }
 
 /**

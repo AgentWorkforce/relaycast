@@ -42,19 +42,18 @@ const updateWorkspaceSchema = z.object({
   system_prompt: z.string().nullable().optional(),
 });
 
-const updateWorkspaceStreamSchema = z.object({
-  enabled: z.boolean().optional(),
-  mode: z.string().optional(),
-}).passthrough();
+const featureOverrideSchema = z.union([
+  z.object({ enabled: z.boolean() }).strict(),
+  z.object({ mode: z.literal('inherit') }).strict(),
+]);
+
+const updateWorkspaceStreamSchema = featureOverrideSchema;
 
 const activityQuerySchema = z.object({
-  limit: positiveIntQueryParam({ defaultValue: 20 }),
+  limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
 });
 
-const updateFleetNodesSchema = z.object({
-  enabled: z.boolean().optional(),
-  mode: z.string().optional(),
-}).passthrough();
+const updateFleetNodesSchema = featureOverrideSchema;
 
 const WORKSPACE_OVERRIDE_MESSAGE = 'Provide { enabled: boolean } or { mode: "inherit" }';
 
@@ -68,6 +67,10 @@ function featureConfigData(config: { enabled: boolean; defaultEnabled: boolean; 
     default_enabled: config.defaultEnabled,
     override: config.override,
   };
+}
+
+function featureOverrideValue(body: z.infer<typeof featureOverrideSchema>) {
+  return 'mode' in body ? null : body.enabled;
 }
 
 const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
@@ -340,14 +343,7 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
     }
     const body = parsed.data;
 
-    let override: boolean | null;
-    if (body?.mode === 'inherit') {
-      override = null;
-    } else if (typeof body?.enabled === 'boolean') {
-      override = body.enabled;
-    } else {
-      return jsonError(c, 'invalid_request', WORKSPACE_OVERRIDE_MESSAGE, 400);
-    }
+    const override = featureOverrideValue(body);
 
     const { kv, config: engineConfig } = c.get('engine');
     await setWorkspaceStreamOverride(kv, workspaceId, override);
@@ -400,14 +396,7 @@ workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
     }
     const body = parsed.data;
 
-    let override: boolean | null;
-    if (body?.mode === 'inherit') {
-      override = null;
-    } else if (typeof body?.enabled === 'boolean') {
-      override = body.enabled;
-    } else {
-      return jsonError(c, 'invalid_request', WORKSPACE_OVERRIDE_MESSAGE, 400);
-    }
+    const override = featureOverrideValue(body);
 
     const { kv, config: engineConfig } = c.get('engine');
     await setFleetNodesOverride(kv, workspaceId, override);

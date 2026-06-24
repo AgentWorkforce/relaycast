@@ -35,7 +35,7 @@ export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 20
 }
 
 export function jsonSuccess(c: Context) {
-  return c.json({ ok: true as const });
+  return c.json({ ok: true as const, data: null });
 }
 
 export function jsonCreated<T>(c: Context, data: T) {

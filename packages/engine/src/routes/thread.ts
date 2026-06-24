@@ -34,7 +34,7 @@ threadRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = await parseJsonBody(c, postReplySchema, 'text is required');
+      const parsed = await parseJsonBody(c, postReplySchema, 'invalid reply body');
       if (!parsed.ok) {
         return parsed.response;
       }

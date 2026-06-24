@@ -82,7 +82,7 @@ function parseTagsParam(value: string | undefined): string[] | undefined {
 }
 
 function handleError(c: Context<AppEnv>, err: unknown) {
-  return errorResponse(c, err, { includeCause: true });
+  return errorResponse(c, err);
 }
 
 directoryRoutes.post('/directory/agents', requireWorkspaceKey, rateLimit, async (c) => {

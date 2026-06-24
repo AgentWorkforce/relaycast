@@ -24,7 +24,7 @@ export type RealtimeWsAuthResult =
 export type NodeWsAuthResult =
   | {
       ok: true;
-      node: Awaited<ReturnType<typeof getNodeByTokenHash>>;
+      node: NonNullable<Awaited<ReturnType<typeof getNodeByTokenHash>>>;
     }
   | WsAuthError;
 
@@ -42,7 +42,8 @@ export function extractBearerToken(authHeader: string | undefined): string | und
 }
 
 export function queryOrBearerToken(queryToken: string | null | undefined, authHeader: string | undefined): string | undefined {
-  return queryToken ?? extractBearerToken(authHeader);
+  const tokenFromQuery = queryToken?.trim();
+  return tokenFromQuery || extractBearerToken(authHeader);
 }
 
 export function missingWsToken(): WsAuthError {
@@ -80,6 +81,9 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
     const result = await deps.auth.authenticate({ token, require: 'agent', db: deps.db });
     if (!result.ok || !result.agent) {
       return invalidWsToken('Invalid agent token');
+    }
+    if (!(await isWorkspaceStreamEnabled(deps.kv, result.workspace.id, deps.config?.workspaceStreamEnabled ?? false))) {
+      return notFoundWsToken('not_found', 'Workspace stream is disabled');
     }
     return { ok: true, scope: 'agent', workspace: result.workspace, agent: result.agent };
   }

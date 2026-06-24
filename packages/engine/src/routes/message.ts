@@ -35,6 +35,19 @@ const postMessageSchema = z.object({
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
+type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
+
+function postMessageInvalidMessage(failure: ValidationFailure) {
+  const field = failure.error.issues[0]?.path[0];
+  if (field === 'text') return 'text is required';
+  if (field === 'mode') return 'mode must be "wait" or "steer"';
+  if (field === 'attachments') return 'attachments must be an array of strings';
+  if (field === 'blocks') return 'blocks must be an array';
+  if (field === 'data') return 'data must be an object';
+  if (field === 'content_type') return 'content_type must be a string';
+  return 'invalid message body';
+}
+
 // POST /v1/channels/:name/messages - post a message
 messageRoutes.post(
   '/channels/:name/messages',
@@ -45,7 +58,7 @@ messageRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const parsed = await parseJsonBody(c, postMessageSchema, 'text is required');
+      const parsed = await parseJsonBody(c, postMessageSchema, postMessageInvalidMessage);
       if (!parsed.ok) {
         return parsed.response;
       }

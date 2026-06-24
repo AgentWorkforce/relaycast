@@ -6,13 +6,13 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
-import { jsonInvalidRequest, jsonOk, parseQueryParams } from '../lib/httpResponse.js';
+import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
 import { PaginationQuerySchema } from '../lib/httpQuery.js';
 
 export const searchRoutes = new Hono<AppEnv>();
 
 const searchQuerySchema = PaginationQuerySchema.extend({
-  q: z.string().optional(),
+  q: z.string().trim().min(1),
   channel: z.string().optional(),
   from: z.string().optional(),
 });
@@ -26,14 +26,15 @@ searchRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const parsed = parseQueryParams(c, searchQuerySchema, 'Invalid search query');
+      const parsed = parseQueryParams(c, searchQuerySchema, (failure) =>
+        failure.error.issues.some((issue) => issue.path[0] === 'q')
+          ? 'q (search query) is required'
+          : 'Invalid search query',
+      );
       if (!parsed.ok) {
         return parsed.response;
       }
       const { q, channel, from, limit, before, after } = parsed.data;
-      if (!q || !q.trim()) {
-        return jsonInvalidRequest(c, 'q (search query) is required');
-      }
 
       const results = await searchEngine.searchMessages(db, workspace.id, {
         q,

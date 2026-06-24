@@ -11,12 +11,20 @@ export function positiveIntQueryParam(options: PositiveIntQueryOptions = {}) {
   const numberSchema = options.max === undefined
     ? z.number().int().positive()
     : z.number().int().positive().max(options.max);
+  if (options.defaultValue !== undefined) {
+    numberSchema.parse(options.defaultValue);
+  }
   const valueSchema = options.defaultValue === undefined
     ? numberSchema.optional()
     : numberSchema.default(options.defaultValue);
 
   return z.preprocess(
-    (value) => (value === undefined ? undefined : Number(value)),
+    (value) => {
+      if (value === undefined || (typeof value === 'string' && value.trim() === '')) {
+        return undefined;
+      }
+      return Number(value);
+    },
     valueSchema,
   );
 }

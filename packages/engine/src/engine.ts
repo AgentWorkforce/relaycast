@@ -164,7 +164,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     // OR an `Authorization: Bearer <token>` header (the relay Rust broker's
     // node_control client sends it this way). Supporting both keeps the engine
     // compatible with every node client without changing the shipped broker.
-    const token = queryOrBearerToken(c.req.query('token'), c.req.header('Authorization') ?? c.req.header('authorization'));
+    const token = queryOrBearerToken(c.req.query('token'), c.req.header('Authorization'));
     if (!token) {
       const error = missingWsToken();
       return jsonError(c, error.code, error.message, error.status);
@@ -257,7 +257,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       });
     }
 
-    if (error.message?.includes('JSON')) {
+    if (error.code === 'invalid_json' || err instanceof SyntaxError) {
       return jsonMalformedBody(c);
     }
     return jsonError(

@@ -357,6 +357,164 @@ describe('route response helpers', () => {
         message: 'Invalid console message query',
       },
     });
+
+    const emptyLimit = await stack.app.request('/v1/console/messages?limit=', {
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+    });
+
+    expect(emptyLimit.status).toBe(200);
+    await expect(emptyLimit.json()).resolves.toMatchObject({ ok: true });
+  });
+
+  it('uses schema-backed validation messages for search query parameters', async () => {
+    const ws = await createWorkspace(stack.app, 'search-query-validation-ws');
+
+    const missingQ = await stack.app.request('/v1/search?q=   ', {
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+    });
+    expect(missingQ.status).toBe(400);
+    await expect(missingQ.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'q (search query) is required',
+      },
+    });
+
+    const invalidLimit = await stack.app.request('/v1/search?q=hello&limit=not-a-number', {
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+    });
+    expect(invalidLimit.status).toBe(400);
+    await expect(invalidLimit.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'Invalid search query',
+      },
+    });
+  });
+
+  it('keeps success envelopes consistent for command-style routes', async () => {
+    const ws = await createWorkspace(stack.app, 'presence-success-envelope-ws');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'presence-success-agent');
+
+    const res = await stack.app.request('/v1/agents/heartbeat', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, data: null });
+  });
+
+  it('enforces schema-level handler requirements for action registration', async () => {
+    const ws = await createWorkspace(stack.app, 'action-handler-validation-ws');
+
+    const res = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ws.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'missing-handler', description: 'no handler' }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'handler_agent or handler_node is required',
+      },
+    });
+  });
+
+  it('reports field-specific message validation failures', async () => {
+    const ws = await createWorkspace(stack.app, 'message-validation-ws');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'message-validation-agent');
+
+    const res = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'hello', mode: 'invalid' }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'mode must be "wait" or "steer"',
+      },
+    });
+  });
+
+  it('uses a generic validation message for invalid thread reply bodies', async () => {
+    const ws = await createWorkspace(stack.app, 'thread-validation-ws');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'thread-validation-agent');
+
+    const res = await stack.app.request('/v1/messages/missing/replies', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'reply', blocks: 'not-array' }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'invalid reply body',
+      },
+    });
+  });
+
+  it('rejects mixed workspace feature override payloads and caps activity limits', async () => {
+    const ws = await createWorkspace(stack.app, 'workspace-feature-validation-ws');
+
+    for (const path of ['/v1/workspace/stream', '/v1/workspace/fleet-nodes']) {
+      const mixed = await stack.app.request(path, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${ws.workspaceKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ enabled: true, mode: 'inherit' }),
+      });
+      expect(mixed.status).toBe(400);
+      await expect(mixed.json()).resolves.toEqual({
+        ok: false,
+        error: {
+          code: 'invalid_request',
+          message: 'Provide { enabled: boolean } or { mode: "inherit" }',
+        },
+      });
+    }
+
+    const tooLarge = await stack.app.request('/v1/activity?limit=501', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+
+    expect(tooLarge.status).toBe(400);
+    await expect(tooLarge.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'Invalid activity query',
+      },
+    });
   });
 
   it('supports optional delivery fail bodies through the shared parser', async () => {

@@ -33,7 +33,13 @@ const registerActionSchema = z.object({
   input_schema: z.record(z.string(), z.unknown()).optional(),
   output_schema: z.record(z.string(), z.unknown()).optional(),
   available_to: z.array(z.string().min(1)).optional(),
-});
+}).refine(
+  ({ handler_agent, handler_node }) => Boolean(handler_agent || handler_node),
+  {
+    path: ['handler_agent'],
+    message: 'handler_agent or handler_node is required',
+  },
+);
 
 const invokeActionSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
