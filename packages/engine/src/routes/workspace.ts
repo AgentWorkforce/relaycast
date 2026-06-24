@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -316,7 +315,7 @@ workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (
       status: error.status,
       ...toErrorDetails(error),
     });
-    return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -356,7 +355,7 @@ workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (
       status: error.status,
       ...toErrorDetails(error),
     });
-    return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -376,7 +375,7 @@ workspaceRoutes.get('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
       status: error.status,
       ...toErrorDetails(error),
     });
-    return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });
 
@@ -416,6 +415,6 @@ workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, as
       status: error.status,
       ...toErrorDetails(error),
     });
-    return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+    return errorResponse(c, error);
   }
 });

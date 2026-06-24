@@ -1,12 +1,11 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
-import { asCodedError, type CodedError } from '../lib/httpError.js';
+import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
@@ -47,8 +46,7 @@ function jsonResponse(c: Context<AppEnv>, body: unknown, status = 200): Response
 }
 
 function codedJsonError(c: Context<AppEnv>, err: unknown) {
-  const error = asCodedError(err);
-  return jsonError(c, error.code || 'internal_error', error.message, (error.status || 500) as ContentfulStatusCode);
+  return errorResponse(c, err);
 }
 
 function a2aAgentNotFound(c: Context<AppEnv>) {
