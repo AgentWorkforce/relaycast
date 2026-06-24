@@ -14,8 +14,8 @@ use crate::origin_actor::{
     sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_QUERY,
 };
 use crate::types::WsEvent;
+use crate::DEFAULT_BASE_URL;
 
-const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const PING_INTERVAL_SECS: u64 = 30;

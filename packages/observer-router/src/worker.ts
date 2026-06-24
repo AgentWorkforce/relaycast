@@ -21,8 +21,8 @@ export default {
     upstream.pathname = incoming.pathname;
     upstream.search = incoming.search;
 
-    // Preserve original observer host so dashboard API routes can map:
-    // prNN-observer.relaycast.dev -> prNN-api.relaycast.dev
+    // Preserve the original observer host so dashboard API routes can resolve
+    // the hosted engine (cast.agentrelay.com) for the request.
     // Use both a custom header and x-forwarded-host for compatibility.
     const headers = new Headers(request.headers);
     headers.set('x-relaycast-observer-host', incoming.host);

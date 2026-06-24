@@ -43,15 +43,6 @@ function resolveDashboardUrl(baseUrl: string): string {
     return 'http://localhost:3100';
   }
 
-  const prMatch = host.match(/^pr(\d+)-api(?:[.-]|$)/);
-  if (prMatch) {
-    return `https://pr${prMatch[1]}-observer.relaycast.dev`;
-  }
-
-  if (host === 'staging-api.relaycast.dev') {
-    return 'https://staging-observer.relaycast.dev';
-  }
-
   return 'https://observer.relaycast.dev';
 }
 

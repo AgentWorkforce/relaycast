@@ -42,10 +42,15 @@ describe('relay server resolution', () => {
     ]);
   });
 
-  it('resolves the per-environment gateway/api candidates for preview observers', () => {
+  it('resolves the hosted engine for preview observers', () => {
     expect(resolveRelayServerCandidatesFromHost('pr23-observer.relaycast.dev')).toEqual([
-      'https://pr23-gateway.relaycast.dev',
-      'https://pr23-api.relaycast.dev',
+      'https://cast.agentrelay.com',
+    ]);
+  });
+
+  it('resolves the hosted engine for the staging observer', () => {
+    expect(resolveRelayServerCandidatesFromHost('staging-observer.relaycast.dev')).toEqual([
+      'https://cast.agentrelay.com',
     ]);
   });
 
@@ -59,12 +64,12 @@ describe('relay server resolution', () => {
 
   it('only accepts remembered engines from the current host candidates', () => {
     const candidates = [
-      'https://pr23-gateway.relaycast.dev',
-      'https://pr23-api.relaycast.dev',
+      'https://cast.agentrelay.com',
+      'https://relay.example.com',
     ];
 
-    expect(pickRememberedEngine('https://pr23-api.relaycast.dev', candidates)).toBe(
-      'https://pr23-api.relaycast.dev'
+    expect(pickRememberedEngine('https://relay.example.com', candidates)).toBe(
+      'https://relay.example.com'
     );
     expect(
       pickRememberedEngine('https://attacker.example.com', candidates)
@@ -74,10 +79,10 @@ describe('relay server resolution', () => {
   it('orders remembered engine first without duplicating candidates', () => {
     expect(
       orderByRemembered(
-        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
-        'https://pr23-api.relaycast.dev'
+        ['https://cast.agentrelay.com', 'https://relay.example.com'],
+        'https://relay.example.com'
       )
-    ).toEqual(['https://pr23-api.relaycast.dev', 'https://pr23-gateway.relaycast.dev']);
+    ).toEqual(['https://relay.example.com', 'https://cast.agentrelay.com']);
   });
 });
 
@@ -86,7 +91,7 @@ describe('selectEngineForKey', () => {
     vi.unstubAllGlobals();
   });
 
-  it('falls back to the -api engine when the gateway rejects the key', async () => {
+  it('falls back to the next engine when the first rejects the key', async () => {
     const fetchMock = mockFetch(
       new Response(null, { status: 401 }),
       new Response(null, { status: 200 })
@@ -94,11 +99,11 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
+        ['https://cast.agentrelay.com', 'https://relay.example.com'],
         'rk_live_test'
       )
     ).resolves.toEqual({
-      baseUrl: 'https://pr23-api.relaycast.dev',
+      baseUrl: 'https://relay.example.com',
       reachedAny: true,
       rejectedAny: true,
       inconclusiveAny: false,
@@ -106,12 +111,12 @@ describe('selectEngineForKey', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      'https://pr23-gateway.relaycast.dev/v1/workspace',
+      'https://cast.agentrelay.com/v1/workspace',
       expect.objectContaining({ cache: 'no-store' })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      'https://pr23-api.relaycast.dev/v1/workspace',
+      'https://relay.example.com/v1/workspace',
       expect.objectContaining({ cache: 'no-store' })
     );
   });
@@ -124,7 +129,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
+        ['https://cast.agentrelay.com', 'https://relay.example.com'],
         'rk_live_test'
       )
     ).resolves.toEqual({
@@ -143,7 +148,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
+        ['https://cast.agentrelay.com', 'https://relay.example.com'],
         'rk_live_test'
       )
     ).resolves.toEqual({
@@ -159,7 +164,7 @@ describe('selectEngineForKey', () => {
 
     await expect(
       selectEngineForKey(
-        ['https://pr23-gateway.relaycast.dev', 'https://pr23-api.relaycast.dev'],
+        ['https://cast.agentrelay.com', 'https://relay.example.com'],
         'rk_live_test'
       )
     ).resolves.toEqual({
