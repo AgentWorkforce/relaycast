@@ -6,11 +6,12 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
+import { positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const consoleRoutes = new Hono<AppEnv>();
 
 const listLogsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).optional(),
+  limit: positiveIntQueryParam({ max: 100 }),
   before: z.string().min(1).optional(),
   agent_id: z.string().min(1).optional(),
   channel_id: z.string().min(1).optional(),
@@ -19,12 +20,12 @@ const listLogsQuerySchema = z.object({
 });
 
 const windowQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(30).default(7),
+  days: positiveIntQueryParam({ defaultValue: 7, max: 30 }),
 });
 
 const agentStatsQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(30).default(7),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  days: positiveIntQueryParam({ defaultValue: 7, max: 30 }),
+  limit: positiveIntQueryParam({ defaultValue: 20, max: 100 }),
 });
 
 consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
