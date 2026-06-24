@@ -9,7 +9,9 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
+import { LimitQuerySchema } from '../lib/httpQuery.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
@@ -24,6 +26,10 @@ const fileUploadSchema = z.object({
   filename: z.string().min(1),
   content_type: z.string().min(1),
   size_bytes: z.number().finite().refine((value) => value !== 0),
+});
+
+const listFilesQuerySchema = LimitQuerySchema.extend({
+  uploaded_by: z.string().optional(),
 });
 
 type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
@@ -167,9 +173,11 @@ fileRoutes.get('/files', requireAuth, rateLimit, async (c) => {
     const db = c.get('db');
     const workspace = c.get('workspace');
 
-    const uploaded_by = c.req.query('uploaded_by');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    const parsed = parseQueryParams(c, listFilesQuerySchema, 'Invalid file list query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { uploaded_by, limit } = parsed.data;
 
     const result = await fileEngine.listFiles(db, workspace.id, {
       uploaded_by,

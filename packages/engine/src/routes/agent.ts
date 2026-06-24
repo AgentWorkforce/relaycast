@@ -19,7 +19,9 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
+import { positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -71,6 +73,11 @@ const releaseAgentSchema = z.object({
   name: z.string().min(1),
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
+});
+
+const listSessionEventsQuerySchema = z.object({
+  type: z.string().optional(),
+  limit: positiveIntQueryParam({ defaultValue: 100, max: 500 }),
 });
 
 function canonicalStatus(status: string): 'active' | 'idle' | 'blocked' | 'waiting' | 'offline' | null {
@@ -462,8 +469,11 @@ agentRoutes.get(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const type = c.req.query('type');
-      const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 500);
+      const parsed = parseQueryParams(c, listSessionEventsQuerySchema, 'Invalid agent event query');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const { type, limit } = parsed.data;
 
       const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {

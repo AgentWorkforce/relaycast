@@ -14,7 +14,9 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
+import { LimitQuerySchema } from '../lib/httpQuery.js';
 
 export const directoryRoutes = new Hono<AppEnv>();
 
@@ -63,6 +65,16 @@ const ratingSchema = z.object({
   review: z.string().max(4000).optional(),
 });
 
+const listDirectoryAgentsQuerySchema = LimitQuerySchema.extend({
+  status: z.string().optional(),
+});
+
+const searchDirectoryQuerySchema = LimitQuerySchema.extend({
+  q: z.string().optional(),
+  tags: z.string().optional(),
+  status: z.string().optional(),
+});
+
 function parseTagsParam(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   const tags = value.split(',').map((tag) => tag.trim()).filter(Boolean);
@@ -95,9 +107,13 @@ directoryRoutes.post('/directory/agents', requireWorkspaceKey, rateLimit, async 
 directoryRoutes.get('/directory/agents', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+    const parsed = parseQueryParams(c, listDirectoryAgentsQuerySchema, 'Invalid directory agent query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { status, limit } = parsed.data;
     const result = await directoryEngine.listDirectoryAgents(c.get('db'), workspace.id, {
-      status: c.req.query('status') || undefined,
+      status: status || undefined,
       limit,
     });
     return jsonOk(c, result);
@@ -109,17 +125,20 @@ directoryRoutes.get('/directory/agents', requireAuth, rateLimit, async (c) => {
 directoryRoutes.get('/directory/search', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
-    const q = c.req.query('q') || undefined;
-    const tags = parseTagsParam(c.req.query('tags'));
+    const parsed = parseQueryParams(c, searchDirectoryQuerySchema, 'Invalid directory search query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { q, tags: tagsParam, status, limit } = parsed.data;
+    const tags = parseTagsParam(tagsParam);
     if ((!q || !q.trim()) && (!tags || tags.length === 0)) {
       return jsonInvalidRequest(c, 'q or tags is required');
     }
 
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
     const result = await directoryEngine.searchDirectory(c.get('db'), workspace.id, {
       q,
       tags,
-      status: c.req.query('status') || undefined,
+      status: status || undefined,
       limit,
     });
     emitServerEvent(c, workspace.id, 'relaycast_server_directory_search_executed', {

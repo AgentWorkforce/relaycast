@@ -13,7 +13,9 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
+import { LimitQuerySchema } from '../lib/httpQuery.js';
 
 export const routingRoutes = new Hono<AppEnv>();
 
@@ -53,6 +55,10 @@ const syncAgentSkillsSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   status: z.string().min(1).optional(),
   skills: z.array(skillSchema).optional(),
+});
+
+const searchSkillsQuerySchema = LimitQuerySchema.extend({
+  q: z.string().optional(),
 });
 
 routingRoutes.post('/route', requireAuth, rateLimit, async (c) => {
@@ -118,8 +124,11 @@ routingRoutes.post('/route/feedback', requireAuth, rateLimit, async (c) => {
 routingRoutes.get('/skills/search', requireAuth, rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
-    const q = c.req.query('q') || undefined;
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+    const parsed = parseQueryParams(c, searchSkillsQuerySchema, 'Invalid skill search query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { q, limit } = parsed.data;
     const result = await routingEngine.searchSkills(c.get('db'), workspace.id, { q, limit });
     return jsonOk(c, result);
   } catch (err: unknown) {

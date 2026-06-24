@@ -27,7 +27,9 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseQueryParams,
 } from '../lib/httpResponse.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -44,6 +46,10 @@ const updateWorkspaceStreamSchema = z.object({
   enabled: z.boolean().optional(),
   mode: z.string().optional(),
 }).passthrough();
+
+const activityQuerySchema = z.object({
+  limit: positiveIntQueryParam({ defaultValue: 20 }),
+});
 
 const updateFleetNodesSchema = z.object({
   enabled: z.boolean().optional(),
@@ -238,8 +244,11 @@ workspaceRoutes.get('/activity', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : 20;
+    const parsed = parseQueryParams(c, activityQuerySchema, 'Invalid activity query');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const { limit } = parsed.data;
 
     const items = await activityEngine.getActivityFeed(db, workspace.id, limit);
     return jsonOk(c, items);
@@ -266,10 +275,11 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     const db = c.get('db');
     const workspace = c.get('workspace');
     const conversationId = c.req.param('conversation_id');
-    const limitStr = c.req.query('limit');
-    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
-    const before = c.req.query('before') || undefined;
-    const after = c.req.query('after') || undefined;
+    const query = parsePaginationQuery(c);
+    if (!query.ok) {
+      return query.response;
+    }
+    const { limit, before, after } = query.data;
 
     const msgs = await dmAllEngine.getDmMessagesForWorkspace(
       db, workspace.id, conversationId, { limit, before, after },

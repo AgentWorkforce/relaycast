@@ -14,6 +14,7 @@ import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
+import { parsePaginationQuery } from '../lib/httpQuery.js';
 
 export const threadRoutes = new Hono<AppEnv>();
 
@@ -146,9 +147,11 @@ threadRoutes.get(
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
-      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const query = parsePaginationQuery(c);
+      if (!query.ok) {
+        return query.response;
+      }
+      const { limit, before, after } = query.data;
 
       const parentId = c.req.param('id');
       const result = await threadEngine.getThread(

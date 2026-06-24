@@ -22,6 +22,7 @@ import {
   jsonOk,
   parseJsonBody,
 } from '../lib/httpResponse.js';
+import { parsePaginationQuery } from '../lib/httpQuery.js';
 
 export const messageRoutes = new Hono<AppEnv>();
 
@@ -190,9 +191,11 @@ messageRoutes.get(
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
-      const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
-      const before = c.req.query('before');
-      const after = c.req.query('after');
+      const query = parsePaginationQuery(c);
+      if (!query.ok) {
+        return query.response;
+      }
+      const { limit, before, after } = query.data;
 
       const messages = await messageEngine.getMessages(
         db,
