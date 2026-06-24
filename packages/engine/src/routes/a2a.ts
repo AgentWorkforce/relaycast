@@ -202,22 +202,12 @@ async function resolveWorkspaceFromAuth(c: Context<AppEnv>): Promise<{ id: strin
   if (!authHeader?.startsWith('Bearer ')) return null;
 
   const token = authHeader.slice(7);
-  const hash = await hashToken(token);
-  const db = c.get('db');
-
-  if (token.startsWith('rk_live_')) {
-    const [ws] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
-    return ws ?? null;
-  }
-
-  if (token.startsWith('at_live_')) {
-    const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-    if (!agent) return null;
-    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
-    return ws ?? null;
-  }
-
-  return null;
+  const result = await c.get('engine').auth.authenticate({
+    token,
+    require: 'any',
+    db: c.get('db'),
+  });
+  return result.ok ? result.workspace : null;
 }
 
 async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
