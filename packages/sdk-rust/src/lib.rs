@@ -337,3 +337,62 @@ pub use types::{
 
 /// SDK version.
 pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Default base URL for the hosted RelayCast engine. Applied whenever a client
+/// is created without an explicit `base_url`. Crate-internal: callers express
+/// "use the hosted default" by passing `None` rather than naming this value.
+pub(crate) const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
+
+/// Rewrite an HTTP(S) base URL to its WebSocket form, mirroring the rewrite the
+/// SDK applies internally when opening a socket.
+fn ws_base_from_http(base: &str) -> String {
+    let trimmed = base.trim().trim_end_matches('/');
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Build the fleet node-control WebSocket URL (`{ws_base}/v1/node/ws`) for the
+/// given engine base URL, applying the hosted default when `base_url` is `None`
+/// or blank. Lets callers (e.g. the broker's node-control client) reach the
+/// node-control endpoint without knowing the hosted host or the URL scheme.
+pub fn node_control_ws_url(base_url: Option<&str>) -> String {
+    let base = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_BASE_URL);
+    format!("{}/v1/node/ws", ws_base_from_http(base))
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::*;
+
+    #[test]
+    fn node_control_ws_url_defaults_to_hosted_engine() {
+        assert_eq!(
+            node_control_ws_url(None),
+            "wss://cast.agentrelay.com/v1/node/ws"
+        );
+        assert_eq!(
+            node_control_ws_url(Some("   ")),
+            "wss://cast.agentrelay.com/v1/node/ws"
+        );
+    }
+
+    #[test]
+    fn node_control_ws_url_uses_override_and_rewrites_scheme() {
+        assert_eq!(
+            node_control_ws_url(Some("https://self.hosted.example/")),
+            "wss://self.hosted.example/v1/node/ws"
+        );
+        assert_eq!(
+            node_control_ws_url(Some("http://localhost:8787")),
+            "ws://localhost:8787/v1/node/ws"
+        );
+    }
+}

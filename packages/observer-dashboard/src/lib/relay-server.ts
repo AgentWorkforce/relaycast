@@ -20,19 +20,14 @@ function isLocalHost(host: string): boolean {
 /**
  * Resolve the ordered list of Relay engine base URLs to try for an observer host.
  *
- * Production resolves to the hosted engine (`cast.agentrelay.com`); the legacy
- * `gateway.relaycast.dev` / `api.relaycast.dev` engines have been decommissioned
- * and are no longer probed. Callers probe the candidates in order and keep the
- * first one that accepts the workspace key.
+ * Every hosted observer host resolves to the single hosted engine
+ * (`cast.agentrelay.com`). A self-hosted or local engine is pinned with the
+ * `RELAY_SERVER_URL` override. Callers probe the candidates in order and keep
+ * the first one that accepts the workspace key.
  *
  * Examples:
  * - observer.relaycast.dev -> [cast.agentrelay.com]
- * - pr23-observer.relaycast.dev -> [pr23-gateway.relaycast.dev, pr23-api.relaycast.dev]
- *
- * Per-environment gateway hostnames (`staging-gateway`, `prNN-gateway`) are
- * assumed to mirror the `-api` naming. If a gateway host does not exist for an
- * environment, the probe simply fails over to its `-api` counterpart, so the
- * assumption carries no risk.
+ * - RELAY_SERVER_URL=http://localhost:8787 -> [http://localhost:8787]
  */
 export function resolveRelayServerCandidatesFromHost(
   host: string | null | undefined
@@ -47,23 +42,6 @@ export function resolveRelayServerCandidatesFromHost(
 
   if (!normalized || isLocalHost(normalized)) {
     return ['http://localhost:3890'];
-  }
-
-  // Accept both custom domains and workers/pages preview hostnames that begin with prNN-observer.
-  const prMatch = normalized.match(/^pr(\d+)-observer(?:[.-]|$)/);
-  if (prMatch) {
-    const n = prMatch[1];
-    return [
-      `https://pr${n}-gateway.relaycast.dev`,
-      `https://pr${n}-api.relaycast.dev`,
-    ];
-  }
-
-  if (normalized === 'staging-observer.relaycast.dev') {
-    return [
-      'https://staging-gateway.relaycast.dev',
-      'https://staging-api.relaycast.dev',
-    ];
   }
 
   return ['https://cast.agentrelay.com'];

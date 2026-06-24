@@ -80,12 +80,12 @@ describe('WsClient', () => {
   it('normalizes trailing slash in baseUrl', () => {
     const client = new WsClient({
       token: 'at_live_test',
-      baseUrl: 'https://pr28-gateway.relaycast.dev/',
+      baseUrl: 'https://relay.example.com/',
     });
     client.connect();
 
     const url = new URL(MockWebSocket.instances[0]!.url);
-    expect(url.origin).toBe('wss://pr28-gateway.relaycast.dev');
+    expect(url.origin).toBe('wss://relay.example.com');
     expect(url.pathname).toBe('/v1/ws');
     expect(url.searchParams.get('token')).toBe('at_live_test');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');

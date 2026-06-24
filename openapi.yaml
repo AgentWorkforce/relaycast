@@ -3002,6 +3002,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /node/ws:
+    get:
+      summary: Fleet node control WebSocket
+      description: >
+        Upgrade to the fleet node-control realtime stream. A fleet node
+        connects here to receive spawn/node-action placement and to report
+        status. Gated by the per-workspace fleet node rollout flag; inert when
+        disabled.
+      tags:
+        - Nodes
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Fleet node token
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket)
+        '401':
+          description: Invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /triggers:
     post:
       summary: Create message trigger

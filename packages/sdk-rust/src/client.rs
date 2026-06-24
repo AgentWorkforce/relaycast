@@ -11,8 +11,9 @@ use crate::origin_actor::{
 };
 use crate::types::ApiResponse;
 
+use crate::DEFAULT_BASE_URL;
+
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 const RETRY_BACKOFFS_MS: [u64; 3] = [200, 400, 800];
 

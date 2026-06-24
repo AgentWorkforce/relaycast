@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Added
+- Added `node_control_ws_url(base_url: Option<&str>)`, which builds the fleet node-control WebSocket URL (`{ws_base}/v1/node/ws`), applying the hosted default and `https`→`wss` rewrite when no base is given. Lets callers reach the node-control endpoint without knowing the hosted host or scheme.
 - Added optional `harness` identifier on `RelayCastOptions`/`ClientOptions` and `WsClientOptions` via `with_harness(...)`, plus `sanitize_harness(...)` and the `HARNESS_HEADER` constant. A User-Agent-style identifier for the harness driving requests (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`); sent as the `X-Relaycast-Harness` HTTP header and forwarded as the `harness` WS query param so server-side telemetry can attribute traffic. Invalid values (empty, control characters) are dropped; the header/param is omitted entirely when unset, and the value survives `HttpClient::with_api_key(...)`. Brings the Rust SDK to parity with `@relaycast/sdk`.
 - Added raw WebSocket event subscriptions with `WsClient::subscribe_raw_events()` and `RawEventReceiver`.
 - Added SDK-owned raw event normalization helpers:

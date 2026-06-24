@@ -5,8 +5,9 @@ use crate::client::{ClientOptions, HttpClient};
 use crate::error::{RelayError, Result};
 use crate::types::*;
 
+use crate::DEFAULT_BASE_URL;
+
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_BASE_URL: &str = "https://cast.agentrelay.com";
 const DEFAULT_ORIGIN_CLIENT: &str = "@relaycast/sdk-rust";
 
 fn strip_hash(channel: &str) -> &str {
