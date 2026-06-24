@@ -1,5 +1,6 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
+import { jsonError } from '../lib/httpResponse.js';
 
 // Conservative per-minute ceiling applied when the entitlements lookup fails,
 // so an entitlements outage degrades to a safe default rather than no limit.
@@ -60,16 +61,7 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     c.header('X-RateLimit-Remaining', String(remaining ?? Math.max(0, limit - count)));
 
     if (!allowed) {
-      return c.json(
-        {
-          ok: false,
-          error: {
-            code: 'rate_limit_exceeded',
-            message: `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`,
-          },
-        },
-        429,
-      );
+      return jsonError(c, 'rate_limit_exceeded', `Rate limit exceeded. ${limit} requests per minute allowed for ${workspace.plan} plan.`, 429);
     }
   } catch {
     // Only the limiter backend failing is fail-open — a transient infra hiccup

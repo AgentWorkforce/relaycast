@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
+import { jsonError } from '../lib/httpResponse.js';
 
 // Re-exported for the WS upgrade, which looks tokens up
 // directly. The active provider's `hashToken` is preferred at those call sites.
@@ -19,19 +20,13 @@ function makeAuthMiddleware(require: AuthRequire) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const token = extractToken(c.req.header('Authorization'));
     if (!token) {
-      return c.json(
-        { ok: false, error: { code: 'unauthorized', message: 'Missing or invalid Authorization header' } },
-        401,
-      );
+      return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
     }
 
     const db = c.get('db');
     const result = await c.get('engine').auth.authenticate({ token, require, db });
     if (!result.ok) {
-      return c.json(
-        { ok: false, error: { code: result.code, message: result.message } },
-        result.status as ContentfulStatusCode,
-      );
+      return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
 
     c.set('workspace', result.workspace);
