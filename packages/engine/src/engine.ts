@@ -12,6 +12,7 @@ import { isWorkspaceStreamEnabled } from './lib/workspaceStream.js';
 import { isFleetNodesEnabled } from './lib/fleetNodes.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError } from './lib/httpError.js';
+import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
 import { requiredOriginInfo } from './lib/origin.js';
 import { emitServerEvent } from './lib/serverTelemetry.js';
 
@@ -97,7 +98,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     const token = c.req.query('token');
     if (!token) {
-      return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
+      return jsonError(c, 'unauthorized', 'Missing token', 401);
     }
 
     const { auth, connections, kv, config } = c.get('engine');
@@ -113,7 +114,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (token.startsWith('at_live_')) {
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) {
-        return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid agent token' } }, 401);
+        return jsonError(c, 'invalid_token', 'Invalid agent token', 401);
       }
       const workspaceId = agent.workspaceId;
 
@@ -141,13 +142,10 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (token.startsWith('rk_live_')) {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
       if (!workspace) {
-        return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid workspace key' } }, 401);
+        return jsonError(c, 'invalid_token', 'Invalid workspace key', 401);
       }
       if (!(await isWorkspaceStreamEnabled(kv, workspace.id, config.workspaceStreamEnabled ?? false))) {
-        return c.json(
-          { ok: false, error: { code: 'not_found', message: 'Workspace stream is disabled' } },
-          404,
-        );
+        return jsonNotFound(c, 'not_found', 'Workspace stream is disabled');
       }
 
       const response = await connections.upgrade({
@@ -165,7 +163,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return response;
     }
 
-    return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid token format' } }, 401);
+    return jsonError(c, 'invalid_token', 'Invalid token format', 401);
   });
 
   app.get('/v1/node/ws', async (c) => {
@@ -184,10 +182,10 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       : undefined;
     const token = c.req.query('token') ?? bearer;
     if (!token) {
-      return c.json({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }, 401);
+      return jsonError(c, 'unauthorized', 'Missing token', 401);
     }
     if (!token.startsWith('nt_live_')) {
-      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token format' } }, 401);
+      return jsonError(c, 'invalid_token', 'Invalid node token format', 401);
     }
 
     const { auth, nodeConnections, kv, config } = c.get('engine');
@@ -195,16 +193,13 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     const hash = await auth.hashToken(token);
     const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
     if (!node) {
-      return c.json({ ok: false, error: { code: 'invalid_token', message: 'Invalid node token' } }, 401);
+      return jsonError(c, 'invalid_token', 'Invalid node token', 401);
     }
 
     // Phase 6 rollout flag: the node control surface is inert until a workspace
     // opts in. A node with a valid token still cannot attach while the flag is off.
     if (!(await isFleetNodesEnabled(kv, node.workspaceId, config.fleetNodesEnabled ?? false))) {
-      return c.json(
-        { ok: false, error: { code: 'fleet_nodes_disabled', message: 'Fleet nodes are disabled for this workspace' } },
-        404,
-      );
+      return jsonNotFound(c, 'fleet_nodes_disabled', 'Fleet nodes are disabled for this workspace');
     }
 
     const originInfo = requiredOriginInfo(c.req.raw);
@@ -261,7 +256,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // 404 handler
   app.notFound((c) => {
-    return c.json({ ok: false, error: { code: 'not_found', message: 'Route not found' } }, 404);
+    return jsonNotFound(c, 'not_found', 'Route not found');
   });
 
   // Global error handler
@@ -288,15 +283,14 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     }
 
     if (error.message?.includes('JSON')) {
-      return c.json({ ok: false, error: { code: 'invalid_json', message: 'Malformed JSON in request body' } }, 400);
+      return jsonMalformedBody(c);
     }
-    return c.json({
-      ok: false,
-      error: {
-        code: error.code || 'internal_error',
-        message: error.message || 'Internal server error',
-      },
-    }, status as ContentfulStatusCode);
+    return jsonError(
+      c,
+      error.code || 'internal_error',
+      error.message || 'Internal server error',
+      status as ContentfulStatusCode,
+    );
   });
 
   return app;

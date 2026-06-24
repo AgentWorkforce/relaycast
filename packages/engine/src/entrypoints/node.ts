@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { createEngine } from '../engine.js';
 import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
+import { jsonNotFound } from '../lib/httpResponse.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
@@ -87,6 +88,7 @@ export function startServer(options: StartServerOptions): RunningServer {
   const app = new Hono<AppEnv>();
   app.all(FILE_ROUTE_PREFIX, (c) => runtime.fileHandler(c.req.raw));
   app.route('/', engine);
+  app.notFound((c) => jsonNotFound(c, 'not_found', 'Route not found'));
 
   const server = serve({ fetch: app.fetch, port: options.port });
 
