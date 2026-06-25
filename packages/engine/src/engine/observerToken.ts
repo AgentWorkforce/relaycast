@@ -251,7 +251,11 @@ export async function revokeObserverToken(
   const [row] = await db
     .update(observerTokens)
     .set({ status: 'revoked', revokedAt: now, updatedAt: now })
-    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+    .where(and(
+      eq(observerTokens.workspaceId, workspaceId),
+      eq(observerTokens.id, id),
+      eq(observerTokens.status, 'active'),
+    ))
     .returning({ id: observerTokens.id });
   return Boolean(row);
 }
@@ -594,6 +598,8 @@ export async function filterObserverFileResults<T extends { id: string }>(
 export async function filterObserverSearchResults<T extends {
   channel_id?: string;
   channel_name?: string | null;
+  channel_type?: number | null;
+  channelType?: number | null;
   conversation_id?: string | null;
   agent_id?: string | null;
   created_at?: string | null;
@@ -608,13 +614,13 @@ export async function filterObserverSearchResults<T extends {
   const missingChannelIds = [...new Set(results
     .filter((result) => !result.channel_name && result.channel_id)
     .map((result) => result.channel_id as string))];
-  const namesById = new Map<string, string>();
+  const channelsById = new Map<string, { name: string; channel_type: number }>();
   if (missingChannelIds.length > 0) {
     const rows = await db
-      .select({ id: channels.id, name: channels.name })
+      .select({ id: channels.id, name: channels.name, channel_type: channels.channelType })
       .from(channels)
       .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, missingChannelIds)));
-    for (const row of rows) namesById.set(row.id, row.name);
+    for (const row of rows) channelsById.set(row.id, { name: row.name, channel_type: row.channel_type });
   }
 
   return results.filter((result) => {
@@ -622,9 +628,11 @@ export async function filterObserverSearchResults<T extends {
     if (result.conversation_id) {
       return observerAllowsConversation(observer, result.conversation_id);
     }
+    const channel = result.channel_id ? channelsById.get(result.channel_id) : undefined;
     return observerAllowsChannel(observer, {
       id: result.channel_id,
-      name: result.channel_name ?? (result.channel_id ? namesById.get(result.channel_id) : null),
+      name: result.channel_name ?? channel?.name,
+      channel_type: result.channel_type ?? result.channelType ?? channel?.channel_type,
     });
   });
 }

@@ -235,7 +235,8 @@ workspaceRoutes.get('/activity', requireWorkspaceRead('activity:read', { allowAg
       getObserverTokenFromContext(c),
       items,
     );
-    return jsonOk(c, visibleItems);
+    const responseItems = visibleItems.map(({ channel_type: _channelType, ...item }) => item);
+    return jsonOk(c, responseItems);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

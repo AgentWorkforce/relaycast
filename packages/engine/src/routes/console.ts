@@ -75,7 +75,8 @@ consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), ra
       })),
     );
 
-    return jsonOk(c, visible);
+    const response = visible.map(({ channel_type: _channelType, ...item }) => item);
+    return jsonOk(c, response);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

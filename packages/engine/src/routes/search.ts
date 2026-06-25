@@ -54,7 +54,11 @@ searchRoutes.get(
         getObserverTokenFromContext(c),
         results,
       );
-      const responseResults = visibleResults.map(({ agent_id: _agentId, ...result }) => result);
+      const responseResults = visibleResults.map(({
+        agent_id: _agentId,
+        channel_type: _channelType,
+        ...result
+      }) => result);
 
       emitServerEvent(c, workspace.id, 'relaycast_server_search_executed', {
         query_length: q.trim().length,

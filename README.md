@@ -362,7 +362,11 @@ POST   /messages/:id/replies
 POST   /dm
 GET    /inbox
 GET    /search
+GET    /activity
 ```
+
+Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
+`conversation_id`.
 
 Durable delivery (server-backed, per-recipient delivery contract):
 

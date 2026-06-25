@@ -52,6 +52,7 @@ export async function searchMessages(
     id: string;
     channel_id: string;
     channel_name: string;
+    channel_type: number;
     conversation_id: string | null;
     agent_id: string;
     agent_name: string | null;
@@ -59,7 +60,7 @@ export async function searchMessages(
     created_at: number;
     rank: number;
   }>(sql`
-    SELECT m.id, m.channel_id, c.name AS channel_name, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
+    SELECT m.id, m.channel_id, c.name AS channel_name, c.channel_type, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
            bm25(messages_fts) AS rank
     FROM messages_fts fts
     JOIN messages m ON m.id = fts.id
@@ -80,6 +81,7 @@ export async function searchMessages(
     id: row.id,
     channel_id: row.channel_id,
     channel_name: row.channel_name || 'unknown',
+    channel_type: row.channel_type,
     conversation_id: row.conversation_id,
     agent_id: row.agent_id,
     agent_name: row.agent_name || 'unknown',

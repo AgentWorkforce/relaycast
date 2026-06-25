@@ -52,6 +52,7 @@ export type SetSystemPromptRequest = z.infer<typeof SetSystemPromptRequestSchema
 export const ActivityItemSchema = z.object({
   type: z.enum(['message', 'dm']),
   id: z.string(),
+  channel_id: z.string().optional(),
   channel_name: z.string().optional(),
   conversation_id: z.string().optional(),
   agent_name: z.string(),

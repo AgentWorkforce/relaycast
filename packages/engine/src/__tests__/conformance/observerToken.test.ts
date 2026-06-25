@@ -111,6 +111,12 @@ describe('observer tokens', () => {
     });
     expect(revoke.status).toBe(204);
 
+    const revokeAgain = await stack.app.request(`/v1/observer-tokens/${created.data.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(revokeAgain.status).toBe(404);
+
     const rotateRevoked = await stack.app.request(`/v1/observer-tokens/${created.data.id}/rotate`, {
       method: 'POST',
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
@@ -173,6 +179,12 @@ describe('observer tokens', () => {
       body: JSON.stringify({ name: 'team-chat' }),
     });
     expect(createTeam.status).toBe(201);
+
+    const generalChannel = await stack.app.request('/v1/channels/general', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const generalChannelBody = await generalChannel.json() as { data: { id: string } };
+    expect(generalChannel.status).toBe(200);
 
     const general = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
@@ -333,6 +345,21 @@ describe('observer tokens', () => {
     const futureEventsBody = await futureEvents.json() as { data: unknown[] };
     expect(futureEvents.status).toBe(200);
     expect(futureEventsBody.data).toHaveLength(0);
+
+    const channelIdActivity = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'general-activity-by-id',
+      scopes: ['activity:read'],
+      filters: { channel_ids: [generalChannelBody.data.id] },
+    });
+    const activity = await stack.app.request('/v1/activity', {
+      headers: { authorization: `Bearer ${channelIdActivity.data.token}` },
+    });
+    const activityBody = await activity.json() as { data: Array<{ text: string; channel_id?: string }> };
+    expect(activity.status).toBe(200);
+    expect(activityBody.data.map((item) => item.text)).toContain('visible general message');
+    expect(activityBody.data.map((item) => item.text)).toContain('hidden bob message');
+    expect(activityBody.data.map((item) => item.text)).not.toContain('hidden team message');
+    expect(activityBody.data.every((item) => item.channel_id === generalChannelBody.data.id)).toBe(true);
 
     const reactionsWithMessageScope = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
       headers: { authorization: `Bearer ${token}` },
@@ -543,6 +570,97 @@ describe('observer tokens', () => {
     expect(futureSingle.status).toBe(404);
   });
 
+  it('filters node roster and node agent bindings by observer agent filters', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-node-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    await registerAgent(stack.app, ws.workspaceKey, 'charlie');
+
+    for (const node of [
+      { node_id: 'observer_shared_node', name: 'shared-node' },
+      { node_id: 'observer_hidden_node', name: 'hidden-node' },
+    ]) {
+      const created = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          ...node,
+          kind: 'ws',
+          role: 'broker',
+          max_agents: 4,
+          capabilities: ['observe:test'],
+        }),
+      });
+      expect(created.status).toBe(201);
+    }
+
+    for (const agentName of ['alice', 'bob']) {
+      const bound = await stack.app.request('/v1/nodes/shared-node/agents', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ agent_name: agentName }),
+      });
+      expect(bound.status).toBe(201);
+    }
+    const hiddenBound = await stack.app.request('/v1/nodes/hidden-node/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ agent_name: 'charlie' }),
+    });
+    expect(hiddenBound.status).toBe(201);
+
+    const observer = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'alice-node-observer',
+      scopes: ['nodes:read'],
+      filters: { agent_ids: [alice.agentId] },
+    });
+
+    const nodeAgents = await stack.app.request('/v1/nodes/shared-node/agents', {
+      headers: { authorization: `Bearer ${observer.data.token}` },
+    });
+    const nodeAgentsBody = await nodeAgents.json() as { data: Array<{ agent_id: string; agent_name: string }> };
+    expect(nodeAgents.status).toBe(200);
+    expect(nodeAgentsBody.data).toEqual([
+      expect.objectContaining({ agent_id: alice.agentId, agent_name: 'alice' }),
+    ]);
+    expect(nodeAgentsBody.data.map((binding) => binding.agent_name)).not.toContain('bob');
+
+    const roster = await stack.app.request('/v1/nodes', {
+      headers: { authorization: `Bearer ${observer.data.token}` },
+    });
+    const rosterBody = await roster.json() as { data: Array<{ name: string; active_agents: number }> };
+    expect(roster.status).toBe(200);
+    expect(rosterBody.data).toEqual([
+      expect.objectContaining({ name: 'shared-node', active_agents: 1 }),
+    ]);
+
+    const visibleNode = await stack.app.request('/v1/nodes/shared-node', {
+      headers: { authorization: `Bearer ${observer.data.token}` },
+    });
+    const visibleNodeBody = await visibleNode.json() as { data: { name: string; active_agents: number } };
+    expect(visibleNode.status).toBe(200);
+    expect(visibleNodeBody.data).toMatchObject({ name: 'shared-node', active_agents: 1 });
+
+    const hiddenNode = await stack.app.request('/v1/nodes/hidden-node', {
+      headers: { authorization: `Bearer ${observer.data.token}` },
+    });
+    expect(hiddenNode.status).toBe(404);
+
+    const bobObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'bob-node-observer',
+      scopes: ['nodes:read'],
+      filters: { agent_ids: [bob.agentId] },
+    });
+    const bobNodeAgents = await stack.app.request('/v1/nodes/shared-node/agents', {
+      headers: { authorization: `Bearer ${bobObserver.data.token}` },
+    });
+    const bobNodeAgentsBody = await bobNodeAgents.json() as { data: Array<{ agent_id: string; agent_name: string }> };
+    expect(bobNodeAgents.status).toBe(200);
+    expect(bobNodeAgentsBody.data).toEqual([
+      expect.objectContaining({ agent_id: bob.agentId, agent_name: 'bob' }),
+    ]);
+  });
+
   it('requires stream-scoped observer tokens for workspace WebSockets and filters events per socket', async () => {
     const ws = await createWorkspace(stack.app, 'observer-stream-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -641,7 +759,7 @@ describe('observer tokens', () => {
 
     const withoutDmScope = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms-without-scope',
-      scopes: ['stream:read'],
+      scopes: ['stream:read', 'messages:read', 'reactions:read', 'threads:read'],
       filters: { channel_names: ['general'], include_dms: true },
     });
     const [withoutDmScopeRow] = await stack.runtime.deps.db
@@ -678,6 +796,12 @@ describe('observer tokens', () => {
     });
     expect(hiddenDmReaction.status).toBe(201);
 
+    const hiddenDmRead = await stack.app.request(`/v1/messages/${hiddenDmBody.data.id}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(hiddenDmRead.status).toBe(200);
+
     const hiddenDmReply = await stack.app.request(`/v1/messages/${hiddenDmBody.data.id}/replies`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
@@ -687,13 +811,14 @@ describe('observer tokens', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('message.read')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
     expect(threadWithoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
 
     const observer = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms',
-      scopes: ['stream:read', 'dms:read', 'reactions:read', 'threads:read'],
+      scopes: ['stream:read', 'dms:read', 'messages:read', 'reactions:read', 'threads:read'],
       filters: { channel_names: ['general'], include_dms: true },
     });
 
@@ -719,6 +844,12 @@ describe('observer tokens', () => {
     });
     expect(visibleDmReaction.status).toBe(201);
 
+    const visibleDmRead = await stack.app.request(`/v1/messages/${dmBody.data.id}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(visibleDmRead.status).toBe(200);
+
     const visibleDmReply = await stack.app.request(`/v1/messages/${dmBody.data.id}/replies`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
@@ -730,6 +861,12 @@ describe('observer tokens', () => {
     expect(sock.ofType('dm.received')).toHaveLength(1);
     expect(sock.ofType('dm.received')[0]).toMatchObject({
       message: { text: 'dm visible despite channel filters' },
+    });
+    expect(sock.ofType('message.read')).toHaveLength(1);
+    expect(sock.ofType('message.read')[0]).toMatchObject({
+      conversation_id: expect.any(String),
+      message_id: dmBody.data.id,
+      agent_id: bob.agentId,
     });
     expect(sock.ofType('message.reacted')).toHaveLength(1);
     expect(sock.ofType('message.reacted')[0]).toMatchObject({
@@ -744,6 +881,7 @@ describe('observer tokens', () => {
       message: { text: 'dm thread reply visible with dms:read' },
     });
     expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('message.read')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
     expect(threadWithoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);

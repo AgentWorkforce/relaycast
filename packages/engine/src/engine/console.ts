@@ -35,6 +35,7 @@ type MessageLogRow = {
   messageId: string;
   channelId: string;
   channelName: string | null;
+  channelType: number | null;
   agentId: string;
   agentName: string | null;
   conversationId: string | null;
@@ -62,6 +63,7 @@ function publicMessageLog(row: MessageLogRow) {
     message_id: row.messageId,
     channel_id: row.channelId,
     channel_name: row.channelName,
+    channel_type: row.channelType,
     agent_id: row.agentId,
     agent_name: row.agentName,
     conversation_id: row.conversationId,
@@ -148,6 +150,7 @@ export async function listMessageLogs(
       messageId: messageLogs.messageId,
       channelId: messageLogs.channelId,
       channelName: channels.name,
+      channelType: channels.channelType,
       agentId: messageLogs.agentId,
       agentName: agents.name,
       conversationId: messageLogs.conversationId,
@@ -182,6 +185,7 @@ export async function listMessageLogsForWindow(
       messageId: messageLogs.messageId,
       channelId: messageLogs.channelId,
       channelName: channels.name,
+      channelType: channels.channelType,
       agentId: messageLogs.agentId,
       agentName: agents.name,
       conversationId: messageLogs.conversationId,

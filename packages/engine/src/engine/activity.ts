@@ -50,7 +50,9 @@ export async function getActivityFeed(
     return {
       type: 'message' as const,
       id: r.id,
+      channel_id: r.channelId,
       channel_name: r.channelName,
+      channel_type: r.channelType,
       agent_id: r.agentId,
       agent_name: r.agentName,
       text: r.body,
