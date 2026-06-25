@@ -790,6 +790,7 @@ components:
                 type: string
             include_dms:
               type: boolean
+              description: Enables DM resources for tokens that also have the `dms:read` scope. Without `dms:read`, DM content is not returned even when this filter is true.
             dm_conversation_ids:
               type: array
               items:
@@ -798,6 +799,7 @@ components:
               type: array
               items:
                 type: string
+              description: Restricts resources and realtime events to matching agents where an event carries an agent id.
             event_types:
               type: array
               items:
@@ -805,6 +807,7 @@ components:
             created_after:
               type: string
               format: date-time
+          description: Filters narrow the resources visible to a scoped observer token. Channel filters apply to channel-scoped resources; workspace-wide presence/status events have no channel and are matched by `agent_ids` when present.
         status:
           type: string
           enum: [active, revoked]
@@ -4001,7 +4004,7 @@ paths:
   /ws:
     get:
       summary: Workspace observer WebSocket stream
-      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token.
+      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token. Prefer Authorization headers when a WebSocket client supports them; query-param tokens can appear in access logs.
       tags:
         - System
       security:
@@ -4009,10 +4012,10 @@ paths:
       parameters:
         - name: token
           in: query
-          required: true
+          required: false
           schema:
             type: string
-          description: Observer token (`ot_live_*`) with `stream:read`
+          description: Observer token (`ot_live_*`) with `stream:read`; use this only when the client cannot send an Authorization header.
       responses:
         '101':
           description: Switching Protocols (WebSocket)

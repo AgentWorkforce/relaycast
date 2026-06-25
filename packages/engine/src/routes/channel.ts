@@ -305,7 +305,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.joined');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.joined');
         }
       } catch {
@@ -351,7 +351,7 @@ channelRoutes.post(
       try {
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.left', eventData), 'fanout member.left');
         }
       } catch {
@@ -455,7 +455,8 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.invited');
-          const eventData = { channel_name: name, agent_name: agentName };
+          const invitedMember = members.find((member) => member.agent_name === agentName);
+          const eventData = { channel_name: name, agent_id: invitedMember?.agent_id, agent_name: agentName };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.invited');
         }
       } catch {
@@ -503,7 +504,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_muted');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_muted', eventData), 'fanout member.channel_muted');
         }
       } catch {
@@ -551,7 +552,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_unmuted');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_unmuted', eventData), 'fanout member.channel_unmuted');
         }
       } catch {

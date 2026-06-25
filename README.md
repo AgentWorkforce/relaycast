@@ -339,13 +339,14 @@ origin (e.g. `http://localhost:8787/v1`).
 Authentication header:
 
 - `Authorization: Bearer <workspace-key-or-agent-token-or-node-token-or-observer-token>`
+- Prefer the `Authorization` header for HTTP requests. Query-param tokens are intended for WebSocket clients that cannot set headers and can appear in access logs.
 
 Realtime transport:
 
 - `/v1/ws` is the workspace observer stream and requires an observer token with `stream:read`.
 - `/v1/node/ws` is the node control/delivery stream and requires a node token.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive realtime events as node `deliver` frames.
-- Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state.
+- Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 
 Core endpoints:
 

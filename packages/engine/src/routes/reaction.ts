@@ -5,7 +5,7 @@ import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
-import { channels, messages } from '../db/schema.js';
+import { channels, dmConversations, messages } from '../db/schema.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,
@@ -63,7 +63,20 @@ reactionRoutes.post(
       // Strip internal channel_id/channel_name before sending to client
       const { channel_id, channel_name, ...reactionData } = result;
 
-      const eventData = { ...reactionData, channel_name, agent_name: agent!.name, action: 'added' };
+      const [dmConversation] = channel_id
+        ? await db
+          .select({ id: dmConversations.id })
+          .from(dmConversations)
+          .where(eq(dmConversations.channelId, channel_id))
+        : [];
+      const eventData = {
+        ...reactionData,
+        channel_name,
+        ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
+        agent_id: agent!.id,
+        agent_name: agent!.name,
+        action: 'added',
+      };
       if (channel_id) {
         runInBackground(
           c,
@@ -99,7 +112,7 @@ reactionRoutes.post(
       await sendWebhookEvent(c, {
         type: 'message.reacted',
         workspaceId: workspace.id,
-        data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name, action: 'added' },
+        data: { ...eventData, channel_id },
       });
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
         message_id: c.req.param('id'),
@@ -144,12 +157,17 @@ reactionRoutes.delete(
       };
       try {
         const [row] = await db
-          .select({ channelId: messages.channelId, channelName: channels.name })
+          .select({ channelId: messages.channelId, channelName: channels.name, conversationId: dmConversations.id })
           .from(messages)
           .innerJoin(channels, eq(messages.channelId, channels.id))
+          .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
           .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
         if (row?.channelId) {
-          const enriched = { ...eventData, channel_name: row.channelName };
+          const enriched = {
+            ...eventData,
+            channel_name: row.channelName,
+            ...(row.conversationId ? { conversation_id: row.conversationId } : {}),
+          };
           runInBackground(
             c,
             (async () => {

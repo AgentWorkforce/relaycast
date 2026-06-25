@@ -7,7 +7,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { observerTokens } from '../../db/schema.js';
+import { messageLogs, observerTokens } from '../../db/schema.js';
 import { authenticateRealtimeWs } from '../../engine/wsAuth.js';
 
 async function createObserverToken(
@@ -20,8 +20,11 @@ async function createObserverToken(
     headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
     body: JSON.stringify(body),
   });
-  const json = await res.json() as { data: { id: string; token?: string; scopes: string[]; filters: Record<string, unknown> } };
-  return { res, data: json.data };
+  const json = await res.json() as {
+    data?: { id: string; token?: string; scopes: string[]; filters: Record<string, unknown> };
+    error?: { code: string; message: string };
+  };
+  return { res, data: json.data!, body: json };
 }
 
 describe('observer tokens', () => {
@@ -86,6 +89,25 @@ describe('observer tokens', () => {
     });
   });
 
+  it('returns a conflict for duplicate observer token names in one workspace', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-duplicate-name-ws');
+    const created = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'dashboard',
+      scopes: ['messages:read'],
+    });
+    expect(created.res.status).toBe(201);
+
+    const duplicate = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'dashboard',
+      scopes: ['messages:read'],
+    });
+    expect(duplicate.res.status).toBe(409);
+    expect(duplicate.body).toMatchObject({
+      ok: false,
+      error: { code: 'observer_token_name_conflict' },
+    });
+  });
+
   it('gates REST reads by scope and channel filters and rejects observer writes', async () => {
     const ws = await createWorkspace(stack.app, 'observer-rest-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -112,6 +134,7 @@ describe('observer tokens', () => {
       body: JSON.stringify({ text: 'hidden bob message' }),
     });
     expect(bobGeneral.status).toBe(201);
+    const bobGeneralBody = await bobGeneral.json() as { data: { id: string } };
 
     const team = await stack.app.request('/v1/channels/team-chat/messages', {
       method: 'POST',
@@ -119,6 +142,15 @@ describe('observer tokens', () => {
       body: JSON.stringify({ text: 'hidden team message' }),
     });
     expect(team.status).toBe(201);
+
+    await stack.runtime.deps.db
+      .update(messageLogs)
+      .set({ metadata: { _cost: { total_usd: 3, total_tokens: 30 } } })
+      .where(eq(messageLogs.messageId, generalBody.data.id));
+    await stack.runtime.deps.db
+      .update(messageLogs)
+      .set({ metadata: { _cost: { total_usd: 7, total_tokens: 70 } } })
+      .where(eq(messageLogs.messageId, bobGeneralBody.data.id));
 
     const observer = await createObserverToken(stack, ws.workspaceKey, {
       name: 'general-reader',
@@ -168,6 +200,43 @@ describe('observer tokens', () => {
     expect(filteredSearch.status).toBe(200);
     expect(filteredSearchBody.data.map((result) => result.text)).toContain('visible general message');
     expect(filteredSearchBody.data.map((result) => result.text)).not.toContain('hidden bob message');
+
+    const consoleObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'console-general-alice',
+      scopes: ['activity:read', 'agents:read'],
+      filters: { channel_names: ['general'], agent_ids: [alice.agentId] },
+    });
+    const consoleStats = await stack.app.request('/v1/console/stats', {
+      headers: { authorization: `Bearer ${consoleObserver.data.token}` },
+    });
+    const consoleStatsBody = await consoleStats.json() as { data: { total_messages: number; channel_messages: number } };
+    expect(consoleStats.status).toBe(200);
+    expect(consoleStatsBody.data.total_messages).toBe(1);
+    expect(consoleStatsBody.data.channel_messages).toBe(1);
+
+    const consoleAgents = await stack.app.request('/v1/console/agents', {
+      headers: { authorization: `Bearer ${consoleObserver.data.token}` },
+    });
+    const consoleAgentsBody = await consoleAgents.json() as { data: Array<{ agent_id: string; message_count: number }> };
+    expect(consoleAgents.status).toBe(200);
+    expect(consoleAgentsBody.data).toHaveLength(1);
+    expect(consoleAgentsBody.data[0]).toMatchObject({
+      agent_id: alice.agentId,
+      agent_name: 'alice',
+      message_count: 1,
+      channel_count: 1,
+      dm_count: 0,
+      last_message_at: expect.any(String),
+    });
+
+    const consoleCosts = await stack.app.request('/v1/console/costs', {
+      headers: { authorization: `Bearer ${consoleObserver.data.token}` },
+    });
+    const consoleCostsBody = await consoleCosts.json() as { data: { totals: { total_cost_usd: number; total_tokens: number }; agents: Array<{ agent_id: string; total_cost_usd: number; total_tokens: number }> } };
+    expect(consoleCosts.status).toBe(200);
+    expect(consoleCostsBody.data.totals).toMatchObject({ total_cost_usd: 3, total_tokens: 30 });
+    expect(consoleCostsBody.data.agents).toHaveLength(1);
+    expect(consoleCostsBody.data.agents[0]).toMatchObject({ agent_id: alice.agentId, total_cost_usd: 3, total_tokens: 30 });
 
     const futureOnly = await createObserverToken(stack, ws.workspaceKey, {
       name: 'future-reader',
@@ -257,6 +326,30 @@ describe('observer tokens', () => {
     expect(visible.status).toBe(200);
     expect(visibleBody.data).toHaveLength(1);
 
+    const dmSearchWithoutScope = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'dm-search-without-scope',
+      scopes: ['search:read'],
+      filters: { include_dms: true },
+    });
+    const hiddenSearch = await stack.app.request('/v1/search?q=private', {
+      headers: { authorization: `Bearer ${dmSearchWithoutScope.data.token}` },
+    });
+    const hiddenSearchBody = await hiddenSearch.json() as { data: unknown[] };
+    expect(hiddenSearch.status).toBe(200);
+    expect(hiddenSearchBody.data).toHaveLength(0);
+
+    const dmSearchWithScope = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'dm-search-with-scope',
+      scopes: ['search:read', 'dms:read'],
+      filters: { include_dms: true },
+    });
+    const visibleSearch = await stack.app.request('/v1/search?q=private', {
+      headers: { authorization: `Bearer ${dmSearchWithScope.data.token}` },
+    });
+    const visibleSearchBody = await visibleSearch.json() as { data: Array<{ text: string }> };
+    expect(visibleSearch.status).toBe(200);
+    expect(visibleSearchBody.data.map((result) => result.text)).toContain('private note');
+
     const underScoped = await createObserverToken(stack, ws.workspaceKey, {
       name: 'channels-only',
       scopes: ['channels:read'],
@@ -324,9 +417,40 @@ describe('observer tokens', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     await registerAgent(stack.app, ws.workspaceKey, 'bob');
 
+    const withoutDmScope = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-dms-without-scope',
+      scopes: ['stream:read'],
+      filters: { channel_names: ['general'], include_dms: true },
+    });
+    const [withoutDmScopeRow] = await stack.runtime.deps.db
+      .select()
+      .from(observerTokens)
+      .where(eq(observerTokens.id, withoutDmScope.data.id));
+    const withoutDmScopeSock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, withoutDmScopeSock, withoutDmScopeRow);
+
+    const hiddenDm = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ to: 'bob', text: 'dm hidden without dms:read' }),
+    });
+    expect(hiddenDm.status).toBe(201);
+    const hiddenDmBody = await hiddenDm.json() as { data: { id: string } };
+
+    const hiddenDmReaction = await stack.app.request(`/v1/messages/${hiddenDmBody.data.id}/reactions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ emoji: 'eyes' }),
+    });
+    expect(hiddenDmReaction.status).toBe(201);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
+
     const observer = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms',
-      scopes: ['stream:read'],
+      scopes: ['stream:read', 'dms:read'],
       filters: { channel_names: ['general'], include_dms: true },
     });
 
@@ -343,11 +467,27 @@ describe('observer tokens', () => {
       body: JSON.stringify({ to: 'bob', text: 'dm visible despite channel filters' }),
     });
     expect(dm.status).toBe(201);
+    const dmBody = await dm.json() as { data: { id: string } };
+
+    const visibleDmReaction = await stack.app.request(`/v1/messages/${dmBody.data.id}/reactions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ emoji: 'thumbsup' }),
+    });
+    expect(visibleDmReaction.status).toBe(201);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sock.ofType('dm.received')).toHaveLength(1);
     expect(sock.ofType('dm.received')[0]).toMatchObject({
       message: { text: 'dm visible despite channel filters' },
     });
+    expect(sock.ofType('message.reacted')).toHaveLength(1);
+    expect(sock.ofType('message.reacted')[0]).toMatchObject({
+      conversation_id: expect.any(String),
+      message_id: dmBody.data.id,
+      emoji: 'thumbsup',
+    });
+    expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
   });
 });

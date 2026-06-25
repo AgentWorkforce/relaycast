@@ -32,6 +32,21 @@ const agentStatsQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 100 }),
 });
 
+async function visibleMessageLogsForObserver(
+  db: Parameters<typeof consoleEngine.listMessageLogsForWindow>[0],
+  workspaceId: string,
+  days: number,
+  observer: ReturnType<typeof getObserverTokenFromContext>,
+) {
+  const logs = await consoleEngine.listMessageLogsForWindow(db, workspaceId, days);
+  return filterObserverSearchResults(
+    db,
+    workspaceId,
+    observer,
+    logs,
+  );
+}
+
 consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
@@ -75,7 +90,14 @@ consoleRoutes.get('/console/stats', requireWorkspaceRead('activity:read'), rateL
       return parsed.response;
     }
 
-    const data = await consoleEngine.getConsoleOverview(db, workspace.id, parsed.data.days);
+    const days = parsed.data.days ?? 7;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeConsoleOverview(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        days,
+      )
+      : await consoleEngine.getConsoleOverview(db, workspace.id, days);
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -91,12 +113,20 @@ consoleRoutes.get('/console/agents', requireWorkspaceRead('agents:read'), rateLi
       return parsed.response;
     }
 
-    const data = await consoleEngine.getAgentStats(
-      db,
-      workspace.id,
-      parsed.data.days,
-      parsed.data.limit,
-    );
+    const days = parsed.data.days ?? 7;
+    const limit = parsed.data.limit ?? 20;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeAgentStats(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        limit,
+      )
+      : await consoleEngine.getAgentStats(
+        db,
+        workspace.id,
+        days,
+        limit,
+      );
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -112,7 +142,14 @@ consoleRoutes.get('/console/costs', requireWorkspaceRead('activity:read'), rateL
       return parsed.response;
     }
 
-    const data = await consoleEngine.getCostStats(db, workspace.id, parsed.data.days);
+    const days = parsed.data.days ?? 7;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeCostStats(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        days,
+      )
+      : await consoleEngine.getCostStats(db, workspace.id, days);
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);

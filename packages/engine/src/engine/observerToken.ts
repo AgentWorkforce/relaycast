@@ -109,6 +109,21 @@ function publicObserverToken(row: ObserverToken, token?: string): PublicObserver
   };
 }
 
+function isObserverTokenNameConflict(err: unknown): boolean {
+  const candidate = err as { code?: string; message?: string };
+  const message = candidate.message ?? '';
+  return (
+    candidate.code === 'SQLITE_CONSTRAINT'
+    || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    || message.includes('observer_tokens_workspace_name_unique')
+    || message.includes('observer_tokens.workspace_id, observer_tokens.name')
+  );
+}
+
+function observerTokenNameConflict(): never {
+  throw codedError('Observer token name already exists in this workspace', 'observer_token_name_conflict', 409);
+}
+
 export async function createObserverToken(
   db: Db,
   workspaceId: string,
@@ -120,20 +135,29 @@ export async function createObserverToken(
   const scopes = normalizeScopes(input.scopes);
   const filters = normalizeObserverFilters(input.filters);
 
-  const [created] = await db
-    .insert(observerTokens)
-    .values({
-      id: `ot_${generateId()}`,
-      workspaceId,
-      name: input.name,
-      description: input.description ?? null,
-      tokenHash,
-      scopes,
-      filters,
-      expiresAt,
-      createdByType: 'workspace',
-    })
-    .returning();
+  let created: ObserverToken | undefined;
+  try {
+    [created] = await db
+      .insert(observerTokens)
+      .values({
+        id: `ot_${generateId()}`,
+        workspaceId,
+        name: input.name,
+        description: input.description ?? null,
+        tokenHash,
+        scopes,
+        filters,
+        expiresAt,
+        createdByType: 'workspace',
+      })
+      .returning();
+  } catch (err: unknown) {
+    if (isObserverTokenNameConflict(err)) observerTokenNameConflict();
+    throw err;
+  }
+  if (!created) {
+    throw codedError('Failed to create observer token', 'internal_error', 500);
+  }
 
   return publicObserverToken(created, token);
 }
@@ -173,11 +197,17 @@ export async function updateObserverToken(
   if (input.filters !== undefined) update.filters = normalizeObserverFilters(input.filters);
   if (input.expires_at !== undefined) update.expiresAt = parseExpiresAt(input.expires_at);
 
-  const [row] = await db
-    .update(observerTokens)
-    .set(update)
-    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
-    .returning();
+  let row: ObserverToken | undefined;
+  try {
+    [row] = await db
+      .update(observerTokens)
+      .set(update)
+      .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+      .returning();
+  } catch (err: unknown) {
+    if (isObserverTokenNameConflict(err)) observerTokenNameConflict();
+    throw err;
+  }
 
   return row ? publicObserverToken(row) : null;
 }
@@ -265,11 +295,12 @@ export function observerAllowsChannel(
 }
 
 export function observerAllowsConversation(
-  observer: Pick<ObserverToken, 'filters'> | undefined,
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   conversationId: string | null | undefined,
 ): boolean {
   if (!observer) return true;
   const filters = normalizeObserverFilters(observer.filters);
+  if (!hasObserverScope(observer, 'dms:read')) return false;
   if (!filters.include_dms) return false;
   const ids = filterList(filters.dm_conversation_ids);
   if (!ids) return true;
@@ -335,16 +366,16 @@ function eventAgentId(event: Record<string, unknown>): string | null {
     ?? (typeof agent.id === 'string' ? agent.id : null);
 }
 
-function eventCreatedAt(event: Record<string, unknown>): string | Date {
+function eventCreatedAt(event: Record<string, unknown>): string | Date | null {
   const message = nestedRecord(event.message);
   return (typeof event.created_at === 'string' ? event.created_at : null)
     ?? (typeof event.timestamp === 'string' ? event.timestamp : null)
     ?? (typeof message.created_at === 'string' ? message.created_at : null)
-    ?? new Date();
+    ?? null;
 }
 
 export function observerAllowsEvent(
-  observer: Pick<ObserverToken, 'filters'> | undefined,
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   event: Record<string, unknown>,
 ): boolean {
   if (!observer) return true;
@@ -409,14 +440,14 @@ export async function getChannelObserverResource(
 
 export async function filterObserverSearchResults<T extends {
   channel_id?: string;
-  channel_name?: string;
+  channel_name?: string | null;
   conversation_id?: string | null;
   agent_id?: string | null;
   created_at?: string | null;
 }>(
   db: Db,
   workspaceId: string,
-  observer: Pick<ObserverToken, 'filters'> | undefined,
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   results: T[],
 ): Promise<T[]> {
   if (!observer || results.length === 0) return results;
