@@ -1020,6 +1020,11 @@ impl RelayCast {
 
     // === Fleet nodes ===
 
+    /// Enroll or rotate a node token.
+    pub async fn create_node(&self, request: CreateNodeRequest) -> Result<CreateNodeResponse> {
+        self.client.post("/v1/nodes", Some(request), None).await
+    }
+
     /// List fleet nodes on the roster.
     pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
         let query = query.unwrap_or_default();
@@ -1050,6 +1055,46 @@ impl RelayCast {
             .get(
                 &format!("/v1/nodes/{}", urlencoding::encode(name)),
                 None,
+                None,
+            )
+            .await
+    }
+
+    /// List active agent bindings for a node.
+    pub async fn list_node_agents(&self, name: &str) -> Result<Vec<NodeAgentBinding>> {
+        self.client
+            .get(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Bind an agent to a node delivery host.
+    pub async fn bind_agent_to_node(
+        &self,
+        name: &str,
+        request: BindAgentToNodeRequest,
+    ) -> Result<NodeAgentBinding> {
+        self.client
+            .post(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Remove an active node binding for an agent.
+    pub async fn unbind_agent_from_node(&self, name: &str, agent_name: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!(
+                    "/v1/nodes/{}/agents/{}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(agent_name)
+                ),
                 None,
             )
             .await

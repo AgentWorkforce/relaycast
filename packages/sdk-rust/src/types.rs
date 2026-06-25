@@ -654,6 +654,24 @@ pub struct Delivery {
     pub channel_id: String,
     pub agent_id: String,
     pub status: DeliveryStatus,
+    #[serde(default)]
+    pub seq: Option<i64>,
+    #[serde(default)]
+    pub location_type: Option<String>,
+    #[serde(default)]
+    pub location_node_id: Option<String>,
+    #[serde(default)]
+    pub route_node_id: Option<String>,
+    #[serde(default)]
+    pub route_node_kind: Option<String>,
+    #[serde(default)]
+    pub delivery_adapter: Option<String>,
+    #[serde(default)]
+    pub dispatch_attempts: Option<i64>,
+    #[serde(default)]
+    pub next_attempt_at: Option<String>,
+    #[serde(default)]
+    pub last_dispatch_error: Option<String>,
     pub mode: String,
     pub reason: Option<String>,
     pub priority: String,
@@ -661,6 +679,14 @@ pub struct Delivery {
     pub error: Option<String>,
     pub available_at: Option<String>,
     pub deadline: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    #[serde(default)]
+    pub acked_at: Option<String>,
+    #[serde(default)]
+    pub dead_lettered_at: Option<String>,
     pub created_at: String,
     pub updated_at: Option<String>,
 }
@@ -1790,6 +1816,12 @@ pub struct NodeRosterEntry {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub delivery_adapter: Option<String>,
+    #[serde(default)]
+    pub delivery: Option<NodeDeliveryConfig>,
+    #[serde(default)]
     pub capabilities: Vec<NodeCapability>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -1810,6 +1842,103 @@ pub struct NodeRosterEntry {
 pub struct NodeListQuery {
     pub capability: Option<String>,
     pub name: Option<String>,
+}
+
+/// Delivery config for a node. HTTP push is typed; raw JSON keeps future adapters usable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NodeDeliveryConfig {
+    HttpPush(HttpPushNodeDelivery),
+    Raw(serde_json::Value),
+}
+
+/// HTTP push delivery settings for a node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpPushNodeDelivery {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<NodeDeliveryAuth>,
+}
+
+/// HTTP push authentication settings for a node delivery contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDeliveryAuth {
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+/// Request to enroll or rotate a node token.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateNodeRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_adapter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<NodeDeliveryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_agents: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// Response from node enrollment or token rotation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateNodeResponse {
+    #[serde(flatten)]
+    pub node: NodeRosterEntry,
+    pub token: String,
+}
+
+/// Agent binding to a node delivery host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeAgentBinding {
+    pub id: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub node_id: String,
+    pub node_name: String,
+    pub node_kind: String,
+    pub status: String,
+    pub session_ref: Option<String>,
+    pub priority: i64,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+/// Request to bind an agent to a node delivery host.
+#[derive(Debug, Clone, Serialize)]
+pub struct BindAgentToNodeRequest {
+    pub agent_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
 }
 
 // === Triggers ===

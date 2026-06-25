@@ -1,13 +1,14 @@
 use relaycast::{
-    ActionInvocationStatus, AgentClient, ClientOptions, CompleteInvocationRequest,
-    CreateAgentRequest, CreateChannelRequest, CreateSubscriptionRequest, CreateTriggerRequest,
-    CreateWebhookRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
-    EmitSessionEventRequest, FailDeliveryRequest, HttpClient, ListDeliveriesOptions,
-    ListSessionEventsQuery, MessageInjectionMode, MessageListQuery, MonitorCertificationRequest,
-    NodeListQuery, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest, RelayCast,
-    RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery,
-    SpawnAgentRequest, SubmitCertificationRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
-    WsClient, WsClientOptions, WsEvent,
+    ActionInvocationStatus, AgentClient, BindAgentToNodeRequest, ClientOptions,
+    CompleteInvocationRequest, CreateAgentRequest, CreateChannelRequest, CreateNodeRequest,
+    CreateSubscriptionRequest, CreateTriggerRequest, CreateWebhookRequest, DeferDeliveryRequest,
+    DeliveryStatus, DmConversationSummary, EmitSessionEventRequest, FailDeliveryRequest,
+    HttpClient, HttpPushNodeDelivery, ListDeliveriesOptions, ListSessionEventsQuery,
+    MessageInjectionMode, MessageListQuery, MonitorCertificationRequest, NodeDeliveryAuth,
+    NodeDeliveryConfig, NodeListQuery, RateDirectoryAgentRequest, RegisterA2aOptions,
+    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
+    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    UpdateRoutingConfigRequest, WebhookTriggerRequest, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
 use std::net::TcpListener;
@@ -2240,12 +2241,90 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
         .expect("failed to create relay client");
 
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes"))
+        .and(body_json(json!({
+            "name": "http-node",
+            "kind": "http_push",
+            "delivery": {
+                "url": "https://receiver.example.test/relaycast",
+                "ack_mode": "manual",
+                "auth": {
+                    "type": "hmac_sha256",
+                    "secret": "secret",
+                    "signature_header": "X-Custom-Signature",
+                    "timestamp_header": "X-Custom-Timestamp",
+                    "signed_payload": "timestamp.body",
+                    "prefix": "sig="
+                }
+            }
+        })))
+        .respond_with(ok(json!({
+            "id": "node_http",
+            "name": "http-node",
+            "kind": "http_push",
+            "delivery_adapter": "http.hmac.v1",
+            "delivery": {
+                "url": "https://receiver.example.test/relaycast",
+                "ack_mode": "manual",
+                "auth": { "type": "hmac_sha256", "secret": "[redacted]" }
+            },
+            "capabilities": [],
+            "tags": [],
+            "version": "unknown",
+            "status": "offline",
+            "live": false,
+            "handlers_live": false,
+            "load": 0,
+            "active_agents": 0,
+            "max_agents": 1,
+            "last_heartbeat_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "token": "nt_live_test"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let created = relay
+        .create_node(CreateNodeRequest {
+            node_id: None,
+            name: "http-node".to_string(),
+            kind: Some("http_push".to_string()),
+            delivery_adapter: None,
+            delivery: Some(NodeDeliveryConfig::HttpPush(HttpPushNodeDelivery {
+                url: "https://receiver.example.test/relaycast".to_string(),
+                ack_mode: Some("manual".to_string()),
+                auth: Some(NodeDeliveryAuth {
+                    auth_type: "hmac_sha256".to_string(),
+                    token: None,
+                    headers: None,
+                    secret: Some("secret".to_string()),
+                    signature_header: Some("X-Custom-Signature".to_string()),
+                    timestamp_header: Some("X-Custom-Timestamp".to_string()),
+                    signed_payload: Some("timestamp.body".to_string()),
+                    encoding: None,
+                    prefix: Some("sig=".to_string()),
+                }),
+            })),
+            capabilities: None,
+            max_agents: None,
+            tags: None,
+            version: None,
+        })
+        .await
+        .expect("create_node failed");
+    assert_eq!(created.node.kind.as_deref(), Some("http_push"));
+    assert_eq!(created.token, "nt_live_test");
+
     Mock::given(method("GET"))
         .and(path("/v1/nodes"))
         .and(query_param("capability", "gpu"))
         .respond_with(ok(json!([{
             "id": "node_1",
             "name": "worker-node",
+            "kind": "fleet_ws",
+            "delivery_adapter": "fleet.ws.v1",
+            "delivery": null,
             "capabilities": [{ "name": "gpu", "kind": "hardware" }],
             "tags": ["fast"],
             "version": "1.2.3",
@@ -2271,6 +2350,77 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(nodes[0].name, "worker-node");
     assert_eq!(nodes[0].capabilities[0].name, "gpu");
     assert_eq!(nodes[0].capabilities[0].kind.as_deref(), Some("hardware"));
+    assert_eq!(nodes[0].kind.as_deref(), Some("fleet_ws"));
+
+    Mock::given(method("GET"))
+        .and(path("/v1/nodes/http-node/agents"))
+        .respond_with(ok(json!([{
+            "id": "anb_1",
+            "agent_id": "agent_1",
+            "agent_name": "billing-agent",
+            "node_id": "node_http",
+            "node_name": "http-node",
+            "node_kind": "http_push",
+            "status": "active",
+            "session_ref": null,
+            "priority": 0,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": null
+        }])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let bindings = relay
+        .list_node_agents("http-node")
+        .await
+        .expect("list_node_agents failed");
+    assert_eq!(bindings[0].agent_name, "billing-agent");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/http-node/agents"))
+        .and(body_json(json!({
+            "agent_name": "billing-agent",
+            "priority": 5
+        })))
+        .respond_with(ok(json!({
+            "id": "anb_1",
+            "agent_id": "agent_1",
+            "agent_name": "billing-agent",
+            "node_id": "node_http",
+            "node_name": "http-node",
+            "node_kind": "http_push",
+            "status": "active",
+            "session_ref": null,
+            "priority": 5,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let binding = relay
+        .bind_agent_to_node(
+            "http-node",
+            BindAgentToNodeRequest {
+                agent_name: "billing-agent".to_string(),
+                session_ref: None,
+                priority: Some(5),
+            },
+        )
+        .await
+        .expect("bind_agent_to_node failed");
+    assert_eq!(binding.priority, 5);
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/nodes/http-node/agents/billing-agent"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .unbind_agent_from_node("http-node", "billing-agent")
+        .await
+        .expect("unbind_agent_from_node failed");
 
     Mock::given(method("POST"))
         .and(path("/v1/triggers"))

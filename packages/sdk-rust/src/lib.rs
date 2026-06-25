@@ -309,7 +309,14 @@ pub use types::{
     SkillSearchQuery,
     SkillSearchResult,
     // Fleet nodes
+    BindAgentToNodeRequest,
+    CreateNodeRequest,
+    CreateNodeResponse,
+    HttpPushNodeDelivery,
+    NodeAgentBinding,
     NodeCapability,
+    NodeDeliveryAuth,
+    NodeDeliveryConfig,
     NodeListQuery,
     NodeRosterEntry,
     // Triggers

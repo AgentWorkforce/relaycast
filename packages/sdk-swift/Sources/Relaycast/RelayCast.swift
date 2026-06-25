@@ -647,6 +647,10 @@ public final class RelayNodesService: @unchecked Sendable {
         self.relay = relay
     }
 
+    public func create(_ request: CreateNodeRequest) async throws -> CreateNodeResponse {
+        try await relay.client.post("/v1/nodes", body: request)
+    }
+
     public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {
         var params: [String: String] = [:]
         if let capability = query.capability { params["capability"] = capability }
@@ -656,6 +660,18 @@ public final class RelayNodesService: @unchecked Sendable {
 
     public func get(_ name: String) async throws -> NodeRosterEntry {
         try await relay.client.get("/v1/nodes/\(percentEncodePathComponent(name))")
+    }
+
+    public func listAgents(_ name: String) async throws -> [NodeAgentBinding] {
+        try await relay.client.get("/v1/nodes/\(percentEncodePathComponent(name))/agents")
+    }
+
+    public func bindAgent(_ name: String, request: BindAgentToNodeRequest) async throws -> NodeAgentBinding {
+        try await relay.client.post("/v1/nodes/\(percentEncodePathComponent(name))/agents", body: request)
+    }
+
+    public func unbindAgent(_ name: String, agentName: String) async throws {
+        _ = try await relay.client.delete("/v1/nodes/\(percentEncodePathComponent(name))/agents/\(percentEncodePathComponent(agentName))")
     }
 }
 
