@@ -12,9 +12,15 @@ export function checkPlanLimit(metric: UsageMetric) {
     if (!workspace) { await next(); return; }
 
     const { entitlements } = c.get('engine');
-    const limits = await entitlements.getLimits(workspace);
+    let limits;
+    try {
+      limits = await entitlements.getLimits(workspace);
+    } catch {
+      await next();
+      return;
+    }
     const limit = limits[metric];
-    if (limit === Infinity) { await next(); return; }
+    if (typeof limit !== 'number' || limit === Infinity) { await next(); return; }
 
     try {
       const current = await entitlements.getUsage(workspace.id, metric);

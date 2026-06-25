@@ -59,7 +59,7 @@ def _message_with_meta_dict(**overrides):
         "agent_id": "ag_1",
         "text": "hello",
         "attachments": [
-            {"file_id": "f_1", "filename": "a.txt", "url": "https://x/y", "size": 12}
+            {"file_id": "f_1", "filename": "a.txt", "content_type": "text/plain", "size_bytes": 12}
         ],
         "created_at": "2026-02-08T00:00:00Z",
         "reply_count": 0,
@@ -199,8 +199,23 @@ def test_channel_model_creation():
 def test_message_with_meta_creation_with_nested_attachment_and_reaction_group():
     msg = MessageWithMeta(**_message_with_meta_dict())
     assert msg.attachments and isinstance(msg.attachments[0], FileAttachment)
+    assert msg.attachments[0].content_type == "text/plain"
+    assert msg.attachments[0].size_bytes == 12
     assert msg.reactions and isinstance(msg.reactions[0], ReactionGroup)
     assert msg.reactions[0].agents == ["ag_1", "ag_2"]
+
+
+def test_file_attachment_requires_canonical_fields():
+    attachment = FileAttachment(
+        file_id="f_1",
+        filename="a.txt",
+        content_type="text/plain",
+        size_bytes=12,
+    )
+    assert attachment.content_type == "text/plain"
+
+    with pytest.raises(ValidationError):
+        FileAttachment(file_id="f_1", filename="a.txt", url="https://x/y", size=12)
 
 
 def test_message_with_meta_accepts_injection_mode():
@@ -321,7 +336,7 @@ def test_ws_message_created_event_model():
                 "agent_name": "Alpha",
                 "text": "hi",
                 "attachments": [
-                    {"file_id": "f_1", "filename": "a.txt", "url": "https://x/y", "size": 1}
+                    {"file_id": "f_1", "filename": "a.txt", "content_type": "text/plain", "size_bytes": 1}
                 ],
                 "injection_mode": "wait",
             },
@@ -329,6 +344,7 @@ def test_ws_message_created_event_model():
     )
     assert ev.type == "message.created"
     assert ev.message.attachments[0].file_id == "f_1"
+    assert ev.message.attachments[0].size_bytes == 1
     assert ev.message.injection_mode == "wait"
 
 

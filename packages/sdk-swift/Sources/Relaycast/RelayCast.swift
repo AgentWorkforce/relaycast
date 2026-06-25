@@ -89,6 +89,7 @@ public final class RelayCast: @unchecked Sendable {
     private var workspaceIDHint: String?
 
     public lazy var workspace = RelayWorkspaceService(relay: self)
+    public lazy var observerTokens = RelayObserverTokensService(relay: self)
     public lazy var systemPrompt = RelaySystemPromptService(relay: self)
     public lazy var channels = RelayChannelsService(relay: self)
     public lazy var messages = RelayMessagesService(relay: self)
@@ -395,6 +396,38 @@ public final class RelayWorkspaceService: @unchecked Sendable {
 
     public func delete() async throws {
         _ = try await relay.client.delete("/v1/workspace")
+    }
+}
+
+public final class RelayObserverTokensService: @unchecked Sendable {
+    private unowned let relay: RelayCast
+
+    init(relay: RelayCast) {
+        self.relay = relay
+    }
+
+    public func create(_ data: CreateObserverTokenRequest) async throws -> ObserverToken {
+        try await relay.client.post("/v1/observer-tokens", body: data)
+    }
+
+    public func list() async throws -> [ObserverToken] {
+        try await relay.client.get("/v1/observer-tokens")
+    }
+
+    public func get(_ id: String) async throws -> ObserverToken {
+        try await relay.client.get("/v1/observer-tokens/\(percentEncodePathComponent(id))")
+    }
+
+    public func update(_ id: String, data: UpdateObserverTokenRequest) async throws -> ObserverToken {
+        try await relay.client.patch("/v1/observer-tokens/\(percentEncodePathComponent(id))", body: data)
+    }
+
+    public func rotate(_ id: String) async throws -> ObserverToken {
+        try await relay.client.post("/v1/observer-tokens/\(percentEncodePathComponent(id))/rotate", body: EmptyRequest())
+    }
+
+    public func revoke(_ id: String) async throws {
+        _ = try await relay.client.delete("/v1/observer-tokens/\(percentEncodePathComponent(id))")
     }
 }
 

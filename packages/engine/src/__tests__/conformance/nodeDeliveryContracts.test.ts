@@ -262,6 +262,87 @@ describe('node delivery contracts', () => {
     });
   });
 
+  it('keeps response-mode http_push deliveries queued when 2xx omits an ack signal', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ack: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const ws = await createWorkspace(stack.app, 'http-node-response-no-ack');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'http-node-response-no-ack',
+      ackMode: 'response',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'missing response ack' }),
+    });
+    expect(post.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await queued.json()) as {
+          data: Array<{
+            status: string;
+            dispatch_attempts: number;
+            last_dispatch_error: string | null;
+            next_attempt_at: string | null;
+          }>;
+        }).data,
+      ).toEqual([
+        expect.objectContaining({
+          status: 'queued',
+          dispatch_attempts: 1,
+          last_dispatch_error: 'response ack not signaled',
+          next_attempt_at: expect.any(String),
+        }),
+      ]);
+    });
+
+    const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, {
+      now: new Date(Date.now() + 31_000),
+    });
+    expect(swept).toBe(1);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const acked = await stack.app.request('/v1/deliveries?status=acked', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await acked.json()) as { data: Array<{ status: string; dispatch_attempts: number }> }).data,
+      ).toEqual([
+        expect.objectContaining({
+          status: 'acked',
+          dispatch_attempts: 2,
+        }),
+      ]);
+    });
+  });
+
   it('defaults http_push nodes to one active agent binding', async () => {
     const ws = await createWorkspace(stack.app, 'http-node-capacity');
     await registerAgent(stack.app, ws.workspaceKey, 'bob');

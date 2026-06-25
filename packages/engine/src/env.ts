@@ -1,4 +1,4 @@
-import type { workspaces, agents, nodes } from './db/schema.js';
+import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
 import type { Logger } from './lib/logger.js';
 import type {
   EngineDb,
@@ -22,6 +22,7 @@ export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
   node: typeof nodes.$inferSelect | undefined;
+  observerToken: typeof observerTokens.$inferSelect | undefined;
   db: EngineDb;
   logger: Logger;
   requestId: string;

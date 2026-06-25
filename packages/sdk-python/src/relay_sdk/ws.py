@@ -26,7 +26,7 @@ class WsClient:
 
     Usage::
 
-        ws = WsClient(token="rk_xxx")
+        ws = WsClient(token="ot_live_xxx")
         ws.on("message.created", lambda e: print(e))
         ws.subscribe(["general", "code-review"])
         await ws.connect()  # blocks until disconnect() is called

@@ -1,6 +1,6 @@
-import { eq, and, isNull, inArray } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments, files } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
@@ -10,7 +10,7 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
-import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
+import { resolveSendAttachments } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -126,31 +126,9 @@ export async function postGroupMessage(
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
 
-  if (data.attachments && data.attachments.length > 0) {
-    const unique = new Set(data.attachments);
-    if (unique.size !== data.attachments.length) {
-      throw codedError('Invalid attachments: duplicate file ids are not allowed', 'invalid_attachments', 400);
-    }
-
-    const validFiles = await db
-      .select({ id: files.id })
-      .from(files)
-      .where(
-        and(
-          eq(files.workspaceId, workspaceId),
-          eq(files.status, 'complete'),
-          inArray(files.id, data.attachments),
-        ),
-      );
-    const validIds = new Set(validFiles.map((f) => f.id));
-    const invalid = data.attachments.filter((id) => !validIds.has(id));
-    if (invalid.length > 0) {
-      throw codedError('Invalid attachments: file ids must exist in workspace and be complete', 'invalid_attachments', 400);
-    }
-  }
-
+  const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const messageId = generateId();
-  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
+  const hasAttachments = attachments.length > 0;
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -175,10 +153,10 @@ export async function postGroupMessage(
         .returning(),
     ];
 
-    if (data.attachments && data.attachments.length > 0) {
-      const attachmentValues = data.attachments.map((fileId, idx) => ({
+    if (attachments.length > 0) {
+      const attachmentValues = attachments.map((attachment, idx) => ({
         messageId,
-        fileId,
+        fileId: attachment.file_id,
         position: idx,
       }));
       writes.push(writeDb.insert(messageAttachments).values(attachmentValues));
@@ -204,11 +182,6 @@ export async function postGroupMessage(
     conversationId,
     senderAgentId: agentId,
   });
-
-  const attachmentMap = hasAttachments
-    ? await fetchAttachmentsBatch(db, workspaceId, [messageId])
-    : new Map<string, AttachmentRow[]>();
-  const attachments = attachmentMap.get(messageId) || [];
 
   const injectionMode = data.mode ?? 'wait';
   return {

@@ -200,17 +200,15 @@ describe('eventToResourceUris', () => {
     ]);
   });
 
-  it('maps command.invoked to channel messages', () => {
-    const event = {
-      type: 'command.invoked',
-      command: '/deploy',
-      channel: 'general',
-      invokedBy: 'agent1',
-      args: null,
-    } as WsClientEvent;
-    expect(eventToResourceUris(event)).toEqual([
-      'relay://channels/general/messages',
-    ]);
+  it('maps action lifecycle events to inbox', () => {
+    for (const type of ['action.invoked', 'action.completed', 'action.failed', 'action.denied'] as const) {
+      const event = {
+        type,
+        invocationId: 'inv_1',
+        actionName: 'deploy',
+      } as WsClientEvent;
+      expect(eventToResourceUris(event)).toEqual(['relay://inbox']);
+    }
   });
 
   it('returns empty array for unknown event types', () => {

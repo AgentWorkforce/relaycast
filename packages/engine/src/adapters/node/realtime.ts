@@ -7,6 +7,7 @@ import type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
+import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
@@ -16,6 +17,7 @@ import { directNodeIdForAgent, handleNodeControlMessage, markDirectNodeOfflineFo
 import { reserveNodeCapacity } from '../../engine/placement.js';
 import { markDrainedInvocationDispatched } from '../../engine/action.js';
 import { deliverPendingToNode } from '../../engine/delivery.js';
+import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -50,6 +52,11 @@ interface NodeConn {
   socket: EngineSocket;
 }
 
+interface WorkspaceConn {
+  socket: EngineSocket;
+  observerToken?: ObserverToken;
+}
+
 interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
@@ -79,7 +86,7 @@ interface ChannelState {
 export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly agents = new Map<string, AgentConn>();
   private readonly channels = new Map<string, ChannelState>();
-  private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
+  private readonly workspaceSockets = new Map<string, Set<WorkspaceConn>>();
   private readonly nodeSockets = new Map<string, NodeConn>();
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   /** Serializes drains per node so concurrent triggers never overlap. */
@@ -193,9 +200,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     const set = this.workspaceSockets.get(args.workspaceId);
     if (!set || set.size === 0) return;
     const data = JSON.stringify(args.event);
-    for (const socket of set) {
+    for (const conn of set) {
+      if (!observerAllowsEvent(conn.observerToken, args.event)) continue;
       try {
-        socket.send(data);
+        conn.socket.send(data);
       } catch {
         // Socket may have closed between enumeration and send.
       }
@@ -330,17 +338,18 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   }
 
   /** Register a live workspace-stream socket; returns handlers the transport drives. */
-  attachWorkspaceSocket(workspaceId: string, socket: EngineSocket): SocketHandle {
+  attachWorkspaceSocket(workspaceId: string, socket: EngineSocket, observerToken?: ObserverToken): SocketHandle {
     let set = this.workspaceSockets.get(workspaceId);
     if (!set) {
       set = new Set();
       this.workspaceSockets.set(workspaceId, set);
     }
-    set.add(socket);
+    const conn: WorkspaceConn = { socket, observerToken };
+    set.add(conn);
     return {
       handleMessage: async (raw) => this.onWorkspaceMessage(socket, raw),
       handleClose: async () => {
-        set!.delete(socket);
+        set!.delete(conn);
       },
     };
   }

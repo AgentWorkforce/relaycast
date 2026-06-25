@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   const wsName = `actions-e2e-${Date.now()}`;
   const wsRes = await req('POST', '/v1/workspaces', { body: { name: wsName } });
   if (wsRes.status >= 300) throw new Error(`create workspace failed: ${wsRes.status}`);
-  const workspaceKey: string = wsRes.json.data.api_key ?? wsRes.json.data.key;
+  const workspaceKey: string = wsRes.json.data.api_key;
 
   const mkAgent = async (name: string) => {
     const r = await req('POST', '/v1/agents', { token: workspaceKey, body: { name } });
@@ -157,9 +157,7 @@ async function main(): Promise<void> {
     const r = await req('GET', '/v1/actions/deploy', { token: caller.token });
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     if (r.json.data?.name !== 'deploy') throw new Error(`expected action name "deploy", got ${JSON.stringify(r.json.data?.name)}`);
-    // handler is exposed either as id or name depending on shape — accept either.
-    const handlerOk = r.json.data.handler_agent_id === handler.id || r.json.data.handler_agent === handler.name;
-    if (!handlerOk) throw new Error(`handler mismatch: ${JSON.stringify(r.json.data)}`);
+    if (r.json.data.handler_agent !== handler.name) throw new Error(`handler mismatch: ${JSON.stringify(r.json.data)}`);
   });
 
   // ── 4. Caller invokes → gets invocation_id with status 'invoked' ──
@@ -177,7 +175,7 @@ async function main(): Promise<void> {
   await test('Handler receives action.invoked over WebSocket', async () => {
     const e = await handlerWs.waitFor('action.invoked');
     const data = e.data ?? e;
-    if ((data.action_name ?? e.action_name) !== 'deploy') throw new Error('wrong action in event');
+    if (data.action_name !== 'deploy') throw new Error('wrong action in event');
   });
 
   // ── 6. Handler completes the invocation ──
@@ -194,7 +192,7 @@ async function main(): Promise<void> {
   await test('Caller receives action.completed over WebSocket', async () => {
     const e = await callerWs.waitFor('action.completed');
     const data = e.data ?? e;
-    if ((data.action_name ?? e.action_name) !== 'deploy') throw new Error('wrong action in completion event');
+    if (data.action_name !== 'deploy') throw new Error('wrong action in completion event');
   });
 
   // ── 8. Get invocation reflects completion + output ──

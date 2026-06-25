@@ -21,6 +21,7 @@ import {
 // Route imports
 import { healthRoutes } from './routes/health.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { observerTokenRoutes } from './routes/observerToken.js';
 import { agentRoutes } from './routes/agent.js';
 import { channelRoutes } from './routes/channel.js';
 import { messageRoutes } from './routes/message.js';
@@ -123,6 +124,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       workspaceId: authResult.workspace.id,
       origin,
       originActor,
+      observerToken: authResult.observerToken,
     });
     if (response.status === 101) {
       emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
@@ -183,6 +185,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', presenceRoutes);
   v1.route('/', systemPromptRoutes);
   v1.route('/', workspaceRoutes);
+  v1.route('/', observerTokenRoutes);
   v1.route('/', agentRoutes);
   v1.route('/', channelRoutes);
   v1.route('/', messageRoutes);

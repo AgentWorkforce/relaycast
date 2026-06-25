@@ -351,6 +351,8 @@ async function dispatchHttpPush(args: {
           return 'acked';
         }
       }
+      await recordHttpPushRetry(args.ctx, args.delivery.id, 'response ack not signaled');
+      return 'failed';
     }
 
     return 'delivered';

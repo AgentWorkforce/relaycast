@@ -160,6 +160,71 @@ impl RelayCast {
         self.client.delete("/v1/workspace", None).await
     }
 
+    // === Observer Tokens ===
+
+    /// Create a scoped observer token. The raw token is returned only from this
+    /// response and rotate responses.
+    pub async fn create_observer_token(
+        &self,
+        request: CreateObserverTokenRequest,
+    ) -> Result<ObserverToken> {
+        self.client
+            .post("/v1/observer-tokens", Some(request), None)
+            .await
+    }
+
+    /// List observer tokens without returning token material.
+    pub async fn list_observer_tokens(&self) -> Result<Vec<ObserverToken>> {
+        self.client.get("/v1/observer-tokens", None, None).await
+    }
+
+    /// Get observer token metadata by id.
+    pub async fn get_observer_token(&self, id: &str) -> Result<ObserverToken> {
+        self.client
+            .get(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Update observer token scopes, filters, or metadata.
+    pub async fn update_observer_token(
+        &self,
+        id: &str,
+        request: UpdateObserverTokenRequest,
+    ) -> Result<ObserverToken> {
+        self.client
+            .patch(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Rotate an observer token and return the new token material.
+    pub async fn rotate_observer_token(&self, id: &str) -> Result<ObserverToken> {
+        self.client
+            .post(
+                &format!("/v1/observer-tokens/{}/rotate", urlencoding::encode(id)),
+                Some(serde_json::json!({})),
+                None,
+            )
+            .await
+    }
+
+    /// Revoke an observer token.
+    pub async fn revoke_observer_token(&self, id: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!("/v1/observer-tokens/{}", urlencoding::encode(id)),
+                None,
+            )
+            .await
+    }
+
     // === System Prompt ===
 
     /// Get the workspace system prompt.

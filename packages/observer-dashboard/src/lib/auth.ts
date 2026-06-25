@@ -26,16 +26,3 @@ export async function clearAuth(): Promise<void> {
     // Best effort
   }
 }
-
-/**
- * Check if user is authenticated by querying the session endpoint.
- * The httpOnly cookies are sent automatically.
- */
-export async function isAuthenticated(): Promise<boolean> {
-  try {
-    const res = await fetch('/observer/api/auth/session');
-    return res.ok;
-  } catch {
-    return false;
-  }
-}

@@ -1,9 +1,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
+import {
+  filterObserverSearchResults,
+  getObserverTokenFromContext,
+} from '../engine/observerToken.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
 import { positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -28,7 +32,27 @@ const agentStatsQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 100 }),
 });
 
-consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
+async function visibleMessageLogsForObserver(
+  db: Parameters<typeof consoleEngine.listMessageLogsForWindow>[0],
+  workspaceId: string,
+  days: number,
+  observer: ReturnType<typeof getObserverTokenFromContext>,
+) {
+  const logs = await consoleEngine.listMessageLogsForWindow(db, workspaceId, days);
+  return filterObserverSearchResults(
+    db,
+    workspaceId,
+    observer,
+    logs,
+    { eventTypes: consoleMessageLogEventTypes },
+  );
+}
+
+function consoleMessageLogEventTypes(log: { conversation_id?: string | null }): string[] {
+  return log.conversation_id ? ['dm.received', 'group_dm.received'] : ['message.created'];
+}
+
+consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -46,13 +70,25 @@ consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
       deliveryKind: parsed.data.delivery_kind,
     });
 
-    return jsonOk(c, data);
+    const visible = await filterObserverSearchResults(
+      db,
+      workspace.id,
+      getObserverTokenFromContext(c),
+      data.map((item) => ({
+        ...item,
+        channel_name: item.channel_name ?? undefined,
+      })),
+      { eventTypes: consoleMessageLogEventTypes },
+    );
+
+    const response = visible.map(({ channel_type: _channelType, ...item }) => item);
+    return jsonOk(c, response);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
 });
 
-consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/stats', requireWorkspaceRead('activity:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -61,14 +97,21 @@ consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
       return parsed.response;
     }
 
-    const data = await consoleEngine.getConsoleOverview(db, workspace.id, parsed.data.days);
+    const days = parsed.data.days ?? 7;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeConsoleOverview(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        days,
+      )
+      : await consoleEngine.getConsoleOverview(db, workspace.id, days);
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
 });
 
-consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/agents', requireWorkspaceRead('agents:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -77,19 +120,27 @@ consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
       return parsed.response;
     }
 
-    const data = await consoleEngine.getAgentStats(
-      db,
-      workspace.id,
-      parsed.data.days,
-      parsed.data.limit,
-    );
+    const days = parsed.data.days ?? 7;
+    const limit = parsed.data.limit ?? 20;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeAgentStats(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        limit,
+      )
+      : await consoleEngine.getAgentStats(
+        db,
+        workspace.id,
+        days,
+        limit,
+      );
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
 });
 
-consoleRoutes.get('/console/costs', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/costs', requireWorkspaceRead('activity:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -98,7 +149,14 @@ consoleRoutes.get('/console/costs', requireAuth, rateLimit, async (c) => {
       return parsed.response;
     }
 
-    const data = await consoleEngine.getCostStats(db, workspace.id, parsed.data.days);
+    const days = parsed.data.days ?? 7;
+    const observer = getObserverTokenFromContext(c);
+    const data = observer
+      ? consoleEngine.summarizeCostStats(
+        await visibleMessageLogsForObserver(db, workspace.id, days, observer),
+        days,
+      )
+      : await consoleEngine.getCostStats(db, workspace.id, days);
     return jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);

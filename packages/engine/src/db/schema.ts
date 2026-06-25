@@ -26,6 +26,16 @@ export interface WorkspaceRetentionSettings {
   message_log_ttl_days?: number | null;
 }
 
+export interface ObserverTokenFilters {
+  channel_ids?: string[];
+  channel_names?: string[];
+  include_dms?: boolean;
+  dm_conversation_ids?: string[];
+  agent_ids?: string[];
+  event_types?: string[];
+  created_after?: string;
+}
+
 export const workspaces = sqliteTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -106,6 +116,38 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+  ],
+);
+
+// ============================================
+// Observer Tokens
+// ============================================
+export const observerTokens = sqliteTable(
+  'observer_tokens',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    tokenHash: text('token_hash').notNull().unique(),
+    scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    filters: text('filters', { mode: 'json' }).$type<ObserverTokenFilters>().notNull().default({}),
+    status: text('status').notNull().default('active'),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+    createdBy: text('created_by'),
+    createdByType: text('created_by_type').notNull().default('workspace'),
+    lastUsedAt: integer('last_used_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }),
+    revokedAt: integer('revoked_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    uniqueIndex('observer_tokens_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('observer_tokens_token_hash_unique').on(table.tokenHash),
+    index('idx_observer_tokens_workspace_status').on(table.workspaceId, table.status),
+    index('idx_observer_tokens_expires_at').on(table.expiresAt),
   ],
 );
 

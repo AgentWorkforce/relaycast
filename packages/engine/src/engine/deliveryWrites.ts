@@ -54,12 +54,12 @@ function channelReasonSql(
   mentionHandles: readonly string[],
   fallback: ChannelDeliveryReason,
 ) {
-  if (fallback !== 'message' || mentionHandles.length === 0) {
+  if (mentionHandles.length === 0) {
     return sql<string>`${fallback}`;
   }
 
   const mentionList = sql.join(mentionHandles.map((handle) => sql`${handle}`), sql`, `);
-  return sql<string>`case when ${agents.name} in (${mentionList}) then ${'mention'} else ${'message'} end`;
+  return sql<string>`case when ${agents.name} in (${mentionList}) then ${'mention'} else ${fallback} end`;
 }
 
 function channelMuteDeliveryFilter(mentionHandles: readonly string[]) {

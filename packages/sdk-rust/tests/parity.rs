@@ -1,13 +1,14 @@
 use relaycast::{
     ActionInvocationStatus, AgentClient, BindAgentToNodeRequest, ClientOptions,
     CompleteInvocationRequest, CreateAgentRequest, CreateChannelRequest, CreateNodeRequest,
-    CreateSubscriptionRequest, CreateTriggerRequest, CreateWebhookRequest, DeferDeliveryRequest,
-    DeliveryStatus, DmConversationSummary, EmitSessionEventRequest, FailDeliveryRequest,
-    HttpClient, HttpPushNodeDelivery, ListDeliveriesOptions, ListSessionEventsQuery,
-    MessageInjectionMode, MessageListQuery, MonitorCertificationRequest, NodeDeliveryAuth,
-    NodeDeliveryConfig, NodeListQuery, RateDirectoryAgentRequest, RegisterA2aOptions,
-    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
-    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    CreateObserverTokenRequest, CreateSubscriptionRequest, CreateTriggerRequest,
+    CreateWebhookRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
+    EmitSessionEventRequest, FailDeliveryRequest, HttpClient, HttpPushNodeDelivery,
+    ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
+    MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
+    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest,
+    RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery,
+    SpawnAgentRequest, SubmitCertificationRequest, UpdateObserverTokenRequest,
     UpdateRoutingConfigRequest, WebhookTriggerRequest, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
@@ -2137,6 +2138,124 @@ async fn routing_and_skills_use_expected_endpoints() {
         .await
         .expect("search_skills failed");
     assert_eq!(skills[0].skill_name, "summarize");
+}
+
+#[tokio::test]
+async fn observer_tokens_use_expected_endpoints() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    let observer_payload = json!({
+        "id": "ot_1",
+        "name": "dashboard",
+        "description": null,
+        "scopes": ["stream:read", "messages:read"],
+        "filters": { "channel_names": ["general"], "include_dms": false },
+        "status": "active",
+        "expires_at": null,
+        "created_at": "2026-06-01T00:00:00.000Z",
+        "updated_at": null,
+        "revoked_at": null,
+        "last_used_at": null,
+        "token": "ot_live_secret"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/observer-tokens"))
+        .and(body_json(json!({
+            "name": "dashboard",
+            "scopes": ["stream:read", "messages:read"],
+            "filters": { "channel_names": ["general"], "include_dms": false }
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": observer_payload
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let created = relay
+        .create_observer_token(CreateObserverTokenRequest {
+            name: "dashboard".to_string(),
+            scopes: vec![ObserverScope::StreamRead, ObserverScope::MessagesRead],
+            description: None,
+            filters: Some(ObserverTokenFilters {
+                channel_names: vec!["general".to_string()],
+                include_dms: Some(false),
+                ..Default::default()
+            }),
+            expires_at: None,
+        })
+        .await
+        .expect("create_observer_token failed");
+    assert_eq!(created.token.as_deref(), Some("ot_live_secret"));
+
+    Mock::given(method("GET"))
+        .and(path("/v1/observer-tokens"))
+        .respond_with(ok(json!([observer_payload.clone()])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tokens = relay
+        .list_observer_tokens()
+        .await
+        .expect("list_observer_tokens failed");
+    assert_eq!(tokens[0].name, "dashboard");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let fetched = relay
+        .get_observer_token("ot_1")
+        .await
+        .expect("get_observer_token failed");
+    assert_eq!(fetched.id, "ot_1");
+
+    Mock::given(method("PATCH"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .and(body_json(json!({ "scopes": ["messages:read"] })))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .update_observer_token(
+            "ot_1",
+            UpdateObserverTokenRequest {
+                scopes: Some(vec![ObserverScope::MessagesRead]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update_observer_token failed");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/observer-tokens/ot_1/rotate"))
+        .and(body_json(json!({})))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rotated = relay
+        .rotate_observer_token("ot_1")
+        .await
+        .expect("rotate_observer_token failed");
+    assert_eq!(rotated.token.as_deref(), Some("ot_live_secret"));
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .revoke_observer_token("ot_1")
+        .await
+        .expect("revoke_observer_token failed");
 }
 
 #[tokio::test]

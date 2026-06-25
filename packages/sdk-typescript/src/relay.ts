@@ -6,11 +6,14 @@ import type {
   AgentPresenceInfo,
   Channel,
   ChannelMemberInfo,
+  CreateObserverTokenRequest,
   CreateAgentRequest,
   CreateAgentResponse,
   UpdateAgentRequest,
+  UpdateObserverTokenRequest,
   UpdateWorkspaceRequest,
   Workspace,
+  ObserverToken,
   CreateWorkspaceResponse,
   WorkspaceLookup,
   SystemPrompt,
@@ -127,6 +130,10 @@ import { AGENT_RELAY_DISTINCT_ID_HEADER, SDK_ORIGIN, sanitizeAgentRelayDistinctI
 import { camelizeKeys } from './casing.js';
 
 export interface RelayCastOptions {
+  /**
+   * Workspace admin key (`rk_live_*`) for administration or observer token
+   * (`ot_live_*`) for read-only REST and workspace realtime observation.
+   */
   apiKey: string;
   baseUrl?: string;
   retryPolicy?: RetryPolicyInput;
@@ -591,6 +598,21 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+  };
+
+  observerTokens = {
+    create: (data: CreateObserverTokenRequest): Promise<ObserverToken> =>
+      this.client.post('/v1/observer-tokens', data),
+    list: (): Promise<ObserverToken[]> =>
+      this.client.get('/v1/observer-tokens'),
+    get: (id: string): Promise<ObserverToken> =>
+      this.client.get(`/v1/observer-tokens/${encodeURIComponent(id)}`),
+    update: (id: string, data: UpdateObserverTokenRequest): Promise<ObserverToken> =>
+      this.client.patch(`/v1/observer-tokens/${encodeURIComponent(id)}`, data),
+    rotate: (id: string): Promise<ObserverToken> =>
+      this.client.post(`/v1/observer-tokens/${encodeURIComponent(id)}/rotate`, {}),
+    revoke: (id: string): Promise<void> =>
+      this.client.delete(`/v1/observer-tokens/${encodeURIComponent(id)}`),
   };
 
   systemPrompt = {

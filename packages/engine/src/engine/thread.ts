@@ -45,6 +45,11 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
+  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const mentionedHandles = new Set<string>();
+  for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
+    mentionedHandles.add(match[1]);
+  }
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -93,6 +98,7 @@ export async function postReply(
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
           reason: 'thread-reply',
+          mentionHandles: Array.from(mentionedHandles),
         }),
     );
 
@@ -109,12 +115,14 @@ export async function postReply(
       messageId: replyId,
       channelId: parent.channelId,
       senderAgentId: agentId,
+      mentionHandles: Array.from(mentionedHandles),
     });
 
   return {
     id: reply.id,
     channel_id: reply.channelId,
     channel_name: ch?.name,
+    ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
     thread_id: reply.threadId,

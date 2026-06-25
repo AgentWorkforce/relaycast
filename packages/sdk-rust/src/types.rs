@@ -95,6 +95,7 @@ pub struct ActivityItem {
     #[serde(rename = "type")]
     pub item_type: String,
     pub id: String,
+    pub channel_id: Option<String>,
     pub channel_name: Option<String>,
     pub conversation_id: Option<String>,
     pub agent_name: String,
@@ -132,6 +133,97 @@ pub struct WorkspaceDmMessage {
 pub struct TokenRotateResponse {
     pub name: String,
     pub token: String,
+}
+
+// === Observer tokens ===
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ObserverScope {
+    #[serde(rename = "stream:read")]
+    StreamRead,
+    #[serde(rename = "messages:read")]
+    MessagesRead,
+    #[serde(rename = "threads:read")]
+    ThreadsRead,
+    #[serde(rename = "dms:read")]
+    DmsRead,
+    #[serde(rename = "channels:read")]
+    ChannelsRead,
+    #[serde(rename = "search:read")]
+    SearchRead,
+    #[serde(rename = "agents:read")]
+    AgentsRead,
+    #[serde(rename = "nodes:read")]
+    NodesRead,
+    #[serde(rename = "deliveries:read")]
+    DeliveriesRead,
+    #[serde(rename = "activity:read")]
+    ActivityRead,
+    #[serde(rename = "files:read")]
+    FilesRead,
+    #[serde(rename = "reactions:read")]
+    ReactionsRead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ObserverTokenFilters {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_dms: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dm_conversation_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateObserverTokenRequest {
+    pub name: String,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateObserverTokenRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<ObserverScope>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObserverToken {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(default)]
+    pub filters: ObserverTokenFilters,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub token: Option<String>,
 }
 
 // === Agents ===
@@ -295,9 +387,7 @@ pub struct ChannelWithMembers {
 pub struct FileAttachment {
     pub file_id: String,
     pub filename: String,
-    #[serde(alias = "contentType")]
     pub content_type: String,
-    #[serde(alias = "size")]
     pub size_bytes: i64,
 }
 

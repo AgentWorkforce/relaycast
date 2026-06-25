@@ -2,13 +2,18 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
 import * as sessionEventEngine from '../engine/sessionEvent.js';
+import {
+  getObserverTokenFromContext,
+  observerAllowsAgent,
+  observerAllowsCreatedAt,
+} from '../engine/observerToken.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { sendNodePresenceContext } from '../engine/nodeContext.js';
 import { runInBackground } from './background.js';
@@ -239,14 +244,16 @@ agentRoutes.post(
 // GET /v1/agents - list agents
 agentRoutes.get(
   '/agents',
-  requireWorkspaceKey,
+  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const status = c.req.query('status');
-      const agents = await agentEngine.listAgents(db, workspace.id, status);
+      const observer = getObserverTokenFromContext(c);
+      const agents = (await agentEngine.listAgents(db, workspace.id, status))
+        .filter((agent) => observerAllowsAgent(observer, agent.id));
       return jsonOk(c, agents);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -257,7 +264,7 @@ agentRoutes.get(
 // GET /v1/agents/:name - get agent by name
 agentRoutes.get(
   '/agents/:name',
-  requireWorkspaceKey,
+  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -266,6 +273,9 @@ agentRoutes.get(
       const name = c.req.param('name');
       const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {
+        return agentNotFound(c, name);
+      }
+      if (!observerAllowsAgent(getObserverTokenFromContext(c), agent.id)) {
         return agentNotFound(c, name);
       }
       return jsonOk(c, agent);
@@ -542,7 +552,7 @@ agentRoutes.post(
 // GET /v1/agents/:name/events - list session events for an agent
 agentRoutes.get(
   '/agents/:name/events',
-  requireWorkspaceKey,
+  requireWorkspaceRead('activity:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -559,13 +569,17 @@ agentRoutes.get(
       if (!agent) {
         return agentNotFound(c, name);
       }
+      const observer = getObserverTokenFromContext(c);
+      if (!observerAllowsAgent(observer, agent.id)) {
+        return agentNotFound(c, name);
+      }
 
       const events = await sessionEventEngine.listSessionEvents(db, workspace.id, agent.id, {
         type,
         limit,
       });
 
-      return jsonOk(c, events);
+      return jsonOk(c, events.filter((event) => observerAllowsCreatedAt(observer, event.created_at)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
