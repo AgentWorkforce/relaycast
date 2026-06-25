@@ -256,8 +256,9 @@ final class RelaycastTests: XCTestCase {
                 "data": [[
                     "id": "node_1",
                     "name": "alpha",
-                    "kind": "fleet_ws",
-                    "delivery_adapter": "fleet.ws.v1",
+                    "kind": "ws",
+                    "role": "broker",
+                    "delivery_adapter": "ws.node.v1",
                     "delivery": NSNull(),
                     "capabilities": [["name": "code", "kind": "executor", "metadata": ["region": "us"]]],
                     "tags": ["primary"],
@@ -281,7 +282,8 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(nodes[0].capabilities.first?.kind, "executor")
         XCTAssertEqual(nodes[0].activeAgents, 2)
         XCTAssertTrue(nodes[0].handlersLive)
-        XCTAssertEqual(nodes[0].kind, "fleet_ws")
+        XCTAssertEqual(nodes[0].kind, "ws")
+        XCTAssertEqual(nodes[0].role, "broker")
     }
 
     func testNodesCreateAndBindings() async throws {
@@ -307,6 +309,7 @@ final class RelaycastTests: XCTestCase {
                         "id": "node_1",
                         "name": "http-node",
                         "kind": "http_push",
+                        "role": "direct",
                         "delivery_adapter": "http.hmac.v1",
                         "delivery": [
                             "url": "https://receiver.example.test/relaycast",
@@ -341,6 +344,7 @@ final class RelaycastTests: XCTestCase {
                         "node_id": "node_1",
                         "node_name": "http-node",
                         "node_kind": "http_push",
+                        "node_role": "direct",
                         "status": "active",
                         "session_ref": NSNull(),
                         "priority": 0,
@@ -361,6 +365,7 @@ final class RelaycastTests: XCTestCase {
                         "node_id": "node_1",
                         "node_name": "http-node",
                         "node_kind": "http_push",
+                        "node_role": "direct",
                         "status": "active",
                         "session_ref": NSNull(),
                         "priority": 5,
@@ -410,6 +415,86 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(binding.priority, 5)
 
         try await relay.nodes.unbindAgent("http-node", agentName: "billing-agent")
+    }
+
+    func testObserverTokensCreateListUpdateRotateAndRevoke() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v1/observer-tokens"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["name"] as? String, "dashboard")
+                XCTAssertEqual(json["scopes"] as? [String], ["stream:read", "messages:read"])
+                let filters = try XCTUnwrap(json["filters"] as? [String: Any])
+                XCTAssertEqual(filters["channel_names"] as? [String], ["general"])
+                XCTAssertEqual(filters["include_dms"] as? Bool, false)
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: "ot_live_secret")
+                ], status: 201)
+            case ("GET", "/v1/observer-tokens"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": [observerTokenData(token: NSNull())]
+                ])
+            case ("GET", "/v1/observer-tokens/ot_1"):
+                var data = observerTokenData(token: NSNull())
+                data.removeValue(forKey: "filters")
+                return jsonResponse([
+                    "ok": true,
+                    "data": data
+                ])
+            case ("PATCH", "/v1/observer-tokens/ot_1"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["scopes"] as? [String], ["messages:read"])
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: NSNull())
+                ])
+            case ("POST", "/v1/observer-tokens/ot_1/rotate"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: "ot_live_rotated")
+                ])
+            case ("DELETE", "/v1/observer-tokens/ot_1"):
+                return (
+                    HTTPURLResponse(url: URL(string: "https://relay.test")!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            default:
+                return jsonResponse(["ok": false, "error": ["code": "not_found", "message": "Missing"]], status: 404)
+            }
+        }
+
+        let created = try await relay.observerTokens.create(CreateObserverTokenRequest(
+            name: "dashboard",
+            scopes: [.streamRead, .messagesRead],
+            filters: ObserverTokenFilters(channelNames: ["general"], includeDms: false)
+        ))
+        XCTAssertEqual(created.token, "ot_live_secret")
+        XCTAssertEqual(created.filters.channelNames, ["general"])
+
+        let listed = try await relay.observerTokens.list()
+        XCTAssertEqual(listed[0].id, "ot_1")
+
+        let fetched = try await relay.observerTokens.get("ot_1")
+        XCTAssertEqual(fetched.name, "dashboard")
+        XCTAssertNil(fetched.filters.channelNames)
+
+        let updated = try await relay.observerTokens.update("ot_1", data: UpdateObserverTokenRequest(scopes: [.messagesRead]))
+        XCTAssertEqual(updated.scopes, [.streamRead, .messagesRead])
+
+        let rotated = try await relay.observerTokens.rotate("ot_1")
+        XCTAssertEqual(rotated.token, "ot_live_rotated")
+
+        try await relay.observerTokens.revoke("ot_1")
     }
 
     func testCreateNodeRequestEncodesRawDeliveryConfig() throws {
@@ -648,6 +733,26 @@ private func requestBodyData(_ request: URLRequest) -> Data? {
         data.append(buffer, count: read)
     }
     return data
+}
+
+private func observerTokenData(token: Any) -> [String: Any] {
+    [
+        "id": "ot_1",
+        "name": "dashboard",
+        "description": NSNull(),
+        "scopes": ["stream:read", "messages:read"],
+        "filters": [
+            "channel_names": ["general"],
+            "include_dms": false
+        ],
+        "status": "active",
+        "expires_at": NSNull(),
+        "created_at": "2026-06-01T00:00:00Z",
+        "updated_at": NSNull(),
+        "revoked_at": NSNull(),
+        "last_used_at": NSNull(),
+        "token": token
+    ]
 }
 
 private func jsonResponse(_ object: [String: Any], status: Int = 200) -> (HTTPURLResponse, Data) {

@@ -319,6 +319,7 @@ describe('Type definitions', () => {
       location_node_id: null,
       route_node_id: null,
       route_node_kind: null,
+      route_node_role: null,
       delivery_adapter: null,
       dispatch_attempts: 0,
       next_attempt_at: null,
@@ -344,7 +345,7 @@ describe('Type definitions', () => {
     const parsed = DeliverySchema.safeParse({
       id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
       seq: 1, location_type: 'self_connected', location_node_id: null,
-      route_node_id: null, route_node_kind: null, delivery_adapter: null,
+      route_node_id: null, route_node_kind: null, route_node_role: null, delivery_adapter: null,
       dispatch_attempts: 0, next_attempt_at: null, last_dispatch_error: null,
       status: 'bogus', mode: 'immediate', reason: null, priority: 'normal',
       retryable: null, error: null, available_at: null, deadline: null,
@@ -358,7 +359,7 @@ describe('Type definitions', () => {
     const parsed = DeliveryItemSchema.safeParse({
       id: 'del_1', message_id: 'm_1', channel_id: 'c_1', agent_id: 'a_1',
       seq: 1, location_type: 'self_connected', location_node_id: null,
-      route_node_id: null, route_node_kind: null, delivery_adapter: null,
+      route_node_id: null, route_node_kind: null, route_node_role: null, delivery_adapter: null,
       dispatch_attempts: 0, next_attempt_at: null, last_dispatch_error: null,
       status: 'delivered', mode: 'immediate', reason: null, priority: 'normal',
       retryable: null, error: null, available_at: '2026-06-01T00:01:00.000Z',

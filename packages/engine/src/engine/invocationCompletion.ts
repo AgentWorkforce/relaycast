@@ -1,8 +1,9 @@
 import { transformForClient } from './wsTransform.js';
 import { enqueueEvent } from './eventQueue.js';
 import type { EngineDeps } from '../ports/index.js';
+import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
 
-export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue'>;
+export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections'>;
 
 type CompletionResult = {
   invocation_id: string;
@@ -41,10 +42,16 @@ export async function emitInvocationCompletionEffects(
   const fanoutTasks: Promise<unknown>[] = [];
   if (result.caller_id) {
     fanoutTasks.push(
-      deps.realtime.deliverToAgents({
+      sendNodeDeliveriesToAgents({
+        db: deps.db,
+        nodeConnections: deps.nodeConnections,
         workspaceId,
+      }, {
         agentIds: [result.caller_id],
-        event: payload,
+        event: eventType,
+        eventKey: result.invocation_id,
+        data: eventPayload,
+        messageId: result.invocation_id,
       }),
     );
   }

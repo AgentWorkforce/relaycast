@@ -95,6 +95,7 @@ pub struct ActivityItem {
     #[serde(rename = "type")]
     pub item_type: String,
     pub id: String,
+    pub channel_id: Option<String>,
     pub channel_name: Option<String>,
     pub conversation_id: Option<String>,
     pub agent_name: String,
@@ -132,6 +133,97 @@ pub struct WorkspaceDmMessage {
 pub struct TokenRotateResponse {
     pub name: String,
     pub token: String,
+}
+
+// === Observer tokens ===
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ObserverScope {
+    #[serde(rename = "stream:read")]
+    StreamRead,
+    #[serde(rename = "messages:read")]
+    MessagesRead,
+    #[serde(rename = "threads:read")]
+    ThreadsRead,
+    #[serde(rename = "dms:read")]
+    DmsRead,
+    #[serde(rename = "channels:read")]
+    ChannelsRead,
+    #[serde(rename = "search:read")]
+    SearchRead,
+    #[serde(rename = "agents:read")]
+    AgentsRead,
+    #[serde(rename = "nodes:read")]
+    NodesRead,
+    #[serde(rename = "deliveries:read")]
+    DeliveriesRead,
+    #[serde(rename = "activity:read")]
+    ActivityRead,
+    #[serde(rename = "files:read")]
+    FilesRead,
+    #[serde(rename = "reactions:read")]
+    ReactionsRead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ObserverTokenFilters {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_dms: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dm_conversation_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateObserverTokenRequest {
+    pub name: String,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateObserverTokenRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<ObserverScope>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<ObserverTokenFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObserverToken {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scopes: Vec<ObserverScope>,
+    #[serde(default)]
+    pub filters: ObserverTokenFilters,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub token: Option<String>,
 }
 
 // === Agents ===
@@ -221,18 +313,7 @@ pub struct SpawnAgentRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnAgentResponse {
-    pub id: String,
-    pub name: String,
-    pub token: String,
-    pub cli: String,
-    pub task: String,
-    pub channel: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub already_existed: bool,
-}
+pub type SpawnAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseAgentRequest {
@@ -243,13 +324,7 @@ pub struct ReleaseAgentRequest {
     pub delete_agent: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReleaseAgentResponse {
-    pub name: String,
-    pub released: bool,
-    pub deleted: bool,
-    pub reason: Option<String>,
-}
+pub type ReleaseAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentListQuery {
@@ -312,9 +387,7 @@ pub struct ChannelWithMembers {
 pub struct FileAttachment {
     pub file_id: String,
     pub filename: String,
-    #[serde(alias = "contentType")]
     pub content_type: String,
-    #[serde(alias = "size")]
     pub size_bytes: i64,
 }
 
@@ -499,13 +572,6 @@ where
         .collect())
 }
 
-fn deserialize_string_or_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum DmLastMessageValue {
@@ -656,6 +722,8 @@ pub struct Delivery {
     pub route_node_id: Option<String>,
     #[serde(default)]
     pub route_node_kind: Option<String>,
+    #[serde(default)]
+    pub route_node_role: Option<String>,
     #[serde(default)]
     pub delivery_adapter: Option<String>,
     #[serde(default)]
@@ -925,6 +993,8 @@ pub struct CommandInvocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionInvocationStatus {
+    Pending,
+    Dispatched,
     Invoked,
     Completed,
     Failed,
@@ -971,7 +1041,11 @@ pub struct InvokeActionRequest {
 pub struct InvokeActionResult {
     pub invocation_id: String,
     pub action_name: String,
-    pub handler_agent_id: String,
+    pub handler_agent_id: Option<String>,
+    #[serde(default)]
+    pub handler_node_id: Option<String>,
+    #[serde(default)]
+    pub dispatched_node_id: Option<String>,
     #[serde(default)]
     pub input: serde_json::Map<String, serde_json::Value>,
     pub status: ActionInvocationStatus,
@@ -1039,6 +1113,13 @@ pub struct SessionEvent {
 pub struct ListSessionEventsQuery {
     pub event_type: Option<String>,
     pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectNodeToken {
+    pub node_id: String,
+    pub node_name: String,
+    pub token: String,
 }
 
 // === WebSocket Events ===
@@ -1142,10 +1223,6 @@ pub enum WsEvent {
     AgentStatusOffline(AgentStatusEvent),
     #[serde(rename = "agent.status.changed")]
     AgentStatusChanged(AgentStatusEvent),
-    #[serde(rename = "agent.spawn_requested")]
-    AgentSpawnRequested(AgentSpawnRequestedEvent),
-    #[serde(rename = "agent.release_requested")]
-    AgentReleaseRequested(AgentReleaseRequestedEvent),
     #[serde(rename = "channel.created")]
     ChannelCreated(ChannelCreatedEvent),
     #[serde(rename = "channel.updated")]
@@ -1234,32 +1311,6 @@ pub struct AgentStatusEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedEvent {
-    pub agent: AgentSpawnRequestedPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedPayload {
-    pub name: String,
-    pub cli: String,
-    #[serde(default, deserialize_with = "deserialize_string_or_default")]
-    pub task: String,
-    #[serde(default)]
-    pub channel: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub already_existed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentReleaseRequestedEvent {
-    pub agent: AgentEventPayload,
-    pub reason: Option<String>,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelCreatedEvent {
     pub channel: ChannelEventPayload,
 }
@@ -1322,6 +1373,10 @@ pub struct ActionInvokedEvent {
     pub action_name: String,
     pub caller_name: String,
     pub handler_agent_id: String,
+    #[serde(default)]
+    pub handler_agent_name: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
 }
 
 /// Literal `completed` status for [`ActionCompletedEvent`]; deserialization
@@ -1810,6 +1865,8 @@ pub struct NodeRosterEntry {
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
     pub delivery_adapter: Option<String>,
     #[serde(default)]
     pub delivery: Option<NodeDeliveryConfig>,
@@ -1892,6 +1949,8 @@ pub struct CreateNodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_adapter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<NodeDeliveryConfig>,
@@ -1922,6 +1981,7 @@ pub struct NodeAgentBinding {
     pub node_id: String,
     pub node_name: String,
     pub node_kind: String,
+    pub node_role: String,
     pub status: String,
     pub session_ref: Option<String>,
     pub priority: i64,

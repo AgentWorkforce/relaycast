@@ -144,27 +144,6 @@ export type AgentStatusEvent =
   | AgentStatusOfflineEvent
   | AgentStatusChangedEvent;
 
-export const AgentSpawnRequestedEventSchema = z.object({
-  type: z.literal('agent.spawn_requested'),
-  agent: z.object({
-    name: z.string(),
-    cli: z.string(),
-    task: z.string(),
-    channel: z.string().nullable(),
-    model: z.string().nullable().optional(),
-    already_existed: z.boolean(),
-  }),
-});
-export type AgentSpawnRequestedEvent = z.infer<typeof AgentSpawnRequestedEventSchema>;
-
-export const AgentReleaseRequestedEventSchema = z.object({
-  type: z.literal('agent.release_requested'),
-  agent: z.object({ name: z.string() }),
-  reason: z.string().nullable(),
-  deleted: z.boolean(),
-});
-export type AgentReleaseRequestedEvent = z.infer<typeof AgentReleaseRequestedEventSchema>;
-
 export const ChannelCreatedEventSchema = z.object({
   type: z.literal('channel.created'),
   channel: z.object({ name: z.string(), topic: z.string().nullable() }),
@@ -255,17 +234,6 @@ export const WebhookReceivedEventSchema = z.object({
 });
 export type WebhookReceivedEvent = z.infer<typeof WebhookReceivedEventSchema>;
 
-export const CommandInvokedEventSchema = z.object({
-  type: z.literal('command.invoked'),
-  command: z.string(),
-  channel: z.string(),
-  invoked_by: z.string(),
-  handler_agent_id: z.string(),
-  args: z.string().nullable(),
-  parameters: z.record(z.string(), z.unknown()).nullable(),
-});
-export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
-
 // Action (agent-to-agent RPC) events. Delivered to the handler agent on invoke,
 // and to the caller agent on completion/failure.
 export const ActionInvokedEventSchema = z.object({
@@ -274,6 +242,8 @@ export const ActionInvokedEventSchema = z.object({
   action_name: z.string(),
   caller_name: z.string(),
   handler_agent_id: z.string(),
+  handler_agent_name: z.string().optional(),
+  input: z.unknown().optional(),
 });
 export type ActionInvokedEvent = z.infer<typeof ActionInvokedEventSchema>;
 
@@ -390,8 +360,6 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -402,7 +370,6 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
@@ -441,8 +408,6 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -453,7 +418,6 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,

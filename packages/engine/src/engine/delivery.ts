@@ -53,6 +53,7 @@ function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
     location_node_id: row.locationNodeId,
     route_node_id: row.routeNodeId,
     route_node_kind: row.routeNodeKind,
+    route_node_role: row.routeNodeRole,
     delivery_adapter: row.deliveryAdapter,
     dispatch_attempts: row.dispatchAttempts,
     next_attempt_at: toIso(row.nextAttemptAt),
@@ -611,6 +612,7 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
     locationNodeId: row.delivery.locationNodeId,
     routeNodeId: row.delivery.routeNodeId,
     routeNodeKind: row.delivery.routeNodeKind,
+    routeNodeRole: row.delivery.routeNodeRole,
     deliveryAdapter: row.delivery.deliveryAdapter,
     nextAttemptAt: row.delivery.nextAttemptAt,
   };
@@ -755,6 +757,8 @@ export async function deliverPendingToNode(
     const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments);
 
     const sent = await registry.sendToNode(workspaceId, nodeId, buildDeliverFrame({
+      delivery_id: row.delivery.id,
+      agent_id: row.delivery.agentId,
       agent: row.recipientAgentName,
       msg_id: row.delivery.messageId,
       seq: row.delivery.seq,

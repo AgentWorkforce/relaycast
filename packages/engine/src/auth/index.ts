@@ -1,8 +1,10 @@
 import { eq } from 'drizzle-orm';
-import { workspaces, agents } from '../db/schema.js';
+import { workspaces, agents, nodes } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
+import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
 
 /** SHA-256 hash of a raw token to its stored form. */
 export function hashToken(token: string): Promise<string> {
@@ -28,26 +30,46 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
 
   async authenticate(args: { token: string; require: AuthRequire; db: EngineDb }): Promise<AuthResult> {
     const { token, require, db } = args;
+    const parsedToken = parseAuthToken(token);
+    if (!parsedToken) {
+      return unauthorized('Invalid token format');
+    }
+
+    const requirement = validateTokenRequirement(parsedToken.kind, require);
+    if (!requirement.ok) {
+      return unauthorized(requirement.message, requirement.code);
+    }
+
     const hash = await hashToken(token);
 
-    if (token.startsWith('rk_live_')) {
-      if (require === 'agent') {
-        return unauthorized('Agent token required (at_live_...)');
-      }
+    if (parsedToken.kind === 'workspace') {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
       if (!workspace) return unauthorized('Invalid API key');
       return { ok: true, workspace };
     }
 
-    if (token.startsWith('at_live_')) {
-      if (require === 'workspace') {
-        return unauthorized('Workspace key required (rk_live_...)');
-      }
+    if (parsedToken.kind === 'agent') {
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return { ok: true, workspace, agent };
+    }
+
+    if (parsedToken.kind === 'node') {
+      const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
+      if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
+      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
+      if (!workspace) return unauthorized('Workspace not found');
+      return { ok: true, workspace, node };
+    }
+
+    if (parsedToken.kind === 'observer') {
+      const observerToken = await getActiveObserverTokenByHash(db, hash);
+      if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
+      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
+      if (!workspace) return unauthorized('Workspace not found');
+      return { ok: true, workspace, observerToken };
     }
 
     return unauthorized('Invalid token format');

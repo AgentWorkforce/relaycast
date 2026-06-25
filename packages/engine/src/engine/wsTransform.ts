@@ -15,12 +15,19 @@ export type WsEvent = {
  */
 export function transformForClient(event: WsEvent): Record<string, unknown> {
   const d = event.data;
+  const createdAt = typeof d.created_at === 'string' ? d.created_at : event.timestamp;
+  const withCreatedAt = { created_at: createdAt };
+  const agentId = (typeof d.agent_id === 'string' ? d.agent_id : null)
+    ?? (typeof d.subject_agent_id === 'string' ? d.subject_agent_id : null);
+  const agentRef = { ...(agentId ? { id: agentId } : {}), name: d.agent_name as string };
 
   switch (event.type) {
     case 'message.created':
       return {
         id: stableRelaycastEventId(d.id as string),
         type: 'message.created',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
@@ -35,6 +42,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'message.updated':
       return {
         type: 'message.updated',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
@@ -48,6 +57,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         id: stableRelaycastEventId(d.id as string),
         type: 'thread.reply',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
+        ...(d.conversation_id ? { conversation_id: d.conversation_id as string } : {}),
         channel: d.channel_name as string,
         parent_id: d.thread_id as string,
         message: {
@@ -61,8 +73,13 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'message.reacted':
       return {
         type: 'message.reacted',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
+        ...(d.channel_name ? { channel: d.channel_name as string } : {}),
+        ...(d.conversation_id ? { conversation_id: d.conversation_id as string } : {}),
         message_id: d.message_id as string,
         emoji: d.emoji as string,
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         agent_name: d.agent_name as string,
         action: (d.action as string | undefined) ?? 'added',
       };
@@ -74,6 +91,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         id: stableRelaycastEventId((msg.id ?? d.id) as string),
         type: 'dm.received',
+        ...withCreatedAt,
         conversation_id: d.conversation_id as string,
         message: {
           id: (msg.id ?? d.id) as string,
@@ -93,6 +111,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         id: stableRelaycastEventId((msg.id ?? d.id) as string),
         type: 'group_dm.received',
+        ...withCreatedAt,
         conversation_id: d.conversation_id as string,
         message: {
           id: (msg.id ?? d.id) as string,
@@ -108,102 +127,103 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'agent.status.active':
       return {
         type: 'agent.status.active',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: 'active',
       };
 
     case 'agent.status.offline':
       return {
         type: 'agent.status.offline',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: 'offline',
       };
 
     case 'agent.status.changed':
       return {
         type: 'agent.status.changed',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: d.status as string,
       };
 
     case 'agent.status.idle':
       return {
         type: 'agent.status.idle',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: 'idle',
       };
 
     case 'agent.status.blocked':
       return {
         type: 'agent.status.blocked',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: 'blocked',
       };
 
     case 'agent.status.waiting':
       return {
         type: 'agent.status.waiting',
-        agent: { name: d.agent_name as string },
+        ...withCreatedAt,
+        agent: agentRef,
         status: 'waiting',
-      };
-
-    case 'agent.spawn_requested':
-      return {
-        type: 'agent.spawn_requested',
-        agent: {
-          name: d.agent_name as string,
-          cli: d.cli as string,
-          task: d.task as string,
-          channel: (d.channel as string | null) ?? null,
-          model: (d.model as string | null) ?? null,
-          already_existed: d.already_existed as boolean,
-        },
-      };
-
-    case 'agent.release_requested':
-      return {
-        type: 'agent.release_requested',
-        agent: { name: d.agent_name as string },
-        reason: (d.reason as string | null) ?? null,
-        deleted: d.deleted as boolean,
       };
 
     case 'channel.created':
       return {
         type: 'channel.created',
+        ...withCreatedAt,
+        ...(event.channel_id || d.id ? { channel_id: (event.channel_id ?? d.id) as string } : {}),
         channel: { name: (d.channel_name as string) ?? (d.name as string), topic: (d.topic as string | null) ?? null },
       };
 
     case 'channel.updated':
       return {
         type: 'channel.updated',
+        ...withCreatedAt,
+        ...(event.channel_id || d.id ? { channel_id: (event.channel_id ?? d.id) as string } : {}),
         channel: { name: (d.channel_name as string) ?? (d.name as string), topic: (d.topic as string | null) ?? null },
       };
 
     case 'channel.archived':
       return {
         type: 'channel.archived',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: { name: d.channel_name as string },
       };
 
     case 'member.joined':
       return {
         type: 'member.joined',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         agent_name: d.agent_name as string,
       };
 
     case 'member.left':
       return {
         type: 'member.left',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         agent_name: d.agent_name as string,
       };
 
     case 'message.read':
       return {
         type: 'message.read',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         message_id: d.message_id as string,
+        ...(d.conversation_id ? { conversation_id: d.conversation_id as string } : {}),
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         agent_name: d.agent_name as string,
         read_at: d.read_at as string,
       };
@@ -211,6 +231,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'file.uploaded':
       return {
         type: 'file.uploaded',
+        ...withCreatedAt,
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         file: {
           file_id: (d.file_id as string) ?? (d.id as string),
           filename: d.filename as string,
@@ -221,6 +243,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'webhook.received':
       return {
         type: 'webhook.received',
+        ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         webhook_id: d.webhook_id as string,
         channel: d.channel as string,
         message: {
@@ -231,20 +255,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         },
       };
 
-    case 'command.invoked':
-      return {
-        type: 'command.invoked',
-        command: d.command as string,
-        channel: d.channel as string,
-        invoked_by: d.invoked_by as string,
-        handler_agent_id: d.handler_agent_id as string,
-        args: (d.args as string | null) ?? null,
-        parameters: (d.parameters as Record<string, unknown> | null) ?? null,
-      };
-
     default: {
       const { workspace_id: _workspace_id, channel_id: _channel_id, timestamp: _timestamp, data, ...rest } = event as WsEvent & Record<string, unknown>;
-      return { ...rest, ...data };
+      return { ...rest, ...data, ...withCreatedAt };
     }
   }
 }

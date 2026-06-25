@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "id": "8cf0772b-7fe0-48ee-a3e7-5e8c4a8a773e",
+  "timestamp": "2026-06-24T16:39:27.529Z",
+  "trajectory": "traj_zhlya22s096b",
+  "files": [
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 143,
+              "revision": "ef9196c8c723b5d0bf79bf5fea2b67e794787749"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,12 +1,18 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
-import { channels, messages } from '../db/schema.js';
+import { channels, dmConversations, messages } from '../db/schema.js';
+import {
+  getMessageObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsMessageResource,
+} from '../engine/observerToken.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
+import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -55,7 +61,20 @@ reactionRoutes.post(
       // Strip internal channel_id/channel_name before sending to client
       const { channel_id, channel_name, ...reactionData } = result;
 
-      const eventData = { ...reactionData, channel_name, agent_name: agent!.name, action: 'added' };
+      const [dmConversation] = channel_id
+        ? await db
+          .select({ id: dmConversations.id })
+          .from(dmConversations)
+          .where(eq(dmConversations.channelId, channel_id))
+        : [];
+      const eventData = {
+        ...reactionData,
+        channel_name,
+        ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
+        agent_id: agent!.id,
+        agent_name: agent!.name,
+        action: 'added',
+      };
       if (channel_id) {
         runInBackground(
           c,
@@ -69,11 +88,29 @@ reactionRoutes.post(
           })(),
           'fanout message.reacted',
         );
+        runInBackground(
+          c,
+          sendNodeDeliveriesForChannel(
+            {
+              db,
+              nodeConnections: c.get('engine').nodeConnections,
+              workspaceId: workspace.id,
+            },
+            {
+              channelId: channel_id,
+              messageId: c.req.param('id'),
+              event: 'message.reacted',
+              eventKey: reactionData.id,
+              data: eventData,
+            },
+          ),
+          'node deliver message.reacted',
+        );
       }
       await sendWebhookEvent(c, {
         type: 'message.reacted',
         workspaceId: workspace.id,
-        data: { ...reactionData, channel_id, channel_name, agent_name: agent!.name, action: 'added' },
+        data: { ...eventData, channel_id },
       });
       emitServerEvent(c, workspace.id, 'relaycast_server_reaction_added', {
         message_id: c.req.param('id'),
@@ -118,12 +155,17 @@ reactionRoutes.delete(
       };
       try {
         const [row] = await db
-          .select({ channelId: messages.channelId, channelName: channels.name })
+          .select({ channelId: messages.channelId, channelName: channels.name, conversationId: dmConversations.id })
           .from(messages)
           .innerJoin(channels, eq(messages.channelId, channels.id))
+          .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
           .where(and(eq(messages.id, c.req.param('id')), eq(channels.workspaceId, workspace.id)));
         if (row?.channelId) {
-          const enriched = { ...eventData, channel_name: row.channelName };
+          const enriched = {
+            ...eventData,
+            channel_name: row.channelName,
+            ...(row.conversationId ? { conversation_id: row.conversationId } : {}),
+          };
           runInBackground(
             c,
             (async () => {
@@ -135,6 +177,24 @@ reactionRoutes.delete(
               }
             })(),
             'fanout message.reacted',
+          );
+          runInBackground(
+            c,
+            sendNodeDeliveriesForChannel(
+              {
+                db,
+                nodeConnections: c.get('engine').nodeConnections,
+                workspaceId: workspace.id,
+              },
+              {
+                channelId: row.channelId,
+                messageId: c.req.param('id'),
+                event: 'message.reacted',
+                eventKey: `removed:${c.req.param('id')}:${agent!.id}:${Date.now()}`,
+                data: enriched,
+              },
+            ),
+            'node deliver message.reacted',
           );
         }
       } catch {
@@ -161,12 +221,22 @@ reactionRoutes.delete(
 // GET /v1/messages/:id/reactions - aggregated reactions
 reactionRoutes.get(
   '/messages/:id/reactions',
-  requireAuth,
+  requireWorkspaceRead('reactions:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getMessageObserverResource(db, workspace.id, c.req.param('id'));
+        if (!resource) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+        if (!observerAllowsMessageResource(observer, resource)) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+      }
       const result = await reactionEngine.getReactions(
         db,
         workspace.id,

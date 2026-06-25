@@ -1,0 +1,313 @@
+{
+  "version": "1.0.0",
+  "id": "808c3dbb-81fc-4936-83a5-39de217bb627",
+  "timestamp": "2026-06-25T14:57:22.865Z",
+  "trajectory": "traj_skw3lpvhwyd4",
+  "files": [
+    {
+      "path": "memory/workspace/.relay/outbox/capabilities.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": []
+        }
+      ]
+    },
+    {
+      "path": "memory/workspace/.relay/state.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": []
+        }
+      ]
+    },
+    {
+      "path": "openapi.yaml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 834,
+              "end_line": 971,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 1470,
+              "end_line": 1481,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 1500,
+              "end_line": 1511,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 1733,
+              "end_line": 1745,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 1764,
+              "end_line": 1776,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 1935,
+              "end_line": 1947,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2141,
+              "end_line": 2153,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2187,
+              "end_line": 2199,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2267,
+              "end_line": 2279,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2352,
+              "end_line": 2364,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2572,
+              "end_line": 2584,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2645,
+              "end_line": 2657,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2760,
+              "end_line": 2771,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2869,
+              "end_line": 2880,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 2886,
+              "end_line": 2897,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3221,
+              "end_line": 3233,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3248,
+              "end_line": 3260,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3555,
+              "end_line": 3567,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3584,
+              "end_line": 3596,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3614,
+              "end_line": 3626,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 3929,
+              "end_line": 3940,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 4384,
+              "end_line": 4423,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 4425,
+              "end_line": 4455,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 4457,
+              "end_line": 4492,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 4494,
+              "end_line": 4524,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 4526,
+              "end_line": 4536,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/observerToken.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 12,
+              "end_line": 19,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 305,
+              "end_line": 314,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 362,
+              "end_line": 371,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 636,
+              "end_line": 641,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 670,
+              "end_line": 676,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/src/types.rs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 387,
+              "end_line": 393,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-typescript/src/types.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 628,
+              "end_line": 638,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 680,
+              "end_line": 687,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/types/src/workspace.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 80,
+              "end_line": 145,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/e2e-actions.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 104,
+              "end_line": 110,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 157,
+              "end_line": 163,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 175,
+              "end_line": 181,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            },
+            {
+              "start_line": 192,
+              "end_line": 198,
+              "revision": "027e212d3015cd56600d4c55e7535532d05eadd1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "workflows/sdk-setup-client-80-100.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": []
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import FoundationNetworking
 public struct WsClientOptions: Equatable, Sendable {
     public var token: String
     public var baseURL: String?
+    public var path: String
+    public var nodeRegistration: DirectNodeRegistration?
     public var maxReconnectAttempts: Int
     public var reconnectBaseDelayMilliseconds: Int
     public var reconnectMaxDelayMilliseconds: Int
@@ -20,6 +22,8 @@ public struct WsClientOptions: Equatable, Sendable {
     public init(
         token: String,
         baseURL: String? = nil,
+        path: String = "/v1/ws",
+        nodeRegistration: DirectNodeRegistration? = nil,
         maxReconnectAttempts: Int = 10,
         reconnectBaseDelayMilliseconds: Int = 1_000,
         reconnectMaxDelayMilliseconds: Int = 30_000,
@@ -33,6 +37,8 @@ public struct WsClientOptions: Equatable, Sendable {
     ) {
         self.token = token
         self.baseURL = baseURL
+        self.path = path
+        self.nodeRegistration = nodeRegistration
         self.maxReconnectAttempts = max(0, maxReconnectAttempts)
         self.reconnectBaseDelayMilliseconds = max(1, reconnectBaseDelayMilliseconds)
         self.reconnectMaxDelayMilliseconds = max(reconnectBaseDelayMilliseconds, reconnectMaxDelayMilliseconds)
@@ -43,6 +49,18 @@ public struct WsClientOptions: Equatable, Sendable {
         self.originSurface = originSurface
         self.originClient = originClient
         self.originVersion = originVersion
+    }
+}
+
+public struct DirectNodeRegistration: Equatable, Sendable {
+    public var nodeId: String
+    public var name: String
+    public var agentName: String
+
+    public init(nodeId: String, name: String, agentName: String) {
+        self.nodeId = nodeId
+        self.name = name
+        self.agentName = agentName
     }
 }
 
@@ -130,7 +148,7 @@ public final class WsClient: @unchecked Sendable {
         }
     )
 
-    private let options: WsClientOptions
+    private var options: WsClientOptions
     private let session: URLSession
     private let decoder = makeRelaycastDecoder()
     private let encoder = makeRelaycastEncoder()
@@ -153,6 +171,18 @@ public final class WsClient: @unchecked Sendable {
     public init(options: WsClientOptions, session: URLSession = .shared) {
         self.options = options
         self.session = session
+    }
+
+    public func configureNodeTransport(token: String, registration: DirectNodeRegistration) {
+        lock.withLock {
+            options.token = token
+            options.path = "/v1/node/ws"
+            options.nodeRegistration = registration
+        }
+    }
+
+    public func reportError(_ message: String) {
+        emitLifecycle(.error(message))
     }
 
     public func connect() {
@@ -188,6 +218,7 @@ public final class WsClient: @unchecked Sendable {
     }
 
     public func subscribe(_ channels: [String]) {
+        guard options.nodeRegistration == nil else { return }
         let normalized = channels
             .map { stripHash($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.isEmpty && $0 != "@self" }
@@ -202,6 +233,7 @@ public final class WsClient: @unchecked Sendable {
     }
 
     public func unsubscribe(_ channels: [String]) {
+        guard options.nodeRegistration == nil else { return }
         let normalized = channels
             .map { stripHash($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.isEmpty && $0 != "@self" }
@@ -232,12 +264,13 @@ public final class WsClient: @unchecked Sendable {
         }
         task.resume()
         reconnectAttempt = 0
+        sendNodeRegisterIfNeeded()
         emitLifecycle(.open)
         startReceiveLoop(task: task)
         startPingLoop()
 
         let channels = lock.withLock { Array(desiredChannels) }
-        if !channels.isEmpty {
+        if options.nodeRegistration == nil && !channels.isEmpty {
             send(command: ClientWsCommand(type: "subscribe", channels: channels))
         }
     }
@@ -280,6 +313,15 @@ public final class WsClient: @unchecked Sendable {
 
         guard let data else { return }
         do {
+            if let deliver = try? decoder.decode(NodeDeliverFrame.self, from: data), deliver.type == "deliver" {
+                sendNodeDeliveryAck(deliver)
+                emit(Self.event(from: deliver))
+                return
+            }
+            if let action = try? decoder.decode(NodeActionInvokeFrame.self, from: data), action.type == "action.invoke" {
+                emit(Self.event(from: action))
+                return
+            }
             let event = try decoder.decode(WsEvent.self, from: data)
             emit(event)
         } catch {
@@ -344,7 +386,50 @@ public final class WsClient: @unchecked Sendable {
     }
 
     private func sendPing() {
+        if let registration = options.nodeRegistration {
+            let heartbeat: [String: JSONValue] = [
+                "v": 1,
+                "type": "node.heartbeat",
+                "load": 0,
+                "active_agents": 1,
+                "handlers_live": false,
+                "node_id": .string(registration.nodeId),
+                "name": .string(registration.name),
+                "capabilities": [],
+                "max_agents": 1,
+                "version": .string(relaycastSDKVersion)
+            ]
+            send(json: heartbeat)
+            return
+        }
         send(raw: #"{"type":"ping"}"#)
+    }
+
+    private func sendNodeRegisterIfNeeded() {
+        guard let registration = options.nodeRegistration else { return }
+        let frame: [String: JSONValue] = [
+            "v": 1,
+            "id": .string("register-\(registration.nodeId)"),
+            "type": "node.register",
+            "node_id": .string(registration.nodeId),
+            "name": .string(registration.name),
+            "capabilities": [],
+            "max_agents": 1,
+            "tags": ["implicit", "direct", "sdk"],
+            "version": .string(relaycastSDKVersion),
+            "resume_cursor": .null
+        ]
+        send(json: frame)
+    }
+
+    private func sendNodeDeliveryAck(_ deliver: NodeDeliverFrame) {
+        let frame: [String: JSONValue] = [
+            "v": 1,
+            "type": "delivery.ack",
+            "agent": .string(deliver.agent),
+            "up_to_seq": .int(deliver.seq)
+        ]
+        send(json: frame)
     }
 
     private func send(command: ClientWsCommand) {
@@ -366,13 +451,23 @@ public final class WsClient: @unchecked Sendable {
         }
     }
 
+    private func send(json: [String: JSONValue]) {
+        do {
+            let data = try encoder.encode(json)
+            guard let raw = String(data: data, encoding: .utf8) else { return }
+            send(raw: raw)
+        } catch {
+            emitLifecycle(.error(error.localizedDescription))
+        }
+    }
+
     private func websocketURL() -> URL? {
         let rawBase = (options.baseURL ?? "https://cast.agentrelay.com")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")
 
-        guard var components = URLComponents(string: "\(rawBase)/v1/ws") else {
+        guard var components = URLComponents(string: "\(rawBase)\(options.path)") else {
             return nil
         }
 
@@ -444,6 +539,81 @@ public final class WsClient: @unchecked Sendable {
         for callback in callbacks {
             callback(event)
         }
+    }
+}
+
+private struct NodeDeliverFrame: Codable {
+    let type: String
+    let deliveryId: String
+    let agent: String
+    let msgId: String
+    let seq: Int
+    let payload: NodeDeliverPayload
+}
+
+private struct NodeDeliverPayload: Codable {
+    let type: String
+    let data: [String: JSONValue]
+}
+
+private struct NodeActionInvokeFrame: Codable {
+    let type: String
+    let invocationId: String
+    let action: String
+    let agentId: String?
+    let agentName: String?
+    let input: JSONValue?
+}
+
+private extension WsClient {
+    static func event(from deliver: NodeDeliverFrame) -> WsEvent {
+        let type = deliver.payload.type
+        let data = deliver.payload.data
+        switch type {
+        case "message.created":
+            return WsEvent(type: type, payload: [
+                "channel": stringValue(data["channel_name"]).map(JSONValue.string) ?? .string(""),
+                "message": .object([
+                    "id": data["id"] ?? .null,
+                    "agent_id": data["agent_id"] ?? .null,
+                    "agent_name": data["agent_name"] ?? data["from_name"] ?? .string("unknown"),
+                    "text": data["text"] ?? .string(""),
+                    "attachments": data["attachments"] ?? .array([]),
+                    "injection_mode": data["injection_mode"] ?? .null
+                ])
+            ])
+        case "thread.reply":
+            return WsEvent(type: type, payload: [
+                "channel": stringValue(data["channel_name"]).map(JSONValue.string) ?? .string(""),
+                "parent_id": data["thread_id"] ?? .null,
+                "message": .object([
+                    "id": data["id"] ?? .null,
+                    "agent_id": data["agent_id"] ?? .null,
+                    "agent_name": data["agent_name"] ?? data["from_name"] ?? .string("unknown"),
+                    "text": data["text"] ?? .string("")
+                ])
+            ])
+        default:
+            return WsEvent(type: type, payload: data)
+        }
+    }
+
+    static func event(from action: NodeActionInvokeFrame) -> WsEvent {
+        WsEvent(type: "action.invoked", payload: [
+            "invocation_id": .string(action.invocationId),
+            "action_name": .string(action.action),
+            "caller_name": .string("node"),
+            "handler_agent_id": .string(action.agentId ?? ""),
+            "handler_agent_name": action.agentName.map(JSONValue.string) ?? .null,
+            "input": action.input ?? .object([:])
+        ])
+    }
+
+    static func stringValue(_ value: JSONValue?) -> String? {
+        if case .string(let raw)? = value {
+            return raw
+        }
+        return nil
     }
 }
 

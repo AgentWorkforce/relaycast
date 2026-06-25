@@ -4,14 +4,18 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
+import respx
 
 import relay_sdk
 from relay_sdk.ws import WsClient
 
+BASE = "https://test.relay.dev"
+
 
 class TestWsClientInit:
     def test_default_base_url(self):
-        ws = WsClient(token="at_xxx")
+        ws = WsClient(token="ot_xxx")
         assert ws._base_url == "wss://cast.agentrelay.com"
 
     def test_custom_base_url_https(self):
@@ -146,7 +150,7 @@ class TestWsClientSend:
 class TestWsClientAutoPong:
     @pytest.mark.asyncio
     async def test_server_ping_triggers_pong(self):
-        ws = WsClient(token="at_xxx")
+        ws = WsClient(token="ot_xxx")
 
         # Fake connection that yields a single server ping frame.
         sent: list[str] = []
@@ -176,7 +180,7 @@ class TestWsClientAutoPong:
 
     @pytest.mark.asyncio
     async def test_server_ping_also_emitted_to_handlers(self):
-        ws = WsClient(token="at_xxx")
+        ws = WsClient(token="ot_xxx")
         handler = MagicMock()
         ws.on("ping", handler)
 
@@ -222,20 +226,20 @@ class TestWsClientDisconnect:
 class TestWsClientOriginParams:
     @pytest.mark.asyncio
     async def test_connect_url_includes_origin_query_params(self):
-        ws = WsClient(token="at_xxx")
+        ws = WsClient(token="ot_xxx")
         with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
             with pytest.raises(RuntimeError):
                 await ws._connect_once()
 
         url = connect_mock.call_args.args[0]
         assert "/v1/ws?" in url
-        assert "token=at_xxx" in url
+        assert "token=ot_xxx" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
         assert f"origin_version={relay_sdk.SDK_VERSION}" in url
 
     @pytest.mark.asyncio
     async def test_connect_url_includes_agent_relay_distinct_id_query_param(self):
-        ws = WsClient(token="at_xxx", agent_relay_distinct_id="abc123def4567890")
+        ws = WsClient(token="ot_xxx", agent_relay_distinct_id="abc123def4567890")
         with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
             with pytest.raises(RuntimeError):
                 await ws._connect_once()
@@ -245,10 +249,102 @@ class TestWsClientOriginParams:
 
     @pytest.mark.asyncio
     async def test_connect_url_omits_invalid_agent_relay_distinct_id_query_param(self):
-        ws = WsClient(token="at_xxx", agent_relay_distinct_id="evil\r\nX-Inject: bad")
+        ws = WsClient(token="ot_xxx", agent_relay_distinct_id="evil\r\nX-Inject: bad")
         with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
             with pytest.raises(RuntimeError):
                 await ws._connect_once()
 
         url = connect_mock.call_args.args[0]
         assert "agent_relay_distinct_id=" not in url
+
+
+class TestWsClientNodeTransport:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_agent_token_uses_direct_node_transport_and_acks_deliveries(self):
+        respx.post(f"{BASE}/v1/agent/node-token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "data": {
+                        "node_id": "node_1",
+                        "node_name": "direct-alice",
+                        "token": "nt_xxx",
+                    },
+                },
+            )
+        )
+        ws = WsClient(token="at_xxx", base_url=BASE)
+        handler = MagicMock()
+        ws.on("message.created", handler)
+        sent: list[str] = []
+
+        class FakeConn:
+            async def send(self, raw):
+                sent.append(raw)
+
+            def __aiter__(self):
+                async def gen():
+                    yield json.dumps({
+                        "v": 1,
+                        "type": "deliver",
+                        "agent": "alice",
+                        "seq": 7,
+                        "payload": {
+                            "type": "message.created",
+                            "data": {
+                                "id": "m_1",
+                                "channel_name": "general",
+                                "agent_id": "a_1",
+                                "from_name": "alice",
+                                "text": "hello",
+                            },
+                        },
+                    })
+
+                return gen()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        with patch("relay_sdk.ws.websockets.connect", return_value=FakeConn()) as connect_mock:
+            with patch.object(ws, "_start_ping"), patch.object(ws, "_stop_ping"):
+                await ws._connect_once()
+
+        url = connect_mock.call_args.args[0]
+        assert url.startswith(f"{BASE.replace('https://', 'wss://')}/v1/node/ws?")
+        assert "token=nt_xxx" in url
+        frames = [json.loads(raw) for raw in sent]
+        assert frames[0] == {
+            "v": 1,
+            "id": "python-direct-node_1",
+            "type": "node.register",
+            "node_id": "node_1",
+            "name": "direct-alice",
+            "capabilities": [],
+            "max_agents": 1,
+            "tags": ["implicit", "direct", "sdk"],
+            "version": f"python-sdk/{relay_sdk.SDK_VERSION}",
+            "resume_cursor": None,
+        }
+        assert frames[1] == {
+            "v": 1,
+            "type": "delivery.ack",
+            "agent": "alice",
+            "up_to_seq": 7,
+        }
+        handler.assert_called_once_with({
+            "type": "message.created",
+            "channel": "general",
+            "message": {
+                "id": "m_1",
+                "agent_id": "a_1",
+                "agent_name": "alice",
+                "text": "hello",
+                "attachments": [],
+            },
+        })

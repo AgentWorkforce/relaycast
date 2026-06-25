@@ -8,7 +8,6 @@ import {
   dmConversations,
   dmParticipants,
   messageAttachments,
-  files,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
@@ -22,7 +21,7 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
-import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
+import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -108,44 +107,6 @@ async function resolveConversation(
   return conv;
 }
 
-async function resolveAttachments(
-  db: Db,
-  workspaceId: string,
-  attachmentIds?: string[],
-): Promise<AttachmentRow[]> {
-  if (!attachmentIds || attachmentIds.length === 0) return [];
-
-  const unique = new Set(attachmentIds);
-  if (unique.size !== attachmentIds.length) {
-    throw codedError('Invalid attachments: duplicate file ids are not allowed', 'invalid_attachments', 400);
-  }
-
-  const validFiles = await db
-    .select({
-      file_id: files.id,
-      filename: files.filename,
-      content_type: files.contentType,
-      size_bytes: files.sizeBytes,
-    })
-    .from(files)
-    .where(
-      and(
-        eq(files.workspaceId, workspaceId),
-        eq(files.status, 'complete'),
-        inArray(files.id, attachmentIds),
-      ),
-    );
-
-  const validIds = new Set(validFiles.map((f) => f.file_id));
-  const invalid = attachmentIds.filter((id) => !validIds.has(id));
-  if (invalid.length > 0) {
-    throw codedError('Invalid attachments: file ids must exist in workspace and be complete', 'invalid_attachments', 400);
-  }
-
-  const ordered = new Map(validFiles.map((file) => [file.file_id, file]));
-  return attachmentIds.map((id) => ordered.get(id)!);
-}
-
 /**
  * Build the message + attachment-junction inserts for a DM without executing
  * them, so the send path can run them inside one atomic unit. The message
@@ -157,9 +118,10 @@ function buildDmMessageWrites(
   fromAgentId: string,
   channelId: string,
   data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  attachments: AttachmentRow[],
   messageId: string,
 ): AtomicWrite[] {
-  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
+  const hasAttachments = attachments.length > 0;
   const writes: AtomicWrite[] = [
     db
       .insert(messages)
@@ -175,10 +137,10 @@ function buildDmMessageWrites(
       .returning(),
   ];
 
-  if (data.attachments && data.attachments.length > 0) {
-    const attachmentValues = data.attachments.map((fileId, idx) => ({
+  if (attachments.length > 0) {
+    const attachmentValues = attachments.map((attachment, idx) => ({
       messageId,
-      fileId,
+      fileId: attachment.file_id,
       position: idx,
     }));
     writes.push(db.insert(messageAttachments).values(attachmentValues));
@@ -218,8 +180,10 @@ export async function sendDm(
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
 
+  // Resolve attachments first so invalid attachments fail before any DM
+  // metadata (channel/conversation/participant rows) is created.
+  const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
-  const attachments = await resolveAttachments(db, workspaceId, data.attachments);
   const a2aTarget = options.skipA2aIntercept
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
@@ -262,7 +226,7 @@ export async function sendDm(
   // Durable writes (message + attachments + delivery + message_log) run as one
   // atomic unit when the adapter supports it; fanout stays in routes.
   const results = await runAtomicWrites(db, (writeDb) => {
-    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, messageId);
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId);
 
     if (deliveryId) {
       writes.push(

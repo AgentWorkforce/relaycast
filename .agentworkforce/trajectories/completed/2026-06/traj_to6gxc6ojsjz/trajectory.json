@@ -1,0 +1,65 @@
+{
+  "id": "traj_to6gxc6ojsjz",
+  "version": 1,
+  "task": {
+    "title": "Implement first-class node delivery contracts"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-24T23:07:26.861Z",
+  "completedAt": "2026-06-24T23:21:43.310Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-24T23:21:04.975Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_qwokk0rgpmw3",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-24T23:21:04.975Z",
+      "endedAt": "2026-06-24T23:21:43.310Z",
+      "events": [
+        {
+          "ts": 1782343264976,
+          "type": "decision",
+          "content": "Modeled HTTP push as a node kind with a delivery contract: Modeled HTTP push as a node kind with a delivery contract",
+          "raw": {
+            "question": "Modeled HTTP push as a node kind with a delivery contract",
+            "chosen": "Modeled HTTP push as a node kind with a delivery contract",
+            "alternatives": [],
+            "reasoning": "A remote HTTP endpoint is a delivery host for one or more agents, so binding agents to first-class nodes keeps fleet WebSocket, HTTP push, and future adapters behind one routing model while allowing per-node auth and ack requirements."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782343279555,
+          "type": "decision",
+          "content": "Agent row remains the current-location authority: Agent row remains the current-location authority",
+          "raw": {
+            "question": "Agent row remains the current-location authority",
+            "chosen": "Agent row remains the current-location authority",
+            "alternatives": [],
+            "reasoning": "Agent-node bindings describe available node delivery contracts, but routing only uses an active binding when the agent row still points at that node. This preserves existing transport switch semantics and prevents stale bindings from hijacking deliveries after an agent reconnects directly."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Implemented first-class node delivery contracts: nodes now carry kind and delivery adapter config, agents can be explicitly bound to nodes, HTTP push nodes support bearer/static header/HMAC auth and ack modes, delivery rows record route and dispatch metadata, SDK/OpenAPI/README document the new surface, and conformance tests cover HMAC push, on-2xx ack, capacity defaults, and existing delivery rerouting semantics.",
+    "approach": "Standard approach",
+    "confidence": 0.86
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "44707af084d2c53e67b013dc8a83751bd0a8dbbc",
+    "endRef": "44707af084d2c53e67b013dc8a83751bd0a8dbbc"
+  }
+}

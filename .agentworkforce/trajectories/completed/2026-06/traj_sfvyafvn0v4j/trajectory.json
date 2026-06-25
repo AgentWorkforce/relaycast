@@ -1,0 +1,61 @@
+{
+  "id": "traj_sfvyafvn0v4j",
+  "version": 1,
+  "task": {
+    "title": "Fix observer DM channel bypass"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T13:37:09.881Z",
+  "completedAt": "2026-06-25T13:40:43.577Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T13:39:51.577Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_teeci49pg0aa",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T13:39:51.577Z",
+      "endedAt": "2026-06-25T13:40:43.577Z",
+      "events": [
+        {
+          "ts": 1782394791578,
+          "type": "decision",
+          "content": "Reject DM-backed channels on observer channel-name routes: Reject DM-backed channels on observer channel-name routes",
+          "raw": {
+            "question": "Reject DM-backed channels on observer channel-name routes",
+            "chosen": "Reject DM-backed channels on observer channel-name routes",
+            "alternatives": [],
+            "reasoning": "DM channel names are deterministic, so observer access through /channels/:name must not treat channel_type 1/2 rows as ordinary channels. DM reads stay behind dms:read and conversation filters on DM-aware endpoints."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Fixed observer token DM channel bypass by rejecting channel_type 1/2 rows on observer channel-name routes and adding deterministic dm-* regression coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [
+    "284b6c8"
+  ],
+  "filesChanged": [
+    "packages/engine/src/__tests__/conformance/observerToken.test.ts",
+    "packages/engine/src/engine/observerToken.ts",
+    "packages/engine/src/routes/channel.ts",
+    "packages/engine/src/routes/message.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "d33cff1ef50426db8f5fb430ab3667318dee1a71",
+    "endRef": "284b6c8674fbbd9cfb5618134837390f26cc631e",
+    "traceId": "d65a82ad-ef90-4bca-a4b5-52b612439651"
+  }
+}

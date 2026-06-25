@@ -38,6 +38,16 @@ class MockWebSocket {
 
 vi.stubGlobal('WebSocket', MockWebSocket);
 
+async function waitForSockets(count: number): Promise<MockWebSocket[]> {
+  for (let i = 0; i < 10; i += 1) {
+    await Promise.resolve();
+    if (MockWebSocket.instances.length >= count) {
+      return MockWebSocket.instances.slice(0, count);
+    }
+  }
+  throw new Error(`Expected ${count} mock sockets, got ${MockWebSocket.instances.length}`);
+}
+
 interface InviteLike {
   workspaceId: string;
   relaycastApiKey: string;
@@ -85,6 +95,7 @@ class MockRelaycastServer {
   private nextMessageId = 1;
   private readonly agentsByName = new Map<string, AgentState>();
   private readonly agentsByToken = new Map<string, AgentState>();
+  private readonly nodeTokensByAgentId = new Map<string, string>();
   private readonly socketsByToken = new Map<string, Set<MockWebSocket>>();
 
   createInvite(agentName = 'review-agent'): InviteLike {
@@ -130,6 +141,10 @@ class MockRelaycastServer {
 
     if (path === '/v1/agents' && (init?.method ?? 'GET').toUpperCase() === 'POST') {
       return this.handleRegisterAgent(authHeader, init);
+    }
+
+    if (path === '/v1/agent/node-token' && (init?.method ?? 'GET').toUpperCase() === 'POST') {
+      return this.handleDirectNodeToken(authHeader);
     }
 
     if (path.startsWith('/v1/agents/') && path.endsWith('/rotate-token')) {
@@ -273,6 +288,21 @@ class MockRelaycastServer {
     });
   }
 
+  private handleDirectNodeToken(authHeader: string | null): Promise<Response> {
+    const agent = this.requireAgent(authHeader);
+    if (agent instanceof Promise) {
+      return agent;
+    }
+
+    const token = `nt_live_${agent.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`;
+    this.nodeTokensByAgentId.set(agent.id, token);
+    return okResponse({
+      node_id: `node_direct_${agent.id}`,
+      node_name: `direct-${agent.id}`,
+      token,
+    });
+  }
+
   private handleDm(authHeader: string | null, init?: RequestInit): Promise<Response> {
     const sender = this.requireAgent(authHeader);
     if (sender instanceof Promise) {
@@ -290,7 +320,7 @@ class MockRelaycastServer {
     }
 
     const messageId = `dm_${this.nextMessageId++}`;
-    this.deliver(recipient.token, {
+    this.deliverToAgent(recipient, {
       type: 'dm.received',
       conversation_id: `conv_${sender.id}_${recipient.id}`,
       message: {
@@ -308,6 +338,26 @@ class MockRelaycastServer {
       text: body.text ?? '',
       created_at: this.timestamp(this.nextMessageId),
     }, 201);
+  }
+
+  private deliverToAgent(agent: AgentState, event: { type: string; [key: string]: unknown }): void {
+    const token = this.nodeTokensByAgentId.get(agent.id) ?? agent.token;
+    this.deliver(token, {
+      v: 1,
+      type: 'deliver',
+      delivery_id: `del_${this.nextMessageId}_${agent.id}`,
+      agent_id: agent.id,
+      agent: agent.name,
+      msg_id: typeof event.message === 'object' && event.message !== null
+        ? String((event.message as { id?: unknown }).id ?? '')
+        : `msg_${this.nextMessageId}`,
+      seq: this.nextMessageId,
+      mode: 'wait',
+      payload: {
+        type: event.type,
+        data: Object.fromEntries(Object.entries(event).filter(([key]) => key !== 'type')),
+      },
+    });
   }
 
   private deliver(token: string, event: unknown): void {
@@ -377,6 +427,11 @@ describe('relayfile invite consumption', () => {
     const stopReview = reviewRelay.onMessage((message) => {
       reviewMessages.push({ sender: message.sender, text: message.text });
     });
+    const sockets = await waitForSockets(2);
+    for (const socket of sockets) {
+      socket.onopen?.();
+    }
+    await Promise.resolve();
 
     const readyPath = '/workspace/notion/review/ready.md';
     const ackPath = '/workspace/notion/review/lead-feedback.md';

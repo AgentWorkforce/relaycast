@@ -68,13 +68,13 @@ describe('RelayCast', () => {
   });
 
   describe('workspace realtime', () => {
-    it('connect() opens /v1/ws with the workspace key and SDK origin metadata', async () => {
+    it('connect() opens /v1/ws with an observer token and SDK origin metadata', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({
-        apiKey: 'rk_live_test123',
+        apiKey: 'ot_live_test123',
         baseUrl: 'http://localhost:8080',
         ws: {
-          token: 'rk_live_wrong',
+          token: 'ot_live_wrong',
           baseUrl: 'https://wrong.example',
         } as any,
       });
@@ -85,7 +85,7 @@ describe('RelayCast', () => {
       const url = new URL(MockWebSocket.instances[0]!.url);
       expect(url.origin).toBe('ws://localhost:8080');
       expect(url.pathname).toBe('/v1/ws');
-      expect(url.searchParams.get('token')).toBe('rk_live_test123');
+      expect(url.searchParams.get('token')).toBe('ot_live_test123');
       expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
       expect(url.searchParams.get('origin_version')).toBeDefined();
       expect(mockFetch).not.toHaveBeenCalled();
@@ -95,7 +95,7 @@ describe('RelayCast', () => {
 
     it('connect() is idempotent and disconnect() allows a fresh workspace socket with existing handlers', async () => {
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({ apiKey: 'ot_live_test123' });
       const handler = vi.fn();
       relay.on.messageCreated(handler);
 
@@ -124,7 +124,7 @@ describe('RelayCast', () => {
     it('on.messageCreated fires with camelized workspace stream events', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({ apiKey: 'ot_live_test123' });
       const handler = vi.fn();
       relay.on.messageCreated(handler);
 
@@ -154,7 +154,7 @@ describe('RelayCast', () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({
-        apiKey: 'rk_live_test123',
+        apiKey: 'ot_live_test123',
         ws: { maxReconnectAttempts: 0, reconnectJitter: false },
       });
       const permanentlyDisconnected = vi.fn();
@@ -176,7 +176,7 @@ describe('RelayCast', () => {
     it('on.actionCompleted fires with camelized action completion events', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({ apiKey: 'ot_live_test123' });
       relay.connect();
       const ws = MockWebSocket.instances[0]!;
       ws.simulateOpen();
@@ -208,7 +208,7 @@ describe('RelayCast', () => {
     it('on.any returns an unsubscribe function for workspace events', async () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({ apiKey: 'ot_live_test123' });
       relay.connect();
       const ws = MockWebSocket.instances[0]!;
       ws.simulateOpen();
@@ -230,7 +230,7 @@ describe('RelayCast', () => {
       vi.useFakeTimers();
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({
-        apiKey: 'rk_live_test123',
+        apiKey: 'ot_live_test123',
         ws: { reconnectJitter: false },
       });
       relay.connect();
@@ -248,7 +248,7 @@ describe('RelayCast', () => {
 
     it('allows registering event handlers before connect()', async () => {
       const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const relay = new RelayCast({ apiKey: 'ot_live_test123' });
       const handler = vi.fn();
 
       expect(() => relay.on.messageCreated(handler)).not.toThrow();
@@ -315,6 +315,66 @@ describe('RelayCast', () => {
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     });
 
+  });
+
+  describe('observerTokens', () => {
+    it('create() calls POST /v1/observer-tokens with snake_case filters', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'ot_1',
+        name: 'dash',
+        token: 'ot_live_secret',
+        scopes: ['stream:read'],
+        filters: { channel_names: ['general'], include_dms: false },
+        status: 'active',
+        description: null,
+        expires_at: null,
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: null,
+        revoked_at: null,
+        last_used_at: null,
+      }));
+
+      const result = await relay.observerTokens.create({
+        name: 'dash',
+        scopes: ['stream:read'],
+        filters: { channelNames: ['general'], includeDms: false },
+      });
+
+      expect(result.token).toBe('ot_live_secret');
+      expect(result.filters.channelNames).toEqual(['general']);
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/observer-tokens');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({
+        name: 'dash',
+        scopes: ['stream:read'],
+        filters: { channel_names: ['general'], include_dms: false },
+      }));
+    });
+
+    it('list/get/update/rotate/revoke call observer token endpoints', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({ id: 'ot_1' }));
+
+      await relay.observerTokens.list();
+      await relay.observerTokens.get('ot_1');
+      await relay.observerTokens.update('ot_1', { scopes: ['messages:read'] });
+      await relay.observerTokens.rotate('ot_1');
+      mockFetch.mockImplementationOnce(() => mockResponse(undefined, true, 204));
+      await relay.observerTokens.revoke('ot_1');
+
+      expect(mockFetch.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
+        ['https://cast.agentrelay.com/v1/observer-tokens', 'GET'],
+        ['https://cast.agentrelay.com/v1/observer-tokens/ot_1', 'GET'],
+        ['https://cast.agentrelay.com/v1/observer-tokens/ot_1', 'PATCH'],
+        ['https://cast.agentrelay.com/v1/observer-tokens/ot_1/rotate', 'POST'],
+        ['https://cast.agentrelay.com/v1/observer-tokens/ot_1', 'DELETE'],
+      ]);
+    });
   });
 
   describe('agents', () => {

@@ -2,11 +2,18 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as agentEngine from '../engine/agent.js';
+import * as nodeEngine from '../engine/node.js';
+import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
 import * as sessionEventEngine from '../engine/sessionEvent.js';
+import {
+  getObserverTokenFromContext,
+  observerAllowsAgent,
+  observerAllowsCreatedAt,
+} from '../engine/observerToken.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { sendNodePresenceContext } from '../engine/nodeContext.js';
 import { runInBackground } from './background.js';
@@ -145,6 +152,49 @@ agentRoutes.get(
   },
 );
 
+// POST /v1/agent/node-token - mint the authenticated agent's direct node token
+agentRoutes.post(
+  '/agent/node-token',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const authAgent = c.get('agent')!;
+      const directNode = await nodeEngine.ensureDirectNodeForAgent(db, workspace.id, authAgent, { online: false });
+      if (!directNode) {
+        return jsonError(c, 'agent_bound_to_node', 'Agent is explicitly bound to another node', 409);
+      }
+
+      const nodeWithToken = await nodeEngine.createNodeToken(db, workspace.id, {
+        node_id: directNode.id,
+        name: directNode.name,
+        kind: 'ws',
+        role: 'direct',
+        delivery_adapter: 'ws.node.v1',
+        delivery: {
+          implicit: true,
+          agent_id: authAgent.id,
+          agent_name: authAgent.name,
+        },
+        capabilities: [],
+        max_agents: 1,
+        tags: ['implicit', 'direct'],
+        version: 'implicit',
+      });
+
+      return jsonOk(c, {
+        node_id: nodeWithToken.id,
+        node_name: nodeWithToken.name,
+        token: nodeWithToken.token,
+      });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
 // POST /v1/agents - register agent (workspace key required)
 agentRoutes.post(
   '/agents',
@@ -194,14 +244,16 @@ agentRoutes.post(
 // GET /v1/agents - list agents
 agentRoutes.get(
   '/agents',
-  requireWorkspaceKey,
+  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const status = c.req.query('status');
-      const agents = await agentEngine.listAgents(db, workspace.id, status);
+      const observer = getObserverTokenFromContext(c);
+      const agents = (await agentEngine.listAgents(db, workspace.id, status))
+        .filter((agent) => observerAllowsAgent(observer, agent.id));
       return jsonOk(c, agents);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -212,7 +264,7 @@ agentRoutes.get(
 // GET /v1/agents/:name - get agent by name
 agentRoutes.get(
   '/agents/:name',
-  requireWorkspaceKey,
+  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -221,6 +273,9 @@ agentRoutes.get(
       const name = c.req.param('name');
       const agent = await agentEngine.getAgentByName(db, workspace.id, name);
       if (!agent) {
+        return agentNotFound(c, name);
+      }
+      if (!observerAllowsAgent(getObserverTokenFromContext(c), agent.id)) {
         return agentNotFound(c, name);
       }
       return jsonOk(c, agent);
@@ -314,15 +369,17 @@ agentRoutes.delete(
   },
 );
 
-// POST /v1/agents/spawn - spawn agent (registers if new, rotates token if exists)
+// POST /v1/agents/spawn - request a node to spawn an agent
 agentRoutes.post(
   '/agents/spawn',
-  requireWorkspaceKey,
+  requireAuth,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
+      const callerAgent = c.get('agent');
+      const callerNode = c.get('node');
       const parsed = await parseJsonBody(c, spawnAgentSchema, (failure) => {
         const hasNameIssue = failure.error.issues.some((issue) => issue.path[0] === 'name');
         const hasCliIssue = failure.error.issues.some((issue) => issue.path[0] === 'cli');
@@ -340,41 +397,47 @@ agentRoutes.post(
       }
       const { name, cli, task, channel, persona, model, metadata } = parsed.data;
 
-      const result = await agentEngine.spawnAgent(db, workspace.id, {
+      const input = {
         name,
         cli,
         task,
-        channel: channel ?? undefined,
-        persona: persona ?? undefined,
-        // Persist the requested model into agent metadata so it is visible via
-        // list_agents, in addition to being emitted on the spawn event below.
-        metadata: model ? { ...(metadata ?? {}), model } : metadata,
-      });
-
-      const spawnEventData = {
-        agent_id: result.id,
-        agent_name: result.name,
-        cli: result.cli,
-        task: result.task,
-        channel: result.channel,
+        channel: channel ?? null,
+        persona: persona ?? null,
         model: model ?? null,
-        already_existed: result.already_existed,
+        metadata: model ? { ...(metadata ?? {}), model } : metadata ?? {},
+      };
+      const result = await actionEngine.invokeAction(
+        db,
+        workspace.id,
+        'spawn',
+        {
+          input,
+          caller_id: callerAgent?.id,
+          caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+        },
+        { nodeConnections: c.get('engine').nodeConnections },
+      );
+
+      const eventData = {
+        invocation_id: result.invocation_id,
+        action_name: result.action_name,
+        caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+        handler_agent_id: result.handler_agent_id,
+        handler_node_id: result.handler_node_id,
       };
 
-      runInBackground(c, fanoutToWorkspace(c, 'agent.spawn_requested', spawnEventData), 'fanout agent.spawn_requested');
       await sendWebhookEvent(c, {
-        type: 'agent.spawn_requested',
+        type: 'action.invoked',
         workspaceId: workspace.id,
-        data: spawnEventData,
+        data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_spawn_requested', {
-        agent_id: result.id,
-        agent_name: result.name,
-        cli: result.cli,
-        already_existed: result.already_existed,
+      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+        action_name: result.action_name,
+        invocation_id: result.invocation_id,
+        caller_agent_id: callerAgent?.id ?? null,
       });
 
-      return result.already_existed ? jsonOk(c, result) : jsonCreated(c, result);
+      return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -489,7 +552,7 @@ agentRoutes.post(
 // GET /v1/agents/:name/events - list session events for an agent
 agentRoutes.get(
   '/agents/:name/events',
-  requireWorkspaceKey,
+  requireWorkspaceRead('activity:read', { allowAgent: false, allowNode: false }),
   rateLimit,
   async (c) => {
     try {
@@ -506,62 +569,77 @@ agentRoutes.get(
       if (!agent) {
         return agentNotFound(c, name);
       }
+      const observer = getObserverTokenFromContext(c);
+      if (!observerAllowsAgent(observer, agent.id)) {
+        return agentNotFound(c, name);
+      }
 
       const events = await sessionEventEngine.listSessionEvents(db, workspace.id, agent.id, {
         type,
         limit,
       });
 
-      return jsonOk(c, events);
+      return jsonOk(c, events.filter((event) => observerAllowsCreatedAt(observer, event.created_at)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
   },
 );
 
-// POST /v1/agents/release - release (mark offline) or delete an agent
+// POST /v1/agents/release - request a node to release an agent
 agentRoutes.post(
   '/agents/release',
-  requireWorkspaceKey,
+  requireAuth,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
+      const callerAgent = c.get('agent');
+      const callerNode = c.get('node');
       const parsed = await parseJsonBody(c, releaseAgentSchema, 'name is required');
       if (!parsed.ok) {
         return parsed.response;
       }
       const { name, reason, delete_agent } = parsed.data;
 
-      const result = await agentEngine.releaseAgent(db, workspace.id, {
+      const input = {
         name,
-        reason: reason ?? undefined,
-        delete_agent,
-      });
+        reason: reason ?? null,
+        delete_agent: delete_agent === true,
+      };
+      const result = await actionEngine.invokeAction(
+        db,
+        workspace.id,
+        'release',
+        {
+          input,
+          caller_id: callerAgent?.id,
+          caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+        },
+        { nodeConnections: c.get('engine').nodeConnections },
+      );
 
-      if (!result) {
-        return agentNotFound(c, name);
-      }
-
-      const releaseEventData = {
-        agent_name: result.name,
-        reason: result.reason ?? null,
-        deleted: result.deleted,
+      const eventData = {
+        invocation_id: result.invocation_id,
+        action_name: result.action_name,
+        caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
+        handler_agent_id: result.handler_agent_id,
+        handler_node_id: result.handler_node_id,
       };
 
-      runInBackground(c, fanoutToWorkspace(c, 'agent.release_requested', releaseEventData), 'fanout agent.release_requested');
       await sendWebhookEvent(c, {
-        type: 'agent.release_requested',
+        type: 'action.invoked',
         workspaceId: workspace.id,
-        data: releaseEventData,
+        data: eventData,
       });
-      emitServerEvent(c, workspace.id, 'relaycast_server_agent_release_requested', {
-        agent_name: result.name,
-        deleted: result.deleted,
+      emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+        action_name: result.action_name,
+        invocation_id: result.invocation_id,
+        caller_agent_id: callerAgent?.id ?? null,
       });
 
-      return jsonOk(c, result);
+      return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

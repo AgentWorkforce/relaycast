@@ -52,17 +52,20 @@ export async function searchMessages(
     id: string;
     channel_id: string;
     channel_name: string;
+    channel_type: number;
+    conversation_id: string | null;
     agent_id: string;
     agent_name: string | null;
     body: string;
     created_at: number;
     rank: number;
   }>(sql`
-    SELECT m.id, m.channel_id, c.name AS channel_name, m.agent_id, a.name AS agent_name, m.body, m.created_at,
+    SELECT m.id, m.channel_id, c.name AS channel_name, c.channel_type, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
            bm25(messages_fts) AS rank
     FROM messages_fts fts
     JOIN messages m ON m.id = fts.id
     JOIN channels c ON c.id = m.channel_id
+    LEFT JOIN dm_conversations dc ON dc.channel_id = c.id
     LEFT JOIN agents a ON a.id = m.agent_id
     WHERE messages_fts MATCH ${ftsQuery}
       AND m.workspace_id = ${workspaceId}
@@ -76,7 +79,11 @@ export async function searchMessages(
 
   return rows.map((row) => ({
     id: row.id,
+    channel_id: row.channel_id,
     channel_name: row.channel_name || 'unknown',
+    channel_type: row.channel_type,
+    conversation_id: row.conversation_id,
+    agent_id: row.agent_id,
     agent_name: row.agent_name || 'unknown',
     text: row.body,
     created_at: new Date(row.created_at * 1000).toISOString(),

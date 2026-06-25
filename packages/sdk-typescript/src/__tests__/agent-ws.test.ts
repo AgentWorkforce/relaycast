@@ -72,48 +72,69 @@ describe('AgentClient WebSocket integration', () => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];
     mockFetch.mockReset();
-    mockFetch.mockImplementation(() => mockResponse({}));
+    mockFetch.mockImplementation((url: string) => {
+      if (url.endsWith('/v1/agent/node-token')) {
+        return mockResponse({
+          node_id: 'node_direct_agent_1',
+          node_name: 'direct-agent-1',
+          token: 'nt_live_direct_agent_1',
+        });
+      }
+      return mockResponse({});
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
+  async function nextSocket(index = 0): Promise<MockWebSocket> {
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+      const socket = MockWebSocket.instances[index];
+      if (socket) return socket;
+    }
+    throw new Error(`Mock WebSocket ${index} was not created`);
+  }
+
   // --- connect / disconnect ---
 
-  it('connect() creates WebSocket with correct URL', () => {
+  it('connect() creates WebSocket with correct URL', async () => {
     const agent = createAgent();
     agent.connect();
+    await nextSocket();
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const url = new URL(MockWebSocket.instances[0]!.url);
     expect(url.origin).toBe('ws://localhost:8080');
-    expect(url.pathname).toBe('/v1/ws');
-    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.pathname).toBe('/v1/node/ws');
+    expect(url.searchParams.get('token')).toBe('nt_live_direct_agent_1');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
-  it('connect() normalizes trailing slash base URL', () => {
+  it('connect() normalizes trailing slash base URL', async () => {
     const client = new HttpClient({
       apiKey: 'at_live_test',
       baseUrl: 'https://relay.example.com/',
     });
     const agent = new AgentClient(client);
     agent.connect();
+    await nextSocket();
 
     const url = new URL(MockWebSocket.instances[0]!.url);
     expect(url.origin).toBe('wss://relay.example.com');
-    expect(url.pathname).toBe('/v1/ws');
-    expect(url.searchParams.get('token')).toBe('at_live_test');
+    expect(url.pathname).toBe('/v1/node/ws');
+    expect(url.searchParams.get('token')).toBe('nt_live_direct_agent_1');
     expect(url.searchParams.get('origin_client')).toBe('@relaycast/sdk');
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
-  it('connect() is idempotent — second call does not create another WebSocket', () => {
+  it('connect() is idempotent — second call does not create another WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
     agent.connect();
+    await nextSocket();
 
     expect(MockWebSocket.instances).toHaveLength(1);
   });
@@ -121,7 +142,7 @@ describe('AgentClient WebSocket integration', () => {
   it('disconnect() closes WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const p = agent.disconnect();
@@ -133,18 +154,20 @@ describe('AgentClient WebSocket integration', () => {
   it('disconnect() allows reconnect with a fresh WebSocket', async () => {
     const agent = createAgent();
     agent.connect();
+    await nextSocket();
     const p = agent.disconnect();
     await vi.advanceTimersByTimeAsync(200);
     await p;
 
     agent.connect();
+    await nextSocket(1);
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
   it('disconnect() clears manual and managed subscriptions before future reconnect', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws1 = MockWebSocket.instances[0]!;
+    const ws1 = await nextSocket();
     ws1.simulateOpen();
     agent.subscribe(['general']);
     agent.subscribe(['dev'], vi.fn());
@@ -154,44 +177,64 @@ describe('AgentClient WebSocket integration', () => {
     await p;
 
     agent.subscribe(['random'], vi.fn());
-    const ws2 = MockWebSocket.instances[1]!;
+    const ws2 = await nextSocket(1);
     ws2.simulateOpen();
 
     const subscribePayloads = ws2.send.mock.calls
       .map(([payload]) => JSON.parse(String(payload)))
       .filter((payload) => payload.type === 'subscribe');
-    expect(subscribePayloads).toEqual([
-      { type: 'subscribe', channels: ['random'] },
-    ]);
+    expect(subscribePayloads).toEqual([]);
   });
 
   // --- typed on.* handlers ---
 
-  it('on.messageCreated fires with message.created event', () => {
+  it('on.messageCreated fires with message.created event', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
     agent.on.messageCreated(handler);
 
     ws.simulateMessage({
-      type: 'message.created',
-      channel: 'general',
-      message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'del_1',
+      agent_id: 'agent_1',
+      agent: 'worker',
+      msg_id: 'm_1',
+      seq: 1,
+      mode: 'wait',
+      payload: {
+        type: 'message.created',
+        data: {
+          id: 'm_1',
+          channel_name: 'general',
+          agent_id: 'bot_1',
+          from_name: 'Bot',
+          text: 'hi',
+          attachments: [],
+        },
+      },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'message.created', channel: 'general' }),
     );
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'worker',
+      up_to_seq: 1,
+    }));
   });
 
-  it('on.messageReacted fires with message.reacted event', () => {
+  it('on.messageReacted fires with message.reacted event', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -211,19 +254,31 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
-  it('on.dmReceived fires with dm.received event', () => {
+  it('on.dmReceived fires with dm.received event', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
     agent.on.dmReceived(handler);
 
     ws.simulateMessage({
-      type: 'dm.received',
-      conversation_id: 'conv_1',
-      message: { id: 'dm_1', agent_name: 'Alice', text: 'hello' },
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'del_dm_1',
+      agent_id: 'agent_1',
+      agent: 'worker',
+      msg_id: 'dm_1',
+      seq: 2,
+      mode: 'wait',
+      payload: {
+        type: 'dm.received',
+        data: {
+          conversation_id: 'conv_1',
+          message: { id: 'dm_1', agent_name: 'Alice', text: 'hello' },
+        },
+      },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -232,10 +287,10 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
-  it('on.channelCreated fires with channel.created event', () => {
+  it('on.channelCreated fires with channel.created event', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -254,32 +309,29 @@ describe('AgentClient WebSocket integration', () => {
 
   // --- subscribe / unsubscribe proxy ---
 
-  it('subscribe() proxies to WsClient', () => {
+  it('subscribe() is local state on direct node transport', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     agent.subscribe(['general', 'dev']);
 
-    expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channels: ['general', 'dev'] }),
-    );
+    const frames = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false);
   });
 
-  it('unsubscribe() proxies to WsClient', () => {
+  it('unsubscribe() is local state on direct node transport', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
     agent.subscribe(['dev']);
     ws.send.mockClear();
 
     agent.unsubscribe(['dev']);
 
-    expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'unsubscribe', channels: ['dev'] }),
-    );
+    expect(ws.send).not.toHaveBeenCalled();
   });
 
   it('subscribe() is a no-op when not connected', () => {
@@ -300,13 +352,12 @@ describe('AgentClient WebSocket integration', () => {
 
     const subscription = agent.subscribe(['#general', '@self'], handler);
 
+    const ws = await nextSocket();
     expect(MockWebSocket.instances).toHaveLength(1);
-    const ws = MockWebSocket.instances[0]!;
     ws.simulateOpen();
 
-    expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channels: ['general'] }),
-    );
+    const frames = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false);
 
     ws.simulateMessage({
       id: stableRelaycastEventId('m_1'),
@@ -333,9 +384,7 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler.mock.calls[1]![0]).toMatchObject({ id: stableRelaycastEventId('dm_1'), type: 'dm.received' });
 
     subscription.unsubscribe();
-    expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'unsubscribe', channels: ['general'] }),
-    );
+    expect(ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).some((frame) => frame.type === 'unsubscribe')).toBe(false);
   });
 
   it('subscribe(channels, handler) logs rejected handler promises', async () => {
@@ -345,7 +394,7 @@ describe('AgentClient WebSocket integration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     agent.subscribe(['general'], handler);
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
     ws.simulateMessage({
       type: 'message.created',
@@ -362,36 +411,36 @@ describe('AgentClient WebSocket integration', () => {
     errorSpy.mockRestore();
   });
 
-  it('resubscribes managed channels after reconnect', () => {
+  it('does not send remote resubscribe frames after reconnect on direct node transport', async () => {
     const agent = createAgent();
     const subscription = agent.subscribe(['general'], vi.fn());
 
-    const ws1 = MockWebSocket.instances[0]!;
+    const ws1 = await nextSocket();
     ws1.simulateOpen();
     ws1.simulateClose();
 
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
 
-    const ws2 = MockWebSocket.instances[1]!;
+    const ws2 = await nextSocket(1);
     ws2.simulateOpen();
-    expect(ws2.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channels: ['general'] }),
-    );
+    const frames = ws2.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false);
 
     subscription.unsubscribe();
   });
 
   // --- lifecycle events ---
 
-  it('on.connected fires on WebSocket open', () => {
+  it('on.connected fires on WebSocket open', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
 
     const handler = vi.fn();
     agent.on.connected(handler);
 
     ws.simulateOpen();
+    await Promise.resolve();
 
     expect(handler).toHaveBeenCalledTimes(1);
   });
@@ -399,8 +448,9 @@ describe('AgentClient WebSocket integration', () => {
   it('on.connected fires immediately if registered after open', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
+    await Promise.resolve();
 
     const handler = vi.fn();
     agent.on.connected(handler);
@@ -409,10 +459,10 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.disconnected fires on WebSocket close', () => {
+  it('on.disconnected fires on WebSocket close', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -423,10 +473,10 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.reconnecting fires with attempt count', () => {
+  it('on.reconnecting fires with attempt count', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -438,20 +488,20 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(1);
 
     // Advance timer to trigger reconnect, then close again
-    vi.advanceTimersByTime(1000);
-    const ws2 = MockWebSocket.instances[1]!;
+    await vi.advanceTimersByTimeAsync(1000);
+    const ws2 = await nextSocket(1);
     ws2.simulateClose();
 
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler).toHaveBeenLastCalledWith(2);
   });
 
-  it('on.permanentlyDisconnected fires with attempt count', () => {
+  it('on.permanentlyDisconnected fires with attempt count', async () => {
     const agent = createAgent({
       ws: { maxReconnectAttempts: 0, reconnectJitter: false },
     });
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -463,10 +513,10 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledWith(0);
   });
 
-  it('on.resynced fires with replay stats after a reconnect resync', () => {
+  it('does not send workspace resync frames on direct node reconnect', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -480,13 +530,13 @@ describe('AgentClient WebSocket integration', () => {
       agent_seq: 4,
     });
     ws.simulateClose();
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
 
-    const ws2 = MockWebSocket.instances[1]!;
+    const ws2 = await nextSocket(1);
     ws2.simulateOpen();
 
     const frames = ws2.send.mock.calls.map(([data]) => JSON.parse(data as string));
-    expect(frames.some((f) => f.type === 'resync' && f.last_seen_seq === 4)).toBe(true);
+    expect(frames.some((f) => f.type === 'resync')).toBe(false);
 
     ws2.simulateMessage({
       type: 'resync_ack',
@@ -496,65 +546,69 @@ describe('AgentClient WebSocket integration', () => {
       gap_detected: false,
     });
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({ replayed: 2, gapDetected: false });
+    expect(handler).not.toHaveBeenCalled();
   });
 
-  it('starts auto-heartbeat on open and continues on interval', () => {
+  it('starts auto-heartbeat on open and continues on interval', async () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
+    await Promise.resolve();
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/v1/agent/node-token');
+    expect(mockFetch.mock.calls[1]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
 
     vi.advanceTimersByTime(30_000);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[1]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
   });
 
   it('stops auto-heartbeat on disconnect', async () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
+    await Promise.resolve();
 
     vi.advanceTimersByTime(30_000);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
 
     const p = agent.disconnect();
     await vi.advanceTimersByTimeAsync(200);
     await p;
-    expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/disconnect');
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockFetch.mock.calls[3]![0]).toBe('http://localhost:8080/v1/agents/disconnect');
 
     vi.advanceTimersByTime(60_000);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
-  it('does not start auto-heartbeat interval when disabled', () => {
+  it('does not start auto-heartbeat interval when disabled', async () => {
     const agent = createAgent({ autoHeartbeatMs: false });
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
+    await Promise.resolve();
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(120_000);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   // --- wildcard ---
 
-  it('on.any receives all events', () => {
+  it('on.any receives all events', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
 
     const handler = vi.fn();
     agent.on.any(handler);
 
     ws.simulateOpen();
+    await Promise.resolve();
     // 'open' synthetic event
 
     ws.simulateMessage({
@@ -564,8 +618,8 @@ describe('AgentClient WebSocket integration', () => {
     });
     ws.simulateMessage({ type: 'pong' });
 
-    // open + message.created + pong = 3
-    expect(handler).toHaveBeenCalledTimes(3);
+    // open + message.created; node transport control replies/pongs are not app events.
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   // --- error: call before connect ---
@@ -607,10 +661,10 @@ describe('AgentClient WebSocket integration', () => {
 
   // --- unsubscribe function ---
 
-  it('handler unsubscribe function stops future events', () => {
+  it('handler unsubscribe function stops future events', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
@@ -630,20 +684,32 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('on.any unsubscribe function stops future events', () => {
+  it('on.any unsubscribe function stops future events', async () => {
     const agent = createAgent();
     agent.connect();
-    const ws = MockWebSocket.instances[0]!;
+    const ws = await nextSocket();
     ws.simulateOpen();
 
     const handler = vi.fn();
     const unsub = agent.on.any(handler);
 
-    ws.simulateMessage({ type: 'pong' });
+    ws.simulateMessage({
+      type: 'message.reacted',
+      message_id: 'm_1',
+      emoji: '👍',
+      agent_name: 'Bot',
+      action: 'added',
+    });
     expect(handler).toHaveBeenCalledTimes(1);
 
     unsub();
-    ws.simulateMessage({ type: 'pong' });
+    ws.simulateMessage({
+      type: 'message.reacted',
+      message_id: 'm_1',
+      emoji: '👍',
+      agent_name: 'Bot',
+      action: 'added',
+    });
     expect(handler).toHaveBeenCalledTimes(1);
   });
 

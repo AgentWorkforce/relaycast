@@ -61,6 +61,65 @@ class TokenRotateResponse(BaseModel):
     token: str
 
 
+# ── Observer tokens ───────────────────────────────────────────────
+
+ObserverScope = Literal[
+    "stream:read",
+    "messages:read",
+    "threads:read",
+    "dms:read",
+    "channels:read",
+    "search:read",
+    "agents:read",
+    "nodes:read",
+    "deliveries:read",
+    "activity:read",
+    "files:read",
+    "reactions:read",
+]
+
+
+class ObserverTokenFilters(BaseModel):
+    channel_ids: list[str] | None = None
+    channel_names: list[str] | None = None
+    include_dms: bool | None = None
+    dm_conversation_ids: list[str] | None = None
+    agent_ids: list[str] | None = None
+    event_types: list[str] | None = None
+    created_after: str | None = None
+
+
+class CreateObserverTokenRequest(BaseModel):
+    name: str
+    scopes: list[ObserverScope]
+    description: str | None = None
+    filters: ObserverTokenFilters | None = None
+    expires_at: str | None = None
+
+
+class UpdateObserverTokenRequest(BaseModel):
+    name: str | None = None
+    scopes: list[ObserverScope] | None = None
+    description: str | None = None
+    filters: ObserverTokenFilters | None = None
+    expires_at: str | None = None
+
+
+class ObserverToken(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    scopes: list[ObserverScope]
+    filters: ObserverTokenFilters = Field(default_factory=ObserverTokenFilters)
+    status: str
+    expires_at: str | None = None
+    created_at: str
+    updated_at: str | None = None
+    revoked_at: str | None = None
+    last_used_at: str | None = None
+    token: str | None = None
+
+
 # ── Workspace ─────────────────────────────────────────────────────
 
 class Workspace(BaseModel):
@@ -136,8 +195,8 @@ class InviteRequest(BaseModel):
 class FileAttachment(BaseModel):
     file_id: str
     filename: str
-    url: str
-    size: int
+    content_type: str
+    size_bytes: int
 
 
 class ReactionGroup(BaseModel):
@@ -382,6 +441,7 @@ class Delivery(BaseModel):
     location_node_id: str | None = None
     route_node_id: str | None = None
     route_node_kind: str | None = None
+    route_node_role: str | None = None
     delivery_adapter: str | None = None
     dispatch_attempts: int = 0
     next_attempt_at: str | None = None
@@ -417,7 +477,8 @@ class DeferDeliveryRequest(BaseModel):
 
 # ── Nodes ─────────────────────────────────────────────────────────
 
-NodeKind = Literal["fleet_ws", "http_push", "direct_ws", "poll"]
+NodeKind = Literal["ws", "http_push", "poll"]
+NodeRole = Literal["direct", "broker"]
 NodeAckMode = Literal["manual", "on_2xx", "response"]
 NodeAuthType = Literal["none", "bearer", "static_headers", "hmac_sha256"]
 
@@ -450,6 +511,7 @@ class NodeRosterEntry(BaseModel):
     id: str
     name: str
     kind: str | None = None
+    role: str | None = None
     delivery_adapter: str | None = None
     delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
     capabilities: list[NodeCapability] = Field(default_factory=list)
@@ -469,6 +531,7 @@ class CreateNodeRequest(BaseModel):
     node_id: str | None = None
     name: str
     kind: NodeKind | None = None
+    role: NodeRole | None = None
     delivery_adapter: str | None = None
     delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
     capabilities: list[str] | None = None
@@ -488,6 +551,7 @@ class NodeAgentBinding(BaseModel):
     node_id: str
     node_name: str
     node_kind: str
+    node_role: str
     status: str
     session_ref: str | None = None
     priority: int

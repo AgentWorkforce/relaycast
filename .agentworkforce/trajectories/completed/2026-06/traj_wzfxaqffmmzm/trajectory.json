@@ -1,0 +1,20 @@
+{
+  "id": "traj_wzfxaqffmmzm",
+  "version": 1,
+  "task": {
+    "title": "Serve llms.txt and llm.txt equivalently"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-06-10T14:01:44.723Z",
+  "completedAt": "2026-06-10T14:04:11.130Z",
+  "agents": [],
+  "chapters": [],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "99dec3007a643a058a7de668f35dd6e9af44e33d",
+    "endRef": "99dec3007a643a058a7de668f35dd6e9af44e33d"
+  }
+}

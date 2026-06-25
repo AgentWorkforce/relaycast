@@ -1,0 +1,86 @@
+{
+  "id": "traj_saln4k9fiil6",
+  "version": 1,
+  "task": {
+    "title": "Fix channel attachment validation and Python file attachment model"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T14:59:24.253Z",
+  "completedAt": "2026-06-25T15:04:57.165Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T15:04:33.932Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_hq5p7jbejgnc",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T15:04:33.932Z",
+      "endedAt": "2026-06-25T15:04:57.165Z",
+      "events": [
+        {
+          "ts": 1782399873933,
+          "type": "decision",
+          "content": "Centralized send-time attachment validation: Centralized send-time attachment validation",
+          "raw": {
+            "question": "Centralized send-time attachment validation",
+            "chosen": "Centralized send-time attachment validation",
+            "alternatives": [],
+            "reasoning": "Channel, DM, and group-DM sends now share workspace/status/duplicate checks and write only validated file ids."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Centralized send-time attachment validation, added channel attachment regression tests, verified inbox is agent-token-only, and fixed Python FileAttachment fields.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "6e30512",
+    "296afef",
+    "fa6aca4"
+  ],
+  "filesChanged": [
+    "packages/engine/src/__tests__/conformance/messageAttachments.test.ts",
+    "packages/engine/src/engine/agent.ts",
+    "packages/engine/src/engine/attachments.ts",
+    "packages/engine/src/engine/console.ts",
+    "packages/engine/src/engine/dm.ts",
+    "packages/engine/src/engine/groupDm.ts",
+    "packages/engine/src/engine/message.ts",
+    "packages/engine/src/engine/wsTransform.ts",
+    "packages/mcp/src/__tests__/ws-bridge.test.ts",
+    "packages/mcp/src/resources/ws-bridge.ts",
+    "packages/observer-dashboard/src/app/api/auth/check/route.ts",
+    "packages/observer-dashboard/src/components/ChatFeed.tsx",
+    "packages/observer-dashboard/src/hooks/use-activity-feed.ts",
+    "packages/observer-dashboard/src/lib/auth.ts",
+    "packages/observer-dashboard/src/types/dashboard.ts",
+    "packages/react/src/__tests__/fetchRaceGuards.test.tsx",
+    "packages/react/src/__tests__/provider.test.tsx",
+    "packages/react/src/hooks/useChannel.ts",
+    "packages/react/src/hooks/useMessages.ts",
+    "packages/react/src/hooks/useThread.ts",
+    "packages/react/src/provider.tsx",
+    "packages/sdk-python/src/relay_sdk/models.py",
+    "packages/sdk-python/tests/test_models.py",
+    "packages/types/src/command.ts",
+    "packages/types/src/events.ts",
+    "packages/types/src/index.ts",
+    "packages/types/src/subscription.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "027e212d3015cd56600d4c55e7535532d05eadd1",
+    "endRef": "6e305127a346aa831a589e0d2b9317b1a439a390",
+    "traceId": "8ad917c5-5551-4716-a5e3-80a6f45849ed"
+  }
+}

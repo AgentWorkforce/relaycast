@@ -90,6 +90,7 @@ public struct WorkspaceStats: Codable, Equatable, Sendable {
 public struct ActivityItem: Codable, Equatable, Sendable {
     public let type: String
     public let id: String
+    public let channelId: String?
     public let channelName: String?
     public let conversationId: String?
     public let agentName: String
@@ -123,6 +124,139 @@ public struct WorkspaceDMMessage: Codable, Equatable, Sendable {
 public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let name: String
     public let token: String
+}
+
+public struct ObserverTokenFilters: Codable, Equatable, Sendable {
+    public var channelIds: [String]?
+    public var channelNames: [String]?
+    public var includeDms: Bool?
+    public var dmConversationIds: [String]?
+    public var agentIds: [String]?
+    public var eventTypes: [String]?
+    public var createdAfter: String?
+
+    public init(
+        channelIds: [String]? = nil,
+        channelNames: [String]? = nil,
+        includeDms: Bool? = nil,
+        dmConversationIds: [String]? = nil,
+        agentIds: [String]? = nil,
+        eventTypes: [String]? = nil,
+        createdAfter: String? = nil
+    ) {
+        self.channelIds = channelIds
+        self.channelNames = channelNames
+        self.includeDms = includeDms
+        self.dmConversationIds = dmConversationIds
+        self.agentIds = agentIds
+        self.eventTypes = eventTypes
+        self.createdAfter = createdAfter
+    }
+}
+
+public enum ObserverScope: String, Codable, Equatable, Sendable {
+    case streamRead = "stream:read"
+    case messagesRead = "messages:read"
+    case threadsRead = "threads:read"
+    case dmsRead = "dms:read"
+    case channelsRead = "channels:read"
+    case searchRead = "search:read"
+    case agentsRead = "agents:read"
+    case nodesRead = "nodes:read"
+    case deliveriesRead = "deliveries:read"
+    case activityRead = "activity:read"
+    case filesRead = "files:read"
+    case reactionsRead = "reactions:read"
+}
+
+public struct CreateObserverTokenRequest: Codable, Equatable, Sendable {
+    public var name: String
+    public var scopes: [ObserverScope]
+    public var description: String?
+    public var filters: ObserverTokenFilters?
+    public var expiresAt: String?
+
+    public init(
+        name: String,
+        scopes: [ObserverScope],
+        description: String? = nil,
+        filters: ObserverTokenFilters? = nil,
+        expiresAt: String? = nil
+    ) {
+        self.name = name
+        self.scopes = scopes
+        self.description = description
+        self.filters = filters
+        self.expiresAt = expiresAt
+    }
+}
+
+public struct UpdateObserverTokenRequest: Codable, Equatable, Sendable {
+    public var name: String?
+    public var scopes: [ObserverScope]?
+    public var description: String?
+    public var filters: ObserverTokenFilters?
+    public var expiresAt: String?
+
+    public init(
+        name: String? = nil,
+        scopes: [ObserverScope]? = nil,
+        description: String? = nil,
+        filters: ObserverTokenFilters? = nil,
+        expiresAt: String? = nil
+    ) {
+        self.name = name
+        self.scopes = scopes
+        self.description = description
+        self.filters = filters
+        self.expiresAt = expiresAt
+    }
+}
+
+public struct ObserverToken: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let scopes: [ObserverScope]
+    public let filters: ObserverTokenFilters
+    public let status: String
+    public let expiresAt: String?
+    public let createdAt: String
+    public let updatedAt: String?
+    public let revokedAt: String?
+    public let lastUsedAt: String?
+    public let token: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case scopes
+        case filters
+        case status
+        case expiresAt
+        case createdAt
+        case updatedAt
+        case revokedAt
+        case lastUsedAt
+        case token
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        scopes = try container.decode([ObserverScope].self, forKey: .scopes)
+        filters = try container.decodeIfPresent(ObserverTokenFilters.self, forKey: .filters) ?? ObserverTokenFilters()
+        status = try container.decode(String.self, forKey: .status)
+        expiresAt = try container.decodeIfPresent(String.self, forKey: .expiresAt)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        revokedAt = try container.decodeIfPresent(String.self, forKey: .revokedAt)
+        lastUsedAt = try container.decodeIfPresent(String.self, forKey: .lastUsedAt)
+        token = try container.decodeIfPresent(String.self, forKey: .token)
+    }
 }
 
 // MARK: - Agents
@@ -277,29 +411,21 @@ public struct SpawnAgentRequest: Codable, Equatable, Sendable {
     public var task: String
     public var channel: String?
     public var persona: String?
+    public var model: String?
     public var metadata: [String: JSONValue]?
 
-    public init(name: String, cli: String, task: String, channel: String? = nil, persona: String? = nil, metadata: [String: JSONValue]? = nil) {
+    public init(name: String, cli: String, task: String, channel: String? = nil, persona: String? = nil, model: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.cli = cli
         self.task = task
         self.channel = channel
         self.persona = persona
+        self.model = model
         self.metadata = metadata
     }
 }
 
-public struct SpawnAgentResponse: Codable, Equatable, Sendable {
-    public let id: String
-    public let name: String
-    public let token: String
-    public let cli: String
-    public let task: String
-    public let channel: String?
-    public let status: AgentStatus
-    public let createdAt: String
-    public let alreadyExisted: Bool
-}
+public typealias SpawnAgentResponse = InvokeActionResult
 
 public struct ReleaseAgentRequest: Codable, Equatable, Sendable {
     public var name: String
@@ -313,12 +439,7 @@ public struct ReleaseAgentRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct ReleaseAgentResponse: Codable, Equatable, Sendable {
-    public let name: String
-    public let released: Bool
-    public let deleted: Bool
-    public let reason: String?
-}
+public typealias ReleaseAgentResponse = InvokeActionResult
 
 public struct ResolvedIdentity: Codable, Equatable, Sendable {
     public let agentId: String
@@ -774,6 +895,7 @@ public struct Delivery: Codable, Equatable, Sendable {
     public let locationNodeId: String?
     public let routeNodeId: String?
     public let routeNodeKind: String?
+    public let routeNodeRole: String?
     public let deliveryAdapter: String?
     public let dispatchAttempts: Int?
     public let nextAttemptAt: String?
@@ -804,6 +926,7 @@ public struct DeliveryItem: Codable, Equatable, Sendable {
     public let locationNodeId: String?
     public let routeNodeId: String?
     public let routeNodeKind: String?
+    public let routeNodeRole: String?
     public let deliveryAdapter: String?
     public let dispatchAttempts: Int?
     public let nextAttemptAt: String?
@@ -1025,6 +1148,8 @@ public struct InvokeActionResult: Codable, Equatable, Sendable {
     public let invocationId: String
     public let actionName: String
     public let handlerAgentId: String?
+    public let handlerNodeId: String?
+    public let dispatchedNodeId: String?
     public let input: [String: JSONValue]?
     public let status: String
     public let createdAt: String?
@@ -1484,6 +1609,12 @@ public struct SessionEvent: Codable, Equatable, Sendable {
     public let createdAt: String?
 }
 
+public struct DirectNodeToken: Codable, Equatable, Sendable {
+    public let nodeId: String
+    public let nodeName: String
+    public let token: String
+}
+
 public struct WsEvent: Codable, Equatable, Sendable {
     public let type: String
     public let payload: [String: JSONValue]
@@ -1530,6 +1661,7 @@ public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [NodeCapability]
@@ -1622,6 +1754,7 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let nodeId: String?
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [String]?
@@ -1629,10 +1762,11 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let tags: [String]?
     public let version: String?
 
-    public init(nodeId: String? = nil, name: String, kind: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+    public init(nodeId: String? = nil, name: String, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
         self.nodeId = nodeId
         self.name = name
         self.kind = kind
+        self.role = role
         self.deliveryAdapter = deliveryAdapter
         self.delivery = delivery
         self.capabilities = capabilities
@@ -1646,6 +1780,7 @@ public struct CreateNodeResponse: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [NodeCapability]
@@ -1669,6 +1804,7 @@ public struct NodeAgentBinding: Codable, Equatable, Sendable {
     public let nodeId: String
     public let nodeName: String
     public let nodeKind: String
+    public let nodeRole: String
     public let status: String
     public let sessionRef: String?
     public let priority: Int

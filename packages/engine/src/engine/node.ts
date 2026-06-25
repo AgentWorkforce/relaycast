@@ -25,7 +25,8 @@ import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
 type AgentRow = typeof agents.$inferSelect;
-type NodeKind = 'fleet_ws' | 'http_push' | 'direct_ws' | 'poll';
+type NodeKind = 'ws' | 'http_push' | 'poll';
+type NodeRole = 'direct' | 'broker';
 
 interface NodeSocketLike {
   send(data: string): void;
@@ -39,6 +40,10 @@ export function directNodeIdForAgent(agentId: string): string {
 
 function directNodeNameForAgent(agentId: string): string {
   return `direct-${agentId}`;
+}
+
+function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>): boolean {
+  return agent.locationNodeId === directNodeIdForAgent(agent.id);
 }
 
 function capabilityName(capability: CapabilityLike | null | undefined): string | null {
@@ -62,6 +67,7 @@ function publicNode(row: NodeRow) {
     id: row.id,
     name: row.name,
     kind: row.kind,
+    role: row.role,
     delivery_adapter: row.deliveryAdapter,
     delivery: redactDeliveryConfig(row.deliveryConfig),
     capabilities: row.capabilities,
@@ -106,9 +112,16 @@ function redactDeliveryConfig(config: Record<string, unknown> | null | undefined
   return redactDeliveryValue(null, config) as Record<string, unknown>;
 }
 
+function normalizeLegacyNodeShape(kind: string, role?: string | null): { kind: NodeKind; role: NodeRole } {
+  if (kind === 'fleet_ws') return { kind: 'ws', role: 'broker' };
+  if (kind === 'direct_ws') return { kind: 'ws', role: 'direct' };
+  if (kind === 'http_push') return { kind: 'http_push', role: role === 'broker' ? 'broker' : 'direct' };
+  if (kind === 'poll') return { kind: 'poll', role: role === 'broker' ? 'broker' : 'direct' };
+  return { kind: 'ws', role: role === 'direct' ? 'direct' : 'broker' };
+}
+
 function defaultAdapter(kind: NodeKind, deliveryConfig?: Record<string, unknown> | null): string {
-  if (kind === 'fleet_ws') return 'fleet.ws.v1';
-  if (kind === 'direct_ws') return 'direct.ws.v1';
+  if (kind === 'ws') return 'ws.node.v1';
   if (kind === 'poll') return 'poll.v1';
   const auth = deliveryConfig?.auth;
   const authType = auth && typeof auth === 'object' && !Array.isArray(auth)
@@ -118,6 +131,12 @@ function defaultAdapter(kind: NodeKind, deliveryConfig?: Record<string, unknown>
   if (authType === 'bearer') return 'http.bearer.v1';
   if (authType === 'static_headers') return 'http.static_headers.v1';
   return 'http.basic.v1';
+}
+
+function normalizeLegacyAdapter(adapter: string | null | undefined): string | undefined {
+  if (!adapter) return undefined;
+  if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
+  return adapter;
 }
 
 async function ensureCapabilityActions(db: Db, workspaceId: string, nodeId: string, capabilities: CapabilityLike[]) {
@@ -156,6 +175,7 @@ export async function createNodeToken(
     node_id?: string;
     name: string;
     kind?: NodeKind;
+    role?: NodeRole;
     delivery_adapter?: string;
     delivery?: Record<string, unknown> | null;
     capabilities?: CapabilityLike[];
@@ -168,12 +188,28 @@ export async function createNodeToken(
   const tokenHash = await sha256Hex(token);
   const existing = await getNodeByName(db, workspaceId, data.name);
   const now = new Date();
-  const kind = data.kind ?? (existing?.kind as NodeKind | undefined) ?? 'fleet_ws';
+  const existingShape = existing ? normalizeLegacyNodeShape(existing.kind, existing.role) : null;
+  const normalized = normalizeLegacyNodeShape(
+    data.kind ?? existing?.kind ?? 'ws',
+    data.role ?? existing?.role ?? (data.max_agents !== undefined && data.max_agents > 1 ? 'broker' : undefined),
+  );
+  const kind = normalized.kind;
+  const role = normalized.role;
+  // When the node shape (transport or role) changes on update, recompute the
+  // delivery adapter and capacity instead of reusing the stale values: rotating
+  // an http_push node to ws must not keep an http.* adapter, and switching a
+  // broker to direct must not retain a capacity > 1.
+  const shapeChanged = !!existingShape && (existingShape.kind !== kind || existingShape.role !== role);
   const deliveryConfig = data.delivery === undefined ? existing?.deliveryConfig ?? null : data.delivery;
   const deliveryAdapter = data.delivery_adapter
-    ?? (data.delivery === undefined ? existing?.deliveryAdapter : undefined)
+    ?? (!shapeChanged && data.delivery === undefined ? normalizeLegacyAdapter(existing?.deliveryAdapter) : undefined)
     ?? defaultAdapter(kind, deliveryConfig);
-  const maxAgents = data.max_agents ?? existing?.maxAgents ?? (kind === 'http_push' ? 1 : 0);
+  const maxAgents = role === 'direct'
+    ? (data.max_agents ?? 1)
+    : (data.max_agents ?? existing?.maxAgents ?? 0);
+  if (role === 'direct' && maxAgents !== 1) {
+    throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
+  }
 
   if (existing) {
     const [updated] = await db
@@ -181,6 +217,7 @@ export async function createNodeToken(
       .set({
         tokenHash,
         kind,
+        role,
         deliveryAdapter,
         deliveryConfig,
         capabilities: normalizeCapabilities(data.capabilities ?? existing.capabilities),
@@ -203,6 +240,7 @@ export async function createNodeToken(
       name: data.name,
       tokenHash,
       kind,
+      role,
       deliveryAdapter,
       deliveryConfig,
       capabilities: normalizeCapabilities(data.capabilities ?? []),
@@ -244,6 +282,14 @@ export async function registerNode(
   }
 
   const now = new Date();
+  const [existing] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
+  if (!existing) {
+    throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
+  }
+
   const [existingByName] = await db
     .select()
     .from(nodes)
@@ -253,29 +299,32 @@ export async function registerNode(
     throw codedError(`Node name "${message.name}" is already enrolled`, 'node_name_conflict', 409);
   }
 
+  const role: NodeRole = existing.role === 'direct' ? 'direct' : 'broker';
+  const capabilities = role === 'direct' ? [] : normalizeCapabilities(message.capabilities);
+  const maxAgents = role === 'direct' ? 1 : message.max_agents;
   const [updated] = await db
     .update(nodes)
     .set({
       name: message.name,
-      capabilities: message.capabilities,
-      kind: 'fleet_ws',
-      deliveryAdapter: 'fleet.ws.v1',
-      deliveryConfig: null,
-      maxAgents: message.max_agents,
-      tags: message.tags,
+      capabilities,
+      kind: 'ws',
+      role,
+      deliveryAdapter: 'ws.node.v1',
+      deliveryConfig: role === 'direct' ? existing.deliveryConfig : null,
+      maxAgents,
+      activeAgents: role === 'direct' ? 1 : existing.activeAgents,
+      tags: role === 'direct' ? existing.tags : message.tags,
       version: message.version,
       status: 'online',
-      handlersLive: message.capabilities.length > 0,
+      handlersLive: role === 'broker' && capabilities.length > 0,
       lastHeartbeatAt: now,
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)))
     .returning();
 
-  if (!updated) {
-    throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
+  if (role === 'broker') {
+    await ensureCapabilityActions(db, workspaceId, updated.id, capabilities);
   }
-
-  await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
   return publicNode(updated);
 }
 
@@ -299,9 +348,21 @@ export async function heartbeatNode(
   const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
   if (message.name !== undefined) rosterUpdate.name = message.name;
   if (message.capabilities !== undefined) {
-    rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+    const [node] = await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (node?.role !== 'direct') {
+      rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+    }
   }
-  if (message.max_agents !== undefined) rosterUpdate.maxAgents = message.max_agents;
+  if (message.max_agents !== undefined) {
+    const [node] = await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    rosterUpdate.maxAgents = node?.role === 'direct' ? 1 : message.max_agents;
+  }
   if (message.version !== undefined) rosterUpdate.version = message.version;
 
   const [updated] = await db
@@ -317,7 +378,7 @@ export async function heartbeatNode(
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
     .returning();
 
-  if (updated && message.capabilities !== undefined) {
+  if (updated && updated.role !== 'direct' && message.capabilities !== undefined) {
     await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
   }
 
@@ -513,8 +574,9 @@ async function ensureDirectNodeForAgentInTx(
   if (!opts.force && alreadyDirect && existingDirect && agent.locationNodeId === nodeId) {
     const update: Partial<typeof nodes.$inferInsert> = {
       name: directNodeNameForAgent(agent.id),
-      kind: 'direct_ws',
-      deliveryAdapter: 'direct.ws.v1',
+      kind: 'ws',
+      role: 'direct',
+      deliveryAdapter: 'ws.node.v1',
       deliveryConfig: {
         implicit: true,
         agent_id: agent.id,
@@ -523,7 +585,7 @@ async function ensureDirectNodeForAgentInTx(
       capabilities: [],
       maxAgents: 1,
       activeAgents: 1,
-      tags: ['implicit', 'direct_ws'],
+      tags: ['implicit', 'direct'],
       version: 'implicit',
       handlersLive: false,
       load: 0,
@@ -556,8 +618,9 @@ async function ensureDirectNodeForAgentInTx(
         workspaceId,
         name: directNodeNameForAgent(agent.id),
         tokenHash,
-        kind: 'direct_ws',
-        deliveryAdapter: 'direct.ws.v1',
+        kind: 'ws',
+        role: 'direct',
+        deliveryAdapter: 'ws.node.v1',
         deliveryConfig: {
           implicit: true,
           agent_id: agent.id,
@@ -566,7 +629,7 @@ async function ensureDirectNodeForAgentInTx(
         capabilities: [],
         maxAgents: 1,
         activeAgents: 0,
-        tags: ['implicit', 'direct_ws'],
+        tags: ['implicit', 'direct'],
         version: 'implicit',
         status: opts.online ? 'online' : 'offline',
         handlersLive: false,
@@ -578,8 +641,9 @@ async function ensureDirectNodeForAgentInTx(
   } else {
     const update: Partial<typeof nodes.$inferInsert> = {
       name: directNodeNameForAgent(agent.id),
-      kind: 'direct_ws',
-      deliveryAdapter: 'direct.ws.v1',
+      kind: 'ws',
+      role: 'direct',
+      deliveryAdapter: 'ws.node.v1',
       deliveryConfig: {
         implicit: true,
         agent_id: agent.id,
@@ -587,7 +651,7 @@ async function ensureDirectNodeForAgentInTx(
       },
       capabilities: [],
       maxAgents: 1,
-      tags: ['implicit', 'direct_ws'],
+      tags: ['implicit', 'direct'],
       version: 'implicit',
       handlersLive: false,
       load: 0,
@@ -649,6 +713,7 @@ function serializeBinding(row: {
   nodeId: string;
   nodeName: string;
   nodeKind: string;
+  nodeRole: string;
   status: string;
   sessionRef: string | null;
   priority: number;
@@ -662,6 +727,7 @@ function serializeBinding(row: {
     node_id: row.nodeId,
     node_name: row.nodeName,
     node_kind: row.nodeKind,
+    node_role: row.nodeRole,
     status: row.status,
     session_ref: row.sessionRef,
     priority: row.priority,
@@ -715,6 +781,7 @@ export async function bindAgentToNode(
         nodeId: agentNodeBindings.nodeId,
         nodeName: nodes.name,
         nodeKind: nodes.kind,
+        nodeRole: nodes.role,
         status: agentNodeBindings.status,
         sessionRef: agentNodeBindings.sessionRef,
         priority: agentNodeBindings.priority,
@@ -776,6 +843,7 @@ export async function listNodeAgents(db: Db, workspaceId: string, nodeName: stri
       nodeId: agentNodeBindings.nodeId,
       nodeName: nodes.name,
       nodeKind: nodes.kind,
+      nodeRole: nodes.role,
       status: agentNodeBindings.status,
       sessionRef: agentNodeBindings.sessionRef,
       priority: agentNodeBindings.priority,
@@ -847,7 +915,13 @@ export async function registerAgentViaNode(
         },
         setWhere: or(
           ne(agents.status, 'active'),
-          and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+          and(
+            eq(agents.locationType, 'via_node'),
+            or(
+              eq(agents.locationNodeId, nodeId),
+              sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
+            ),
+          ),
         ),
       })
       .returning();
@@ -971,7 +1045,9 @@ export async function reconcileInventory(
         eq(nodes.id, existing.locationNodeId ?? ''),
       ));
     const boundNodeLive = !!boundNode && isNodeLive(boundNode);
-    const conflict = existing.locationType !== 'via_node' || !existing.locationNodeId || (existing.locationNodeId !== nodeId && boundNodeLive);
+    const conflict = existing.locationType !== 'via_node'
+      || !existing.locationNodeId
+      || (existing.locationNodeId !== nodeId && boundNodeLive && !isImplicitDirectLocation(existing));
     if (conflict) {
       console.warn('[node.inventory] rejected active-name claim', {
         workspace_id: workspaceId,
@@ -1164,6 +1240,10 @@ export async function handleNodeControlMessage(args: {
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
+        // The success reply was already sent above; keep the pending flush
+        // best-effort so a delivery error cannot trigger a second error reply
+        // for the same request id from the outer catch.
+        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId).catch(() => {});
         return;
       }
       case 'node.heartbeat':

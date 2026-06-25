@@ -7,14 +7,16 @@ import type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from '../../ports/realtime.js';
-import { and, eq, sql } from 'drizzle-orm';
+import type { ObserverToken } from '../../ports/auth.js';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
-import { actionInvocations } from '../../db/schema.js';
+import { actionInvocations, observerTokens } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
 import { handleNodeControlMessage, markDirectNodeOfflineForAgent, markNodeOffline } from '../../engine/node.js';
 import { reserveNodeCapacity } from '../../engine/placement.js';
 import { markDrainedInvocationDispatched } from '../../engine/action.js';
+import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -49,6 +51,21 @@ interface NodeConn {
   socket: EngineSocket;
 }
 
+interface WorkspaceConn {
+  socket: EngineSocket;
+  observerToken?: ObserverToken;
+  /** Epoch ms of the last DB revalidation of {@link observerToken}. */
+  observerCheckedAt?: number;
+}
+
+/**
+ * How long a cached observer token snapshot is trusted before its live state
+ * (revoked / narrowed / expired / deleted) is re-read from the DB on the next
+ * publish. Bounds the window in which a revoked dashboard can keep receiving
+ * events without forcing a DB read on every fanned-out event.
+ */
+const OBSERVER_TOKEN_REVALIDATE_MS = 5_000;
+
 interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
@@ -78,7 +95,7 @@ interface ChannelState {
 export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly agents = new Map<string, AgentConn>();
   private readonly channels = new Map<string, ChannelState>();
-  private readonly workspaceSockets = new Map<string, Set<EngineSocket>>();
+  private readonly workspaceSockets = new Map<string, Set<WorkspaceConn>>();
   private readonly nodeSockets = new Map<string, NodeConn>();
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   /** Serializes drains per node so concurrent triggers never overlap. */
@@ -192,13 +209,62 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     const set = this.workspaceSockets.get(args.workspaceId);
     if (!set || set.size === 0) return;
     const data = JSON.stringify(args.event);
-    for (const socket of set) {
+    const now = Date.now();
+    for (const conn of set) {
+      // Re-read the observer token's live state periodically so a revoked,
+      // narrowed, or expired token stops receiving events without waiting for a
+      // reconnect. Without this the snapshot taken at attach time would be
+      // authoritative forever (security gap).
+      if (conn.observerToken && (conn.observerCheckedAt === undefined || now - conn.observerCheckedAt >= OBSERVER_TOKEN_REVALIDATE_MS)) {
+        try {
+          const fresh = await this.loadActiveObserverToken(args.workspaceId, conn.observerToken.id);
+          if (!fresh) {
+            // Token revoked / expired / deleted: drop the socket entirely.
+            set.delete(conn);
+            try {
+              conn.socket.close(1008, 'observer token revoked');
+            } catch {
+              // already closed
+            }
+            continue;
+          }
+          conn.observerToken = fresh;
+          conn.observerCheckedAt = now;
+        } catch {
+          // Transient DB error: keep using the cached snapshot and retry on the
+          // next event rather than dropping a legitimate observer.
+        }
+      }
+      if (!observerAllowsEvent(conn.observerToken, args.event)) continue;
       try {
-        socket.send(data);
+        conn.socket.send(data);
       } catch {
         // Socket may have closed between enumeration and send.
       }
     }
+  }
+
+  /**
+   * Load the current, still-active observer token row by id, mirroring the
+   * active/expiry checks the auth provider applies at connect time. Returns
+   * `undefined` when the token has been revoked, has expired, or no longer
+   * exists, so callers can fail closed.
+   */
+  private async loadActiveObserverToken(
+    workspaceId: string,
+    tokenId: string,
+  ): Promise<ObserverToken | undefined> {
+    const now = new Date();
+    const [row] = await this.db
+      .select()
+      .from(observerTokens)
+      .where(and(
+        eq(observerTokens.workspaceId, workspaceId),
+        eq(observerTokens.id, tokenId),
+        eq(observerTokens.status, 'active'),
+        or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
+      ));
+    return row;
   }
 
   async setChannelMembers(workspaceId: string, channelId: string, members: string[]): Promise<void> {
@@ -328,17 +394,23 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   }
 
   /** Register a live workspace-stream socket; returns handlers the transport drives. */
-  attachWorkspaceSocket(workspaceId: string, socket: EngineSocket): SocketHandle {
+  attachWorkspaceSocket(workspaceId: string, socket: EngineSocket, observerToken?: ObserverToken): SocketHandle {
     let set = this.workspaceSockets.get(workspaceId);
     if (!set) {
       set = new Set();
       this.workspaceSockets.set(workspaceId, set);
     }
-    set.add(socket);
+    const conn: WorkspaceConn = {
+      socket,
+      observerToken,
+      // Trust the freshly authenticated snapshot until the first revalidation.
+      observerCheckedAt: observerToken ? Date.now() : undefined,
+    };
+    set.add(conn);
     return {
       handleMessage: async (raw) => this.onWorkspaceMessage(socket, raw),
       handleClose: async () => {
-        set!.delete(socket);
+        set!.delete(conn);
       },
     };
   }

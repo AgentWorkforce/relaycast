@@ -4,8 +4,9 @@ import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
 import { and, eq } from 'drizzle-orm';
-import { messages } from '../db/schema.js';
+import { dmConversations, messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
+import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -37,11 +38,34 @@ receiptRoutes.post(
       const eventData = { ...result, agent_name: agent!.name };
       try {
         const [row] = await db
-          .select({ channelId: messages.channelId })
+          .select({ channelId: messages.channelId, conversationId: dmConversations.id })
           .from(messages)
+          .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
           .where(and(eq(messages.id, c.req.param('id')), eq(messages.workspaceId, workspace.id)));
         if (row?.channelId) {
-          runInBackground(c, fanoutToChannel(c, row.channelId, 'message.read', eventData), 'fanout message.read');
+          const enriched = {
+            ...eventData,
+            ...(row.conversationId ? { conversation_id: row.conversationId } : {}),
+          };
+          runInBackground(c, fanoutToChannel(c, row.channelId, 'message.read', enriched), 'fanout message.read');
+          runInBackground(
+            c,
+            sendNodeDeliveriesForChannel(
+              {
+                db,
+                nodeConnections: c.get('engine').nodeConnections,
+                workspaceId: workspace.id,
+              },
+              {
+                channelId: row.channelId,
+                messageId: result.message_id,
+                event: 'message.read',
+                eventKey: `${result.message_id}:${result.agent_id}:${result.read_at}`,
+                data: enriched,
+              },
+            ),
+            'node deliver message.read',
+          );
         }
       } catch {
         // Ignore fanout failures

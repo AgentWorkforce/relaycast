@@ -5,6 +5,9 @@ import {
   makeNodeStack,
   createWorkspace,
   registerAgent,
+  FakeSocket,
+  attachDirectNodeSocket,
+  deliverFramesOfType,
   type TestStack,
 } from './harness.js';
 import { agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
@@ -59,6 +62,7 @@ describe('node delivery contracts', () => {
       data: {
         name: string;
         kind: string;
+        role: string;
         delivery_adapter: string;
         delivery: { url: string; auth: { secret: string } };
         max_agents: number;
@@ -108,6 +112,7 @@ describe('node delivery contracts', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
     const node = await createHttpNode(ws.workspaceKey);
+    expect(node.data.role).toBe('direct');
     expect(node.data.delivery.auth.secret).toBe('[redacted]');
     expect(node.data.max_agents).toBe(1);
     expect(
@@ -257,6 +262,87 @@ describe('node delivery contracts', () => {
     });
   });
 
+  it('keeps response-mode http_push deliveries queued when 2xx omits an ack signal', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ack: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const ws = await createWorkspace(stack.app, 'http-node-response-no-ack');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'http-node-response-no-ack',
+      ackMode: 'response',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'missing response ack' }),
+    });
+    expect(post.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await queued.json()) as {
+          data: Array<{
+            status: string;
+            dispatch_attempts: number;
+            last_dispatch_error: string | null;
+            next_attempt_at: string | null;
+          }>;
+        }).data,
+      ).toEqual([
+        expect.objectContaining({
+          status: 'queued',
+          dispatch_attempts: 1,
+          last_dispatch_error: 'response ack not signaled',
+          next_attempt_at: expect.any(String),
+        }),
+      ]);
+    });
+
+    const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, {
+      now: new Date(Date.now() + 31_000),
+    });
+    expect(swept).toBe(1);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const acked = await stack.app.request('/v1/deliveries?status=acked', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await acked.json()) as { data: Array<{ status: string; dispatch_attempts: number }> }).data,
+      ).toEqual([
+        expect.objectContaining({
+          status: 'acked',
+          dispatch_attempts: 2,
+        }),
+      ]);
+    });
+  });
+
   it('defaults http_push nodes to one active agent binding', async () => {
     const ws = await createWorkspace(stack.app, 'http-node-capacity');
     await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -349,18 +435,47 @@ describe('node delivery contracts', () => {
     const body = (await rotate.json()) as {
       data: {
         kind: string;
+        role: string;
         delivery_adapter: string;
         delivery: { url: string; auth: { secret: string } };
         max_agents: number;
       };
     };
     expect(body.data.kind).toBe('http_push');
+    expect(body.data.role).toBe('direct');
     expect(body.data.delivery_adapter).toBe('http.hmac.v1');
     expect(body.data.delivery.url).toBe(
       'https://receiver.example.test/relaycast',
     );
     expect(body.data.delivery.auth.secret).toBe('[redacted]');
     expect(body.data.max_agents).toBe(1);
+  });
+
+  it('rejects direct nodes with unlimited capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'direct-node-capacity-zero');
+    const res = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: 'bad-direct-node',
+        kind: 'http_push',
+        role: 'direct',
+        max_agents: 0,
+        delivery: {
+          url: 'https://receiver.example.test/relaycast',
+          ack_mode: 'manual',
+        },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'direct_node_capacity_exceeded' },
+    });
   });
 
   it('does not clobber an explicit http_push binding when the agent opens /ws', async () => {
@@ -660,6 +775,7 @@ describe('node delivery contracts', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
     const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const { sock: carolSock } = await attachDirectNodeSocket(stack, ws.workspaceId, carol);
     const node = await createHttpNode(ws.workspaceKey, {
       name: 'slow-http-node',
     });
@@ -679,6 +795,19 @@ describe('node delivery contracts', () => {
 
     await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitForAssertion(async () => {
+      expect(deliverFramesOfType(carolSock, 'message.created')).toEqual([
+        expect.objectContaining({
+          type: 'deliver',
+          payload: expect.objectContaining({
+            type: 'message.created',
+            data: expect.objectContaining({
+              agent_id: alice.agentId,
+              from_name: 'alice',
+              text: 'do not block carol',
+            }),
+          }),
+        }),
+      ]);
       const carolQueue = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${carol.token}` },
       });

@@ -1,13 +1,14 @@
 use relaycast::{
     ActionInvocationStatus, AgentClient, BindAgentToNodeRequest, ClientOptions,
     CompleteInvocationRequest, CreateAgentRequest, CreateChannelRequest, CreateNodeRequest,
-    CreateSubscriptionRequest, CreateTriggerRequest, CreateWebhookRequest, DeferDeliveryRequest,
-    DeliveryStatus, DmConversationSummary, EmitSessionEventRequest, FailDeliveryRequest,
-    HttpClient, HttpPushNodeDelivery, ListDeliveriesOptions, ListSessionEventsQuery,
-    MessageInjectionMode, MessageListQuery, MonitorCertificationRequest, NodeDeliveryAuth,
-    NodeDeliveryConfig, NodeListQuery, RateDirectoryAgentRequest, RegisterA2aOptions,
-    RegisterActionRequest, RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest,
-    SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
+    CreateObserverTokenRequest, CreateSubscriptionRequest, CreateTriggerRequest,
+    CreateWebhookRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
+    EmitSessionEventRequest, FailDeliveryRequest, HttpClient, HttpPushNodeDelivery,
+    ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
+    MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
+    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest,
+    RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery,
+    SpawnAgentRequest, SubmitCertificationRequest, UpdateObserverTokenRequest,
     UpdateRoutingConfigRequest, WebhookTriggerRequest, WsClient, WsClientOptions, WsEvent,
 };
 use serde_json::json;
@@ -265,15 +266,19 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             "metadata": {"ticket": "SDK-101"}
         })))
         .respond_with(ok(json!({
-            "id": "a_1",
-            "name": "WorkerOne",
-            "token": "at_live_worker",
-            "cli": "codex",
-            "task": "Run parity check",
-            "channel": "general",
-            "status": "online",
-            "created_at": "2026-01-01T00:00:00.000Z",
-            "already_existed": false
+            "invocation_id": "inv_spawn_1",
+            "action_name": "spawn",
+            "handler_agent_id": null,
+            "handler_node_id": "node_runner_1",
+            "dispatched_node_id": "node_runner_1",
+            "input": {
+                "name": "WorkerOne",
+                "cli": "codex",
+                "task": "Run parity check",
+                "channel": "general"
+            },
+            "status": "dispatched",
+            "created_at": "2026-01-01T00:00:00.000Z"
         })))
         .expect(1)
         .mount(&server)
@@ -291,8 +296,9 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         })
         .await
         .expect("spawn_agent failed");
-    assert_eq!(spawned.name, "WorkerOne");
-    assert!(!spawned.already_existed);
+    assert_eq!(spawned.invocation_id, "inv_spawn_1");
+    assert_eq!(spawned.action_name, "spawn");
+    assert_eq!(spawned.handler_node_id.as_deref(), Some("node_runner_1"));
 
     Mock::given(method("POST"))
         .and(path("/v1/agents/release"))
@@ -302,10 +308,18 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             "delete_agent": true
         })))
         .respond_with(ok(json!({
-            "name": "WorkerOne",
-            "released": true,
-            "deleted": true,
-            "reason": "task completed"
+            "invocation_id": "inv_release_1",
+            "action_name": "release",
+            "handler_agent_id": null,
+            "handler_node_id": "node_runner_1",
+            "dispatched_node_id": "node_runner_1",
+            "input": {
+                "name": "WorkerOne",
+                "reason": "task completed",
+                "delete_agent": true
+            },
+            "status": "dispatched",
+            "created_at": "2026-01-01T00:00:01.000Z"
         })))
         .expect(1)
         .mount(&server)
@@ -319,8 +333,8 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         })
         .await
         .expect("release_agent failed");
-    assert!(released.released);
-    assert!(released.deleted);
+    assert_eq!(released.invocation_id, "inv_release_1");
+    assert_eq!(released.action_name, "release");
 }
 
 #[tokio::test]
@@ -1039,52 +1053,6 @@ fn ws_command_invoked_deserializes_handler_agent_id() {
         WsEvent::CommandInvoked(cmd) => {
             assert_eq!(cmd.handler_agent_id, "a_handler_1");
             assert_eq!(cmd.command, "/spawn");
-        }
-        other => panic!("unexpected event variant: {other:?}"),
-    }
-}
-
-#[test]
-fn ws_agent_spawn_requested_tolerates_missing_or_null_optional_fields() {
-    let missing = serde_json::from_value::<WsEvent>(json!({
-        "type": "agent.spawn_requested",
-        "agent": {
-            "name": "worker-1",
-            "cli": "codex"
-        }
-    }))
-    .expect("failed to parse spawn request with missing fields");
-
-    match missing {
-        WsEvent::AgentSpawnRequested(event) => {
-            assert_eq!(event.agent.name, "worker-1");
-            assert_eq!(event.agent.cli, "codex");
-            assert_eq!(event.agent.task, "");
-            assert_eq!(event.agent.channel, None);
-            assert!(!event.agent.already_existed);
-        }
-        other => panic!("unexpected event variant: {other:?}"),
-    }
-
-    let nulled = serde_json::from_value::<WsEvent>(json!({
-        "type": "agent.spawn_requested",
-        "agent": {
-            "name": "worker-2",
-            "cli": "claude",
-            "task": null,
-            "channel": null,
-            "already_existed": true
-        }
-    }))
-    .expect("failed to parse spawn request with null task/channel");
-
-    match nulled {
-        WsEvent::AgentSpawnRequested(event) => {
-            assert_eq!(event.agent.name, "worker-2");
-            assert_eq!(event.agent.cli, "claude");
-            assert_eq!(event.agent.task, "");
-            assert_eq!(event.agent.channel, None);
-            assert!(event.agent.already_existed);
         }
         other => panic!("unexpected event variant: {other:?}"),
     }
@@ -2173,6 +2141,124 @@ async fn routing_and_skills_use_expected_endpoints() {
 }
 
 #[tokio::test]
+async fn observer_tokens_use_expected_endpoints() {
+    let server = MockServer::start().await;
+    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+        .expect("failed to create relay client");
+
+    let observer_payload = json!({
+        "id": "ot_1",
+        "name": "dashboard",
+        "description": null,
+        "scopes": ["stream:read", "messages:read"],
+        "filters": { "channel_names": ["general"], "include_dms": false },
+        "status": "active",
+        "expires_at": null,
+        "created_at": "2026-06-01T00:00:00.000Z",
+        "updated_at": null,
+        "revoked_at": null,
+        "last_used_at": null,
+        "token": "ot_live_secret"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/observer-tokens"))
+        .and(body_json(json!({
+            "name": "dashboard",
+            "scopes": ["stream:read", "messages:read"],
+            "filters": { "channel_names": ["general"], "include_dms": false }
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "ok": true,
+            "data": observer_payload
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let created = relay
+        .create_observer_token(CreateObserverTokenRequest {
+            name: "dashboard".to_string(),
+            scopes: vec![ObserverScope::StreamRead, ObserverScope::MessagesRead],
+            description: None,
+            filters: Some(ObserverTokenFilters {
+                channel_names: vec!["general".to_string()],
+                include_dms: Some(false),
+                ..Default::default()
+            }),
+            expires_at: None,
+        })
+        .await
+        .expect("create_observer_token failed");
+    assert_eq!(created.token.as_deref(), Some("ot_live_secret"));
+
+    Mock::given(method("GET"))
+        .and(path("/v1/observer-tokens"))
+        .respond_with(ok(json!([observer_payload.clone()])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tokens = relay
+        .list_observer_tokens()
+        .await
+        .expect("list_observer_tokens failed");
+    assert_eq!(tokens[0].name, "dashboard");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let fetched = relay
+        .get_observer_token("ot_1")
+        .await
+        .expect("get_observer_token failed");
+    assert_eq!(fetched.id, "ot_1");
+
+    Mock::given(method("PATCH"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .and(body_json(json!({ "scopes": ["messages:read"] })))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .update_observer_token(
+            "ot_1",
+            UpdateObserverTokenRequest {
+                scopes: Some(vec![ObserverScope::MessagesRead]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update_observer_token failed");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/observer-tokens/ot_1/rotate"))
+        .and(body_json(json!({})))
+        .respond_with(ok(observer_payload.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rotated = relay
+        .rotate_observer_token("ot_1")
+        .await
+        .expect("rotate_observer_token failed");
+    assert_eq!(rotated.token.as_deref(), Some("ot_live_secret"));
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/observer-tokens/ot_1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    relay
+        .revoke_observer_token("ot_1")
+        .await
+        .expect("revoke_observer_token failed");
+}
+
+#[tokio::test]
 async fn nodes_and_triggers_use_expected_endpoints() {
     let server = MockServer::start().await;
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
@@ -2200,6 +2286,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "id": "node_http",
             "name": "http-node",
             "kind": "http_push",
+            "role": "direct",
             "delivery_adapter": "http.hmac.v1",
             "delivery": {
                 "url": "https://receiver.example.test/relaycast",
@@ -2227,6 +2314,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             node_id: None,
             name: "http-node".to_string(),
             kind: Some("http_push".to_string()),
+            role: None,
             delivery_adapter: None,
             delivery: Some(NodeDeliveryConfig::from(HttpPushNodeDelivery {
                 url: "https://receiver.example.test/relaycast".to_string(),
@@ -2251,6 +2339,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .await
         .expect("create_node failed");
     assert_eq!(created.node.kind.as_deref(), Some("http_push"));
+    assert_eq!(created.node.role.as_deref(), Some("direct"));
     assert_eq!(created.token, "nt_live_test");
 
     Mock::given(method("GET"))
@@ -2259,8 +2348,9 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .respond_with(ok(json!([{
             "id": "node_1",
             "name": "worker-node",
-            "kind": "fleet_ws",
-            "delivery_adapter": "fleet.ws.v1",
+            "kind": "ws",
+            "role": "broker",
+            "delivery_adapter": "ws.node.v1",
             "delivery": null,
             "capabilities": [{ "name": "gpu", "kind": "hardware" }],
             "tags": ["fast"],
@@ -2287,7 +2377,8 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(nodes[0].name, "worker-node");
     assert_eq!(nodes[0].capabilities[0].name, "gpu");
     assert_eq!(nodes[0].capabilities[0].kind.as_deref(), Some("hardware"));
-    assert_eq!(nodes[0].kind.as_deref(), Some("fleet_ws"));
+    assert_eq!(nodes[0].kind.as_deref(), Some("ws"));
+    assert_eq!(nodes[0].role.as_deref(), Some("broker"));
 
     Mock::given(method("GET"))
         .and(path("/v1/nodes/http-node/agents"))
@@ -2298,6 +2389,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "node_id": "node_http",
             "node_name": "http-node",
             "node_kind": "http_push",
+            "node_role": "direct",
             "status": "active",
             "session_ref": null,
             "priority": 0,
@@ -2326,6 +2418,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "node_id": "node_http",
             "node_name": "http-node",
             "node_kind": "http_push",
+            "node_role": "direct",
             "status": "active",
             "session_ref": null,
             "priority": 5,

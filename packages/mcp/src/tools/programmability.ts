@@ -368,32 +368,20 @@ export function registerProgrammabilityTools(
 
   server.registerTool('agent.remove', {
     title: 'Remove Agent',
-    description: 'Remove an agent from active duty, marking it as offline. This is a BUILT-IN system operation for agent lifecycle management. Optionally delete the agent entirely from the workspace. Use this when an agent has completed its task or is no longer needed.',
+    description: 'Request that an agent be removed from active duty. This is a BUILT-IN system action routed to the agent broker; the returned invocation is completed when the broker confirms release.',
     inputSchema: {
       name: z.string().describe('Name of the agent to remove (e.g. "worker-1", "code-reviewer")'),
       reason: z.string().optional().describe('Human-readable reason for removing the agent (e.g. "task completed", "no longer needed")'),
       delete_agent: z.boolean().optional().describe('If true, permanently delete the agent instead of just marking it offline'),
     },
-    outputSchema: {
-      name: z.string().describe('Name of the removed agent'),
-      removed: z.boolean().describe('True if the agent was successfully removed'),
-      deleted: z.boolean().describe('True if the agent was permanently deleted'),
-      reason: z.string().nullable().describe('The reason provided for removing the agent'),
-    },
+    outputSchema: jsonResult,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async ({ name, reason, delete_agent }) => {
     const relay = getRelay();
     const result = await relay.agents.release({ name, reason, deleteAgent: delete_agent });
-    // Transform 'released' to 'removed' for agent-facing consistency
-    const transformed = {
-      name: result.name,
-      removed: result.released,
-      deleted: result.deleted,
-      reason: result.reason,
-    };
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify(transformed, null, 2) }],
-      structuredContent: transformed as unknown as Record<string, unknown>,
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result as unknown as Record<string, unknown>,
     };
   });
 }

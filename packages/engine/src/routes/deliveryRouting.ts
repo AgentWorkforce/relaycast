@@ -25,6 +25,7 @@ type DeliveryTarget = {
   locationType: string;
   locationNodeId: string | null;
   nodeKind: string | null;
+  nodeRole: string | null;
   deliveryAdapter: string | null;
   deliveryConfig: Record<string, unknown> | null;
 };
@@ -75,20 +76,6 @@ async function fanoutToAgentsForContext(
   await Promise.allSettled(tasks);
 }
 
-async function deliverDirectWsEvent(
-  ctx: RoutingContext,
-  agentIds: string[],
-  type: string,
-  data: Record<string, unknown>,
-): Promise<void> {
-  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
-  await ctx.engine.realtime.deliverToAgents({
-    workspaceId: ctx.workspaceId,
-    agentIds: [...new Set(agentIds)],
-    event: payload,
-  });
-}
-
 async function resolveLiveLocations(
   ctx: RoutingContext,
   deliveries: DeliveryFanoutRecord[],
@@ -101,6 +88,7 @@ async function resolveLiveLocations(
       agentId: agentNodeBindings.agentId,
       nodeId: agentNodeBindings.nodeId,
       nodeKind: nodes.kind,
+      nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })
@@ -125,6 +113,7 @@ async function resolveLiveLocations(
       locationType: 'via_node',
       locationNodeId: binding.nodeId,
       nodeKind: binding.nodeKind,
+      nodeRole: binding.nodeRole,
       deliveryAdapter: binding.deliveryAdapter,
       deliveryConfig: binding.deliveryConfig as Record<string, unknown> | null,
     });
@@ -136,6 +125,7 @@ async function resolveLiveLocations(
       locationType: agents.locationType,
       locationNodeId: agents.locationNodeId,
       nodeKind: nodes.kind,
+      nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })
@@ -148,8 +138,9 @@ async function resolveLiveLocations(
     byAgent.set(row.id, {
       locationType: row.locationType,
       locationNodeId: row.locationNodeId,
-      nodeKind: row.nodeKind ?? (row.locationNodeId ? 'fleet_ws' : null),
-      deliveryAdapter: row.deliveryAdapter ?? (row.locationNodeId ? 'fleet.ws.v1' : null),
+      nodeKind: row.nodeKind ?? (row.locationNodeId ? 'ws' : null),
+      nodeRole: row.nodeRole ?? (row.locationNodeId ? 'broker' : null),
+      deliveryAdapter: row.deliveryAdapter ?? (row.locationNodeId ? 'ws.node.v1' : null),
       deliveryConfig: row.deliveryConfig as Record<string, unknown> | null,
     });
   }
@@ -186,11 +177,20 @@ async function resolveRecordedTargets(
       locationType: 'via_node',
       locationNodeId: delivery.routeNodeId,
       nodeKind: delivery.routeNodeKind ?? node?.kind ?? null,
+      nodeRole: delivery.routeNodeRole ?? node?.role ?? null,
       deliveryAdapter: delivery.deliveryAdapter ?? node?.deliveryAdapter ?? null,
       deliveryConfig: (node?.deliveryConfig as Record<string, unknown> | null | undefined) ?? null,
     });
   }
   return byDelivery;
+}
+
+function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
+  if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
+  if (adapter) return adapter;
+  if (nodeKind === 'ws' || nodeKind === 'fleet_ws' || nodeKind === 'direct_ws') return 'ws.node.v1';
+  if (nodeKind === 'http_push') return 'http.basic.v1';
+  return null;
 }
 
 function publicHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
@@ -351,6 +351,8 @@ async function dispatchHttpPush(args: {
           return 'acked';
         }
       }
+      await recordHttpPushRetry(args.ctx, args.delivery.id, 'response ack not signaled');
+      return 'failed';
     }
 
     return 'delivered';
@@ -373,10 +375,13 @@ async function routeOneDeliveryOutcome(
   const target = recordedTarget ?? liveLocation;
   const locationType = target?.locationType ?? delivery.locationType;
   const locationNodeId = target?.locationNodeId ?? delivery.locationNodeId;
-  const nodeKind = target?.nodeKind ?? (locationNodeId ? 'fleet_ws' : null);
+  const nodeKind = target?.nodeKind ?? (locationNodeId ? 'ws' : null);
+  const deliveryAdapter = normalizeDeliveryAdapter(target?.deliveryAdapter ?? delivery.deliveryAdapter, nodeKind);
 
-  if (locationType === 'via_node' && locationNodeId && nodeKind === 'fleet_ws') {
+  if (locationType === 'via_node' && locationNodeId && deliveryAdapter === 'ws.node.v1') {
     const sent = await ctx.engine.nodeConnections.sendToNode(ctx.workspaceId, locationNodeId, buildDeliverFrame({
+      delivery_id: delivery.id,
+      agent_id: delivery.agentId,
       agent: delivery.agentName,
       msg_id: delivery.messageId,
       seq: delivery.seq,
@@ -397,14 +402,9 @@ async function routeOneDeliveryOutcome(
     return;
   }
 
-  if (locationType === 'via_node' && locationNodeId && nodeKind === 'direct_ws') {
-    await deliverDirectWsEvent(ctx, [delivery.agentId], eventType, eventData);
-    await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-    return;
-  }
-
-  await deliverDirectWsEvent(ctx, [delivery.agentId], eventType, eventData);
-  await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+  // No agent-owned realtime socket exists anymore. If a legacy/unbound row
+  // reaches this point, leave it queued so a later node binding/replay can
+  // deliver it instead of falsely marking it delivered.
 }
 
 async function routeDeliveryOutcomesForContext(

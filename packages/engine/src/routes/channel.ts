@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
@@ -9,6 +9,13 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  getChannelObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsAgent,
+  observerAllowsChannel,
+  type ObserverToken,
+} from '../engine/observerToken.js';
 import {
   jsonCreated,
   jsonError,
@@ -41,6 +48,13 @@ const inviteChannelSchema = z.object({
 
 function channelNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'channel_not_found', `Channel "${name}" not found`);
+}
+
+function observerChannelAllowed(
+  observer: ObserverToken | undefined,
+  channel: { id?: string | null; name?: string | null; channel_type?: number | null; channelType?: number | null },
+) {
+  return observerAllowsChannel(observer, channel);
 }
 
 // POST /v1/channels - create channel
@@ -97,19 +111,20 @@ channelRoutes.post(
 // GET /v1/channels - list channels
 channelRoutes.get(
   '/channels',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const includeArchived = c.req.query('include_archived') === 'true';
+      const observer = getObserverTokenFromContext(c);
       const channels = await channelEngine.listChannels(
         db,
         workspace.id,
         includeArchived,
       );
-      return jsonOk(c, channels);
+      return jsonOk(c, channels.filter((channel) => observerChannelAllowed(observer, channel)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -119,16 +134,25 @@ channelRoutes.get(
 // GET /v1/channels/:name - get channel with members
 channelRoutes.get(
   '/channels/:name',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getChannelObserverResource(db, workspace.id, name);
+        if (!resource || !observerChannelAllowed(observer, resource)) {
+          return channelNotFound(c, name);
+        }
+      }
       const channel = await channelEngine.getChannel(db, workspace.id, name);
-      if (!channel) {
-        return channelNotFound(c, name);
+      if (!channel) return channelNotFound(c, name);
+      if (observer) {
+        const visibleMembers = channel.members.filter((m) => observerAllowsAgent(observer, m.agent_id));
+        return jsonOk(c, { ...channel, members: visibleMembers, member_count: visibleMembers.length });
       }
       return jsonOk(c, channel);
     } catch (err: unknown) {
@@ -291,7 +315,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.joined');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.joined');
         }
       } catch {
@@ -337,7 +361,7 @@ channelRoutes.post(
       try {
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.left', eventData), 'fanout member.left');
         }
       } catch {
@@ -378,19 +402,29 @@ channelRoutes.post(
 // GET /v1/channels/:name/members - list channel members
 channelRoutes.get(
   '/channels/:name/members',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const channel = await getChannelObserverResource(db, workspace.id, name);
+        if (!channel || !observerChannelAllowed(observer, channel)) {
+          return channelNotFound(c, name);
+        }
+      }
       const members = await channelEngine.getMembers(
         db,
         workspace.id,
         name,
       );
-      return jsonOk(c, members);
+      const visibleMembers = observer
+        ? members.filter((m) => observerAllowsAgent(observer, m.agent_id))
+        : members;
+      return jsonOk(c, visibleMembers);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -434,7 +468,8 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.invited');
-          const eventData = { channel_name: name, agent_name: agentName };
+          const invitedMember = members.find((member) => member.agent_name === agentName);
+          const eventData = { channel_name: name, agent_id: invitedMember?.agent_id, agent_name: agentName };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.invited');
         }
       } catch {
@@ -482,7 +517,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_muted');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_muted', eventData), 'fanout member.channel_muted');
         }
       } catch {
@@ -530,7 +565,7 @@ channelRoutes.post(
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
           runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_unmuted');
-          const eventData = { channel_name: name, agent_name: agent!.name };
+          const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_unmuted', eventData), 'fanout member.channel_unmuted');
         }
       } catch {

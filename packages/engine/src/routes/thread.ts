@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
@@ -9,6 +9,12 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
+import {
+  getMessageObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsMessageResource,
+  observerAllowsMessage,
+} from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -133,7 +139,7 @@ threadRoutes.post(
 // GET /v1/messages/:id/replies - get thread
 threadRoutes.get(
   '/messages/:id/replies',
-  requireAuth,
+  requireWorkspaceRead('threads:read'),
   rateLimit,
   async (c) => {
     try {
@@ -146,13 +152,28 @@ threadRoutes.get(
       const { limit, before, after } = query.data;
 
       const parentId = c.req.param('id');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getMessageObserverResource(db, workspace.id, parentId);
+        if (!resource) {
+          return jsonError(c, 'message_not_found', 'Parent message not found', 404);
+        }
+        if (!observerAllowsMessageResource(observer, resource)) {
+          return jsonError(c, 'message_not_found', 'Parent message not found', 404);
+        }
+      }
       const result = await threadEngine.getThread(
         db,
         workspace.id,
         parentId,
         { limit, before, after },
       );
-      return jsonOk(c, result);
+      if (!observer) return jsonOk(c, result);
+      const replies = result.replies.filter((reply) => observerAllowsMessage(observer, reply));
+      return jsonOk(c, {
+        ...result,
+        replies,
+      });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

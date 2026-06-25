@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
@@ -14,10 +14,16 @@ import {
   parseJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
+import {
+  getObserverTokenFromContext,
+  normalizeObserverFilters,
+  observerAllowsAgent,
+} from '../engine/observerToken.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
-const nodeKindSchema = z.enum(['fleet_ws', 'http_push', 'direct_ws', 'poll']);
+const nodeKindSchema = z.enum(['ws', 'http_push', 'poll']);
+const nodeRoleSchema = z.enum(['direct', 'broker']);
 const deliveryAckModeSchema = z.enum(['on_2xx', 'manual', 'response']);
 const headerNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
 const headerValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
@@ -46,6 +52,7 @@ const createNodeSchema = z.object({
   node_id: z.string().min(1).optional(),
   name: z.string().min(1),
   kind: nodeKindSchema.optional(),
+  role: nodeRoleSchema.optional(),
   delivery_adapter: z.string().min(1).optional(),
   delivery: z.record(z.string(), z.unknown()).nullable().optional(),
   capabilities: z.array(z.string().min(1)).optional(),
@@ -74,6 +81,36 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   return environment !== 'test';
 }
 
+type NodeRosterEntry = Awaited<ReturnType<typeof nodeEngine.listNodes>>[number];
+type NodeAgentBinding = NonNullable<Awaited<ReturnType<typeof nodeEngine.listNodeAgents>>>[number];
+type ObserverContext = ReturnType<typeof getObserverTokenFromContext>;
+
+function observerHasAgentFilter(observer: ObserverContext): boolean {
+  return Boolean(observer && normalizeObserverFilters(observer.filters).agent_ids?.length);
+}
+
+function filterNodeAgentsForObserver(observer: ObserverContext, bindings: NodeAgentBinding[]): NodeAgentBinding[] {
+  return bindings.filter((binding) => observerAllowsAgent(observer, binding.agent_id));
+}
+
+async function filterNodesForObserver(
+  db: Parameters<typeof nodeEngine.listNodes>[0],
+  workspaceId: string,
+  observer: ObserverContext,
+  roster: NodeRosterEntry[],
+): Promise<NodeRosterEntry[]> {
+  if (!observerHasAgentFilter(observer)) return roster;
+  const visible: NodeRosterEntry[] = [];
+  for (const node of roster) {
+    const bindings = await nodeEngine.listNodeAgents(db, workspaceId, node.name);
+    const visibleBindings = bindings ? filterNodeAgentsForObserver(observer, bindings) : [];
+    if (visibleBindings.length > 0) {
+      visible.push({ ...node, active_agents: visibleBindings.length });
+    }
+  }
+  return visible;
+}
+
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)
 nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   try {
@@ -82,7 +119,10 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
       return parsed.response;
     }
     const existing = await nodeEngine.getNodeByName(c.get('db'), c.get('workspace').id, parsed.data.name);
-    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'fleet_ws';
+    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
+    const role = parsed.data.role
+      ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
+      ?? (kind === 'ws' || (parsed.data.max_agents !== undefined && parsed.data.max_agents > 1) ? 'broker' : 'direct');
     const deliveryInput = parsed.data.delivery === undefined
       ? existing?.deliveryConfig ?? null
       : parsed.data.delivery;
@@ -99,9 +139,13 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
+    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
+      return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
+    }
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
       ...parsed.data,
       kind,
+      role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
     });
     return jsonCreated(c, result);
@@ -111,26 +155,41 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
 });
 
 // GET /v1/nodes?capability=&name= - node roster
-nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
-    const result = await nodeEngine.listNodes(c.get('db'), c.get('workspace').id, {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const result = await nodeEngine.listNodes(db, workspace.id, {
       capability: c.req.query('capability'),
       name: c.req.query('name'),
     });
-    return jsonOk(c, result);
+    return jsonOk(c, await filterNodesForObserver(
+      db,
+      workspace.id,
+      getObserverTokenFromContext(c),
+      result,
+    ));
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
 });
 
 // GET /v1/nodes/:name/agents - active agent bindings for a node
-nodeRoutes.get('/nodes/:name/agents', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name/agents', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodeAgents(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {
       return jsonNotFound(c, 'node_not_found', 'Node not found');
     }
-    return jsonOk(c, result);
+    const observer = getObserverTokenFromContext(c);
+    const visibleBindings = filterNodeAgentsForObserver(observer, result);
+    // Mirror the single-node endpoint: an observer scoped to specific agents
+    // must not be able to probe node existence, so hide nodes with no visible
+    // bindings behind the same not-found response.
+    if (observerHasAgentFilter(observer) && visibleBindings.length === 0) {
+      return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    return jsonOk(c, visibleBindings);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -181,11 +240,23 @@ nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, rateLim
 });
 
 // GET /v1/nodes/:name - single node roster entry
-nodeRoutes.get('/nodes/:name', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
-    const result = await nodeEngine.getPublicNode(c.get('db'), c.get('workspace').id, c.req.param('name'));
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const name = c.req.param('name');
+    const result = await nodeEngine.getPublicNode(db, workspace.id, name);
     if (!result) {
       return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    const observer = getObserverTokenFromContext(c);
+    if (observerHasAgentFilter(observer)) {
+      const bindings = await nodeEngine.listNodeAgents(db, workspace.id, name);
+      const visibleBindings = bindings ? filterNodeAgentsForObserver(observer, bindings) : [];
+      if (visibleBindings.length === 0) {
+        return jsonNotFound(c, 'node_not_found', 'Node not found');
+      }
+      return jsonOk(c, { ...result, active_agents: visibleBindings.length });
     }
     return jsonOk(c, result);
   } catch (err: unknown) {

@@ -1,0 +1,266 @@
+{
+  "version": "1.0.0",
+  "id": "05de78b0-2227-4c1b-a57f-468584e9dc4f",
+  "timestamp": "2026-06-23T09:20:32.670Z",
+  "trajectory": "traj_6u3au0fquyoj",
+  "files": [
+    {
+      "path": "packages/engine/src/__tests__/conformance/httpResponse.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 102,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/__tests__/httpError.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 43,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/httpError.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 44,
+              "end_line": 56,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/lib/httpResponse.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 71,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/eventSubscription.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 6,
+              "end_line": 18,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 35,
+              "end_line": 52,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 59,
+              "end_line": 65,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 71,
+              "end_line": 77,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 88,
+              "end_line": 96,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 107,
+              "end_line": 118,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/node.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 5,
+              "end_line": 16,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 27,
+              "end_line": 38,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 45,
+              "end_line": 51,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 56,
+              "end_line": 64,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/receipt.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 10,
+              "end_line": 16,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 31,
+              "end_line": 37,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 57,
+              "end_line": 63,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 79,
+              "end_line": 88,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 104,
+              "end_line": 113,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/systemPrompt.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 6,
+              "end_line": 12,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 20,
+              "end_line": 26,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 30,
+              "end_line": 38,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 41,
+              "end_line": 58,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/trigger.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 4,
+              "end_line": 16,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 28,
+              "end_line": 39,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 43,
+              "end_line": 49,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 54,
+              "end_line": 62,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 65,
+              "end_line": 79,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            },
+            {
+              "start_line": 84,
+              "end_line": 92,
+              "revision": "2a9893601717e624b2ed379c6e70261af4818749"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

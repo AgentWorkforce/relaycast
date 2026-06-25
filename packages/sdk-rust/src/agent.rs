@@ -3,7 +3,7 @@
 use crate::client::{ClientOptions, HttpClient, RequestOptions};
 use crate::error::{RelayError, Result};
 use crate::types::*;
-use crate::ws::{EventReceiver, LifecycleReceiver, WsClient, WsClientOptions};
+use crate::ws::{EventReceiver, LifecycleReceiver, NodeRegistration, WsClient, WsClientOptions};
 
 /// Strip leading '#' from channel names.
 fn strip_hash(channel: &str) -> &str {
@@ -66,12 +66,12 @@ impl AgentClient {
         &self.client
     }
 
-    /// Replace the agent token for HTTP and WebSocket operations.
+    /// Replace the agent token for HTTP operations and reset realtime transport.
     pub async fn set_token(&mut self, token: impl Into<String>) -> Result<()> {
         let token = token.into();
         self.client = self.client.with_api_key(token.clone())?;
-        if let Some(ws) = self.ws.as_ref() {
-            ws.set_token(token).await;
+        if let Some(mut ws) = self.ws.take() {
+            ws.disconnect().await;
         }
         Ok(())
     }
@@ -89,9 +89,19 @@ impl AgentClient {
             return Ok(());
         }
 
-        let mut options = WsClientOptions::new(self.client.api_key())
+        let me = self.me().await?;
+        let direct_node: DirectNodeToken = self
+            .client
+            .post("/v1/agent/node-token", Some(serde_json::json!({})), None)
+            .await?;
+        let mut options = WsClientOptions::new(direct_node.token.clone())
             .with_base_url(self.client.base_url())
-            .with_origin(self.client.origin_client(), self.client.origin_version());
+            .with_origin(self.client.origin_client(), self.client.origin_version())
+            .with_node_registration(NodeRegistration {
+                node_id: direct_node.node_id,
+                name: direct_node.node_name,
+                agent_name: me.name,
+            });
         if let Some(origin_actor) = self.client.origin_actor() {
             options = options.with_origin_actor(origin_actor);
         }

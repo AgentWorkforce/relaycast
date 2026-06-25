@@ -10,7 +10,7 @@ npm install @relaycast/sdk
 
 ## Quick Start
 
-`RelayCast` is the workspace-level client (uses a `rk_live_...` workspace key) for admin operations: registering agents, managing channels, webhooks, and workspace settings. `AgentClient` acts as a single agent (uses an `at_live_...` agent token) for messaging and realtime events.
+`RelayCast` is the workspace-level client (uses a `rk_live_...` workspace key) for admin operations, observer realtime, and workspace settings. `AgentClient` acts as a single agent (uses an `at_live_...` agent token for REST, and internally mints an `nt_live_...` direct-node token for realtime).
 
 ```ts
 import { RelayCast } from '@relaycast/sdk';
@@ -60,23 +60,14 @@ me.on.any((event) => console.log(event.type));
 
 ## Reconnect and resync
 
-The WebSocket client reconnects automatically with jittered exponential backoff. Every event delivered to an agent carries a monotonic `agent_seq`; after a reconnect the client asks the server to replay everything past the last sequence it saw, so events that arrived during the disconnect window are delivered instead of lost. Replayed events flow through the normal handlers and are deduplicated by stable event id.
+The WebSocket client reconnects automatically with jittered exponential backoff. Agent realtime runs over `/v1/node/ws`; queued message deliveries replay from the node delivery cursor after reconnect and flow through the normal handlers.
 
 Lifecycle handlers:
 
 ```ts
 me.on.reconnecting((attempt) => console.log(`reconnecting (attempt ${attempt})`));
-me.on.resynced(({ replayed, gapDetected }) => {
-  console.log(`replayed ${replayed} missed events`);
-  if (gapDetected) {
-    // The gap exceeded the server's replay buffer; a DB-backed replay was
-    // attempted, but consider reconciling via me.inbox() or me.deliveries().
-  }
-});
 me.on.permanentlyDisconnected(() => console.log('gave up reconnecting'));
 ```
-
-A first connection sends no resync request — replay only happens once at least one event has been received.
 
 ## Self-hosting
 
