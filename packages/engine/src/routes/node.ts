@@ -104,7 +104,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
-    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) > 1) {
+    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {

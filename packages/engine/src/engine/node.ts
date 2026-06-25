@@ -195,7 +195,7 @@ export async function createNodeToken(
     ?? (data.delivery === undefined ? normalizeLegacyAdapter(existing?.deliveryAdapter) : undefined)
     ?? defaultAdapter(kind, deliveryConfig);
   const maxAgents = data.max_agents ?? existing?.maxAgents ?? (role === 'direct' ? 1 : 0);
-  if (role === 'direct' && maxAgents > 1) {
+  if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
   }
 

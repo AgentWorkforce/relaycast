@@ -368,6 +368,33 @@ describe('node delivery contracts', () => {
     expect(body.data.max_agents).toBe(1);
   });
 
+  it('rejects direct nodes with unlimited capacity', async () => {
+    const ws = await createWorkspace(stack.app, 'direct-node-capacity-zero');
+    const res = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: 'bad-direct-node',
+        kind: 'http_push',
+        role: 'direct',
+        max_agents: 0,
+        delivery: {
+          url: 'https://receiver.example.test/relaycast',
+          ack_mode: 'manual',
+        },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'direct_node_capacity_exceeded' },
+    });
+  });
+
   it('does not clobber an explicit http_push binding when the agent opens /ws', async () => {
     const ws = await createWorkspace(stack.app, 'http-node-direct-ws');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -686,11 +713,14 @@ describe('node delivery contracts', () => {
 
     await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitForAssertion(async () => {
-      expect(carolSock.ofType('deliver')).toEqual([
+      expect(carolSock.ofType('message.created')).toEqual([
         expect.objectContaining({
-          agent_id: carol.agentId,
-          agent: 'carol',
-          payload: expect.objectContaining({ type: 'message.created' }),
+          type: 'message.created',
+          message: expect.objectContaining({
+            agent_id: alice.agentId,
+            agent_name: 'alice',
+            text: 'do not block carol',
+          }),
         }),
       ]);
       const carolQueue = await stack.app.request('/v1/deliveries', {

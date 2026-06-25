@@ -234,15 +234,18 @@ describe('node adapter conformance', () => {
       // fanout runs in background; give the event loop a tick.
       await new Promise((r) => setTimeout(r, 50));
 
-      const delivered = bobSock.ofType('deliver');
-      expect(delivered).toHaveLength(1);
-      expect(delivered[0]).toMatchObject({
-        type: 'deliver',
-        agent_id: bob.agentId,
-        agent: 'bob',
-        payload: { type: 'message.created' },
-      });
-      expect(delivered[0].delivery_id).toBeTruthy();
+      const delivered = bobSock.ofType('message.created');
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          type: 'message.created',
+          channel: 'team-chat',
+          message: expect.objectContaining({
+            id: posted.data.id,
+            agent_name: 'alice',
+            text: 'hello bob',
+          }),
+        }),
+      ]);
       expect(typeof delivered[0].agent_seq).toBe('number');
     });
 
@@ -293,7 +296,7 @@ describe('node adapter conformance', () => {
         ));
 
       expect(rows).toHaveLength(0);
-      expect(bobSock.ofType('deliver')).toHaveLength(0);
+      expect(bobSock.ofType('message.created')).toHaveLength(0);
     });
 
     it('creates a mention delivery for muted channel members when explicitly mentioned', async () => {
@@ -346,11 +349,15 @@ describe('node adapter conformance', () => {
         expect.objectContaining({ reason: 'mention' }),
       ]);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(bobSock.ofType('deliver')).toEqual([
+      expect(bobSock.ofType('message.created')).toEqual([
         expect.objectContaining({
-          agent_id: bob.agentId,
-          agent: 'bob',
-          payload: expect.objectContaining({ type: 'message.created' }),
+          type: 'message.created',
+          channel: 'mentions-chat',
+          message: expect.objectContaining({
+            id: posted.data.id,
+            agent_name: 'alice',
+            text: '@bob please look',
+          }),
         }),
       ]);
     });
@@ -383,12 +390,14 @@ describe('node adapter conformance', () => {
       stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(bobSock.ofType('deliver')).toEqual([
+      expect(bobSock.ofType('message.created')).toEqual([
         expect.objectContaining({
-          agent_id: bob.agentId,
-          agent: 'bob',
-          msg_id: posted.data.id,
-          payload: expect.objectContaining({ type: 'message.created' }),
+          type: 'message.created',
+          message: expect.objectContaining({
+            id: posted.data.id,
+            agent_name: 'alice',
+            text: 'queued for direct reconnect',
+          }),
         }),
       ]);
       [queued] = await stack.runtime.deps.db

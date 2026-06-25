@@ -3051,8 +3051,7 @@ paths:
                 role:
                   type: string
                   enum: [direct, broker]
-                  default: broker
-                  description: Node ownership/capability role. `direct` nodes bind one agent; `broker` nodes may host multiple agents and use node control frames.
+                  description: Node ownership/capability role. Defaults to `broker` for `ws` nodes, and `direct` for `http_push` or `poll` nodes. `direct` nodes bind one agent; `broker` nodes may host multiple agents and use node control frames.
                 delivery_adapter:
                   type: string
                   description: Optional adapter identifier. WebSocket nodes default to `ws.node.v1`; HTTP push nodes default from delivery auth.
