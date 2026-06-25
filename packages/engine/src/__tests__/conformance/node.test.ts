@@ -262,6 +262,59 @@ describe('node adapter conformance', () => {
       expect(rows).toHaveLength(0);
       expect(bobSock.ofType('message.created')).toHaveLength(0);
     });
+
+    it('creates a mention delivery for muted channel members when explicitly mentioned', async () => {
+      const ws = await createWorkspace(stack.app, 'muted-mention-delivery-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const createRes = await stack.app.request('/v1/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'mentions-chat' }),
+      });
+      expect(createRes.status).toBeLessThan(300);
+      for (const token of [alice.token, bob.token]) {
+        const joinRes = await stack.app.request('/v1/channels/mentions-chat/join', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(joinRes.status).toBeLessThan(300);
+      }
+
+      const muteRes = await stack.app.request('/v1/channels/mentions-chat/mute', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(muteRes.status).toBeLessThan(300);
+
+      const bobSock = new FakeSocket();
+      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      bobSock.received.length = 0;
+
+      const postRes = await stack.app.request('/v1/channels/mentions-chat/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: '@bob please look' }),
+      });
+      expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+
+      const rows = await stack.runtime.deps.db
+        .select({ id: deliveries.id, reason: deliveries.reason })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(rows).toEqual([
+        expect.objectContaining({ reason: 'mention' }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(bobSock.ofType('message.created')).toHaveLength(1);
+    });
   });
 
   describe('fleet node control', () => {

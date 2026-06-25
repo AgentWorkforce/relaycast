@@ -365,6 +365,10 @@ Relaycast creates a per-recipient delivery row for every channel message, DM, gr
 thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
 on reconnect; the ack/fail/defer endpoints are idempotent.
+Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
+channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
+still create `mention` deliveries for muted members; full channel history remains available
+through the message history APIs.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,

@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, sql, inArray } from 'drizzle-orm';
+import { and, eq, isNull, ne, or, sql, inArray } from 'drizzle-orm';
 import type { SQLiteInsertSelectQueryBuilder } from 'drizzle-orm/sqlite-core';
 import {
   agentNodeBindings,
@@ -61,6 +61,13 @@ function channelReasonSql(
   return sql<string>`case when ${agents.name} in (${mentionList}) then ${'mention'} else ${'message'} end`;
 }
 
+function channelMuteDeliveryFilter(mentionHandles: readonly string[]) {
+  if (mentionHandles.length === 0) {
+    return eq(channelMembers.isMuted, false);
+  }
+  return or(eq(channelMembers.isMuted, false), inArray(agents.name, mentionHandles));
+}
+
 function asDeliveryInsertSelect(query: unknown): DeliveryInsertSelect {
   return query as DeliveryInsertSelect;
 }
@@ -107,7 +114,8 @@ export function buildChannelDeliveryWrite(
     mentionHandles?: readonly string[];
   },
 ): AtomicWrite {
-  const reason = channelReasonSql(input.mentionHandles ?? [], input.reason ?? 'message');
+  const mentionHandles = input.mentionHandles ?? [];
+  const reason = channelReasonSql(mentionHandles, input.reason ?? 'message');
   return db
     .insert(deliveries)
     .select((qb) =>
@@ -158,7 +166,7 @@ export function buildChannelDeliveryWrite(
         .where(
           and(
             eq(channelMembers.channelId, input.channelId),
-            eq(channelMembers.isMuted, false),
+            channelMuteDeliveryFilter(mentionHandles),
             ne(channelMembers.agentId, input.senderAgentId),
             belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
@@ -372,8 +380,10 @@ export async function fetchChannelDeliveryOutcomes(
     messageId: string;
     channelId: string;
     senderAgentId: string;
+    mentionHandles?: readonly string[];
   },
 ): Promise<DeliveryOutcomeRecords> {
+  const mentionHandles = input.mentionHandles ?? [];
   const [deliveries, intended] = await Promise.all([
     fetchDeliveryFanoutRecords(db, input.messageId),
     db
@@ -385,7 +395,7 @@ export async function fetchChannelDeliveryOutcomes(
       .innerJoin(agents, eq(channelMembers.agentId, agents.id))
       .where(and(
         eq(channelMembers.channelId, input.channelId),
-        eq(channelMembers.isMuted, false),
+        channelMuteDeliveryFilter(mentionHandles),
         ne(channelMembers.agentId, input.senderAgentId),
       )),
   ]);
