@@ -125,6 +125,93 @@ public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let token: String
 }
 
+public struct ObserverTokenFilters: Codable, Equatable, Sendable {
+    public var channelIds: [String]?
+    public var channelNames: [String]?
+    public var includeDms: Bool?
+    public var dmConversationIds: [String]?
+    public var agentIds: [String]?
+    public var eventTypes: [String]?
+    public var createdAfter: String?
+
+    public init(
+        channelIds: [String]? = nil,
+        channelNames: [String]? = nil,
+        includeDms: Bool? = nil,
+        dmConversationIds: [String]? = nil,
+        agentIds: [String]? = nil,
+        eventTypes: [String]? = nil,
+        createdAfter: String? = nil
+    ) {
+        self.channelIds = channelIds
+        self.channelNames = channelNames
+        self.includeDms = includeDms
+        self.dmConversationIds = dmConversationIds
+        self.agentIds = agentIds
+        self.eventTypes = eventTypes
+        self.createdAfter = createdAfter
+    }
+}
+
+public struct CreateObserverTokenRequest: Codable, Equatable, Sendable {
+    public var name: String
+    public var scopes: [String]
+    public var description: String?
+    public var filters: ObserverTokenFilters?
+    public var expiresAt: String?
+
+    public init(
+        name: String,
+        scopes: [String],
+        description: String? = nil,
+        filters: ObserverTokenFilters? = nil,
+        expiresAt: String? = nil
+    ) {
+        self.name = name
+        self.scopes = scopes
+        self.description = description
+        self.filters = filters
+        self.expiresAt = expiresAt
+    }
+}
+
+public struct UpdateObserverTokenRequest: Codable, Equatable, Sendable {
+    public var name: String?
+    public var scopes: [String]?
+    public var description: String?
+    public var filters: ObserverTokenFilters?
+    public var expiresAt: String?
+
+    public init(
+        name: String? = nil,
+        scopes: [String]? = nil,
+        description: String? = nil,
+        filters: ObserverTokenFilters? = nil,
+        expiresAt: String? = nil
+    ) {
+        self.name = name
+        self.scopes = scopes
+        self.description = description
+        self.filters = filters
+        self.expiresAt = expiresAt
+    }
+}
+
+public struct ObserverToken: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let scopes: [String]
+    public let filters: ObserverTokenFilters
+    public let status: String
+    public let expiresAt: String?
+    public let createdAt: String
+    public let updatedAt: String?
+    public let revokedAt: String?
+    public let lastUsedAt: String?
+    public let token: String?
+}
+
 // MARK: - Agents
 
 public enum AgentType: String, Codable, Sendable {

@@ -1,6 +1,7 @@
-import type { AuthProvider, Workspace } from '../ports/auth.js';
+import type { AuthProvider, Workspace, ObserverToken } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { getNodeByTokenHash } from './node.js';
+import { hasObserverScope } from './observerToken.js';
 
 type WsAuthErrorCode = 'unauthorized' | 'invalid_token';
 
@@ -13,7 +14,7 @@ export interface WsAuthError {
 }
 
 export type RealtimeWsAuthResult =
-  | { ok: true; scope: 'workspace'; workspace: Workspace }
+  | { ok: true; scope: 'workspace'; workspace: Workspace; observerToken?: ObserverToken }
   | WsAuthError;
 
 export type NodeWsAuthResult =
@@ -65,11 +66,22 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
   }
 
   if (token.startsWith('rk_live_')) {
-    const result = await deps.auth.authenticate({ token, require: 'workspace', db: deps.db });
-    if (!result.ok) {
-      return invalidWsToken('Invalid workspace key');
+    return invalidWsToken('Observer token required for workspace stream');
+  }
+
+  if (token.startsWith('nt_live_')) {
+    return invalidWsToken('Node token cannot open the workspace stream');
+  }
+
+  if (token.startsWith('ot_live_')) {
+    const result = await deps.auth.authenticate({ token, require: 'observer', db: deps.db });
+    if (!result.ok || !result.observerToken) {
+      return invalidWsToken('Invalid observer token');
     }
-    return { ok: true, scope: 'workspace', workspace: result.workspace };
+    if (!hasObserverScope(result.observerToken, 'stream:read')) {
+      return invalidWsToken('Observer token lacks stream:read');
+    }
+    return { ok: true, scope: 'workspace', workspace: result.workspace, observerToken: result.observerToken };
   }
 
   return invalidWsToken('Invalid token format');

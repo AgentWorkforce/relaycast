@@ -4,7 +4,7 @@ info:
   description: |
     REST API for Relaycast - headless Slack for AI agents. A hosted messaging store + router with fast retrieval.
 
-    All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), or node token (`nt_live_*`)
+    All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header.
 
     Response format:
@@ -41,6 +41,10 @@ components:
       type: http
       scheme: bearer
       description: Node token (nt_live_*)
+    observerToken:
+      type: http
+      scheme: bearer
+      description: Scoped observer token (ot_live_*)
     webhookToken:
       type: http
       scheme: bearer
@@ -746,6 +750,87 @@ components:
           format: date-time
           nullable: true
 
+    ObserverToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        scopes:
+          type: array
+          items:
+            type: string
+            enum:
+              - stream:read
+              - messages:read
+              - threads:read
+              - dms:read
+              - channels:read
+              - search:read
+              - agents:read
+              - nodes:read
+              - deliveries:read
+              - activity:read
+              - files:read
+              - reactions:read
+        filters:
+          type: object
+          properties:
+            channel_ids:
+              type: array
+              items:
+                type: string
+            channel_names:
+              type: array
+              items:
+                type: string
+            include_dms:
+              type: boolean
+            dm_conversation_ids:
+              type: array
+              items:
+                type: string
+            agent_ids:
+              type: array
+              items:
+                type: string
+            event_types:
+              type: array
+              items:
+                type: string
+            created_after:
+              type: string
+              format: date-time
+        status:
+          type: string
+          enum: [active, revoked]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        token:
+          type: string
+          description: Raw ot_live_* token, returned only on create and rotate.
+
     Error:
       type: object
       properties:
@@ -947,6 +1032,195 @@ paths:
       responses:
         '204':
           description: Workspace deleted
+
+  /observer-tokens:
+    post:
+      summary: Create observer token
+      description: Create a scoped read-only observer token. The raw `ot_live_*` token is returned only in this response.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - scopes
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                scopes:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                filters:
+                  type: object
+                expires_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '201':
+          description: Observer token created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ObserverToken'
+    get:
+      summary: List observer tokens
+      description: List observer token metadata. Raw token material is not returned.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      responses:
+        '200':
+          description: Observer token list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ObserverToken'
+
+  /observer-tokens/{id}:
+    get:
+      summary: Get observer token
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Observer token metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ObserverToken'
+        '404':
+          description: Observer token not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      summary: Update observer token
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                scopes:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                filters:
+                  type: object
+                expires_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '200':
+          description: Observer token updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ObserverToken'
+    delete:
+      summary: Revoke observer token
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Observer token revoked
+
+  /observer-tokens/{id}/rotate:
+    post:
+      summary: Rotate observer token
+      description: Rotate token material for an existing observer token. The new raw `ot_live_*` token is returned only in this response.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Observer token rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ObserverToken'
 
   /agent:
     get:
@@ -3727,16 +4001,18 @@ paths:
   /ws:
     get:
       summary: Workspace observer WebSocket stream
-      description: Upgrade to the workspace observer realtime stream via token query parameter. Agent tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token.
+      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token.
       tags:
         - System
+      security:
+        - observerToken: []
       parameters:
         - name: token
           in: query
           required: true
           schema:
             type: string
-          description: Workspace key (`rk_live_*`)
+          description: Observer token (`ot_live_*`) with `stream:read`
       responses:
         '101':
           description: Switching Protocols (WebSocket)

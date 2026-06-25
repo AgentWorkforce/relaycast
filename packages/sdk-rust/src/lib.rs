@@ -72,7 +72,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut ws = WsClient::new(WsClientOptions::new("rk_live_workspace_key"));
+//!     let mut ws = WsClient::new(WsClientOptions::new("ot_live_observer_token"));
 //!     let mut raw_events = ws.subscribe_raw_events();
 //!     ws.connect().await?;
 //!

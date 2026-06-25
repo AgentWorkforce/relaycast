@@ -1,9 +1,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
+import {
+  filterObserverSearchResults,
+  getObserverTokenFromContext,
+} from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
@@ -20,7 +24,7 @@ const searchQuerySchema = PaginationQuerySchema.extend({
 // GET /v1/search?q=...&channel=...&from=...&limit=...&before=...&after=...
 searchRoutes.get(
   '/search',
-  requireAuth,
+  requireWorkspaceRead('search:read'),
   rateLimit,
   async (c) => {
     try {
@@ -44,15 +48,21 @@ searchRoutes.get(
         before,
         after,
       });
+      const visibleResults = await filterObserverSearchResults(
+        db,
+        workspace.id,
+        getObserverTokenFromContext(c),
+        results,
+      );
 
       emitServerEvent(c, workspace.id, 'relaycast_server_search_executed', {
         query_length: q.trim().length,
-        result_count: results.length,
+        result_count: visibleResults.length,
         has_channel_filter: Boolean(channel),
         has_from_filter: Boolean(from),
       });
 
-      return jsonOk(c, results);
+      return jsonOk(c, visibleResults);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

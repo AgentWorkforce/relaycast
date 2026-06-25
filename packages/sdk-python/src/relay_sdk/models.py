@@ -61,6 +61,65 @@ class TokenRotateResponse(BaseModel):
     token: str
 
 
+# ── Observer tokens ───────────────────────────────────────────────
+
+ObserverScope = Literal[
+    "stream:read",
+    "messages:read",
+    "threads:read",
+    "dms:read",
+    "channels:read",
+    "search:read",
+    "agents:read",
+    "nodes:read",
+    "deliveries:read",
+    "activity:read",
+    "files:read",
+    "reactions:read",
+]
+
+
+class ObserverTokenFilters(BaseModel):
+    channel_ids: list[str] | None = None
+    channel_names: list[str] | None = None
+    include_dms: bool | None = None
+    dm_conversation_ids: list[str] | None = None
+    agent_ids: list[str] | None = None
+    event_types: list[str] | None = None
+    created_after: str | None = None
+
+
+class CreateObserverTokenRequest(BaseModel):
+    name: str
+    scopes: list[ObserverScope]
+    description: str | None = None
+    filters: ObserverTokenFilters | None = None
+    expires_at: str | None = None
+
+
+class UpdateObserverTokenRequest(BaseModel):
+    name: str | None = None
+    scopes: list[ObserverScope] | None = None
+    description: str | None = None
+    filters: ObserverTokenFilters | None = None
+    expires_at: str | None = None
+
+
+class ObserverToken(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    scopes: list[ObserverScope]
+    filters: ObserverTokenFilters = Field(default_factory=ObserverTokenFilters)
+    status: str
+    expires_at: str | None = None
+    created_at: str
+    updated_at: str | None = None
+    revoked_at: str | None = None
+    last_used_at: str | None = None
+    token: str | None = None
+
+
 # ── Workspace ─────────────────────────────────────────────────────
 
 class Workspace(BaseModel):

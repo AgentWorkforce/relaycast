@@ -1,19 +1,25 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireWorkspaceRead, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as presenceEngine from '../engine/presence.js';
+import {
+  getObserverTokenFromContext,
+  observerAllowsAgent,
+} from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonOk, jsonSuccess } from '../lib/httpResponse.js';
 
 export const presenceRoutes = new Hono<AppEnv>();
 
-presenceRoutes.get('/agents/presence', requireAuth, rateLimit, async (c) => {
+presenceRoutes.get('/agents/presence', requireWorkspaceRead('agents:read'), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const result = await presenceEngine.getPresence(db, c.get('engine').presence, workspace.id);
+    const observer = getObserverTokenFromContext(c);
+    const result = (await presenceEngine.getPresence(db, c.get('engine').presence, workspace.id))
+      .filter((presence) => observerAllowsAgent(observer, presence.agent_id));
     return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);

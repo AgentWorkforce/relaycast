@@ -34,8 +34,11 @@ from .models import (
     Agent,
     CreateAgentRequest,
     CreateAgentResponse,
+    CreateObserverTokenRequest,
+    ObserverToken,
     PublishToDirectoryRequest,
     TokenRotateResponse,
+    UpdateObserverTokenRequest,
     Workspace,
 )
 
@@ -172,6 +175,36 @@ class _NodesNamespace:
         self._client.delete(f"/v1/nodes/{_enc(name)}/agents/{_enc(agent_name)}")
 
 
+class _ObserverTokensNamespace:
+    """Sync observer-token operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def create(self, data: CreateObserverTokenRequest) -> ObserverToken:
+        result = self._client.post("/v1/observer-tokens", data.model_dump(exclude_none=True))
+        return ObserverToken.model_validate(result)
+
+    def list(self) -> list[ObserverToken]:
+        result = self._client.get("/v1/observer-tokens")
+        return [ObserverToken.model_validate(token) for token in result]
+
+    def get(self, token_id: str) -> ObserverToken:
+        result = self._client.get(f"/v1/observer-tokens/{_enc(token_id)}")
+        return ObserverToken.model_validate(result)
+
+    def update(self, token_id: str, data: UpdateObserverTokenRequest) -> ObserverToken:
+        result = self._client.patch(f"/v1/observer-tokens/{_enc(token_id)}", data.model_dump(exclude_none=True))
+        return ObserverToken.model_validate(result)
+
+    def rotate(self, token_id: str) -> ObserverToken:
+        result = self._client.post(f"/v1/observer-tokens/{_enc(token_id)}/rotate", {})
+        return ObserverToken.model_validate(result)
+
+    def revoke(self, token_id: str) -> None:
+        self._client.delete(f"/v1/observer-tokens/{_enc(token_id)}")
+
+
 class Relay:
     """Synchronous Relay client.
 
@@ -205,6 +238,7 @@ class Relay:
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
         self.nodes = _NodesNamespace(self._client)
+        self.observer_tokens = _ObserverTokensNamespace(self._client)
 
 
     def register_agent(
@@ -478,6 +512,36 @@ class _AsyncNodesNamespace:
         await self._client.delete(f"/v1/nodes/{_enc(name)}/agents/{_enc(agent_name)}")
 
 
+class _AsyncObserverTokensNamespace:
+    """Async observer-token operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def create(self, data: CreateObserverTokenRequest) -> ObserverToken:
+        result = await self._client.post("/v1/observer-tokens", data.model_dump(exclude_none=True))
+        return ObserverToken.model_validate(result)
+
+    async def list(self) -> list[ObserverToken]:
+        result = await self._client.get("/v1/observer-tokens")
+        return [ObserverToken.model_validate(token) for token in result]
+
+    async def get(self, token_id: str) -> ObserverToken:
+        result = await self._client.get(f"/v1/observer-tokens/{_enc(token_id)}")
+        return ObserverToken.model_validate(result)
+
+    async def update(self, token_id: str, data: UpdateObserverTokenRequest) -> ObserverToken:
+        result = await self._client.patch(f"/v1/observer-tokens/{_enc(token_id)}", data.model_dump(exclude_none=True))
+        return ObserverToken.model_validate(result)
+
+    async def rotate(self, token_id: str) -> ObserverToken:
+        result = await self._client.post(f"/v1/observer-tokens/{_enc(token_id)}/rotate", {})
+        return ObserverToken.model_validate(result)
+
+    async def revoke(self, token_id: str) -> None:
+        await self._client.delete(f"/v1/observer-tokens/{_enc(token_id)}")
+
+
 class AsyncRelay:
     """Asynchronous Relay client.
 
@@ -511,6 +575,7 @@ class AsyncRelay:
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
         self.nodes = _AsyncNodesNamespace(self._client)
+        self.observer_tokens = _AsyncObserverTokensNamespace(self._client)
 
 
     async def register_agent(

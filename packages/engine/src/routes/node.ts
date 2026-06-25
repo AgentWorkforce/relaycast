@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
@@ -120,7 +120,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
 });
 
 // GET /v1/nodes?capability=&name= - node roster
-nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodes(c.get('db'), c.get('workspace').id, {
       capability: c.req.query('capability'),
@@ -133,7 +133,7 @@ nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
 });
 
 // GET /v1/nodes/:name/agents - active agent bindings for a node
-nodeRoutes.get('/nodes/:name/agents', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name/agents', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodeAgents(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {
@@ -190,7 +190,7 @@ nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, rateLim
 });
 
 // GET /v1/nodes/:name - single node roster entry
-nodeRoutes.get('/nodes/:name', requireAuth, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name', requireWorkspaceRead('nodes:read'), rateLimit, async (c) => {
   try {
     const result = await nodeEngine.getPublicNode(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {

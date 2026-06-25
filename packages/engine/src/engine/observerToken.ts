@@ -1,0 +1,401 @@
+import { and, eq, or, gt, isNull, inArray } from 'drizzle-orm';
+import type { getDb } from '../db/index.js';
+import { channels, dmConversations, messages, observerTokens } from '../db/schema.js';
+import type { ObserverTokenFilters } from '../db/schema.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { codedError } from '../lib/httpError.js';
+import { generateId } from './snowflake.js';
+
+type Db = ReturnType<typeof getDb>;
+export type ObserverToken = typeof observerTokens.$inferSelect;
+
+export const OBSERVER_SCOPES = [
+  'stream:read',
+  'messages:read',
+  'threads:read',
+  'dms:read',
+  'channels:read',
+  'search:read',
+  'agents:read',
+  'nodes:read',
+  'deliveries:read',
+  'activity:read',
+  'files:read',
+  'reactions:read',
+] as const;
+
+export type ObserverScope = typeof OBSERVER_SCOPES[number];
+
+export const OBSERVER_SCOPE_SET = new Set<string>(OBSERVER_SCOPES);
+
+export interface PublicObserverToken {
+  id: string;
+  name: string;
+  description: string | null;
+  scopes: ObserverScope[];
+  filters: ObserverTokenFilters;
+  status: string;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  token?: string;
+}
+
+export interface CreateObserverTokenInput {
+  name: string;
+  description?: string | null;
+  scopes: ObserverScope[];
+  filters?: ObserverTokenFilters;
+  expires_at?: string | null;
+}
+
+export interface UpdateObserverTokenInput {
+  name?: string;
+  description?: string | null;
+  scopes?: ObserverScope[];
+  filters?: ObserverTokenFilters;
+  expires_at?: string | null;
+}
+
+function parseExpiresAt(value: string | null | undefined): Date | null {
+  if (value == null) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw codedError('expires_at must be an ISO-8601 timestamp', 'invalid_request', 400);
+  }
+  return date;
+}
+
+export function normalizeObserverFilters(filters?: ObserverTokenFilters | null): ObserverTokenFilters {
+  return {
+    ...(filters?.channel_ids?.length ? { channel_ids: [...new Set(filters.channel_ids)] } : {}),
+    ...(filters?.channel_names?.length ? { channel_names: [...new Set(filters.channel_names)] } : {}),
+    include_dms: filters?.include_dms === true,
+    ...(filters?.dm_conversation_ids?.length ? { dm_conversation_ids: [...new Set(filters.dm_conversation_ids)] } : {}),
+    ...(filters?.agent_ids?.length ? { agent_ids: [...new Set(filters.agent_ids)] } : {}),
+    ...(filters?.event_types?.length ? { event_types: [...new Set(filters.event_types)] } : {}),
+    ...(filters?.created_after ? { created_after: filters.created_after } : {}),
+  };
+}
+
+function normalizeScopes(scopes: string[]): ObserverScope[] {
+  const unique = [...new Set(scopes)];
+  const invalid = unique.filter((scope) => !OBSERVER_SCOPE_SET.has(scope));
+  if (invalid.length > 0) {
+    throw codedError(`Invalid observer scopes: ${invalid.join(', ')}`, 'invalid_request', 400);
+  }
+  if (unique.length === 0) {
+    throw codedError('At least one observer scope is required', 'invalid_request', 400);
+  }
+  return unique as ObserverScope[];
+}
+
+function publicObserverToken(row: ObserverToken, token?: string): PublicObserverToken {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    scopes: normalizeScopes(row.scopes ?? []),
+    filters: normalizeObserverFilters(row.filters),
+    status: row.status,
+    expires_at: row.expiresAt?.toISOString() ?? null,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt?.toISOString() ?? null,
+    revoked_at: row.revokedAt?.toISOString() ?? null,
+    last_used_at: row.lastUsedAt?.toISOString() ?? null,
+    ...(token ? { token } : {}),
+  };
+}
+
+export async function createObserverToken(
+  db: Db,
+  workspaceId: string,
+  input: CreateObserverTokenInput,
+): Promise<PublicObserverToken> {
+  const token = `ot_live_${randomHex(24)}`;
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = parseExpiresAt(input.expires_at);
+  const scopes = normalizeScopes(input.scopes);
+  const filters = normalizeObserverFilters(input.filters);
+
+  const [created] = await db
+    .insert(observerTokens)
+    .values({
+      id: `ot_${generateId()}`,
+      workspaceId,
+      name: input.name,
+      description: input.description ?? null,
+      tokenHash,
+      scopes,
+      filters,
+      expiresAt,
+      createdByType: 'workspace',
+    })
+    .returning();
+
+  return publicObserverToken(created, token);
+}
+
+export async function listObserverTokens(db: Db, workspaceId: string): Promise<PublicObserverToken[]> {
+  const rows = await db
+    .select()
+    .from(observerTokens)
+    .where(eq(observerTokens.workspaceId, workspaceId));
+  return rows.map((row) => publicObserverToken(row));
+}
+
+export async function getObserverToken(
+  db: Db,
+  workspaceId: string,
+  id: string,
+): Promise<PublicObserverToken | null> {
+  const [row] = await db
+    .select()
+    .from(observerTokens)
+    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)));
+  return row ? publicObserverToken(row) : null;
+}
+
+export async function updateObserverToken(
+  db: Db,
+  workspaceId: string,
+  id: string,
+  input: UpdateObserverTokenInput,
+): Promise<PublicObserverToken | null> {
+  const update: Partial<typeof observerTokens.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+  if (input.name !== undefined) update.name = input.name;
+  if (input.description !== undefined) update.description = input.description;
+  if (input.scopes !== undefined) update.scopes = normalizeScopes(input.scopes);
+  if (input.filters !== undefined) update.filters = normalizeObserverFilters(input.filters);
+  if (input.expires_at !== undefined) update.expiresAt = parseExpiresAt(input.expires_at);
+
+  const [row] = await db
+    .update(observerTokens)
+    .set(update)
+    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+    .returning();
+
+  return row ? publicObserverToken(row) : null;
+}
+
+export async function rotateObserverToken(
+  db: Db,
+  workspaceId: string,
+  id: string,
+): Promise<PublicObserverToken | null> {
+  const token = `ot_live_${randomHex(24)}`;
+  const tokenHash = await sha256Hex(token);
+  const [row] = await db
+    .update(observerTokens)
+    .set({ tokenHash, updatedAt: new Date(), lastUsedAt: null })
+    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+    .returning();
+  return row ? publicObserverToken(row, token) : null;
+}
+
+export async function revokeObserverToken(
+  db: Db,
+  workspaceId: string,
+  id: string,
+): Promise<boolean> {
+  const now = new Date();
+  const [row] = await db
+    .update(observerTokens)
+    .set({ status: 'revoked', revokedAt: now, updatedAt: now })
+    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+    .returning({ id: observerTokens.id });
+  return Boolean(row);
+}
+
+export async function getActiveObserverTokenByHash(
+  db: Db,
+  tokenHash: string,
+): Promise<ObserverToken | null> {
+  const now = new Date();
+  const [row] = await db
+    .select()
+    .from(observerTokens)
+    .where(and(
+      eq(observerTokens.tokenHash, tokenHash),
+      eq(observerTokens.status, 'active'),
+      or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
+    ));
+  if (!row) return null;
+
+  try {
+    await db
+      .update(observerTokens)
+      .set({ lastUsedAt: now })
+      .where(eq(observerTokens.id, row.id));
+  } catch {
+    // last_used_at is best-effort audit metadata; authentication should not fail
+    // solely because a read replica or adapter rejects this update.
+  }
+  return row;
+}
+
+export function hasObserverScope(observer: Pick<ObserverToken, 'scopes'>, scope: ObserverScope): boolean {
+  return (observer.scopes ?? []).includes(scope);
+}
+
+export function hasAnyObserverScope(observer: Pick<ObserverToken, 'scopes'>, scopes: ObserverScope[]): boolean {
+  return scopes.some((scope) => hasObserverScope(observer, scope));
+}
+
+function filterList(values: string[] | undefined): Set<string> | null {
+  return values && values.length > 0 ? new Set(values) : null;
+}
+
+export function observerAllowsChannel(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  channel: { id?: string | null; name?: string | null },
+): boolean {
+  if (!observer) return true;
+  const filters = normalizeObserverFilters(observer.filters);
+  const ids = filterList(filters.channel_ids);
+  const names = filterList(filters.channel_names);
+  if (!ids && !names) return true;
+  return Boolean((channel.id && ids?.has(channel.id)) || (channel.name && names?.has(channel.name)));
+}
+
+export function observerAllowsConversation(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  conversationId: string | null | undefined,
+): boolean {
+  if (!observer) return true;
+  const filters = normalizeObserverFilters(observer.filters);
+  if (!filters.include_dms) return false;
+  const ids = filterList(filters.dm_conversation_ids);
+  if (!ids) return true;
+  return Boolean(conversationId && ids.has(conversationId));
+}
+
+export function observerAllowsAgent(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  agentId: string | null | undefined,
+): boolean {
+  if (!observer) return true;
+  const ids = filterList(normalizeObserverFilters(observer.filters).agent_ids);
+  if (!ids) return true;
+  return Boolean(agentId && ids.has(agentId));
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function eventChannelName(event: Record<string, unknown>): string | null {
+  const channel = event.channel;
+  if (typeof channel === 'string') return channel;
+  const channelObject = nestedRecord(channel);
+  return typeof channelObject.name === 'string' ? channelObject.name : null;
+}
+
+function eventAgentId(event: Record<string, unknown>): string | null {
+  const message = nestedRecord(event.message);
+  const agent = nestedRecord(event.agent);
+  return (typeof event.agent_id === 'string' ? event.agent_id : null)
+    ?? (typeof event.subject_agent_id === 'string' ? event.subject_agent_id : null)
+    ?? (typeof message.agent_id === 'string' ? message.agent_id : null)
+    ?? (typeof agent.id === 'string' ? agent.id : null);
+}
+
+export function observerAllowsEvent(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  event: Record<string, unknown>,
+): boolean {
+  if (!observer) return true;
+  const filters = normalizeObserverFilters(observer.filters);
+  const type = typeof event.type === 'string' ? event.type : '';
+
+  if (filters.event_types?.length && !filters.event_types.includes(type)) {
+    return false;
+  }
+
+  if ((type === 'dm.received' || type === 'group_dm.received') && !observerAllowsConversation(
+    observer,
+    typeof event.conversation_id === 'string' ? event.conversation_id : null,
+  )) {
+    return false;
+  }
+
+  if (!observerAllowsChannel(observer, {
+    id: typeof event.channel_id === 'string' ? event.channel_id : null,
+    name: eventChannelName(event),
+  })) {
+    return false;
+  }
+
+  if (!observerAllowsAgent(observer, eventAgentId(event))) {
+    return false;
+  }
+
+  return true;
+}
+
+export async function getMessageObserverResource(
+  db: Db,
+  workspaceId: string,
+  messageId: string,
+): Promise<{ channel_id: string; channel_name: string; conversation_id: string | null } | null> {
+  const [row] = await db
+    .select({
+      channel_id: channels.id,
+      channel_name: channels.name,
+      conversation_id: dmConversations.id,
+    })
+    .from(messages)
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
+    .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
+  return row ?? null;
+}
+
+export async function getChannelObserverResource(
+  db: Db,
+  workspaceId: string,
+  name: string,
+): Promise<{ id: string; name: string } | null> {
+  const [row] = await db
+    .select({ id: channels.id, name: channels.name })
+    .from(channels)
+    .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
+  return row ?? null;
+}
+
+export async function filterObserverSearchResults<T extends { channel_id?: string; channel_name?: string; conversation_id?: string | null }>(
+  db: Db,
+  workspaceId: string,
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  results: T[],
+): Promise<T[]> {
+  if (!observer || results.length === 0) return results;
+
+  const missingChannelIds = [...new Set(results
+    .filter((result) => !result.channel_name && result.channel_id)
+    .map((result) => result.channel_id as string))];
+  const namesById = new Map<string, string>();
+  if (missingChannelIds.length > 0) {
+    const rows = await db
+      .select({ id: channels.id, name: channels.name })
+      .from(channels)
+      .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, missingChannelIds)));
+    for (const row of rows) namesById.set(row.id, row.name);
+  }
+
+  return results.filter((result) => {
+    if (result.conversation_id && !observerAllowsConversation(observer, result.conversation_id)) return false;
+    return observerAllowsChannel(observer, {
+      id: result.channel_id,
+      name: result.channel_name ?? (result.channel_id ? namesById.get(result.channel_id) : null),
+    });
+  });
+}
+
+export function getObserverTokenFromContext(c: { get(key: 'observerToken'): ObserverToken | undefined }): ObserverToken | undefined {
+  return c.get('observerToken');
+}

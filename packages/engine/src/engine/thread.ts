@@ -45,6 +45,9 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
+  const mentionPattern = /@(\w+)/g;
+  const mentionMatches = data.text.match(mentionPattern) || [];
+  const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -93,6 +96,7 @@ export async function postReply(
           ttlMs: mailbox.ttlMs,
           depthCap: mailbox.depthCap,
           reason: 'thread-reply',
+          mentionHandles: Array.from(mentionedHandles),
         }),
     );
 
@@ -109,6 +113,7 @@ export async function postReply(
       messageId: replyId,
       channelId: parent.channelId,
       senderAgentId: agentId,
+      mentionHandles: Array.from(mentionedHandles),
     });
 
   return {

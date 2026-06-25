@@ -1,9 +1,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
+import {
+  filterObserverSearchResults,
+  getObserverTokenFromContext,
+} from '../engine/observerToken.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonOk, parseQueryParams } from '../lib/httpResponse.js';
 import { positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -28,7 +32,7 @@ const agentStatsQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 100 }),
 });
 
-consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -46,13 +50,23 @@ consoleRoutes.get('/console/messages', requireAuth, rateLimit, async (c) => {
       deliveryKind: parsed.data.delivery_kind,
     });
 
-    return jsonOk(c, data);
+    const visible = await filterObserverSearchResults(
+      db,
+      workspace.id,
+      getObserverTokenFromContext(c),
+      data.map((item) => ({
+        ...item,
+        channel_name: item.channel_name ?? undefined,
+      })),
+    );
+
+    return jsonOk(c, visible);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
 });
 
-consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/stats', requireWorkspaceRead('activity:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -68,7 +82,7 @@ consoleRoutes.get('/console/stats', requireAuth, rateLimit, async (c) => {
   }
 });
 
-consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/agents', requireWorkspaceRead('agents:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');
@@ -89,7 +103,7 @@ consoleRoutes.get('/console/agents', requireAuth, rateLimit, async (c) => {
   }
 });
 
-consoleRoutes.get('/console/costs', requireAuth, rateLimit, async (c) => {
+consoleRoutes.get('/console/costs', requireWorkspaceRead('activity:read'), rateLimit, async (c) => {
   try {
     const workspace = c.get('workspace');
     const db = c.get('db');

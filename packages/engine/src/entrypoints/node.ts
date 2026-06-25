@@ -146,7 +146,11 @@ export function startServer(options: StartServerOptions): RunningServer {
         }
 
         wss.handleUpgrade(req, socket, head, (ws) => {
-          const handle = runtime.realtime.attachWorkspaceSocket(authResult.workspace.id, toEngineSocket(ws));
+          const handle = runtime.realtime.attachWorkspaceSocket(
+            authResult.workspace.id,
+            toEngineSocket(ws),
+            authResult.observerToken,
+          );
           ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
           ws.on('close', () => { void handle.handleClose(); });
         });

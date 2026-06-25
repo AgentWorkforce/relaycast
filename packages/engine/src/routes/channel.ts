@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
@@ -9,6 +9,12 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
+import {
+  getChannelObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsChannel,
+  type ObserverToken,
+} from '../engine/observerToken.js';
 import {
   jsonCreated,
   jsonError,
@@ -41,6 +47,10 @@ const inviteChannelSchema = z.object({
 
 function channelNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'channel_not_found', `Channel "${name}" not found`);
+}
+
+function observerChannelAllowed(observer: ObserverToken | undefined, channel: { id?: string | null; name?: string | null }) {
+  return observerAllowsChannel(observer, channel);
 }
 
 // POST /v1/channels - create channel
@@ -97,19 +107,20 @@ channelRoutes.post(
 // GET /v1/channels - list channels
 channelRoutes.get(
   '/channels',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const includeArchived = c.req.query('include_archived') === 'true';
+      const observer = getObserverTokenFromContext(c);
       const channels = await channelEngine.listChannels(
         db,
         workspace.id,
         includeArchived,
       );
-      return jsonOk(c, channels);
+      return jsonOk(c, channels.filter((channel) => observerChannelAllowed(observer, channel)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -119,7 +130,7 @@ channelRoutes.get(
 // GET /v1/channels/:name - get channel with members
 channelRoutes.get(
   '/channels/:name',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
@@ -128,6 +139,9 @@ channelRoutes.get(
       const name = c.req.param('name');
       const channel = await channelEngine.getChannel(db, workspace.id, name);
       if (!channel) {
+        return channelNotFound(c, name);
+      }
+      if (!observerChannelAllowed(getObserverTokenFromContext(c), channel)) {
         return channelNotFound(c, name);
       }
       return jsonOk(c, channel);
@@ -378,13 +392,20 @@ channelRoutes.post(
 // GET /v1/channels/:name/members - list channel members
 channelRoutes.get(
   '/channels/:name/members',
-  requireAuth,
+  requireWorkspaceRead('channels:read'),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const channel = await getChannelObserverResource(db, workspace.id, name);
+        if (!channel || !observerChannelAllowed(observer, channel)) {
+          return channelNotFound(c, name);
+        }
+      }
       const members = await channelEngine.getMembers(
         db,
         workspace.id,

@@ -98,7 +98,7 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(401);
   });
 
-  it('accepts workspace observer realtime upgrades with workspace keys', async () => {
+  it('requires observer tokens for workspace realtime upgrades', async () => {
     const ws = await api('/v1/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -106,7 +106,16 @@ describe('node control WS upgrade auth (self-host)', () => {
     });
     const workspaceKey = ws.body.data.api_key as string;
 
-    expect(await tryUpgrade({}, `?token=${workspaceKey}`, '/v1/ws')).toBe(101);
+    const observer = await api('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ name: 'stream', scopes: ['stream:read'] }),
+    });
+    expect(observer.status).toBe(201);
+    const observerToken = observer.body.data.token as string;
+
+    expect(await tryUpgrade({}, `?token=${workspaceKey}`, '/v1/ws')).toBe(401);
+    expect(await tryUpgrade({}, `?token=${observerToken}`, '/v1/ws')).toBe(101);
   });
 
   it('rejects a missing or malformed token (401)', async () => {

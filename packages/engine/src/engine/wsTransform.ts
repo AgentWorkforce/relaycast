@@ -21,6 +21,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         id: stableRelaycastEventId(d.id as string),
         type: 'message.created',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
@@ -35,6 +36,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'message.updated':
       return {
         type: 'message.updated',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         message: {
           id: d.id as string,
@@ -48,6 +50,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         id: stableRelaycastEventId(d.id as string),
         type: 'thread.reply',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         parent_id: d.thread_id as string,
         message: {
@@ -61,6 +64,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'message.reacted':
       return {
         type: 'message.reacted',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         message_id: d.message_id as string,
         emoji: d.emoji as string,
         agent_name: d.agent_name as string,
@@ -150,24 +154,28 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'channel.created':
       return {
         type: 'channel.created',
+        ...(event.channel_id || d.id ? { channel_id: (event.channel_id ?? d.id) as string } : {}),
         channel: { name: (d.channel_name as string) ?? (d.name as string), topic: (d.topic as string | null) ?? null },
       };
 
     case 'channel.updated':
       return {
         type: 'channel.updated',
+        ...(event.channel_id || d.id ? { channel_id: (event.channel_id ?? d.id) as string } : {}),
         channel: { name: (d.channel_name as string) ?? (d.name as string), topic: (d.topic as string | null) ?? null },
       };
 
     case 'channel.archived':
       return {
         type: 'channel.archived',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: { name: d.channel_name as string },
       };
 
     case 'member.joined':
       return {
         type: 'member.joined',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         agent_name: d.agent_name as string,
       };
@@ -175,6 +183,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
     case 'member.left':
       return {
         type: 'member.left',
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         channel: d.channel_name as string,
         agent_name: d.agent_name as string,
       };

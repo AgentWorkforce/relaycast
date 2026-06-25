@@ -17,6 +17,7 @@
  */
 
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
+import type { ObserverToken } from './auth.js';
 
 /** A client-facing event payload, already passed through `transformForClient`. */
 export type EngineEvent = Record<string, unknown>;
@@ -79,6 +80,8 @@ export interface UpgradeArgs {
   origin: { client: string; version: string };
   /** Cloud-only origin-actor path (`{app}/{type}[/{name}]`); defaults to `'unknown'`. */
   originActor?: string;
+  /** Scoped observer principal for workspace stream sockets. */
+  observerToken?: ObserverToken;
 }
 
 export interface ConnectionRegistry {

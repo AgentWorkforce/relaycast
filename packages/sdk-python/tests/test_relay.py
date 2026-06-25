@@ -10,8 +10,11 @@ from relay_sdk import Relay, AsyncRelay, AgentClient, AsyncAgentClient
 from relay_sdk.models import (
     BindAgentToNodeRequest,
     CreateNodeRequest,
+    CreateObserverTokenRequest,
     HttpPushNodeDelivery,
     NodeDeliveryAuth,
+    ObserverTokenFilters,
+    UpdateObserverTokenRequest,
 )
 
 BASE = "https://test.relay.dev"
@@ -89,6 +92,21 @@ NODE_BINDING_DATA = {
     "priority": 5,
     "created_at": "2026-06-01T00:00:00Z",
     "updated_at": None,
+}
+
+OBSERVER_TOKEN_DATA = {
+    "id": "ot_1",
+    "name": "dashboard",
+    "description": None,
+    "scopes": ["stream:read", "messages:read"],
+    "filters": {"channel_names": ["general"], "include_dms": False},
+    "status": "active",
+    "expires_at": None,
+    "created_at": "2026-06-01T00:00:00Z",
+    "updated_at": None,
+    "revoked_at": None,
+    "last_used_at": None,
+    "token": "ot_live_secret",
 }
 
 
@@ -237,6 +255,39 @@ class TestRelay:
         assert unbind_route.called
 
     @respx.mock
+    def test_observer_tokens_create_list_update_rotate_and_revoke(self):
+        create_route = respx.post(f"{BASE}/v1/observer-tokens").mock(return_value=ok(OBSERVER_TOKEN_DATA))
+        r = Relay(KEY, base_url=BASE)
+        created = r.observer_tokens.create(
+            CreateObserverTokenRequest(
+                name="dashboard",
+                scopes=["stream:read", "messages:read"],
+                filters=ObserverTokenFilters(channel_names=["general"], include_dms=False),
+            )
+        )
+        assert created.token == "ot_live_secret"
+        assert created.filters.channel_names == ["general"]
+        create_body = json.loads(create_route.calls[0].request.content)
+        assert create_body["filters"] == {"channel_names": ["general"], "include_dms": False}
+
+        respx.get(f"{BASE}/v1/observer-tokens").mock(return_value=ok([OBSERVER_TOKEN_DATA]))
+        assert r.observer_tokens.list()[0].id == "ot_1"
+
+        respx.get(f"{BASE}/v1/observer-tokens/ot_1").mock(return_value=ok(OBSERVER_TOKEN_DATA))
+        assert r.observer_tokens.get("ot_1").name == "dashboard"
+
+        update_route = respx.patch(f"{BASE}/v1/observer-tokens/ot_1").mock(return_value=ok(OBSERVER_TOKEN_DATA))
+        r.observer_tokens.update("ot_1", UpdateObserverTokenRequest(scopes=["messages:read"]))
+        assert json.loads(update_route.calls[0].request.content) == {"scopes": ["messages:read"]}
+
+        respx.post(f"{BASE}/v1/observer-tokens/ot_1/rotate").mock(return_value=ok(OBSERVER_TOKEN_DATA))
+        assert r.observer_tokens.rotate("ot_1").token == "ot_live_secret"
+
+        revoke_route = respx.delete(f"{BASE}/v1/observer-tokens/ot_1").mock(return_value=httpx.Response(204))
+        assert r.observer_tokens.revoke("ot_1") is None
+        assert revoke_route.called
+
+    @respx.mock
     def test_agents_register_or_rotate_registers_new_agent(self):
         respx.post(f"{BASE}/v1/agents").mock(return_value=ok(CREATE_AGENT_DATA))
         r = Relay(KEY, base_url=BASE)
@@ -376,6 +427,17 @@ class TestAsyncRelay:
         assert binding.agent_name == "billing-agent"
         assert create_route.called
         assert bind_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_observer_tokens_async_create(self):
+        route = respx.post(f"{BASE}/v1/observer-tokens").mock(return_value=ok(OBSERVER_TOKEN_DATA))
+        async with AsyncRelay(KEY, base_url=BASE) as r:
+            created = await r.observer_tokens.create(
+                CreateObserverTokenRequest(name="dashboard", scopes=["stream:read"])
+            )
+        assert created.token == "ot_live_secret"
+        assert route.called
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("error_code", ["agent_already_exists", "name_conflict"])

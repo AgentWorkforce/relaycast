@@ -1,11 +1,17 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
+import {
+  getMessageObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsChannel,
+  observerAllowsConversation,
+} from '../engine/observerToken.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';
@@ -198,12 +204,25 @@ reactionRoutes.delete(
 // GET /v1/messages/:id/reactions - aggregated reactions
 reactionRoutes.get(
   '/messages/:id/reactions',
-  requireAuth,
+  requireWorkspaceRead(['messages:read', 'reactions:read']),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getMessageObserverResource(db, workspace.id, c.req.param('id'));
+        if (!resource) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+        const allowed = resource.conversation_id
+          ? observerAllowsConversation(observer, resource.conversation_id)
+          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name });
+        if (!allowed) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+      }
       const result = await reactionEngine.getReactions(
         db,
         workspace.id,

@@ -3,12 +3,16 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey } from '../middleware/auth.js';
+import { requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
 import * as tokenRotateEngine from '../engine/tokenRotate.js';
+import {
+  getObserverTokenFromContext,
+  observerAllowsConversation,
+} from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
@@ -211,7 +215,7 @@ workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) =
 });
 
 // GET /activity — recent activity feed
-workspaceRoutes.get('/activity', requireWorkspaceKey, rateLimit, async (c) => {
+workspaceRoutes.get('/activity', requireWorkspaceRead('activity:read', { allowAgent: false, allowNode: false }), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
@@ -229,11 +233,13 @@ workspaceRoutes.get('/activity', requireWorkspaceKey, rateLimit, async (c) => {
 });
 
 // GET /dm/conversations/all — workspace-wide DM list
-workspaceRoutes.get('/dm/conversations/all', requireWorkspaceKey, rateLimit, async (c) => {
+workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { allowAgent: false, allowNode: false }), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const conversations = await dmAllEngine.listAllDmConversations(db, workspace.id);
+    const observer = getObserverTokenFromContext(c);
+    const conversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
+      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -241,11 +247,14 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceKey, rateLimit, asy
 });
 
 // GET /dm/conversations/:conversation_id/messages — DM messages by conversation
-workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorkspaceKey, rateLimit, async (c) => {
+workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorkspaceRead('dms:read', { allowAgent: false, allowNode: false }), rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
     const conversationId = c.req.param('conversation_id');
+    if (!observerAllowsConversation(getObserverTokenFromContext(c), conversationId)) {
+      return jsonNotFound(c, 'dm_conversation_not_found', 'Conversation not found');
+    }
     const query = parsePaginationQuery(c);
     if (!query.ok) {
       return query.response;

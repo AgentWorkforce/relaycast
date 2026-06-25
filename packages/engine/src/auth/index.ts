@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { workspaces, agents, nodes } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 
@@ -37,6 +38,9 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       if (require === 'node') {
         return unauthorized('Node token required (nt_live_...)');
       }
+      if (require === 'observer') {
+        return unauthorized('Observer token required (ot_live_...)');
+      }
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
       if (!workspace) return unauthorized('Invalid API key');
       return { ok: true, workspace };
@@ -48,6 +52,9 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       }
       if (require === 'node') {
         return unauthorized('Node token required (nt_live_...)');
+      }
+      if (require === 'observer') {
+        return unauthorized('Observer token required (ot_live_...)');
       }
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
@@ -63,11 +70,25 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
       if (require === 'agent') {
         return unauthorized('Agent token required (at_live_...)');
       }
+      if (require === 'observer') {
+        return unauthorized('Observer token required (ot_live_...)');
+      }
       const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
       if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return { ok: true, workspace, node };
+    }
+
+    if (token.startsWith('ot_live_')) {
+      if (require !== 'observer') {
+        return unauthorized('Observer token cannot perform this operation', 'observer_token_forbidden');
+      }
+      const observerToken = await getActiveObserverTokenByHash(db, hash);
+      if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
+      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
+      if (!workspace) return unauthorized('Workspace not found');
+      return { ok: true, workspace, observerToken };
     }
 
     return unauthorized('Invalid token format');

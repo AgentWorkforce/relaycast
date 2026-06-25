@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
@@ -11,6 +11,13 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
+import {
+  getMessageObserverResource,
+  getObserverTokenFromContext,
+  hasObserverScope,
+  observerAllowsChannel,
+  observerAllowsConversation,
+} from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -185,7 +192,7 @@ messageRoutes.post(
 // GET /v1/channels/:name/messages - list messages
 messageRoutes.get(
   '/channels/:name/messages',
-  requireAuth,
+  requireWorkspaceRead('messages:read'),
   rateLimit,
   async (c) => {
     try {
@@ -194,6 +201,9 @@ messageRoutes.get(
       const channelName = c.req.param('name');
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
+      }
+      if (!observerAllowsChannel(getObserverTokenFromContext(c), channel)) {
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
@@ -219,13 +229,30 @@ messageRoutes.get(
 // GET /v1/messages/:id - get single message
 messageRoutes.get(
   '/messages/:id',
-  requireAuth,
+  requireWorkspaceRead(['messages:read', 'dms:read']),
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const messageId = c.req.param('id');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getMessageObserverResource(db, workspace.id, messageId);
+        if (!resource) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+        if (resource.conversation_id) {
+          if (!hasObserverScope(observer, 'dms:read') || !observerAllowsConversation(observer, resource.conversation_id)) {
+            return jsonNotFound(c, 'message_not_found', 'Message not found');
+          }
+        } else if (!hasObserverScope(observer, 'messages:read') || !observerAllowsChannel(observer, {
+          id: resource.channel_id,
+          name: resource.channel_name,
+        })) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+      }
       const message = await messageEngine.getMessage(db, workspace.id, messageId);
       if (!message) {
         return jsonNotFound(c, 'message_not_found', 'Message not found');

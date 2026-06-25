@@ -627,6 +627,62 @@ export type UpdateChannelRequest = Camelize<Raw.UpdateChannelRequest>;
 export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;
 export type UploadRequest = Camelize<Raw.UploadRequest>;
 export type UploadResponse = Camelize<Raw.UploadResponse>;
+
+export type ObserverScope =
+  | 'stream:read'
+  | 'messages:read'
+  | 'threads:read'
+  | 'dms:read'
+  | 'channels:read'
+  | 'search:read'
+  | 'agents:read'
+  | 'nodes:read'
+  | 'deliveries:read'
+  | 'activity:read'
+  | 'files:read'
+  | 'reactions:read';
+
+export interface ObserverTokenFilters {
+  channelIds?: string[];
+  channelNames?: string[];
+  includeDms?: boolean;
+  dmConversationIds?: string[];
+  agentIds?: string[];
+  eventTypes?: string[];
+  createdAfter?: string;
+}
+
+export interface CreateObserverTokenRequest {
+  name: string;
+  description?: string | null;
+  scopes: ObserverScope[];
+  filters?: ObserverTokenFilters;
+  expiresAt?: string | null;
+}
+
+export interface UpdateObserverTokenRequest {
+  name?: string;
+  description?: string | null;
+  scopes?: ObserverScope[];
+  filters?: ObserverTokenFilters;
+  expiresAt?: string | null;
+}
+
+export interface ObserverToken {
+  id: string;
+  name: string;
+  description: string | null;
+  scopes: ObserverScope[];
+  filters: ObserverTokenFilters;
+  status: string;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  token?: string;
+}
+
 export type ActionInvokedEvent = Camelize<Raw.ActionInvokedEvent>;
 export type ActionCompletedEvent = Camelize<Raw.ActionCompletedEvent>;
 export type ActionDeniedEvent = Camelize<Raw.ActionDeniedEvent>;

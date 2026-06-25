@@ -372,6 +372,80 @@ describe('node adapter conformance', () => {
       ]);
     });
 
+    it('creates a mention delivery for muted members mentioned in thread replies', async () => {
+      const ws = await createWorkspace(stack.app, 'muted-thread-mention-delivery-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const createRes = await stack.app.request('/v1/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'thread-mentions-chat' }),
+      });
+      expect(createRes.status).toBeLessThan(300);
+      for (const token of [alice.token, bob.token]) {
+        const joinRes = await stack.app.request('/v1/channels/thread-mentions-chat/join', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(joinRes.status).toBeLessThan(300);
+      }
+
+      const muteRes = await stack.app.request('/v1/channels/thread-mentions-chat/mute', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(muteRes.status).toBeLessThan(300);
+
+      const parentRes = await stack.app.request('/v1/channels/thread-mentions-chat/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'parent message' }),
+      });
+      expect(parentRes.status).toBeLessThan(300);
+      const parent = await parentRes.json() as { data: { id: string } };
+
+      const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+      bobSock.received.length = 0;
+
+      const replyRes = await stack.app.request(`/v1/messages/${parent.data.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: '@bob please see this reply' }),
+      });
+      expect(replyRes.status).toBeLessThan(300);
+      const reply = await replyRes.json() as { data: { id: string } };
+
+      const rows = await stack.runtime.deps.db
+        .select({ id: deliveries.id, reason: deliveries.reason })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, reply.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(rows).toEqual([
+        expect.objectContaining({ reason: 'mention' }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(deliverFramesOfType(bobSock, 'thread.reply')).toEqual([
+        expect.objectContaining({
+          type: 'deliver',
+          msg_id: reply.data.id,
+          payload: expect.objectContaining({
+            type: 'thread.reply',
+            data: expect.objectContaining({
+              id: reply.data.id,
+              channel_name: 'thread-mentions-chat',
+              from_name: 'alice',
+              text: '@bob please see this reply',
+            }),
+          }),
+        }),
+      ]);
+    });
+
     it('replays queued direct-node deliveries when the agent socket reconnects', async () => {
       const ws = await createWorkspace(stack.app, 'direct-node-reconnect-ws');
       const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
