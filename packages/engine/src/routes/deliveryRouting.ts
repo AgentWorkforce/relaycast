@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { AppEnv } from '../env.js';
+import type { AppEnv, EngineRuntime } from '../env.js';
 import * as deliveryEngine from '../engine/delivery.js';
 import { buildDeliverFrame, buildDeliverPayload } from '../engine/deliveryWire.js';
 import type {
@@ -9,8 +9,18 @@ import type {
 } from '../engine/deliveryWrites.js';
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
 import { hmacSha256Hex } from '../lib/crypto.js';
+import { isSafeExternalUrl } from '../lib/ssrf.js';
+import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
+import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
+import type { EngineDb, EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 type HonoContext = Context<AppEnv>;
+type RoutingEngine = EngineRuntime | EngineDeps;
+type RoutingContext = {
+  db: EngineDb;
+  workspaceId: string;
+  engine: RoutingEngine;
+};
 
 type DeliveryTarget = {
   locationType: string;
@@ -22,20 +32,60 @@ type DeliveryTarget = {
 
 const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
 
+function routingContextFromHono(c: HonoContext): RoutingContext {
+  return {
+    db: c.get('db'),
+    workspaceId: c.get('workspace').id,
+    engine: c.get('engine'),
+  };
+}
+
 function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
 
-async function resolveLiveLocations(
-  c: HonoContext,
+function strictExternalUrl(engine: RoutingEngine): boolean {
+  return engine.config?.environment !== 'test';
+}
+
+function buildEvent(
+  type: string,
   workspaceId: string,
+  data: Record<string, unknown>,
+): WsEvent {
+  return {
+    type,
+    workspace_id: workspaceId,
+    data,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+async function fanoutToAgentsForContext(
+  ctx: RoutingContext,
+  agentIds: string[],
+  type: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
+  const unique = [...new Set(agentIds)];
+  const tasks: Promise<unknown>[] = [
+    ctx.engine.realtime.deliverToAgents({ workspaceId: ctx.workspaceId, agentIds: unique, event: payload }),
+  ];
+  if (await isWorkspaceStreamEnabled(ctx.engine.kv, ctx.workspaceId, ctx.engine.config?.workspaceStreamEnabled ?? false)) {
+    tasks.push(ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }));
+  }
+  await Promise.allSettled(tasks);
+}
+
+async function resolveLiveLocations(
+  ctx: RoutingContext,
   deliveries: DeliveryFanoutRecord[],
 ): Promise<Map<string, DeliveryTarget>> {
   const uniqueAgentIds = [...new Set(deliveries.map((delivery) => delivery.agentId))];
   if (uniqueAgentIds.length === 0) return new Map();
 
-  const db = c.get('db');
-  const bindings = await db
+  const bindings = await ctx.db
     .select({
       agentId: agentNodeBindings.agentId,
       nodeId: agentNodeBindings.nodeId,
@@ -51,7 +101,7 @@ async function resolveLiveLocations(
     ))
     .innerJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
     .where(and(
-      eq(agentNodeBindings.workspaceId, workspaceId),
+      eq(agentNodeBindings.workspaceId, ctx.workspaceId),
       eq(agentNodeBindings.status, 'active'),
       inArray(agentNodeBindings.agentId, uniqueAgentIds),
     ))
@@ -69,7 +119,7 @@ async function resolveLiveLocations(
     });
   }
 
-  const fallbackRows = await db
+  const fallbackRows = await ctx.db
     .select({
       id: agents.id,
       locationType: agents.locationType,
@@ -80,7 +130,7 @@ async function resolveLiveLocations(
     })
     .from(agents)
     .leftJoin(nodes, eq(agents.locationNodeId, nodes.id))
-    .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.id, uniqueAgentIds)));
+    .where(and(eq(agents.workspaceId, ctx.workspaceId), inArray(agents.id, uniqueAgentIds)));
 
   for (const row of fallbackRows) {
     if (byAgent.has(row.id)) continue;
@@ -105,8 +155,29 @@ function publicHeaders(headers: Record<string, unknown> | undefined): Record<str
   return result;
 }
 
+async function recordHttpPushRetry(
+  ctx: RoutingContext,
+  deliveryId: string,
+  error: string,
+  opts: { incrementAttempts?: boolean } = {},
+): Promise<void> {
+  await ctx.db
+    .update(deliveryRows)
+    .set({
+      ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
+      lastDispatchError: error,
+      nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(deliveryRows.workspaceId, ctx.workspaceId),
+      eq(deliveryRows.id, deliveryId),
+      eq(deliveryRows.status, 'queued'),
+    ));
+}
+
 async function dispatchHttpPush(args: {
-  c: HonoContext;
+  ctx: RoutingContext;
   delivery: DeliveryFanoutRecord;
   target: DeliveryTarget;
   eventType: string;
@@ -115,15 +186,11 @@ async function dispatchHttpPush(args: {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) {
-    await args.c.get('db')
-      .update(deliveryRows)
-      .set({
-        dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
-        lastDispatchError: 'invalid http_push delivery config: missing url',
-        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
-        updatedAt: new Date(),
-      })
-      .where(eq(deliveryRows.id, args.delivery.id));
+    await recordHttpPushRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
+    return 'failed';
+  }
+  if (!isSafeExternalUrl(url, { strict: strictExternalUrl(args.ctx.engine) })) {
+    await recordHttpPushRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
     return 'failed';
   }
 
@@ -133,7 +200,7 @@ async function dispatchHttpPush(args: {
   const timestamp = new Date().toISOString();
   const body = JSON.stringify({
     type: args.eventType,
-    workspace_id: args.c.get('workspace').id,
+    workspace_id: args.ctx.workspaceId,
     delivery_id: args.delivery.id,
     message_id: args.delivery.messageId,
     agent_id: args.delivery.agentId,
@@ -167,44 +234,44 @@ async function dispatchHttpPush(args: {
   }
 
   try {
-    await args.c.get('db')
+    const started = await args.ctx.db
       .update(deliveryRows)
       .set({
         dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
         lastDispatchError: null,
-        nextAttemptAt: null,
+        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
-      .where(eq(deliveryRows.id, args.delivery.id));
+      .where(and(
+        eq(deliveryRows.workspaceId, args.ctx.workspaceId),
+        eq(deliveryRows.id, args.delivery.id),
+        eq(deliveryRows.status, 'queued'),
+      ))
+      .returning({ id: deliveryRows.id });
+    if (started.length === 0) return 'failed';
 
     const response = await globalThis.fetch(url, {
       method: 'POST',
       headers,
       body,
+      redirect: 'error',
       signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
-      await args.c.get('db')
-        .update(deliveryRows)
-        .set({
-          lastDispatchError: `HTTP ${response.status}`,
-          nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
-          updatedAt: new Date(),
-        })
-        .where(eq(deliveryRows.id, args.delivery.id));
+      await recordHttpPushRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);
       return 'failed';
     }
 
     if (ackMode === 'on_2xx') {
       const acked = await deliveryEngine.ackDelivery(
-        args.c.get('db'),
-        args.c.get('workspace').id,
+        args.ctx.db,
+        args.ctx.workspaceId,
         args.delivery.agentId,
         args.delivery.id,
       );
       if (acked?.changed) {
-        await fanoutToAgents(args.c, [args.delivery.agentId], 'delivery.delivered', {
+        await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
           delivery_id: args.delivery.id,
           message_id: args.delivery.messageId,
         });
@@ -218,13 +285,13 @@ async function dispatchHttpPush(args: {
         const responseBody = await response.json().catch(() => null) as { ack?: unknown; delivery_status?: unknown } | null;
         if (responseBody?.ack === true || responseBody?.delivery_status === 'acked') {
           const acked = await deliveryEngine.ackDelivery(
-            args.c.get('db'),
-            args.c.get('workspace').id,
+            args.ctx.db,
+            args.ctx.workspaceId,
             args.delivery.agentId,
             args.delivery.id,
           );
           if (acked?.changed) {
-            await fanoutToAgents(args.c, [args.delivery.agentId], 'delivery.delivered', {
+            await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
               delivery_id: args.delivery.id,
               message_id: args.delivery.messageId,
             });
@@ -236,16 +303,67 @@ async function dispatchHttpPush(args: {
 
     return 'delivered';
   } catch (err) {
-    await args.c.get('db')
-      .update(deliveryRows)
-      .set({
-        lastDispatchError: err instanceof Error ? err.message : 'HTTP delivery failed',
-        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
-        updatedAt: new Date(),
-      })
-      .where(eq(deliveryRows.id, args.delivery.id));
+    await recordHttpPushRetry(args.ctx, args.delivery.id, err instanceof Error ? err.message : 'HTTP delivery failed');
     return 'failed';
   }
+}
+
+async function routeOneDeliveryOutcome(
+  ctx: RoutingContext,
+  liveLocations: Map<string, DeliveryTarget>,
+  delivery: DeliveryFanoutRecord,
+  eventType: string,
+  eventData: Record<string, unknown>,
+): Promise<void> {
+  const liveLocation = liveLocations.get(delivery.agentId);
+  const locationType = liveLocation?.locationType ?? delivery.locationType;
+  const locationNodeId = liveLocation?.locationNodeId ?? delivery.locationNodeId;
+  const nodeKind = liveLocation?.nodeKind ?? (locationNodeId ? 'fleet_ws' : null);
+
+  if (locationType === 'via_node' && locationNodeId && nodeKind === 'fleet_ws') {
+    const sent = await ctx.engine.nodeConnections.sendToNode(ctx.workspaceId, locationNodeId, buildDeliverFrame({
+      agent: delivery.agentName,
+      msg_id: delivery.messageId,
+      seq: delivery.seq,
+      mode: wireMode(delivery.mode),
+      payload: buildDeliverPayload(eventType, eventData),
+    }));
+    if (sent) {
+      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+    }
+    return;
+  }
+
+  if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && liveLocation) {
+    const result = await dispatchHttpPush({ ctx, delivery, target: liveLocation, eventType, eventData });
+    if (result === 'delivered') {
+      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+    }
+    return;
+  }
+
+  await fanoutToAgentsForContext(ctx, [delivery.agentId], 'delivery.accepted', {
+    delivery_id: delivery.id,
+    message_id: delivery.messageId,
+    channel_id: (eventData.channel_id as string | undefined) ?? null,
+    reason: delivery.reason,
+    seq: delivery.seq,
+  });
+  await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+}
+
+async function routeDeliveryOutcomesForContext(
+  ctx: RoutingContext,
+  deliveries: DeliveryFanoutRecord[],
+  eventType: string,
+  eventData: Record<string, unknown>,
+): Promise<void> {
+  if (deliveries.length === 0) return;
+
+  const liveLocations = await resolveLiveLocations(ctx, deliveries);
+  await Promise.allSettled(deliveries.map((delivery) => (
+    routeOneDeliveryOutcome(ctx, liveLocations, delivery, eventType, eventData)
+  )));
 }
 
 export async function routeDeliveryOutcomes(
@@ -254,48 +372,23 @@ export async function routeDeliveryOutcomes(
   eventType: string,
   eventData: Record<string, unknown>,
 ): Promise<void> {
-  if (deliveries.length === 0) return;
+  await routeDeliveryOutcomesForContext(routingContextFromHono(c), deliveries, eventType, eventData);
+}
 
-  const workspaceId = c.get('workspace').id;
-  const db = c.get('db');
-  const deliveredIds: string[] = [];
-  const liveLocations = await resolveLiveLocations(c, workspaceId, deliveries);
-
-  for (const delivery of deliveries) {
-    const liveLocation = liveLocations.get(delivery.agentId);
-    const locationType = liveLocation?.locationType ?? delivery.locationType;
-    const locationNodeId = liveLocation?.locationNodeId ?? delivery.locationNodeId;
-    const nodeKind = liveLocation?.nodeKind ?? (locationNodeId ? 'fleet_ws' : null);
-
-    if (locationType === 'via_node' && locationNodeId && nodeKind === 'fleet_ws') {
-      const sent = await c.get('engine').nodeConnections.sendToNode(workspaceId, locationNodeId, buildDeliverFrame({
-        agent: delivery.agentName,
-        msg_id: delivery.messageId,
-        seq: delivery.seq,
-        mode: wireMode(delivery.mode),
-        payload: buildDeliverPayload(eventType, eventData),
-      }));
-      if (sent) deliveredIds.push(delivery.id);
-      continue;
-    }
-
-    if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && liveLocation) {
-      const result = await dispatchHttpPush({ c, delivery, target: liveLocation, eventType, eventData });
-      if (result === 'delivered') deliveredIds.push(delivery.id);
-      continue;
-    }
-
-    deliveredIds.push(delivery.id);
-    await fanoutToAgents(c, [delivery.agentId], 'delivery.accepted', {
-      delivery_id: delivery.id,
-      message_id: delivery.messageId,
-      channel_id: (eventData.channel_id as string | undefined) ?? null,
-      reason: delivery.reason,
-      seq: delivery.seq,
-    });
-  }
-
-  await deliveryEngine.markDeliveriesDelivered(db, workspaceId, deliveredIds);
+export async function sweepDueHttpPushDeliveries(
+  engine: EngineDeps,
+  opts: { workspaceId?: string; now?: Date; limit?: number } = {},
+): Promise<number> {
+  const due = await deliveryEngine.fetchDueHttpPushDeliveryEvents(engine.db, opts);
+  await Promise.allSettled(due.map((event) => (
+    routeDeliveryOutcomesForContext(
+      { db: engine.db, workspaceId: event.workspaceId, engine },
+      [event.delivery],
+      event.eventType,
+      event.eventData,
+    )
+  )));
+  return due.length;
 }
 
 export async function notifyDeliveryRejections(

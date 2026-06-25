@@ -15,6 +15,7 @@ import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions }
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
 
 export {
   InProcessRealtime,
@@ -139,6 +140,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const sweepTimer = setInterval(() => {
     void sweepOfflineNodes(db, realtime).catch(() => {});
     void sweepTimedOutInvocations(db, realtime).catch(() => {});
+    void sweepDueHttpPushDeliveries(deps).catch(() => {});
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();
 

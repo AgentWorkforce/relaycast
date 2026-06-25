@@ -835,6 +835,7 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
     index('idx_deliveries_expires').on(table.workspaceId, table.status, table.expiresAt),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
+    index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],
 );
 

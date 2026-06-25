@@ -16,13 +16,14 @@ export function makeNodeStack(options?: {
   mailbox?: EngineConfig['mailbox'];
   /** Phase 6 rollout flag default. Defaults to true so node tests run unchanged. */
   fleetNodesEnabled?: boolean;
+  environment?: string;
 }): TestStack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
     migrate: true,
     config: {
-      environment: 'test',
+      environment: options?.environment ?? 'test',
       workspaceStreamEnabled: true,
       fleetNodesEnabled: options?.fleetNodesEnabled ?? true,
       mailbox: options?.mailbox,

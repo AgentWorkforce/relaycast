@@ -70,19 +70,32 @@ function publicNode(row: NodeRow) {
   };
 }
 
+const SENSITIVE_DELIVERY_KEY = /api[_-]?key|authorization|cookie|credential|headers|password|private[_-]?key|secret|token/i;
+
+function redactDeliveryValue(key: string | null, value: unknown): unknown {
+  if (key && /^headers$/i.test(key) && value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.fromEntries(Object.keys(value as Record<string, unknown>).map((name) => [name, '[redacted]']));
+  }
+  if (key && SENSITIVE_DELIVERY_KEY.test(key)) {
+    return '[redacted]';
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactDeliveryValue(null, item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+        childKey,
+        redactDeliveryValue(childKey, childValue),
+      ]),
+    );
+  }
+  return value;
+}
+
 function redactDeliveryConfig(config: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!config) return null;
-  const copy = structuredClone(config) as Record<string, unknown>;
-  const auth = copy.auth;
-  if (auth && typeof auth === 'object' && !Array.isArray(auth)) {
-    const authCopy = auth as Record<string, unknown>;
-    if ('secret' in authCopy) authCopy.secret = '[redacted]';
-    if ('token' in authCopy) authCopy.token = '[redacted]';
-    if (authCopy.headers && typeof authCopy.headers === 'object' && !Array.isArray(authCopy.headers)) {
-      authCopy.headers = Object.fromEntries(Object.keys(authCopy.headers as Record<string, unknown>).map((name) => [name, '[redacted]']));
-    }
-  }
-  return copy;
+  return redactDeliveryValue(null, config) as Record<string, unknown>;
 }
 
 function defaultAdapter(kind: NodeKind, deliveryConfig?: Record<string, unknown> | null): string {
@@ -417,6 +430,49 @@ async function upsertAgentNodeBinding(
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
 }
 
+async function activeBindingNodeIdsForAgent(db: Db, workspaceId: string, agentId: string): Promise<string[]> {
+  const rows = await db
+    .select({ nodeId: agentNodeBindings.nodeId })
+    .from(agentNodeBindings)
+    .where(and(
+      eq(agentNodeBindings.workspaceId, workspaceId),
+      eq(agentNodeBindings.agentId, agentId),
+      eq(agentNodeBindings.status, 'active'),
+    ));
+  return rows.map((row) => row.nodeId);
+}
+
+async function reserveNodeAgentSlot(db: Db, workspaceId: string, node: NodeRow): Promise<void> {
+  const [reserved] = await db
+    .update(nodes)
+    .set({
+      activeAgents: sql`${nodes.activeAgents} + 1`,
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      eq(nodes.id, node.id),
+      or(eq(nodes.maxAgents, 0), sql`${nodes.activeAgents} < ${nodes.maxAgents}`),
+    ))
+    .returning({ id: nodes.id });
+  if (!reserved) {
+    throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+  }
+}
+
+async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: string[]): Promise<void> {
+  const uniqueNodeIds = [...new Set(nodeIds)];
+  if (uniqueNodeIds.length === 0) return;
+  await db
+    .update(nodes)
+    .set({
+      activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+    })
+    .where(and(
+      eq(nodes.workspaceId, workspaceId),
+      inArray(nodes.id, uniqueNodeIds),
+    ));
+}
+
 function serializeBinding(row: {
   id: string;
   agentId: string;
@@ -445,25 +501,6 @@ function serializeBinding(row: {
   };
 }
 
-async function assertNodeCapacity(db: Db, workspaceId: string, node: NodeRow, agentId: string) {
-  if (node.maxAgents === 0) return;
-  const active = await db
-    .select({
-      id: agentNodeBindings.id,
-      agentId: agentNodeBindings.agentId,
-    })
-    .from(agentNodeBindings)
-    .where(and(
-      eq(agentNodeBindings.workspaceId, workspaceId),
-      eq(agentNodeBindings.nodeId, node.id),
-      eq(agentNodeBindings.status, 'active'),
-    ));
-  if (active.some((binding) => binding.agentId === agentId)) return;
-  if (active.length >= node.maxAgents) {
-    throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
-  }
-}
-
 export async function bindAgentToNode(
   db: Db,
   workspaceId: string,
@@ -481,11 +518,25 @@ export async function bindAgentToNode(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
     if (!agent) throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
 
-    await assertNodeCapacity(tx, workspaceId, node, agent.id);
-    await upsertAgentNodeBinding(tx, workspaceId, agent, node.id, {
-      sessionRef: opts.session_ref ?? null,
-      priority: opts.priority ?? 0,
-    });
+    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, agent.id);
+    const targetWasActive = activeNodeIds.includes(node.id);
+    let reservedTargetSlot = false;
+    try {
+      if (!targetWasActive) {
+        await reserveNodeAgentSlot(tx, workspaceId, node);
+        reservedTargetSlot = true;
+      }
+      await upsertAgentNodeBinding(tx, workspaceId, agent, node.id, {
+        sessionRef: opts.session_ref ?? null,
+        priority: opts.priority ?? 0,
+      });
+      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((nodeId) => nodeId !== node.id));
+    } catch (err) {
+      if (reservedTargetSlot) {
+        await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
+      }
+      throw err;
+    }
 
     const [binding] = await tx
       .select({
@@ -536,6 +587,7 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
       .returning({ id: agentNodeBindings.id });
 
     if (updated.length === 0) return false;
+    await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
 
     if (agent.locationNodeId === node.id) {
       await tx

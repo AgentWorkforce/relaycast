@@ -580,8 +580,9 @@ components:
           default: manual
           description: >
             `manual` leaves the delivery delivered until the recipient calls `/deliveries/:id/ack`;
-            `on_2xx` acks on any 2xx HTTP response; `response` acks when the response body declares
-            an ack, for example `{ "ack": true }`.
+            HTTP push receivers must authenticate that ack with the bound agent token. `on_2xx`
+            acks on any 2xx HTTP response; `response` acks when the response body declares an ack,
+            for example `{ "ack": true }`.
         auth:
           $ref: '#/components/schemas/NodeDeliveryAuth'
 

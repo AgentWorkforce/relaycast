@@ -72,7 +72,7 @@ function normalizeDelivery(kind: z.infer<typeof nodeKindSchema>, delivery: Recor
 
 function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
   const environment = c.get('engine').config.environment;
-  return environment !== 'test' && environment !== 'development';
+  return environment !== 'test';
 }
 
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)

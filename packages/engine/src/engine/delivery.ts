@@ -1,4 +1,4 @@
-import { eq, and, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
+import { eq, and, not, asc, isNull, isNotNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -7,12 +7,36 @@ import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 import { toIso } from '../lib/serialize.js';
-import { fetchAttachmentsBatch } from './attachments.js';
+import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
+import type { DeliveryFanoutRecord } from './deliveryWrites.js';
 
 type Db = ReturnType<typeof getDb>;
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
+type PendingDeliveryRow = {
+  delivery: DeliveryRow;
+  recipientAgentName: string;
+  body: string;
+  blocks: unknown;
+  metadata: unknown;
+  hasAttachments: boolean;
+  threadId: string | null;
+  createdAt: Date;
+  channelId: string;
+  channelName: string;
+  conversationId: string | null;
+  dmType: string | null;
+  senderAgentId: string | null;
+  senderAgentName: string | null;
+};
+
+export interface RoutableDeliveryEvent {
+  workspaceId: string;
+  delivery: DeliveryFanoutRecord;
+  eventType: string;
+  eventData: Record<string, unknown>;
+}
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
@@ -313,6 +337,8 @@ async function ackRows(
         .update(deliveries)
         .set({
           status: TERMINAL_SUCCESS_STATUS,
+          nextAttemptAt: null,
+          lastDispatchError: null,
           ackedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -383,6 +409,8 @@ export async function markDeliveriesDelivered(
     .update(deliveries)
     .set({
       status: 'delivered',
+      nextAttemptAt: null,
+      lastDispatchError: null,
       deliveredAt: new Date(),
       updatedAt: new Date(),
     })
@@ -467,6 +495,215 @@ function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
 
+function buildRoutableDeliveryEvent(
+  row: PendingDeliveryRow,
+  attachments: AttachmentRow[],
+): { eventType: string; eventData: Record<string, unknown> } {
+  const senderName = row.senderAgentName ?? 'unknown';
+  const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
+  // Thread replies route as `thread.reply` in the live path even inside a DM /
+  // group DM (see routes/thread.ts fanout), so a missed thread reply must
+  // replay with the same event type/shape. Check `threadId` before `dmType`.
+  const eventType = row.threadId
+    ? 'thread.reply'
+    : (row.dmType
+      ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received')
+      : 'message.created');
+
+  if (eventType === 'dm.received') {
+    return {
+      eventType,
+      eventData: buildDmReceivedEventData({
+        conversation_id: row.conversationId,
+        message: {
+          id: row.delivery.messageId,
+          agent_id: row.senderAgentId,
+          agent_name: senderName,
+          text: row.body,
+          injection_mode: injectionMode,
+          attachments,
+        },
+        created_at: row.createdAt.toISOString(),
+        id: row.delivery.messageId,
+        from_agent_id: row.senderAgentId,
+        to: row.recipientAgentName,
+        text: row.body,
+        injection_mode: injectionMode,
+        attachments,
+      }, { fromName: senderName }),
+    };
+  }
+
+  if (eventType === 'group_dm.received') {
+    return {
+      eventType,
+      eventData: buildGroupDmReceivedEventData({
+        conversation_id: row.conversationId,
+        message: {
+          id: row.delivery.messageId,
+          agent_id: row.senderAgentId,
+          agent_name: senderName,
+          text: row.body,
+          injection_mode: injectionMode,
+          attachments,
+        },
+        created_at: row.createdAt.toISOString(),
+        id: row.delivery.messageId,
+        agent_id: row.senderAgentId,
+        text: row.body,
+        injection_mode: injectionMode,
+        attachments,
+      }, { fromName: senderName }),
+    };
+  }
+
+  if (eventType === 'thread.reply') {
+    return {
+      eventType,
+      eventData: buildThreadReplyEventData({
+        id: row.delivery.messageId,
+        channel_id: row.channelId,
+        channel_name: row.channelName,
+        agent_id: row.senderAgentId,
+        agent_name: senderName,
+        thread_id: row.threadId,
+        text: row.body,
+        blocks: (row.blocks as unknown[] | null) || null,
+        metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
+        has_attachments: row.hasAttachments,
+        created_at: row.createdAt.toISOString(),
+      }, { channelName: row.channelName, fromName: senderName }),
+    };
+  }
+
+  const mentions = [...row.body.matchAll(/@(\w+)/g)].map((match) => match[1]);
+  return {
+    eventType,
+    eventData: buildMessageCreatedEventData({
+      id: row.delivery.messageId,
+      channel_id: row.channelId,
+      agent_id: row.senderAgentId,
+      agent_name: senderName,
+      text: row.body,
+      blocks: (row.blocks as unknown[] | null) || null,
+      metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
+      has_attachments: row.hasAttachments,
+      thread_id: row.threadId,
+      created_at: row.createdAt.toISOString(),
+      mentions,
+      attachments,
+      injection_mode: injectionMode,
+    }, { channelName: row.channelName, fromName: senderName, mode: injectionMode }),
+  };
+}
+
+function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRecord {
+  return {
+    id: row.delivery.id,
+    agentId: row.delivery.agentId,
+    agentName: row.recipientAgentName,
+    messageId: row.delivery.messageId,
+    seq: row.delivery.seq,
+    mode: row.delivery.mode,
+    reason: row.delivery.reason ?? 'message',
+    status: row.delivery.status,
+    locationType: row.delivery.locationType,
+    locationNodeId: row.delivery.locationNodeId,
+    routeNodeId: row.delivery.routeNodeId,
+    routeNodeKind: row.delivery.routeNodeKind,
+    deliveryAdapter: row.delivery.deliveryAdapter,
+  };
+}
+
+export async function fetchDueHttpPushDeliveryEvents(
+  db: Db,
+  opts: { workspaceId?: string; now?: Date; limit?: number } = {},
+): Promise<RoutableDeliveryEvent[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const now = opts.now ?? new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const conditions = [
+    eq(deliveries.status, 'queued'),
+    eq(deliveries.routeNodeKind, 'http_push'),
+    isNotNull(deliveries.nextAttemptAt),
+    lte(deliveries.nextAttemptAt, now),
+    sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
+  ];
+  if (opts.workspaceId) {
+    conditions.push(eq(deliveries.workspaceId, opts.workspaceId));
+  }
+
+  const rows = await db
+    .select({
+      delivery: deliveries,
+      recipientAgentName: agents.name,
+      body: messages.body,
+      blocks: messages.blocks,
+      metadata: messages.metadata,
+      hasAttachments: messages.hasAttachments,
+      threadId: messages.threadId,
+      createdAt: messages.createdAt,
+      channelId: messages.channelId,
+      channelName: channels.name,
+      conversationId: dmConversations.id,
+      dmType: dmConversations.dmType,
+      senderAgentId: messages.agentId,
+      senderAgentName: sql<string | null>`(
+        SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
+      )`,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+    .where(and(...conditions))
+    .orderBy(asc(deliveries.nextAttemptAt), asc(deliveries.createdAt), asc(deliveries.id))
+    .limit(limit);
+
+  if (!opts.workspaceId && rows.length > 0) {
+    const workspaceAttachments = new Map<string, AttachmentRow[]>();
+    for (const workspaceId of [...new Set(rows.map((row) => row.delivery.workspaceId))]) {
+      const workspaceMessageIds = rows
+        .filter((row) => row.delivery.workspaceId === workspaceId)
+        .map((row) => row.delivery.messageId);
+      const batch = await fetchAttachmentsBatch(db, workspaceId, [...new Set(workspaceMessageIds)]);
+      for (const [messageId, attachments] of batch) workspaceAttachments.set(messageId, attachments);
+    }
+    return rows.map((row) => {
+      const pendingRow = row as PendingDeliveryRow;
+      const { eventType, eventData } = buildRoutableDeliveryEvent(
+        pendingRow,
+        workspaceAttachments.get(row.delivery.messageId) ?? [],
+      );
+      return {
+        workspaceId: row.delivery.workspaceId,
+        delivery: fanoutRecordFromDeliveryRow(pendingRow),
+        eventType,
+        eventData,
+      };
+    });
+  }
+
+  const attachmentsByMessageId = opts.workspaceId
+    ? await fetchAttachmentsBatch(db, opts.workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))])
+    : new Map<string, AttachmentRow[]>();
+
+  return rows.map((row) => {
+    const pendingRow = row as PendingDeliveryRow;
+    const { eventType, eventData } = buildRoutableDeliveryEvent(
+      pendingRow,
+      attachmentsByMessageId.get(row.delivery.messageId) ?? [],
+    );
+    return {
+      workspaceId: row.delivery.workspaceId,
+      delivery: fanoutRecordFromDeliveryRow(pendingRow),
+      eventType,
+      eventData,
+    };
+  });
+}
+
 export async function deliverPendingToNode(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -513,88 +750,8 @@ export async function deliverPendingToNode(
 
   const deliveredIds: string[] = [];
   for (const row of rows) {
-    const senderName = row.senderAgentName ?? 'unknown';
     const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
-    const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
-    // Thread replies route as `thread.reply` in the live path even inside a DM /
-    // group DM (see routes/thread.ts fanout), so a missed thread reply must
-    // replay with the same event type/shape. Check `threadId` before `dmType`.
-    const eventType = row.threadId
-      ? 'thread.reply'
-      : (row.dmType
-        ? (row.dmType === 'group' ? 'group_dm.received' : 'dm.received')
-        : 'message.created');
-
-    let eventData: Record<string, unknown>;
-    if (eventType === 'dm.received') {
-      eventData = buildDmReceivedEventData({
-        conversation_id: row.conversationId,
-        message: {
-          id: row.delivery.messageId,
-          agent_id: row.senderAgentId,
-          agent_name: senderName,
-          text: row.body,
-          injection_mode: injectionMode,
-          attachments,
-        },
-        created_at: row.createdAt.toISOString(),
-        id: row.delivery.messageId,
-        from_agent_id: row.senderAgentId,
-        to: row.recipientAgentName,
-        text: row.body,
-        injection_mode: injectionMode,
-        attachments,
-      }, { fromName: senderName });
-    } else if (eventType === 'group_dm.received') {
-      eventData = buildGroupDmReceivedEventData({
-        conversation_id: row.conversationId,
-        message: {
-          id: row.delivery.messageId,
-          agent_id: row.senderAgentId,
-          agent_name: senderName,
-          text: row.body,
-          injection_mode: injectionMode,
-          attachments,
-        },
-        created_at: row.createdAt.toISOString(),
-        id: row.delivery.messageId,
-        agent_id: row.senderAgentId,
-        text: row.body,
-        injection_mode: injectionMode,
-        attachments,
-      }, { fromName: senderName });
-    } else if (eventType === 'thread.reply') {
-      eventData = buildThreadReplyEventData({
-        id: row.delivery.messageId,
-        channel_id: row.channelId,
-        channel_name: row.channelName,
-        agent_id: row.senderAgentId,
-        agent_name: senderName,
-        thread_id: row.threadId,
-        text: row.body,
-        blocks: (row.blocks as unknown[] | null) || null,
-        metadata: publicMessageMetadata(row.metadata),
-        has_attachments: row.hasAttachments,
-        created_at: row.createdAt.toISOString(),
-      }, { channelName: row.channelName, fromName: senderName });
-    } else {
-      const mentions = [...row.body.matchAll(/@(\w+)/g)].map((match) => match[1]);
-      eventData = buildMessageCreatedEventData({
-        id: row.delivery.messageId,
-        channel_id: row.channelId,
-        agent_id: row.senderAgentId,
-        agent_name: senderName,
-        text: row.body,
-        blocks: (row.blocks as unknown[] | null) || null,
-        metadata: publicMessageMetadata(row.metadata),
-        has_attachments: row.hasAttachments,
-        thread_id: row.threadId,
-        created_at: row.createdAt.toISOString(),
-        mentions,
-        attachments,
-        injection_mode: injectionMode,
-      }, { channelName: row.channelName, fromName: senderName, mode: injectionMode });
-    }
+    const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments);
 
     const sent = await registry.sendToNode(workspaceId, nodeId, buildDeliverFrame({
       agent: row.recipientAgentName,

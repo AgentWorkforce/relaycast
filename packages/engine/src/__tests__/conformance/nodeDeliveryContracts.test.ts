@@ -8,6 +8,7 @@ import {
   type TestStack,
 } from './harness.js';
 import { nodes } from '../../db/schema.js';
+import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
 
 describe('node delivery contracts', () => {
   let stack: TestStack;
@@ -126,6 +127,7 @@ describe('node delivery contracts', () => {
     await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://receiver.example.test/relaycast');
+    expect(init.redirect).toBe('error');
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Custom-Timestamp']).toBeTruthy();
     const bodyText = init.body as string;
@@ -271,6 +273,62 @@ describe('node delivery contracts', () => {
     expect(
       ((await second.json()) as { error: { code: string } }).error.code,
     ).toBe('node_capacity_exceeded');
+
+    const unbind = await stack.app.request(`/v1/nodes/${node.data.name}/agents/bob`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(unbind.status).toBe(204);
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'carol')).status,
+    ).toBe(201);
+  });
+
+  it('redacts secret-like fields from every node delivery config shape', async () => {
+    const ws = await createWorkspace(stack.app, 'node-delivery-redaction');
+    const created = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        name: 'poll-with-secret-config',
+        kind: 'poll',
+        delivery: {
+          endpoint: 'poll://local',
+          api_key: 'top-secret',
+          nested: { accessToken: 'nested-token', harmless: 'visible' },
+          auth: {
+            headers: {
+              Authorization: 'Bearer secret',
+              'Content-Type': 'application/json',
+            },
+          },
+        },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as {
+      data: {
+        delivery: {
+          endpoint: string;
+          api_key: string;
+          nested: { accessToken: string; harmless: string };
+          auth: { headers: Record<string, string> };
+        };
+      };
+    };
+    expect(body.data.delivery.endpoint).toBe('poll://local');
+    expect(body.data.delivery.api_key).toBe('[redacted]');
+    expect(body.data.delivery.nested).toMatchObject({
+      accessToken: '[redacted]',
+      harmless: 'visible',
+    });
+    expect(body.data.delivery.auth.headers).toEqual({
+      Authorization: '[redacted]',
+      'Content-Type': '[redacted]',
+    });
   });
 
   it('preserves an existing http_push contract during minimal token rotation', async () => {
@@ -356,6 +414,188 @@ describe('node delivery contracts', () => {
         }),
       ]);
       expect(items[0]?.next_attempt_at).toBeTruthy();
+    });
+  });
+
+  it('rejects an unsafe http_push url if the stored config changes before dispatch', async () => {
+    stack.close();
+    stack = makeNodeStack({ ttlMs: 60_000, environment: 'production' });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 202 }));
+    const ws = await createWorkspace(stack.app, 'http-node-unsafe-redrive');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'unsafe-url-node',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+    await stack.runtime.deps.db
+      .update(nodes)
+      .set({
+        deliveryConfig: {
+          url: 'http://169.254.169.254/latest/meta-data',
+          ack_mode: 'manual',
+          auth: { type: 'none' },
+        },
+      })
+      .where(eq(nodes.name, node.data.name));
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'unsafe url' }),
+    });
+    expect(post.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).not.toHaveBeenCalled();
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      const items = (
+        (await queued.json()) as {
+          data: Array<{
+            status: string;
+            dispatch_attempts: number;
+            next_attempt_at: string | null;
+            last_dispatch_error: string | null;
+          }>;
+        }
+      ).data;
+      expect(items).toEqual([
+        expect.objectContaining({
+          status: 'queued',
+          dispatch_attempts: 1,
+          last_dispatch_error: 'unsafe http_push delivery url',
+        }),
+      ]);
+      expect(items[0]?.next_attempt_at).toBeTruthy();
+    });
+  });
+
+  it('redrives failed http_push deliveries when their retry time is due', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(new Response('', { status: 202 }));
+    const ws = await createWorkspace(stack.app, 'http-node-redrive');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'redrive-http-node',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'retry me' }),
+    });
+    expect(post.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      const items = (
+        (await queued.json()) as {
+          data: Array<{
+            status: string;
+            dispatch_attempts: number;
+            next_attempt_at: string | null;
+            last_dispatch_error: string | null;
+          }>;
+        }
+      ).data;
+      expect(items).toEqual([
+        expect.objectContaining({
+          status: 'queued',
+          dispatch_attempts: 1,
+          last_dispatch_error: 'HTTP 503',
+        }),
+      ]);
+      expect(items[0]?.next_attempt_at).toBeTruthy();
+    });
+
+    const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, {
+      now: new Date(Date.now() + 31_000),
+    });
+    expect(swept).toBe(1);
+
+    await waitForAssertion(async () => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await queued.json()) as { data: Array<{ status: string; dispatch_attempts: number }> }).data,
+      ).toEqual([
+        expect.objectContaining({
+          status: 'delivered',
+          dispatch_attempts: 2,
+        }),
+      ]);
+    });
+  });
+
+  it('does not let a slow http_push receiver block self-connected recipients', async () => {
+    let releaseFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() => new Promise<Response>((resolve) => {
+        releaseFetch = resolve;
+      }));
+    const ws = await createWorkspace(stack.app, 'http-node-slow-isolation');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'slow-http-node',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'do not block carol' }),
+    });
+    expect(post.status).toBe(201);
+
+    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForAssertion(async () => {
+      const carolQueue = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${carol.token}` },
+      });
+      expect(
+        ((await carolQueue.json()) as { data: Array<{ status: string }> }).data,
+      ).toEqual([expect.objectContaining({ status: 'delivered' })]);
+    });
+
+    releaseFetch?.(new Response('', { status: 202 }));
+    await waitForAssertion(async () => {
+      const bobQueue = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await bobQueue.json()) as { data: Array<{ status: string }> }).data,
+      ).toEqual([expect.objectContaining({ status: 'delivered' })]);
     });
   });
 });

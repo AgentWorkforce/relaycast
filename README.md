@@ -418,6 +418,9 @@ agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, an
 `hmac_sha256`; stored secrets and header values are redacted from node roster responses.
 `ackMode: 'manual'` leaves deliveries delivered until the agent acks them, `on_2xx` acks
 on any 2xx HTTP response, and `response` acks when the response body declares an ack.
+Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
+token, so pure webhook endpoints should use `on_2xx` or `response` unless they can
+securely hold that token.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id`, emits `action.invoked` to the handler agent, and completion emits
