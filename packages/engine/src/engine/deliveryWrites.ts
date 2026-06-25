@@ -27,6 +27,7 @@ export interface DeliveryFanoutRecord {
   locationNodeId: string | null;
   routeNodeId: string | null;
   routeNodeKind: string | null;
+  routeNodeRole: string | null;
   deliveryAdapter: string | null;
   nextAttemptAt?: Date | null;
 }
@@ -135,6 +136,7 @@ export function buildChannelDeliveryWrite(
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
           deliveryAdapter: nodes.deliveryAdapter,
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
@@ -206,6 +208,7 @@ export function buildGroupDmDeliveryWrite(
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
           deliveryAdapter: nodes.deliveryAdapter,
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
@@ -278,6 +281,7 @@ export function buildDirectDeliveryWrite(
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeKind: nodes.kind,
+          routeNodeRole: nodes.role,
           deliveryAdapter: nodes.deliveryAdapter,
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
@@ -331,6 +335,7 @@ export async function fetchDeliveryFanoutRecords(
       locationNodeId: deliveries.locationNodeId,
       routeNodeId: deliveries.routeNodeId,
       routeNodeKind: deliveries.routeNodeKind,
+      routeNodeRole: deliveries.routeNodeRole,
       deliveryAdapter: deliveries.deliveryAdapter,
       nextAttemptAt: deliveries.nextAttemptAt,
     })
@@ -351,6 +356,7 @@ export async function fetchDeliveryFanoutRecords(
     locationNodeId: row.locationNodeId,
     routeNodeId: row.routeNodeId,
     routeNodeKind: row.routeNodeKind,
+    routeNodeRole: row.routeNodeRole,
     deliveryAdapter: row.deliveryAdapter,
     nextAttemptAt: row.nextAttemptAt,
   }));

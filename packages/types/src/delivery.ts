@@ -34,6 +34,7 @@ export const DeliverySchema = z.object({
   location_node_id: z.string().nullable(),
   route_node_id: z.string().nullable(),
   route_node_kind: z.string().nullable(),
+  route_node_role: z.string().nullable(),
   delivery_adapter: z.string().nullable(),
   dispatch_attempts: z.number(),
   next_attempt_at: z.string().nullable(),

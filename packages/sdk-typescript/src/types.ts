@@ -298,7 +298,8 @@ export interface ActionInvocation {
 
 // === Fleet nodes / triggers ===
 
-export type NodeKind = 'fleet_ws' | 'http_push' | 'direct_ws' | 'poll';
+export type NodeKind = 'ws' | 'http_push' | 'poll';
+export type NodeRole = 'direct' | 'broker';
 export type NodeAckMode = 'manual' | 'on_2xx' | 'response';
 
 export type NodeDeliveryAuth =
@@ -325,6 +326,7 @@ export interface NodeRosterEntry {
   id: string;
   name: string;
   kind: NodeKind | string;
+  role: NodeRole | string;
   deliveryAdapter: string;
   delivery: Record<string, unknown> | null;
   capabilities: NodeCapability[];
@@ -344,6 +346,7 @@ export interface CreateNodeRequest {
   nodeId?: string;
   name: string;
   kind?: NodeKind;
+  role?: NodeRole;
   deliveryAdapter?: string;
   delivery?: HttpPushNodeDelivery | Record<string, unknown> | null;
   capabilities?: string[];
@@ -363,6 +366,7 @@ export interface NodeAgentBinding {
   nodeId: string;
   nodeName: string;
   nodeKind: NodeKind | string;
+  nodeRole: NodeRole | string;
   status: string;
   sessionRef: string | null;
   priority: number;

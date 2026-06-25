@@ -128,7 +128,7 @@ export interface NodeConnectionRegistry {
    */
   upgradeNode(args: NodeUpgradeArgs): Promise<Response>;
 
-  /** Push a typed fleet control message to the node's live broker connection. */
+  /** Push a typed node protocol message to a live broker node or implicit direct node. */
   sendToNode(
     workspaceId: string,
     nodeId: string,

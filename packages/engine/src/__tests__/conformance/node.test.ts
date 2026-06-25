@@ -204,12 +204,45 @@ describe('node adapter conformance', () => {
         body: JSON.stringify({ text: 'hello bob' }),
       });
       expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+
+      const [route] = await stack.runtime.deps.db
+        .select({
+          routeNodeKind: deliveries.routeNodeKind,
+          routeNodeRole: deliveries.routeNodeRole,
+          deliveryAdapter: deliveries.deliveryAdapter,
+          nodeKind: nodes.kind,
+          nodeRole: nodes.role,
+          nodeDeliveryAdapter: nodes.deliveryAdapter,
+        })
+        .from(deliveries)
+        .innerJoin(nodes, eq(deliveries.routeNodeId, nodes.id))
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+      expect(route).toMatchObject({
+        routeNodeKind: 'ws',
+        routeNodeRole: 'direct',
+        deliveryAdapter: 'ws.node.v1',
+        nodeKind: 'ws',
+        nodeRole: 'direct',
+        nodeDeliveryAdapter: 'ws.node.v1',
+      });
 
       // fanout runs in background; give the event loop a tick.
       await new Promise((r) => setTimeout(r, 50));
 
-      const delivered = bobSock.ofType('message.created');
+      const delivered = bobSock.ofType('deliver');
       expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        type: 'deliver',
+        agent_id: bob.agentId,
+        agent: 'bob',
+        payload: { type: 'message.created' },
+      });
+      expect(delivered[0].delivery_id).toBeTruthy();
       expect(typeof delivered[0].agent_seq).toBe('number');
     });
 
@@ -260,7 +293,7 @@ describe('node adapter conformance', () => {
         ));
 
       expect(rows).toHaveLength(0);
-      expect(bobSock.ofType('message.created')).toHaveLength(0);
+      expect(bobSock.ofType('deliver')).toHaveLength(0);
     });
 
     it('creates a mention delivery for muted channel members when explicitly mentioned', async () => {
@@ -313,7 +346,60 @@ describe('node adapter conformance', () => {
         expect.objectContaining({ reason: 'mention' }),
       ]);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(bobSock.ofType('message.created')).toHaveLength(1);
+      expect(bobSock.ofType('deliver')).toEqual([
+        expect.objectContaining({
+          agent_id: bob.agentId,
+          agent: 'bob',
+          payload: expect.objectContaining({ type: 'message.created' }),
+        }),
+      ]);
+    });
+
+    it('replays queued direct-node deliveries when the agent socket reconnects', async () => {
+      const ws = await createWorkspace(stack.app, 'direct-node-reconnect-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const postRes = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'queued for direct reconnect' }),
+      });
+      expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      let [queued] = await stack.runtime.deps.db
+        .select({ status: deliveries.status })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+      expect(queued).toMatchObject({ status: 'queued' });
+
+      const bobSock = new FakeSocket();
+      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(bobSock.ofType('deliver')).toEqual([
+        expect.objectContaining({
+          agent_id: bob.agentId,
+          agent: 'bob',
+          msg_id: posted.data.id,
+          payload: expect.objectContaining({ type: 'message.created' }),
+        }),
+      ]);
+      [queued] = await stack.runtime.deps.db
+        .select({ status: deliveries.status })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+      expect(queued).toMatchObject({ status: 'delivered' });
     });
   });
 

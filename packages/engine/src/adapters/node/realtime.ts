@@ -12,9 +12,10 @@ import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
-import { handleNodeControlMessage, markDirectNodeOfflineForAgent, markNodeOffline } from '../../engine/node.js';
+import { directNodeIdForAgent, handleNodeControlMessage, markDirectNodeOfflineForAgent, markNodeOffline } from '../../engine/node.js';
 import { reserveNodeCapacity } from '../../engine/placement.js';
 import { markDrainedInvocationDispatched } from '../../engine/action.js';
+import { deliverPendingToNode } from '../../engine/delivery.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -265,6 +266,14 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
+    if (nodeId.startsWith('node_direct_') && message.type === 'deliver') {
+      const agentId = message.agent_id || nodeId.slice('node_direct_'.length);
+      const conn = this.agents.get(this.agentKey(workspaceId, agentId));
+      if (!conn || conn.sockets.size === 0) return false;
+      await this.pushToAgent(workspaceId, agentId, message);
+      return true;
+    }
+
     const key = this.nodeKey(workspaceId, nodeId);
     const current = this.nodeSockets.get(key)?.socket;
     if (current) {
@@ -312,6 +321,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   attachAgentSocket(workspaceId: string, agentId: string, socket: EngineSocket): SocketHandle {
     const conn = this.getAgent(workspaceId, agentId);
     conn.sockets.add(socket);
+    void deliverPendingToNode(this.db, this, workspaceId, directNodeIdForAgent(agentId)).catch(() => {});
     return {
       handleMessage: (raw) => this.onAgentMessage(workspaceId, agentId, socket, raw),
       handleClose: async () => {

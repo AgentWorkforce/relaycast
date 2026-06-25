@@ -17,7 +17,8 @@ import * as nodeEngine from '../engine/node.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
-const nodeKindSchema = z.enum(['fleet_ws', 'http_push', 'direct_ws', 'poll']);
+const nodeKindSchema = z.enum(['ws', 'http_push', 'poll']);
+const nodeRoleSchema = z.enum(['direct', 'broker']);
 const deliveryAckModeSchema = z.enum(['on_2xx', 'manual', 'response']);
 const headerNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
 const headerValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
@@ -46,6 +47,7 @@ const createNodeSchema = z.object({
   node_id: z.string().min(1).optional(),
   name: z.string().min(1),
   kind: nodeKindSchema.optional(),
+  role: nodeRoleSchema.optional(),
   delivery_adapter: z.string().min(1).optional(),
   delivery: z.record(z.string(), z.unknown()).nullable().optional(),
   capabilities: z.array(z.string().min(1)).optional(),
@@ -82,7 +84,10 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
       return parsed.response;
     }
     const existing = await nodeEngine.getNodeByName(c.get('db'), c.get('workspace').id, parsed.data.name);
-    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'fleet_ws';
+    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
+    const role = parsed.data.role
+      ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
+      ?? (kind === 'ws' || (parsed.data.max_agents !== undefined && parsed.data.max_agents > 1) ? 'broker' : 'direct');
     const deliveryInput = parsed.data.delivery === undefined
       ? existing?.deliveryConfig ?? null
       : parsed.data.delivery;
@@ -99,9 +104,13 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
         return jsonError(c, 'unsafe_node_delivery_url', 'delivery.url is not allowed', 400);
       }
     }
+    if (role === 'direct' && (parsed.data.max_agents ?? existing?.maxAgents ?? 1) > 1) {
+      return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
+    }
     const result = await nodeEngine.createNodeToken(c.get('db'), c.get('workspace').id, {
       ...parsed.data,
       kind,
+      role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
     });
     return jsonCreated(c, result);

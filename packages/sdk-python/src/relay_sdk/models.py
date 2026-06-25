@@ -382,6 +382,7 @@ class Delivery(BaseModel):
     location_node_id: str | None = None
     route_node_id: str | None = None
     route_node_kind: str | None = None
+    route_node_role: str | None = None
     delivery_adapter: str | None = None
     dispatch_attempts: int = 0
     next_attempt_at: str | None = None
@@ -417,7 +418,8 @@ class DeferDeliveryRequest(BaseModel):
 
 # ── Nodes ─────────────────────────────────────────────────────────
 
-NodeKind = Literal["fleet_ws", "http_push", "direct_ws", "poll"]
+NodeKind = Literal["ws", "http_push", "poll"]
+NodeRole = Literal["direct", "broker"]
 NodeAckMode = Literal["manual", "on_2xx", "response"]
 NodeAuthType = Literal["none", "bearer", "static_headers", "hmac_sha256"]
 
@@ -450,6 +452,7 @@ class NodeRosterEntry(BaseModel):
     id: str
     name: str
     kind: str | None = None
+    role: str | None = None
     delivery_adapter: str | None = None
     delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
     capabilities: list[NodeCapability] = Field(default_factory=list)
@@ -469,6 +472,7 @@ class CreateNodeRequest(BaseModel):
     node_id: str | None = None
     name: str
     kind: NodeKind | None = None
+    role: NodeRole | None = None
     delivery_adapter: str | None = None
     delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
     capabilities: list[str] | None = None
@@ -488,6 +492,7 @@ class NodeAgentBinding(BaseModel):
     node_id: str
     node_name: str
     node_kind: str
+    node_role: str
     status: str
     session_ref: str | None = None
     priority: int

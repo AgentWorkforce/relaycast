@@ -56,6 +56,7 @@ NODE_DATA = {
     "id": "node_1",
     "name": "http-node",
     "kind": "http_push",
+    "role": "direct",
     "delivery_adapter": "http.hmac.v1",
     "delivery": {
         "url": "https://receiver.example.test/relaycast",
@@ -82,6 +83,7 @@ NODE_BINDING_DATA = {
     "node_id": "node_1",
     "node_name": "http-node",
     "node_kind": "http_push",
+    "node_role": "direct",
     "status": "active",
     "session_ref": None,
     "priority": 5,

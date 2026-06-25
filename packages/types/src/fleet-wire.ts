@@ -224,6 +224,8 @@ export const FleetDeliverMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('deliver'),
+    delivery_id: z.string(),
+    agent_id: z.string(),
     agent: z.string(),
     msg_id: z.string(),
     seq: z.number().int().nonnegative(),
