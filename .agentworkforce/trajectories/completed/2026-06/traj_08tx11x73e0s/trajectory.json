@@ -1,0 +1,706 @@
+{
+  "id": "traj_08tx11x73e0s",
+  "version": 1,
+  "task": {
+    "title": "Continue Relaycast architecture refactor"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-23T16:13:25.250Z",
+  "completedAt": "2026-06-24T02:06:03.671Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-23T16:14:00.929Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_f6zfjaup887w",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-23T16:14:00.929Z",
+      "endedAt": "2026-06-24T02:06:03.671Z",
+      "events": [
+        {
+          "ts": 1782231240930,
+          "type": "decision",
+          "content": "Migrate directory routes to shared HTTP response helpers: Migrate directory routes to shared HTTP response helpers",
+          "raw": {
+            "question": "Migrate directory routes to shared HTTP response helpers",
+            "chosen": "Migrate directory routes to shared HTTP response helpers",
+            "alternatives": [],
+            "reasoning": "The directory route has a bespoke error renderer, repeated success/error envelopes, direct JSON parsing, and lacks the shared malformed JSON response behavior."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782231539526,
+          "type": "reflection",
+          "content": "Directory route migration completed with shared response helpers and live HTTP verification; remaining route duplication can continue in similar cohesive slices.",
+          "raw": {
+            "focalPoints": [
+              "route-helpers",
+              "verification",
+              "remaining-duplication"
+            ],
+            "confidence": 0.86
+          },
+          "significance": "high",
+          "tags": [
+            "focal:route-helpers",
+            "focal:verification",
+            "focal:remaining-duplication",
+            "confidence:0.86"
+          ]
+        },
+        {
+          "ts": 1782231596470,
+          "type": "decision",
+          "content": "Migrate file routes to shared HTTP response helpers: Migrate file routes to shared HTTP response helpers",
+          "raw": {
+            "question": "Migrate file routes to shared HTTP response helpers",
+            "chosen": "Migrate file routes to shared HTTP response helpers",
+            "alternatives": [],
+            "reasoning": "The file route is a small cohesive module with duplicated envelopes and direct JSON parsing; it can be live-tested through upload metadata, complete, get, list, and delete flows."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782231869508,
+          "type": "reflection",
+          "content": "File route migration completed and verified; route helper pattern is now proven across directory and file modules, with larger message/channel/action routes remaining as future slices.",
+          "raw": {
+            "focalPoints": [
+              "file-routes",
+              "route-helpers",
+              "remaining-slices"
+            ],
+            "confidence": 0.87
+          },
+          "significance": "high",
+          "tags": [
+            "focal:file-routes",
+            "focal:route-helpers",
+            "focal:remaining-slices",
+            "confidence:0.87"
+          ]
+        },
+        {
+          "ts": 1782231952731,
+          "type": "decision",
+          "content": "Migrate read-oriented routes and query validation to shared HTTP helpers: Migrate read-oriented routes and query validation to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate read-oriented routes and query validation to shared HTTP helpers",
+            "chosen": "Migrate read-oriented routes and query validation to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Search, presence, inbox, and console share response envelope duplication; console also repeats query safeParse error handling that belongs beside body parsing helpers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782232198152,
+          "type": "reflection",
+          "content": "Read-oriented routes now share response helpers and query validation; remaining duplication is concentrated in larger state-changing route modules like channel, message, dm, action, agent, delivery, and a2a.",
+          "raw": {
+            "focalPoints": [
+              "route-helpers",
+              "query-validation",
+              "remaining-large-routes"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:route-helpers",
+            "focal:query-validation",
+            "focal:remaining-large-routes",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782232237813,
+          "type": "decision",
+          "content": "Migrate routing routes to shared HTTP helpers: Migrate routing routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate routing routes to shared HTTP helpers",
+            "chosen": "Migrate routing routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Routing is a medium module with repeated body validation and envelopes; it exercises route selection, skill sync, feedback, and config paths without touching the largest messaging handlers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782232455715,
+          "type": "reflection",
+          "content": "Routing route migration completed with live route resolution and config verification; helper coverage now spans small, read-oriented, file, directory, and routing modules.",
+          "raw": {
+            "focalPoints": [
+              "routing",
+              "route-helpers",
+              "live-verification"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:routing",
+            "focal:route-helpers",
+            "focal:live-verification",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782232513288,
+          "type": "decision",
+          "content": "Migrate reaction routes to shared HTTP helpers: Migrate reaction routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate reaction routes to shared HTTP helpers",
+            "chosen": "Migrate reaction routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Reaction routes are a medium, cohesive module with direct JSON parsing, repeated not-found envelopes, created/no-content/success responses, and an easy live HTTP flow via message creation."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782232727315,
+          "type": "reflection",
+          "content": "Reaction route migration completed with malformed-body coverage and live add/list/delete verification; response helper pattern now covers another state-changing module.",
+          "raw": {
+            "focalPoints": [
+              "reaction-routes",
+              "route-helpers",
+              "live-verification"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:reaction-routes",
+            "focal:route-helpers",
+            "focal:live-verification",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782232758285,
+          "type": "decision",
+          "content": "Migrate inbound webhook routes to shared HTTP helpers: Migrate inbound webhook routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate inbound webhook routes to shared HTTP helpers",
+            "chosen": "Migrate inbound webhook routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Inbound webhooks are a cohesive module with create/list/delete/trigger flows, direct body parsing, repeated envelopes, and a live-testable end-to-end webhook flow."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782232994674,
+          "type": "reflection",
+          "content": "Inbound webhook migration completed with live create/list/trigger/delete verification; helper pattern now covers webhook ingress alongside route, reaction, file, directory, and read modules.",
+          "raw": {
+            "focalPoints": [
+              "inbound-webhooks",
+              "route-helpers",
+              "live-verification"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:inbound-webhooks",
+            "focal:route-helpers",
+            "focal:live-verification",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782233080853,
+          "type": "decision",
+          "content": "Migrate certification JSON routes to shared HTTP helpers: Migrate certification JSON routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate certification JSON routes to shared HTTP helpers",
+            "chosen": "Migrate certification JSON routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Certification has small duplicated JSON envelopes and body parsing; monitor/read paths can be verified locally while leaving the SVG badge route as a non-envelope response."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782233453647,
+          "type": "reflection",
+          "content": "Certification JSON routes now use the shared HTTP helpers; final checks and live certification monitor/read/badge exercise passed, with external autoreview still blocked by tenant policy.",
+          "raw": {
+            "focalPoints": [
+              "route-helper-migration",
+              "verification",
+              "autoreview-policy"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:route-helper-migration",
+            "focal:verification",
+            "focal:autoreview-policy",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782233598525,
+          "type": "decision",
+          "content": "Migrate delivery routes to shared response helpers with optional JSON parsing: Migrate delivery routes to shared response helpers with optional JSON parsing",
+          "raw": {
+            "question": "Migrate delivery routes to shared response helpers with optional JSON parsing",
+            "chosen": "Migrate delivery routes to shared response helpers with optional JSON parsing",
+            "alternatives": [],
+            "reasoning": "The delivery route is a bounded slice that still duplicated query parsing, body parsing, not-found envelopes, and success envelopes; optional fail bodies need a shared helper while preserving existing empty-body and error-message behavior."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782233916236,
+          "type": "reflection",
+          "content": "Delivery routes now share response, query, JSON, and optional-body parsing helpers; focused/full tests and live delivery list/ack/fail/defer flows passed, with external autoreview still policy-blocked.",
+          "raw": {
+            "focalPoints": [
+              "delivery-routes",
+              "optional-json-parser",
+              "verification"
+            ],
+            "confidence": 0.88
+          },
+          "significance": "high",
+          "tags": [
+            "focal:delivery-routes",
+            "focal:optional-json-parser",
+            "focal:verification",
+            "confidence:0.88"
+          ]
+        },
+        {
+          "ts": 1782234001478,
+          "type": "decision",
+          "content": "Migrate direct DM routes to shared HTTP helpers: Migrate direct DM routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate direct DM routes to shared HTTP helpers",
+            "chosen": "Migrate direct DM routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "The DM route is a bounded messaging slice with direct body parsing, custom validation messages, idempotency errors, and repeated success envelopes; migrating it keeps behavior while reducing duplicated response plumbing."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782234196699,
+          "type": "reflection",
+          "content": "Direct DM routes now use shared response and JSON helpers; live malformed/validation/idempotency/send/replay/list flows passed, external autoreview remains policy-blocked.",
+          "raw": {
+            "focalPoints": [
+              "dm-routes",
+              "validation",
+              "idempotency",
+              "verification"
+            ],
+            "confidence": 0.89
+          },
+          "significance": "high",
+          "tags": [
+            "focal:dm-routes",
+            "focal:validation",
+            "focal:idempotency",
+            "focal:verification",
+            "confidence:0.89"
+          ]
+        },
+        {
+          "ts": 1782234238655,
+          "type": "decision",
+          "content": "Migrate thread routes to shared HTTP helpers: Migrate thread routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate thread routes to shared HTTP helpers",
+            "chosen": "Migrate thread routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Thread replies have the same direct body parsing, idempotency error envelope, agent-token guard envelope, and success envelope duplication as DM; the route is small enough to migrate and live-test as one slice."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782234422877,
+          "type": "reflection",
+          "content": "Thread routes now use shared response and JSON helpers; focused/full checks and live malformed/validation/agent-token/idempotent reply/list flows passed, with external autoreview still policy-blocked.",
+          "raw": {
+            "focalPoints": [
+              "thread-routes",
+              "idempotency",
+              "verification"
+            ],
+            "confidence": 0.89
+          },
+          "significance": "high",
+          "tags": [
+            "focal:thread-routes",
+            "focal:idempotency",
+            "focal:verification",
+            "confidence:0.89"
+          ]
+        },
+        {
+          "ts": 1782234486627,
+          "type": "decision",
+          "content": "Migrate group DM routes to shared HTTP helpers: Migrate group DM routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate group DM routes to shared HTTP helpers",
+            "chosen": "Migrate group DM routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Group DM routes are the remaining DM-family endpoints with duplicated body parsing, idempotency errors, success envelopes, and no-content handling; migrating them completes the direct/group/thread messaging helper pattern."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782234695048,
+          "type": "reflection",
+          "content": "Group DM routes now use shared response, JSON, and no-content helpers; focused/full checks and live create/message/replay/participant/leave flows passed, external autoreview remains policy-blocked.",
+          "raw": {
+            "focalPoints": [
+              "group-dm-routes",
+              "no-content",
+              "idempotency",
+              "verification"
+            ],
+            "confidence": 0.89
+          },
+          "significance": "high",
+          "tags": [
+            "focal:group-dm-routes",
+            "focal:no-content",
+            "focal:idempotency",
+            "focal:verification",
+            "confidence:0.89"
+          ]
+        },
+        {
+          "ts": 1782234756373,
+          "type": "decision",
+          "content": "Migrate channel message routes to shared HTTP helpers: Migrate channel message routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate channel message routes to shared HTTP helpers",
+            "chosen": "Migrate channel message routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Channel message post/list/get still duplicated body parsing, idempotency, channel/message not-found, agent-token-required, and success envelopes; this is the last core message route before larger channel/agent/action modules."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782234987414,
+          "type": "reflection",
+          "content": "Channel message routes now use shared response and JSON helpers; focused/full checks and live post/replay/list/get flows passed, external autoreview remains policy-blocked.",
+          "raw": {
+            "focalPoints": [
+              "message-routes",
+              "idempotency",
+              "not-found",
+              "verification"
+            ],
+            "confidence": 0.89
+          },
+          "significance": "high",
+          "tags": [
+            "focal:message-routes",
+            "focal:idempotency",
+            "focal:not-found",
+            "focal:verification",
+            "confidence:0.89"
+          ]
+        },
+        {
+          "ts": 1782235115027,
+          "type": "decision",
+          "content": "Migrate action routes to shared HTTP helpers: Migrate action routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate action routes to shared HTTP helpers",
+            "chosen": "Migrate action routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "Action routes still duplicate registration parsing, optional invocation/completion parsing, not-found/error envelopes, success envelopes, and 204 responses. The existing optional-body helper fits invoke/complete while improving malformed JSON handling."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782235407058,
+          "type": "reflection",
+          "content": "Action route now uses shared response helpers across registration, invoke, completion, lookup, and delete. Validation and live HTTP checks passed; malformed non-empty invoke and completion bodies now consistently return invalid_json while empty bodies remain valid.",
+          "raw": {
+            "focalPoints": [
+              "action-routes",
+              "optional-body-parser",
+              "live-validation"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:action-routes",
+            "focal:optional-body-parser",
+            "focal:live-validation",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782235453216,
+          "type": "decision",
+          "content": "Migrate channel routes to shared HTTP helpers: Migrate channel routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate channel routes to shared HTTP helpers",
+            "chosen": "Migrate channel routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "channel.ts is the next large route-level duplicate surface: create/update/topic/invite parse bodies manually, several endpoints hand-roll not-found and agent-token-required envelopes, and success/no-content envelopes are repeated. The change can stay scoped by preserving channelEngine behavior and fanout/webhook side effects."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782235676694,
+          "type": "reflection",
+          "content": "Channel routes now use shared response and body helpers across create, update, topic, archive, membership, invite, and mute flows. The side-effect paths were left intact and verified with live HTTP coverage for validation, not-found, invite auth, no-content, and archived-list behavior.",
+          "raw": {
+            "focalPoints": [
+              "channel-routes",
+              "response-helpers",
+              "live-validation"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:channel-routes",
+            "focal:response-helpers",
+            "focal:live-validation",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782235721179,
+          "type": "decision",
+          "content": "Migrate agent routes to shared HTTP helpers: Migrate agent routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate agent routes to shared HTTP helpers",
+            "chosen": "Migrate agent routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "agent.ts still hand-rolls standard Relaycast success/error envelopes, no-content responses, and body parsing across register/update/spawn/events/release. The migration can preserve custom spawn and status-event messages while reducing route-local response construction."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782235970556,
+          "type": "reflection",
+          "content": "Agent routes now use shared response and body helpers across identity, registration, update, delete, spawn, session events, event listing, and release. Custom spawn and status-event validation messages were preserved and verified live across 48 HTTP checks.",
+          "raw": {
+            "focalPoints": [
+              "agent-routes",
+              "custom-validation",
+              "live-validation"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:agent-routes",
+            "focal:custom-validation",
+            "focal:live-validation",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782236015045,
+          "type": "decision",
+          "content": "Migrate workspace routes to shared HTTP helpers: Migrate workspace routes to shared HTTP helpers",
+          "raw": {
+            "question": "Migrate workspace routes to shared HTTP helpers",
+            "chosen": "Migrate workspace routes to shared HTTP helpers",
+            "alternatives": [],
+            "reasoning": "workspace.ts is the last large standard-envelope route: workspace create/update/delete, activity, workspace-wide DM views, token rotation, stream config, and fleet-node config all duplicate success/error envelopes and body parsing. A scoped migration can preserve public lookup rate-limiting and config override semantics while reducing route-local response construction."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782265439148,
+          "type": "reflection",
+          "content": "Workspace routes now use shared response and body helpers across workspace lifecycle, public lookup, activity, workspace-wide DM reads, token rotation, and stream/fleet feature overrides. The corrected live HTTP run passed 43 checks and confirmed config override semantics and no-content delete behavior.",
+          "raw": {
+            "focalPoints": [
+              "workspace-routes",
+              "feature-config",
+              "live-validation"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:workspace-routes",
+            "focal:feature-config",
+            "focal:live-validation",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782265745435,
+          "type": "reflection",
+          "content": "A2A routes now use shared helpers for management envelopes while preserving raw Agent Card and JSON-RPC wire shapes. Live validation confirmed registration/list/card/delete envelopes, raw workspace card responses, and JSON-RPC error behavior.",
+          "raw": {
+            "focalPoints": [
+              "a2a-routes",
+              "protocol-boundary",
+              "live-validation"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:a2a-routes",
+            "focal:protocol-boundary",
+            "focal:live-validation",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782265807891,
+          "type": "decision",
+          "content": "Migrate standard middleware errors to shared HTTP helper: Migrate standard middleware errors to shared HTTP helper",
+          "raw": {
+            "question": "Migrate standard middleware errors to shared HTTP helper",
+            "chosen": "Migrate standard middleware errors to shared HTTP helper",
+            "alternatives": [],
+            "reasoning": "After route migrations, the remaining standard Relaycast envelopes were middleware errors in auth, rate limiting, plan limits, and fleet-node gating. Reusing jsonError keeps status codes/messages unchanged and leaves health plus A2A protocol responses as intentional non-envelope exceptions."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1782266073661,
+          "type": "reflection",
+          "content": "Standard middleware error envelopes now use shared jsonError across auth, rate limiting, plan limits, and fleet-node gating. Live validation confirmed auth and fleet error shapes while leaving health as an intentional raw status response.",
+          "raw": {
+            "focalPoints": [
+              "middleware-errors",
+              "response-helpers",
+              "health-exception"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:middleware-errors",
+            "focal:response-helpers",
+            "focal:health-exception",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782266406368,
+          "type": "reflection",
+          "content": "Engine-level JSON errors now use shared helpers, and self-host parent 404s return the standard envelope instead of Hono's default text response. Residual raw responses are limited to protocol-shaped health, A2A JSON-RPC parsing, and WebSocket non-upgrade text.",
+          "raw": {
+            "focalPoints": [
+              "engine-wrapper",
+              "not-found",
+              "response-helpers"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:engine-wrapper",
+            "focal:not-found",
+            "focal:response-helpers",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1782266713663,
+          "type": "reflection",
+          "content": "A2A management and workspace feature-config catches now delegate coded-error response rendering to errorResponse, leaving local coded-error narrowing only for logging or JSON-RPC protocol body construction.",
+          "raw": {
+            "focalPoints": [
+              "coded-errors",
+              "errorResponse",
+              "a2a",
+              "workspace"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:coded-errors",
+            "focal:errorResponse",
+            "focal:a2a",
+            "focal:workspace",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Completed the Relaycast engine response-helper architecture pass. Standard JSON success/error/no-content envelopes and request parsing now flow through shared helpers across routes, middleware, engine-level handlers, and self-host 404s. Intentional raw-shape exceptions are limited to health, A2A JSON-RPC protocol parsing, and WebSocket non-upgrade text. Each slice was verified with typecheck, focused conformance tests, lint, build, full engine tests with escalated localhost binding after sandbox EPERM, live HTTP probes, local review substitutes, and commits.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "0c13f59",
+    "084f65e",
+    "56b160e",
+    "5243538",
+    "1dca675",
+    "b911ce5",
+    "832ab4c",
+    "e8e6dfc",
+    "fc5aaa8",
+    "7f56e8f",
+    "75ed092",
+    "a5bd31a",
+    "c6832cd",
+    "8fc77b2",
+    "fa720ed",
+    "7602c63",
+    "a3b8104",
+    "eb25632",
+    "94a491d",
+    "9260d99"
+  ],
+  "filesChanged": [
+    "packages/engine/src/__tests__/conformance/httpResponse.test.ts",
+    "packages/engine/src/engine.ts",
+    "packages/engine/src/entrypoints/node.ts",
+    "packages/engine/src/lib/__tests__/httpError.test.ts",
+    "packages/engine/src/lib/httpError.ts",
+    "packages/engine/src/lib/httpResponse.ts",
+    "packages/engine/src/middleware/auth.ts",
+    "packages/engine/src/middleware/fleetNodes.ts",
+    "packages/engine/src/middleware/planLimits.ts",
+    "packages/engine/src/middleware/rateLimit.ts",
+    "packages/engine/src/routes/a2a.ts",
+    "packages/engine/src/routes/action.ts",
+    "packages/engine/src/routes/agent.ts",
+    "packages/engine/src/routes/certify.ts",
+    "packages/engine/src/routes/channel.ts",
+    "packages/engine/src/routes/console.ts",
+    "packages/engine/src/routes/delivery.ts",
+    "packages/engine/src/routes/directory.ts",
+    "packages/engine/src/routes/dm.ts",
+    "packages/engine/src/routes/file.ts",
+    "packages/engine/src/routes/groupDm.ts",
+    "packages/engine/src/routes/inboundWebhook.ts",
+    "packages/engine/src/routes/inbox.ts",
+    "packages/engine/src/routes/message.ts",
+    "packages/engine/src/routes/presence.ts",
+    "packages/engine/src/routes/reaction.ts",
+    "packages/engine/src/routes/routing.ts",
+    "packages/engine/src/routes/search.ts",
+    "packages/engine/src/routes/thread.ts",
+    "packages/engine/src/routes/workspace.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "8dd4e79a76429f0df0873c6f89745aa160391ab0",
+    "endRef": "0c13f5942d1da9424276bbaaa3fe7fd4d548355e",
+    "traceId": "e9d707b8-38b7-4991-95bb-3c7f16ffdacf"
+  }
+}

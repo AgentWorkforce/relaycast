@@ -44,3 +44,4 @@ packages/sdk-typescript/bin/*
 !packages/sdk-typescript/bin/.gitkeep
 relaycast-files/
 *.db
+.agentworkforce/relay*

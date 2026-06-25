@@ -1,0 +1,64 @@
+{
+  "id": "traj_da4wt5z16dll",
+  "version": 1,
+  "task": {
+    "title": "Address PR 214 review comments"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-25T10:27:18.278Z",
+  "completedAt": "2026-06-25T10:33:09.807Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-06-25T10:29:12.155Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_arobop4govsf",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-06-25T10:29:12.155Z",
+      "endedAt": "2026-06-25T10:33:09.807Z",
+      "events": [
+        {
+          "ts": 1782383352156,
+          "type": "decision",
+          "content": "Kept ws.node.v1 as the durable route but translated implicit direct-node deliver frames back to client events: Kept ws.node.v1 as the durable route but translated implicit direct-node deliver frames back to client events",
+          "raw": {
+            "question": "Kept ws.node.v1 as the durable route but translated implicit direct-node deliver frames back to client events",
+            "chosen": "Kept ws.node.v1 as the durable route but translated implicit direct-node deliver frames back to client events",
+            "alternatives": [],
+            "reasoning": "Broker nodes need node protocol frames, while ordinary agent /v1/ws clients and SDK subscriptions rely on canonical typed realtime events."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Addressed PR #214 review feedback by enforcing direct-node capacity, removing the static OpenAPI role default, and translating implicit direct-node deliver frames back to client realtime events.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "d970f57"
+  ],
+  "filesChanged": [
+    "openapi.yaml",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/__tests__/conformance/node.test.ts",
+    "packages/engine/src/__tests__/conformance/nodeDeliveryContracts.test.ts",
+    "packages/engine/src/adapters/node/realtime.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/routes/node.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "195358d72a5b0d0d16de99c11c5888d1a39fe6f8",
+    "endRef": "d970f571dd6efdf4b4e201115e70ac6dc106529d",
+    "traceId": "76b7bcff-77a3-4de3-b922-99940d9e4d5a"
+  }
+}

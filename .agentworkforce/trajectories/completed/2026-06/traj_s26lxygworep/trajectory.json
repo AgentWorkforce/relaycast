@@ -1,0 +1,25 @@
+{
+  "id": "traj_s26lxygworep",
+  "version": 1,
+  "task": {
+    "title": "Assess semver level for recent main merges"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-10T14:41:04.183Z",
+  "completedAt": "2026-06-10T14:42:16.735Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Compared origin/main against v2.5.1 and recent merged PRs. Recommended a minor JS lockstep release because current main adds optional public API fields and exported engine helpers without removals or required-field changes; noted OpenAPI needs the new spawn model field before release.",
+    "approach": "Standard approach",
+    "confidence": 0.86
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "99dec3007a643a058a7de668f35dd6e9af44e33d",
+    "endRef": "99dec3007a643a058a7de668f35dd6e9af44e33d"
+  }
+}

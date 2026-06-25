@@ -1,0 +1,267 @@
+{
+  "version": "1.0.0",
+  "id": "f19eb6c1-36c9-427b-8589-f996e40eeef3",
+  "timestamp": "2026-06-25T03:39:14.274Z",
+  "trajectory": "traj_gcua3hnucbil",
+  "files": [
+    {
+      "path": "README.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 415,
+              "end_line": 423,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/node.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 7,
+              "end_line": 13,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 212,
+              "end_line": 267,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/nodeDeliveryContracts.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 13,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 363,
+              "end_line": 410,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 592,
+              "end_line": 648,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0021_node_delivery_contracts.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 4,
+              "end_line": 9,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 14,
+              "end_line": 19,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0024_binding_workspace_constraints.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 109,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 120,
+              "end_line": 125,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/delivery.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 612,
+              "end_line": 618,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/deliveryWrites.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 28,
+              "end_line": 34,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 158,
+              "end_line": 164,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 324,
+              "end_line": 330,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 344,
+              "end_line": 350,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 385,
+              "end_line": 391,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/node.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 499,
+              "end_line": 506,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 510,
+              "end_line": 551,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 607,
+              "end_line": 613,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/entrypoints/node.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 148,
+              "end_line": 153,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/index.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 49,
+              "end_line": 60,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/deliveryRouting.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 245,
+              "end_line": 259,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            },
+            {
+              "start_line": 262,
+              "end_line": 268,
+              "revision": "2f0c3ade29b4ef82666bb6f9749b77111cf33c23"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
