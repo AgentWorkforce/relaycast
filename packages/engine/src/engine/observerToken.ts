@@ -1,4 +1,6 @@
 import { and, eq, or, gt, isNull, inArray, ne } from 'drizzle-orm';
+import { OBSERVER_SCOPES } from '@relaycast/types';
+import type { ObserverScope as SharedObserverScope } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { channels, dmConversations, files as fileRows, messageAttachments, messages, observerTokens } from '../db/schema.js';
 import type { ObserverTokenFilters } from '../db/schema.js';
@@ -10,22 +12,8 @@ type Db = ReturnType<typeof getDb>;
 export type ObserverToken = typeof observerTokens.$inferSelect;
 const LAST_USED_DEBOUNCE_MS = 30_000;
 
-export const OBSERVER_SCOPES = [
-  'stream:read',
-  'messages:read',
-  'threads:read',
-  'dms:read',
-  'channels:read',
-  'search:read',
-  'agents:read',
-  'nodes:read',
-  'deliveries:read',
-  'activity:read',
-  'files:read',
-  'reactions:read',
-] as const;
-
-export type ObserverScope = typeof OBSERVER_SCOPES[number];
+export { OBSERVER_SCOPES };
+export type ObserverScope = SharedObserverScope;
 
 export const OBSERVER_SCOPE_SET = new Set<string>(OBSERVER_SCOPES);
 
@@ -317,11 +305,10 @@ function hasChannelOrDmFilter(filters: ObserverTokenFilters): boolean {
 
 export function observerAllowsChannel(
   observer: Pick<ObserverToken, 'filters'> | undefined,
-  channel: { id?: string | null; name?: string | null; channel_type?: number | null; channelType?: number | null },
+  channel: { id?: string | null; name?: string | null; channel_type?: number | null },
 ): boolean {
   if (!observer) return true;
-  const channelType = channel.channel_type ?? channel.channelType;
-  if (channelType != null && channelType !== 0) return false;
+  if (channel.channel_type != null && channel.channel_type !== 0) return false;
   const filters = normalizeObserverFilters(observer.filters);
   const ids = filterList(filters.channel_ids);
   const names = filterList(filters.channel_names);
@@ -375,10 +362,10 @@ export function observerAllowsCreatedAt(
 
 export function observerAllowsMessage(
   observer: Pick<ObserverToken, 'filters'> | undefined,
-  message: { agent_id?: string | null; agentId?: string | null; created_at?: string | null; createdAt?: Date | string | number | null },
+  message: { agent_id?: string | null; created_at?: string | Date | number | null },
 ): boolean {
-  return observerAllowsAgent(observer, message.agent_id ?? message.agentId)
-    && observerAllowsCreatedAt(observer, message.created_at ?? message.createdAt);
+  return observerAllowsAgent(observer, message.agent_id)
+    && observerAllowsCreatedAt(observer, message.created_at);
 }
 
 export type MessageObserverResource = {
@@ -649,7 +636,6 @@ export async function filterObserverSearchResults<T extends {
   channel_id?: string;
   channel_name?: string | null;
   channel_type?: number | null;
-  channelType?: number | null;
   conversation_id?: string | null;
   agent_id?: string | null;
   created_at?: string | null;
@@ -684,7 +670,7 @@ export async function filterObserverSearchResults<T extends {
     return observerAllowsChannel(observer, {
       id: result.channel_id,
       name: result.channel_name ?? channel?.name,
-      channel_type: result.channel_type ?? result.channelType ?? channel?.channel_type,
+      channel_type: result.channel_type ?? channel?.channel_type,
     });
   });
 }

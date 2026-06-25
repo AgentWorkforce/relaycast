@@ -80,3 +80,66 @@ export const TokenRotateResponseSchema = z.object({
   token: z.string(),
 });
 export type TokenRotateResponse = z.infer<typeof TokenRotateResponseSchema>;
+
+// --- Observer tokens ---
+
+export const OBSERVER_SCOPES = [
+  'stream:read',
+  'messages:read',
+  'threads:read',
+  'dms:read',
+  'channels:read',
+  'search:read',
+  'agents:read',
+  'nodes:read',
+  'deliveries:read',
+  'activity:read',
+  'files:read',
+  'reactions:read',
+] as const;
+export type ObserverScope = typeof OBSERVER_SCOPES[number];
+
+export const ObserverTokenFiltersSchema = z.object({
+  channel_ids: z.array(z.string()).optional(),
+  channel_names: z.array(z.string()).optional(),
+  include_dms: z.boolean().optional(),
+  dm_conversation_ids: z.array(z.string()).optional(),
+  agent_ids: z.array(z.string()).optional(),
+  event_types: z.array(z.string()).optional(),
+  created_after: z.string().optional(),
+});
+export type ObserverTokenFilters = z.infer<typeof ObserverTokenFiltersSchema>;
+
+export const CreateObserverTokenRequestSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  scopes: z.array(z.enum(OBSERVER_SCOPES)).min(1),
+  filters: ObserverTokenFiltersSchema.optional(),
+  expires_at: z.string().nullable().optional(),
+});
+export type CreateObserverTokenRequest = z.infer<typeof CreateObserverTokenRequestSchema>;
+
+export const UpdateObserverTokenRequestSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().nullable().optional(),
+  scopes: z.array(z.enum(OBSERVER_SCOPES)).min(1).optional(),
+  filters: ObserverTokenFiltersSchema.optional(),
+  expires_at: z.string().nullable().optional(),
+});
+export type UpdateObserverTokenRequest = z.infer<typeof UpdateObserverTokenRequestSchema>;
+
+export const ObserverTokenSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  scopes: z.array(z.enum(OBSERVER_SCOPES)),
+  filters: ObserverTokenFiltersSchema,
+  status: z.enum(['active', 'revoked']),
+  expires_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+  last_used_at: z.string().nullable(),
+  token: z.string().optional(),
+});
+export type ObserverToken = z.infer<typeof ObserverTokenSchema>;

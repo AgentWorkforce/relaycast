@@ -834,6 +834,138 @@ components:
           type: string
           description: Raw ot_live_* token, returned only on create and rotate.
 
+    ConsoleMessageLog:
+      type: object
+      properties:
+        id:
+          type: string
+        message_id:
+          type: string
+          nullable: true
+        channel_id:
+          type: string
+          nullable: true
+        channel_name:
+          type: string
+          nullable: true
+        agent_id:
+          type: string
+          nullable: true
+        agent_name:
+          type: string
+          nullable: true
+        conversation_id:
+          type: string
+          nullable: true
+        delivery_kind:
+          type: string
+          enum: [channel, dm]
+        text:
+          type: string
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        attachment_count:
+          type: integer
+        mention_count:
+          type: integer
+        latency_ms:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ConsoleOverview:
+      type: object
+      properties:
+        window_days:
+          type: integer
+        since:
+          type: string
+          format: date-time
+        total_messages:
+          type: integer
+        channel_messages:
+          type: integer
+        dm_messages:
+          type: integer
+        unique_agents:
+          type: integer
+        avg_latency_ms:
+          type: integer
+        max_latency_ms:
+          type: integer
+        attachment_count:
+          type: integer
+        mention_count:
+          type: integer
+
+    ConsoleAgentStat:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+          nullable: true
+        message_count:
+          type: integer
+        channel_count:
+          type: integer
+        dm_count:
+          type: integer
+        avg_latency_ms:
+          type: integer
+        last_message_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ConsoleCostAgent:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+          nullable: true
+        message_count:
+          type: integer
+        total_cost_usd:
+          type: number
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    ConsoleCostStats:
+      type: object
+      properties:
+        window_days:
+          type: integer
+        totals:
+          type: object
+          properties:
+            total_cost_usd:
+              type: number
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsoleCostAgent'
+
     Error:
       type: object
       properties:
@@ -1338,11 +1470,12 @@ paths:
 
     get:
       summary: List agents
-      description: List all agents in the workspace
+      description: List all agents in the workspace. Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - observerToken: []
       parameters:
         - name: status
           in: query
@@ -1367,11 +1500,12 @@ paths:
   /agents/{name}:
     get:
       summary: Get agent
-      description: Get agent by name
+      description: Get agent by name. Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -1599,12 +1733,13 @@ paths:
 
     get:
       summary: List channels
-      description: List all channels in the workspace
+      description: List all channels in the workspace. Observer tokens require `channels:read`.
       tags:
         - Channels
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: include_archived
           in: query
@@ -1629,12 +1764,13 @@ paths:
   /channels/{name}:
     get:
       summary: Get channel
-      description: Get channel with members
+      description: Get channel with members. Observer tokens require `channels:read`.
       tags:
         - Channels
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -1799,12 +1935,13 @@ paths:
   /channels/{name}/members:
     get:
       summary: List channel members
-      description: Get all members of a channel
+      description: Get all members of a channel. Observer tokens require `channels:read`.
       tags:
         - Channels
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -2004,12 +2141,13 @@ paths:
 
     get:
       summary: List messages
-      description: Get messages from a channel
+      description: Get messages from a channel. Observer tokens require `messages:read`.
       tags:
         - Messages
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -2049,12 +2187,13 @@ paths:
   /messages/{id}:
     get:
       summary: Get message
-      description: Get a single message by ID
+      description: Get a single message by ID. Observer tokens require `messages:read` for channel messages or `dms:read` for DM-backed messages, subject to filters.
       tags:
         - Messages
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: id
           in: path
@@ -2128,12 +2267,13 @@ paths:
 
     get:
       summary: Get thread
-      description: Get all replies to a message
+      description: Get all replies to a message. Observer tokens require `threads:read`, and DM-backed threads also require `dms:read` through DM filters.
       tags:
         - Threads
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: id
           in: path
@@ -2212,12 +2352,13 @@ paths:
 
     get:
       summary: Get reactions
-      description: Get aggregated reactions for a message
+      description: Get aggregated reactions for a message. Observer tokens require `reactions:read`; DM-backed messages also require `dms:read` and DM filters.
       tags:
         - Reactions
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: id
           in: path
@@ -2431,12 +2572,13 @@ paths:
   /search:
     get:
       summary: Search messages
-      description: Full-text search across messages
+      description: Full-text search across messages. Observer tokens require `search:read`; DM search results require `dms:read` and DM filters.
       tags:
         - Search
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: q
           in: query
@@ -2503,12 +2645,13 @@ paths:
   /agents/presence:
     get:
       summary: List agent presence
-      description: Get current online/offline presence state for workspace agents
+      description: Get current online/offline presence state for workspace agents. Observer tokens require `agents:read`.
       tags:
         - Presence
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       responses:
         '200':
           description: Presence list
@@ -2617,11 +2760,12 @@ paths:
   /activity:
     get:
       summary: Get workspace activity feed
-      description: Get recent workspace activity events. Channel message items include `channel_id` and `channel_name`; DM items include `conversation_id`.
+      description: Get recent workspace activity events. Channel message items include `channel_id` and `channel_name`; DM items include `conversation_id`. Observer tokens require `activity:read`, and DM activity also requires `dms:read` plus DM filters.
       tags:
         - Workspaces
       security:
         - workspaceKey: []
+        - observerToken: []
       parameters:
         - name: limit
           in: query
@@ -2725,11 +2869,12 @@ paths:
   /dm/conversations/all:
     get:
       summary: List all workspace DM conversations
-      description: Workspace-admin view of all DM conversations
+      description: Workspace-admin view of all DM conversations. Observer tokens require `dms:read` and DM filters.
       tags:
         - Direct Messages
       security:
         - workspaceKey: []
+        - observerToken: []
       responses:
         '200':
           description: Workspace DM conversations
@@ -2741,11 +2886,12 @@ paths:
   /dm/conversations/{conversation_id}/messages:
     get:
       summary: Get workspace DM conversation messages
-      description: Workspace-admin access to messages for any DM conversation
+      description: Workspace-admin access to messages for any DM conversation. Observer tokens require `dms:read` and DM filters.
       tags:
         - Direct Messages
       security:
         - workspaceKey: []
+        - observerToken: []
       parameters:
         - name: conversation_id
           in: path
@@ -3075,12 +3221,13 @@ paths:
   /files:
     get:
       summary: List files
-      description: List files in workspace
+      description: List files in workspace. Observer tokens require `files:read`; DM-attached files also require `dms:read` and DM filters. Channel, agent, and time filters are applied where attachment context exists.
       tags:
         - Files
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: uploaded_by
           in: query
@@ -3101,12 +3248,13 @@ paths:
   /files/{id}:
     get:
       summary: Get file metadata
-      description: Get file metadata and download URL information
+      description: Get file metadata and download URL information. Observer tokens require `files:read`; DM-attached files also require `dms:read` and DM filters. Channel, agent, and time filters are applied where attachment context exists.
       tags:
         - Files
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: id
           in: path
@@ -3407,12 +3555,13 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
       summary: List nodes
-      description: List delivery nodes in the workspace, optionally filtered by capability or name.
+      description: List delivery nodes in the workspace, optionally filtered by capability or name. Observer tokens require `nodes:read`; agent filters constrain active-agent details.
       tags:
         - Nodes
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: capability
           in: query
@@ -3435,12 +3584,13 @@ paths:
   /nodes/{name}:
     get:
       summary: Get node
-      description: Get one node roster entry by name.
+      description: Get one node roster entry by name. Observer tokens require `nodes:read`; agent filters constrain active-agent details.
       tags:
         - Nodes
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -3464,12 +3614,13 @@ paths:
   /nodes/{name}/agents:
     get:
       summary: List node agent bindings
-      description: List active agent bindings for a node.
+      description: List active agent bindings for a node. Observer tokens require `nodes:read`; `agent_ids` filters constrain returned bindings.
       tags:
         - Nodes
       security:
         - workspaceKey: []
         - agentToken: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -3778,11 +3929,12 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     get:
       summary: List agent session events
-      description: List recorded session events for an agent
+      description: List recorded session events for an agent. Observer tokens require `activity:read`; `agent_ids` and `created_after` filters apply.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - observerToken: []
       parameters:
         - name: name
           in: path
@@ -4232,7 +4384,40 @@ paths:
   /console/messages:
     get:
       summary: List console messages
+      description: List observability console message logs. Observer tokens require `messages:read`; DM logs also require `dms:read` and DM filters.
       tags: [Console]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - observerToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: before
+          in: query
+          schema:
+            type: string
+        - name: agent_id
+          in: query
+          schema:
+            type: string
+        - name: channel_id
+          in: query
+          schema:
+            type: string
+        - name: conversation_id
+          in: query
+          schema:
+            type: string
+        - name: delivery_kind
+          in: query
+          schema:
+            type: string
+            enum: [channel, dm]
       responses:
         '200':
           description: Console messages
@@ -4240,11 +4425,31 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConsoleMessageLog'
 
   /console/stats:
     get:
       summary: Get console stats
+      description: Get observability console summary stats. Observer tokens require `activity:read`.
       tags: [Console]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - observerToken: []
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+            default: 7
       responses:
         '200':
           description: Console stats
@@ -4252,11 +4457,36 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ConsoleOverview'
 
   /console/agents:
     get:
       summary: List console agents
+      description: List per-agent observability console stats. Observer tokens require `agents:read`; `agent_ids` filters constrain the aggregate.
       tags: [Console]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - observerToken: []
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+            default: 7
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
       responses:
         '200':
           description: Console agents
@@ -4264,11 +4494,31 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConsoleAgentStat'
 
   /console/costs:
     get:
       summary: Get cost breakdown
+      description: Get observability console cost breakdown. Observer tokens require `activity:read`.
       tags: [Console]
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - observerToken: []
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+            default: 7
       responses:
         '200':
           description: Cost data
@@ -4276,6 +4526,11 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ConsoleCostStats'
 
   # ── Directory ───────────────────────────────────────────────────────
   /directory/agents:

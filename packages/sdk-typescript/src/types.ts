@@ -628,60 +628,11 @@ export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;
 export type UploadRequest = Camelize<Raw.UploadRequest>;
 export type UploadResponse = Camelize<Raw.UploadResponse>;
 
-export type ObserverScope =
-  | 'stream:read'
-  | 'messages:read'
-  | 'threads:read'
-  | 'dms:read'
-  | 'channels:read'
-  | 'search:read'
-  | 'agents:read'
-  | 'nodes:read'
-  | 'deliveries:read'
-  | 'activity:read'
-  | 'files:read'
-  | 'reactions:read';
-
-export interface ObserverTokenFilters {
-  channelIds?: string[];
-  channelNames?: string[];
-  includeDms?: boolean;
-  dmConversationIds?: string[];
-  agentIds?: string[];
-  eventTypes?: string[];
-  createdAfter?: string;
-}
-
-export interface CreateObserverTokenRequest {
-  name: string;
-  description?: string | null;
-  scopes: ObserverScope[];
-  filters?: ObserverTokenFilters;
-  expiresAt?: string | null;
-}
-
-export interface UpdateObserverTokenRequest {
-  name?: string;
-  description?: string | null;
-  scopes?: ObserverScope[];
-  filters?: ObserverTokenFilters;
-  expiresAt?: string | null;
-}
-
-export interface ObserverToken {
-  id: string;
-  name: string;
-  description: string | null;
-  scopes: ObserverScope[];
-  filters: ObserverTokenFilters;
-  status: string;
-  expiresAt: string | null;
-  createdAt: string;
-  updatedAt: string | null;
-  revokedAt: string | null;
-  lastUsedAt: string | null;
-  token?: string;
-}
+export type ObserverScope = Raw.ObserverScope;
+export type ObserverTokenFilters = Camelize<Raw.ObserverTokenFilters>;
+export type CreateObserverTokenRequest = Camelize<Raw.CreateObserverTokenRequest>;
+export type UpdateObserverTokenRequest = Camelize<Raw.UpdateObserverTokenRequest>;
+export type ObserverToken = Camelize<Raw.ObserverToken>;
 
 export type ActionInvokedEvent = Camelize<Raw.ActionInvokedEvent>;
 export type ActionCompletedEvent = Camelize<Raw.ActionCompletedEvent>;
@@ -729,3 +680,8 @@ type _AssertNodeCapability = Assert<Equals<NodeCapability, Raw.FleetCapability>>
 // Action output is any JSON value (scalars/arrays/null legal), not object-only.
 type _AssertInvocationOutput = Assert<Equals<ActionInvocation['output'], Raw.FleetWireJsonValue>>;
 type _AssertCompletionOutput = Assert<Equals<CompleteInvocationRequest['output'], Raw.FleetWireJsonValue | undefined>>;
+type _AssertObserverScope = Assert<Equals<ObserverScope, Raw.ObserverScope>>;
+type _AssertObserverTokenFilters = Assert<Equals<ObserverTokenFilters, Camelize<Raw.ObserverTokenFilters>>>;
+type _AssertCreateObserverTokenRequest = Assert<Equals<CreateObserverTokenRequest, Camelize<Raw.CreateObserverTokenRequest>>>;
+type _AssertUpdateObserverTokenRequest = Assert<Equals<UpdateObserverTokenRequest, Camelize<Raw.UpdateObserverTokenRequest>>>;
+type _AssertObserverToken = Assert<Equals<ObserverToken, Camelize<Raw.ObserverToken>>>;
