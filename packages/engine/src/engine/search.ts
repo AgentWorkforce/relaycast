@@ -81,6 +81,7 @@ export async function searchMessages(
     channel_id: row.channel_id,
     channel_name: row.channel_name || 'unknown',
     conversation_id: row.conversation_id,
+    agent_id: row.agent_id,
     agent_name: row.agent_name || 'unknown',
     text: row.body,
     created_at: new Date(row.created_at * 1000).toISOString(),

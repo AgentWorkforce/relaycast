@@ -226,15 +226,17 @@ export async function getActiveObserverTokenByHash(
     ));
   if (!row) return null;
 
-  try {
-    await db
-      .update(observerTokens)
-      .set({ lastUsedAt: now })
-      .where(eq(observerTokens.id, row.id));
-  } catch {
-    // last_used_at is best-effort audit metadata; authentication should not fail
-    // solely because a read replica or adapter rejects this update.
-  }
+  void (async () => {
+    try {
+      await db
+        .update(observerTokens)
+        .set({ lastUsedAt: now })
+        .where(eq(observerTokens.id, row.id));
+    } catch {
+      // last_used_at is best-effort audit metadata; authentication should not fail
+      // solely because a read replica or adapter rejects this update.
+    }
+  })();
   return row;
 }
 
@@ -284,6 +286,35 @@ export function observerAllowsAgent(
   return Boolean(agentId && ids.has(agentId));
 }
 
+function timestampMillis(value: string | Date | number | null | undefined): number | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+export function observerAllowsCreatedAt(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  createdAt: string | Date | number | null | undefined,
+): boolean {
+  if (!observer) return true;
+  const cutoff = normalizeObserverFilters(observer.filters).created_after;
+  if (!cutoff) return true;
+  const cutoffMs = timestampMillis(cutoff);
+  const createdMs = timestampMillis(createdAt);
+  if (cutoffMs == null || createdMs == null) return false;
+  return createdMs >= cutoffMs;
+}
+
+export function observerAllowsMessage(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  message: { agent_id?: string | null; agentId?: string | null; created_at?: string | null; createdAt?: Date | string | number | null },
+): boolean {
+  return observerAllowsAgent(observer, message.agent_id ?? message.agentId)
+    && observerAllowsCreatedAt(observer, message.created_at ?? message.createdAt);
+}
+
 function nestedRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -304,6 +335,14 @@ function eventAgentId(event: Record<string, unknown>): string | null {
     ?? (typeof agent.id === 'string' ? agent.id : null);
 }
 
+function eventCreatedAt(event: Record<string, unknown>): string | Date {
+  const message = nestedRecord(event.message);
+  return (typeof event.created_at === 'string' ? event.created_at : null)
+    ?? (typeof event.timestamp === 'string' ? event.timestamp : null)
+    ?? (typeof message.created_at === 'string' ? message.created_at : null)
+    ?? new Date();
+}
+
 export function observerAllowsEvent(
   observer: Pick<ObserverToken, 'filters'> | undefined,
   event: Record<string, unknown>,
@@ -316,43 +355,44 @@ export function observerAllowsEvent(
     return false;
   }
 
-  if ((type === 'dm.received' || type === 'group_dm.received') && !observerAllowsConversation(
-    observer,
-    typeof event.conversation_id === 'string' ? event.conversation_id : null,
-  )) {
+  if (!observerAllowsCreatedAt(observer, eventCreatedAt(event))) {
     return false;
   }
 
-  if (!observerAllowsChannel(observer, {
+  const conversationId = typeof event.conversation_id === 'string' ? event.conversation_id : null;
+  const isDm = conversationId !== null || type === 'dm.received' || type === 'group_dm.received';
+  if (isDm) {
+    if (!observerAllowsConversation(observer, conversationId)) {
+      return false;
+    }
+  } else if (!observerAllowsChannel(observer, {
     id: typeof event.channel_id === 'string' ? event.channel_id : null,
     name: eventChannelName(event),
   })) {
     return false;
   }
 
-  if (!observerAllowsAgent(observer, eventAgentId(event))) {
-    return false;
-  }
-
-  return true;
+  return observerAllowsAgent(observer, eventAgentId(event));
 }
 
 export async function getMessageObserverResource(
   db: Db,
   workspaceId: string,
   messageId: string,
-): Promise<{ channel_id: string; channel_name: string; conversation_id: string | null } | null> {
+): Promise<{ channel_id: string; channel_name: string; conversation_id: string | null; agent_id: string; created_at: string } | null> {
   const [row] = await db
     .select({
       channel_id: channels.id,
       channel_name: channels.name,
       conversation_id: dmConversations.id,
+      agent_id: messages.agentId,
+      created_at: messages.createdAt,
     })
     .from(messages)
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
     .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
-  return row ?? null;
+  return row ? { ...row, created_at: row.created_at.toISOString() } : null;
 }
 
 export async function getChannelObserverResource(
@@ -367,7 +407,13 @@ export async function getChannelObserverResource(
   return row ?? null;
 }
 
-export async function filterObserverSearchResults<T extends { channel_id?: string; channel_name?: string; conversation_id?: string | null }>(
+export async function filterObserverSearchResults<T extends {
+  channel_id?: string;
+  channel_name?: string;
+  conversation_id?: string | null;
+  agent_id?: string | null;
+  created_at?: string | null;
+}>(
   db: Db,
   workspaceId: string,
   observer: Pick<ObserverToken, 'filters'> | undefined,
@@ -388,7 +434,10 @@ export async function filterObserverSearchResults<T extends { channel_id?: strin
   }
 
   return results.filter((result) => {
-    if (result.conversation_id && !observerAllowsConversation(observer, result.conversation_id)) return false;
+    if (!observerAllowsMessage(observer, result)) return false;
+    if (result.conversation_id) {
+      return observerAllowsConversation(observer, result.conversation_id);
+    }
     return observerAllowsChannel(observer, {
       id: result.channel_id,
       name: result.channel_name ?? (result.channel_id ? namesById.get(result.channel_id) : null),

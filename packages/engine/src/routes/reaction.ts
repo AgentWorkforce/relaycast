@@ -11,6 +11,7 @@ import {
   getObserverTokenFromContext,
   observerAllowsChannel,
   observerAllowsConversation,
+  observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
@@ -204,7 +205,7 @@ reactionRoutes.delete(
 // GET /v1/messages/:id/reactions - aggregated reactions
 reactionRoutes.get(
   '/messages/:id/reactions',
-  requireWorkspaceRead(['messages:read', 'reactions:read']),
+  requireWorkspaceRead('reactions:read'),
   rateLimit,
   async (c) => {
     try {
@@ -216,9 +217,9 @@ reactionRoutes.get(
         if (!resource) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
-        const allowed = resource.conversation_id
+        const allowed = observerAllowsMessage(observer, resource) && (resource.conversation_id
           ? observerAllowsConversation(observer, resource.conversation_id)
-          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name });
+          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name }));
         if (!allowed) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }

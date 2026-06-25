@@ -17,6 +17,7 @@ import {
   hasObserverScope,
   observerAllowsChannel,
   observerAllowsConversation,
+  observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -203,7 +204,8 @@ messageRoutes.get(
       if (!channel) {
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
-      if (!observerAllowsChannel(getObserverTokenFromContext(c), channel)) {
+      const observer = getObserverTokenFromContext(c);
+      if (!observerAllowsChannel(observer, channel)) {
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
@@ -219,7 +221,7 @@ messageRoutes.get(
         channel.id,
         { limit, before, after },
       );
-      return jsonOk(c, messages);
+      return jsonOk(c, messages.filter((message) => observerAllowsMessage(observer, message)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -240,6 +242,9 @@ messageRoutes.get(
       if (observer) {
         const resource = await getMessageObserverResource(db, workspace.id, messageId);
         if (!resource) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+        if (!observerAllowsMessage(observer, resource)) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
         if (resource.conversation_id) {

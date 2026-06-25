@@ -10,8 +10,11 @@ import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
 import * as tokenRotateEngine from '../engine/tokenRotate.js';
 import {
+  filterObserverSearchResults,
   getObserverTokenFromContext,
+  observerAllowsCreatedAt,
   observerAllowsConversation,
+  observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -226,7 +229,13 @@ workspaceRoutes.get('/activity', requireWorkspaceRead('activity:read', { allowAg
     const { limit } = parsed.data;
 
     const items = await activityEngine.getActivityFeed(db, workspace.id, limit);
-    return jsonOk(c, items);
+    const visibleItems = await filterObserverSearchResults(
+      db,
+      workspace.id,
+      getObserverTokenFromContext(c),
+      items,
+    );
+    return jsonOk(c, visibleItems);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -239,7 +248,9 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const workspace = c.get('workspace');
     const observer = getObserverTokenFromContext(c);
     const conversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
-      .filter((conversation) => observerAllowsConversation(observer, conversation.id));
+      .filter((conversation) =>
+        observerAllowsConversation(observer, conversation.id)
+        && (!conversation.last_message || observerAllowsCreatedAt(observer, conversation.last_message.created_at)));
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);
@@ -264,7 +275,7 @@ workspaceRoutes.get('/dm/conversations/:conversation_id/messages', requireWorksp
     const msgs = await dmAllEngine.getDmMessagesForWorkspace(
       db, workspace.id, conversationId, { limit, before, after },
     );
-    return jsonOk(c, msgs);
+    return jsonOk(c, msgs.filter((message) => observerAllowsMessage(getObserverTokenFromContext(c), message)));
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -66,14 +66,16 @@ export async function postMessage(
   const startedAtMs = Date.now();
   const messageId = generateId();
 
-  // Parse @mentions from text
-  const mentionPattern = /@(\w+)/g;
-  const mentionMatches = data.text.match(mentionPattern) || [];
+  // Parse @mentions from text without treating email domains as handles.
+  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const mentionedHandles = new Set<string>();
+  for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
+    mentionedHandles.add(match[1]);
+  }
 
   const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const metadata = sanitizeUserMessageMetadata(data.data);
 
-  const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
@@ -140,7 +142,7 @@ export async function postMessage(
           injection_mode: data.mode ?? 'wait',
         },
         attachmentCount: attachments.length,
-        mentionCount: mentionMatches.length,
+        mentionCount: mentionedHandles.size,
         latencyMs: Date.now() - startedAtMs,
       }),
     );
@@ -166,7 +168,7 @@ export async function postMessage(
     has_attachments: message.hasAttachments,
     thread_id: message.threadId,
     created_at: message.createdAt.toISOString(),
-    mentions: mentionMatches.map((m: string) => m.slice(1)),
+    mentions: Array.from(mentionedHandles),
     attachments,
     injection_mode: data.mode ?? 'wait',
     _deliveries: deliveryOutcomes.deliveries,

@@ -1,6 +1,6 @@
 import { eq, desc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents } from '../db/schema.js';
+import { messages, channels, agents, dmConversations } from '../db/schema.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -19,11 +19,14 @@ export async function getActivityFeed(
       channelId: messages.channelId,
       channelName: channels.name,
       channelType: channels.channelType,
+      conversationId: dmConversations.id,
+      agentId: messages.agentId,
       agentName: agents.name,
     })
     .from(messages)
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .innerJoin(agents, eq(messages.agentId, agents.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
     .where(eq(messages.workspaceId, workspaceId))
     // id is a monotonic snowflake — use it as a stable tiebreaker so same-second
     // messages don't shuffle between calls.
@@ -37,7 +40,8 @@ export async function getActivityFeed(
       return {
         type: 'dm' as const,
         id: r.id,
-        conversation_id: r.channelId,
+        conversation_id: r.conversationId ?? r.channelId,
+        agent_id: r.agentId,
         agent_name: r.agentName,
         text: r.body,
         created_at: r.createdAt.toISOString(),
@@ -47,6 +51,7 @@ export async function getActivityFeed(
       type: 'message' as const,
       id: r.id,
       channel_name: r.channelName,
+      agent_id: r.agentId,
       agent_name: r.agentName,
       text: r.body,
       created_at: r.createdAt.toISOString(),

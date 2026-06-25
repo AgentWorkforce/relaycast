@@ -45,9 +45,11 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
-  const mentionPattern = /@(\w+)/g;
-  const mentionMatches = data.text.match(mentionPattern) || [];
-  const mentionedHandles = new Set(mentionMatches.map((m: string) => m.slice(1)));
+  const mentionPattern = /(?:^|\s)@(\w+)/g;
+  const mentionedHandles = new Set<string>();
+  for (let match = mentionPattern.exec(data.text); match !== null; match = mentionPattern.exec(data.text)) {
+    mentionedHandles.add(match[1]);
+  }
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,
     depthCap: DEFAULT_MAILBOX_DEPTH_CAP,

@@ -14,6 +14,7 @@ import {
   getObserverTokenFromContext,
   observerAllowsChannel,
   observerAllowsConversation,
+  observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -158,9 +159,9 @@ threadRoutes.get(
         if (!resource) {
           return jsonError(c, 'message_not_found', 'Parent message not found', 404);
         }
-        const allowed = resource.conversation_id
+        const allowed = observerAllowsMessage(observer, resource) && (resource.conversation_id
           ? observerAllowsConversation(observer, resource.conversation_id)
-          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name });
+          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name }));
         if (!allowed) {
           return jsonError(c, 'message_not_found', 'Parent message not found', 404);
         }
@@ -171,7 +172,16 @@ threadRoutes.get(
         parentId,
         { limit, before, after },
       );
-      return jsonOk(c, result);
+      if (!observer) return jsonOk(c, result);
+      const replies = result.replies.filter((reply) => observerAllowsMessage(observer, reply));
+      return jsonOk(c, {
+        ...result,
+        parent: {
+          ...result.parent,
+          reply_count: replies.length,
+        },
+        replies,
+      });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

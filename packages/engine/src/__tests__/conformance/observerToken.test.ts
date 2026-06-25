@@ -68,9 +68,28 @@ describe('observer tokens', () => {
     expect(revoke.status).toBe(204);
   });
 
+  it('rejects non-ISO observer token timestamps', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-timestamp-validation-ws');
+    const res = await stack.app.request('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: 'bad-time',
+        scopes: ['messages:read'],
+        expires_at: 'June 1, 2026',
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request' },
+    });
+  });
+
   it('gates REST reads by scope and channel filters and rejects observer writes', async () => {
     const ws = await createWorkspace(stack.app, 'observer-rest-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
 
     const createTeam = await stack.app.request('/v1/channels', {
       method: 'POST',
@@ -85,6 +104,14 @@ describe('observer tokens', () => {
       body: JSON.stringify({ text: 'visible general message' }),
     });
     expect(general.status).toBe(201);
+    const generalBody = await general.json() as { data: { id: string } };
+
+    const bobGeneral = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ text: 'hidden bob message' }),
+    });
+    expect(bobGeneral.status).toBe(201);
 
     const team = await stack.app.request('/v1/channels/team-chat/messages', {
       method: 'POST',
@@ -120,6 +147,71 @@ describe('observer tokens', () => {
     expect(searchBody.data.map((result) => result.text)).toContain('visible general message');
     expect(searchBody.data.map((result) => result.text)).not.toContain('hidden team message');
     expect(searchBody.data.every((result) => result.channel_name === 'general')).toBe(true);
+
+    const aliceOnly = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'alice-reader',
+      scopes: ['messages:read', 'search:read'],
+      filters: { channel_names: ['general'], agent_ids: [alice.agentId] },
+    });
+    const filteredMessages = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${aliceOnly.data.token}` },
+    });
+    const filteredBody = await filteredMessages.json() as { data: Array<{ text: string }> };
+    expect(filteredMessages.status).toBe(200);
+    expect(filteredBody.data.map((message) => message.text)).toContain('visible general message');
+    expect(filteredBody.data.map((message) => message.text)).not.toContain('hidden bob message');
+
+    const filteredSearch = await stack.app.request('/v1/search?q=message', {
+      headers: { authorization: `Bearer ${aliceOnly.data.token}` },
+    });
+    const filteredSearchBody = await filteredSearch.json() as { data: Array<{ text: string }> };
+    expect(filteredSearch.status).toBe(200);
+    expect(filteredSearchBody.data.map((result) => result.text)).toContain('visible general message');
+    expect(filteredSearchBody.data.map((result) => result.text)).not.toContain('hidden bob message');
+
+    const futureOnly = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'future-reader',
+      scopes: ['messages:read', 'search:read', 'reactions:read'],
+      filters: { channel_names: ['general'], created_after: '2999-01-01T00:00:00.000Z' },
+    });
+    const futureMessages = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${futureOnly.data.token}` },
+    });
+    const futureMessagesBody = await futureMessages.json() as { data: unknown[] };
+    expect(futureMessages.status).toBe(200);
+    expect(futureMessagesBody.data).toHaveLength(0);
+
+    const futureSingle = await stack.app.request(`/v1/messages/${generalBody.data.id}`, {
+      headers: { authorization: `Bearer ${futureOnly.data.token}` },
+    });
+    expect(futureSingle.status).toBe(404);
+
+    const futureSearch = await stack.app.request('/v1/search?q=message', {
+      headers: { authorization: `Bearer ${futureOnly.data.token}` },
+    });
+    const futureSearchBody = await futureSearch.json() as { data: unknown[] };
+    expect(futureSearch.status).toBe(200);
+    expect(futureSearchBody.data).toHaveLength(0);
+
+    const reactionsWithMessageScope = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(reactionsWithMessageScope.status).toBe(403);
+
+    const reactionsReader = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'reaction-reader',
+      scopes: ['reactions:read'],
+      filters: { channel_names: ['general'] },
+    });
+    const reactionsWithReactionScope = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
+      headers: { authorization: `Bearer ${reactionsReader.data.token}` },
+    });
+    expect(reactionsWithReactionScope.status).toBe(200);
+
+    const futureReactions = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
+      headers: { authorization: `Bearer ${futureOnly.data.token}` },
+    });
+    expect(futureReactions.status).toBe(404);
 
     const write = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
@@ -224,6 +316,38 @@ describe('observer tokens', () => {
     expect(sock.ofType('message.created')[0]).toMatchObject({
       channel: 'general',
       message: { text: 'stream visible' },
+    });
+  });
+
+  it('allows DM stream events when channel filters are present and include_dms is enabled', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-stream-dm-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const observer = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-dms',
+      scopes: ['stream:read'],
+      filters: { channel_names: ['general'], include_dms: true },
+    });
+
+    const [row] = await stack.runtime.deps.db
+      .select()
+      .from(observerTokens)
+      .where(eq(observerTokens.id, observer.data.id));
+    const sock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, sock, row);
+
+    const dm = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ to: 'bob', text: 'dm visible despite channel filters' }),
+    });
+    expect(dm.status).toBe(201);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sock.ofType('dm.received')).toHaveLength(1);
+    expect(sock.ofType('dm.received')[0]).toMatchObject({
+      message: { text: 'dm visible despite channel filters' },
     });
   });
 });

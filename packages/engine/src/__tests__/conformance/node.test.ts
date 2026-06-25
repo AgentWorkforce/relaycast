@@ -444,6 +444,28 @@ describe('node adapter conformance', () => {
           }),
         }),
       ]);
+
+      bobSock.received.length = 0;
+      const emailReplyRes = await stack.app.request(`/v1/messages/${parent.data.id}/replies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'please email alice@bob.com' }),
+      });
+      expect(emailReplyRes.status).toBeLessThan(300);
+      const emailReply = await emailReplyRes.json() as { data: { id: string } };
+
+      const emailRows = await stack.runtime.deps.db
+        .select({ id: deliveries.id, reason: deliveries.reason })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, emailReply.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(emailRows).toHaveLength(0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(deliverFramesOfType(bobSock, 'thread.reply')).toHaveLength(0);
     });
 
     it('replays queued direct-node deliveries when the agent socket reconnects', async () => {
