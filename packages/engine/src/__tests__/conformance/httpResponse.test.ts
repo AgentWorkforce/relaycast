@@ -481,27 +481,8 @@ describe('route response helpers', () => {
     });
   });
 
-  it('rejects mixed workspace feature override payloads and caps activity limits', async () => {
+  it('caps activity limits', async () => {
     const ws = await createWorkspace(stack.app, 'workspace-feature-validation-ws');
-
-    for (const path of ['/v1/workspace/stream', '/v1/workspace/fleet-nodes']) {
-      const mixed = await stack.app.request(path, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${ws.workspaceKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ enabled: true, mode: 'inherit' }),
-      });
-      expect(mixed.status).toBe(400);
-      await expect(mixed.json()).resolves.toEqual({
-        ok: false,
-        error: {
-          code: 'invalid_request',
-          message: 'Provide { enabled: boolean } or { mode: "inherit" }',
-        },
-      });
-    }
 
     const tooLarge = await stack.app.request('/v1/activity?limit=501', {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },

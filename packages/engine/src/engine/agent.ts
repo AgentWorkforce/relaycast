@@ -1,9 +1,10 @@
 import { eq, and, lt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, channels, channelMembers, actions, deliveries } from '../db/schema.js';
+import { agents, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
+import { directNodeIdForAgent, ensureDirectNodeForAgent } from './node.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -87,6 +88,8 @@ export async function registerAgent(
       role: 'member',
     });
   }
+
+  await ensureDirectNodeForAgent(db, workspaceId, agent);
 
   return {
     id: agentId,
@@ -281,6 +284,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   if (!agent) return false;
 
   await db.delete(agents).where(eq(agents.id, agent.id));
+  await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
   return true;
 }
 
@@ -374,6 +378,8 @@ export async function spawnAgent(
       })
       .where(eq(agents.id, agentId));
 
+    await ensureDirectNodeForAgent(db, workspaceId, existing);
+
     createdAt = existing.createdAt.toISOString();
   } else {
     // Create new agent
@@ -423,6 +429,8 @@ export async function spawnAgent(
         role: 'member',
       }).onConflictDoNothing();
     }
+
+    await ensureDirectNodeForAgent(db, workspaceId, agent);
   }
 
   // Join specified channel if provided
@@ -490,6 +498,7 @@ export async function releaseAgent(
   if (data.delete_agent) {
     // Delete the agent entirely
     await db.delete(agents).where(eq(agents.id, agent.id));
+    await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
     return {
       name: data.name,
       released: true,

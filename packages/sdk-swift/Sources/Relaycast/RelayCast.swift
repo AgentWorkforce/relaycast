@@ -376,7 +376,6 @@ public final class RelayCast: @unchecked Sendable {
 
 public final class RelayWorkspaceService: @unchecked Sendable {
     private unowned let relay: RelayCast
-    public lazy var stream = RelayWorkspaceStreamService(relay: relay)
 
     init(relay: RelayCast) {
         self.relay = relay
@@ -396,26 +395,6 @@ public final class RelayWorkspaceService: @unchecked Sendable {
 
     public func delete() async throws {
         _ = try await relay.client.delete("/v1/workspace")
-    }
-}
-
-public final class RelayWorkspaceStreamService: @unchecked Sendable {
-    private unowned let relay: RelayCast
-
-    init(relay: RelayCast) {
-        self.relay = relay
-    }
-
-    public func get() async throws -> WorkspaceStreamConfig {
-        try await relay.client.get("/v1/workspace/stream")
-    }
-
-    public func set(enabled: Bool) async throws -> WorkspaceStreamConfig {
-        try await relay.client.put("/v1/workspace/stream", body: WorkspaceStreamSetRequest(enabled: enabled))
-    }
-
-    public func inherit() async throws -> WorkspaceStreamConfig {
-        try await relay.client.put("/v1/workspace/stream", body: WorkspaceStreamSetRequest(mode: "inherit"))
     }
 }
 

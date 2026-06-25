@@ -67,14 +67,6 @@ pub struct SetSystemPromptRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceStreamConfig {
-    pub enabled: bool,
-    pub default_enabled: bool,
-    #[serde(rename = "override")]
-    pub override_value: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceStats {
     pub agents: AgentStats,
     pub messages: MessageStats,

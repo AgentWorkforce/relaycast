@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { RelayCast, RelayError } from '@relaycast/sdk';
 import {
   resolveRelayServerCandidatesFromRequest,
   selectEngineForKey,
@@ -51,28 +50,6 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Invalid API key' },
         { status: 401 }
       );
-    }
-
-    const relay = new RelayCast({ apiKey, baseUrl: relayServer });
-
-    // Enable workspace stream for this workspace so observer dashboard
-    // receives realtime event fanout.
-    try {
-      await relay.workspace.stream.set(true);
-    } catch (error) {
-      // Best-effort: dashboard can still load and show in-app recovery controls.
-      const relayError = error instanceof RelayError ? error : null;
-      console.warn('[api/auth/login] Failed to enable workspace stream', {
-        detail: relayError
-          ? `${relayError.code} (${relayError.status}): ${relayError.message}`
-          : error instanceof Error
-            ? error.message
-            : String(error),
-        baseUrl: relayServer,
-        host: request.headers.get('host'),
-        observerHost: request.headers.get('x-relaycast-observer-host'),
-        forwardedHost: request.headers.get('x-forwarded-host'),
-      });
     }
 
     const cookieStore = await cookies();

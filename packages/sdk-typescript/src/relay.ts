@@ -146,18 +146,6 @@ export interface RelayCastOptions {
   agentRelayDistinctId?: string;
 }
 
-export interface WorkspaceStreamConfig {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  override: boolean | null;
-}
-
-export interface WorkspaceFleetNodesConfig {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  override: boolean | null;
-}
-
 export interface WorkspaceBootstrapOptions {
   apiKey?: string;
   baseUrl?: string;
@@ -603,20 +591,6 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
-    stream: {
-      get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
-      set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { enabled }),
-      inherit: (): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
-    },
-    fleetNodes: {
-      get: (): Promise<WorkspaceFleetNodesConfig> => this.client.get('/v1/workspace/fleet-nodes'),
-      set: (enabled: boolean): Promise<WorkspaceFleetNodesConfig> =>
-        this.client.put('/v1/workspace/fleet-nodes', { enabled }),
-      inherit: (): Promise<WorkspaceFleetNodesConfig> =>
-        this.client.put('/v1/workspace/fleet-nodes', { mode: 'inherit' }),
-    },
   };
 
   systemPrompt = {

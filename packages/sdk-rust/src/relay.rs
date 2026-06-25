@@ -160,33 +160,6 @@ impl RelayCast {
         self.client.delete("/v1/workspace", None).await
     }
 
-    /// Get effective workspace stream configuration.
-    pub async fn workspace_stream_get(&self) -> Result<WorkspaceStreamConfig> {
-        self.client.get("/v1/workspace/stream", None, None).await
-    }
-
-    /// Set workspace stream override.
-    pub async fn workspace_stream_set(&self, enabled: bool) -> Result<WorkspaceStreamConfig> {
-        self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "enabled": enabled })),
-                None,
-            )
-            .await
-    }
-
-    /// Clear workspace stream override and inherit default behavior.
-    pub async fn workspace_stream_inherit(&self) -> Result<WorkspaceStreamConfig> {
-        self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "mode": "inherit" })),
-                None,
-            )
-            .await
-    }
-
     // === System Prompt ===
 
     /// Get the workspace system prompt.

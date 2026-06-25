@@ -33,6 +33,14 @@ interface NodeSocketLike {
 
 type CapabilityLike = string | FleetCapability;
 
+export function directNodeIdForAgent(agentId: string): string {
+  return `node_direct_${agentId}`;
+}
+
+function directNodeNameForAgent(agentId: string): string {
+  return `direct-${agentId}`;
+}
+
 function capabilityName(capability: CapabilityLike | null | undefined): string | null {
   if (typeof capability === 'string') return capability;
   return capability?.name ?? null;
@@ -473,6 +481,130 @@ async function releaseNodeAgentSlots(db: Db, workspaceId: string, nodeIds: strin
     ));
 }
 
+export async function ensureDirectNodeForAgent(
+  db: Db,
+  workspaceId: string,
+  agent: Pick<AgentRow, 'id' | 'name' | 'locationNodeId'>,
+  opts: { force?: boolean; online?: boolean; sessionRef?: string | null } = {},
+) {
+  return runAtomic(db, (tx) => ensureDirectNodeForAgentInTx(tx, workspaceId, agent, opts));
+}
+
+async function ensureDirectNodeForAgentInTx(
+  db: Db,
+  workspaceId: string,
+  agent: Pick<AgentRow, 'id' | 'name' | 'locationNodeId'>,
+  opts: { force?: boolean; online?: boolean; sessionRef?: string | null } = {},
+) {
+  const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, agent.id);
+  const nodeId = directNodeIdForAgent(agent.id);
+  const alreadyDirect = activeNodeIds.includes(nodeId);
+  if (!opts.force && activeNodeIds.length > 0 && !alreadyDirect) {
+    return null;
+  }
+
+  const now = new Date();
+  const [existingDirect] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+
+  let directNode = existingDirect;
+  if (!directNode) {
+    const tokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agent.id}:${randomHex(16)}`);
+    [directNode] = await db
+      .insert(nodes)
+      .values({
+        id: nodeId,
+        workspaceId,
+        name: directNodeNameForAgent(agent.id),
+        tokenHash,
+        kind: 'direct_ws',
+        deliveryAdapter: 'direct.ws.v1',
+        deliveryConfig: {
+          implicit: true,
+          agent_id: agent.id,
+          agent_name: agent.name,
+        },
+        capabilities: [],
+        maxAgents: 1,
+        activeAgents: 0,
+        tags: ['implicit', 'direct_ws'],
+        version: 'implicit',
+        status: opts.online ? 'online' : 'offline',
+        handlersLive: false,
+        load: 0,
+        lastHeartbeatAt: opts.online ? now : null,
+        createdAt: now,
+      })
+      .returning();
+  } else {
+    const update: Partial<typeof nodes.$inferInsert> = {
+      name: directNodeNameForAgent(agent.id),
+      kind: 'direct_ws',
+      deliveryAdapter: 'direct.ws.v1',
+      deliveryConfig: {
+        implicit: true,
+        agent_id: agent.id,
+        agent_name: agent.name,
+      },
+      capabilities: [],
+      maxAgents: 1,
+      tags: ['implicit', 'direct_ws'],
+      version: 'implicit',
+      handlersLive: false,
+      load: 0,
+    };
+    if (opts.online) {
+      update.status = 'online';
+      update.lastHeartbeatAt = now;
+    }
+    [directNode] = await db
+      .update(nodes)
+      .set(update)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+      .returning();
+  }
+
+  await upsertAgentNodeBinding(db, workspaceId, agent, nodeId, {
+    sessionRef: opts.sessionRef ?? null,
+    deactivateExisting: true,
+  });
+  await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+  await db
+    .update(nodes)
+    .set({
+      activeAgents: 1,
+      status: opts.online ? 'online' : directNode.status,
+      lastHeartbeatAt: opts.online ? now : directNode.lastHeartbeatAt,
+    })
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+
+  return publicNode({
+    ...directNode,
+    activeAgents: 1,
+    status: opts.online ? 'online' : directNode.status,
+    lastHeartbeatAt: opts.online ? now : directNode.lastHeartbeatAt,
+  });
+}
+
+export async function markDirectNodeOfflineForAgent(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+) {
+  const nodeId = directNodeIdForAgent(agentId);
+  await db
+    .update(nodes)
+    .set({
+      status: 'offline',
+      handlersLive: false,
+      load: 0,
+      lastHeartbeatAt: new Date(),
+    })
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+}
+
 function serializeBinding(row: {
   id: string;
   agentId: string;
@@ -590,10 +722,7 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
     await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
 
     if (agent.locationNodeId === node.id) {
-      await tx
-        .update(agents)
-        .set({ locationType: 'self_connected', locationNodeId: null, sessionRef: null, lastSeen: new Date() })
-        .where(eq(agents.id, agent.id));
+      await ensureDirectNodeForAgentInTx(tx, workspaceId, agent, { force: true });
     }
     return true;
   });
@@ -685,10 +814,12 @@ export async function registerAgentViaNode(
     }
 
     await autoJoinGeneral(tx, workspaceId, result.id);
+    const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, result.id);
     await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
       sessionRef: message.session_ref ?? null,
       deactivateExisting: true,
     });
+    await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
     return {
       agent_id: result.id,
       name: result.name,
@@ -722,6 +853,7 @@ export async function deregisterAgentViaNode(
     .where(and(...conditions))
     .returning();
   if (updated) {
+    const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, updated.id);
     await db
       .update(agentNodeBindings)
       .set({ status: 'inactive', updatedAt: new Date() })
@@ -731,6 +863,14 @@ export async function deregisterAgentViaNode(
         eq(agentNodeBindings.agentId, updated.id),
         eq(agentNodeBindings.status, 'active'),
       ));
+    await releaseNodeAgentSlots(db, workspaceId, [nodeId]);
+    await ensureDirectNodeForAgent(db, workspaceId, updated, { force: true });
+    await db
+      .update(agents)
+      .set({ status: 'offline', lastSeen: new Date() })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, updated.id)));
+    await markDirectNodeOfflineForAgent(db, workspaceId, updated.id);
+    await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
   }
   return updated ?? null;
 }
@@ -787,6 +927,7 @@ export async function reconcileInventory(
   for (const item of inventoryAgents) {
     const existing = existingByName.get(item.name);
     if (existing) {
+      const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
       await db
         .update(agents)
         .set({
@@ -802,6 +943,7 @@ export async function reconcileInventory(
         sessionRef: item.session_ref ?? existing.sessionRef,
         deactivateExisting: true,
       });
+      await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
     }
 
     if (!item.invocation_id) continue;

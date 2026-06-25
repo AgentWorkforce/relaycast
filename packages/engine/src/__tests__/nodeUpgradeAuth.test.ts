@@ -10,8 +10,6 @@ import { startServer, type RunningServer } from '../entrypoints/node.js';
  * HTTP server). Asserts:
  *   - the node token is accepted from `Authorization: Bearer` (the relay Rust
  *     broker's transport) AND from the `?token=` query param (SDK/Pear)
- *   - the Phase 6 fleet flag gates the upgrade (rejected when the workspace is
- *     off), exactly like the rk_live workspace-stream gate
  *
  * This is the exact cross-repo handshake (broker #1107 send-side ↔ engine #192
  * read-side) that shipped mismatched; it must never regress.
@@ -26,7 +24,7 @@ describe('node control WS upgrade auth (self-host)', () => {
       dbPath: ':memory:',
       port: 0,
       migrate: true,
-      config: { environment: 'test', fleetNodesEnabled: false },
+      config: { environment: 'test' },
     });
     const addr = running.server.address() as AddressInfo;
     base = `http://127.0.0.1:${addr.port}`;
@@ -63,20 +61,13 @@ describe('node control WS upgrade auth (self-host)', () => {
     return body.data.token as string;
   }
 
-  it('accepts the node token via Authorization: Bearer AND ?token= when the flag is on', async () => {
+  it('accepts the node token via Authorization: Bearer AND ?token=', async () => {
     const ws = await api('/v1/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'ws-on' }),
+      body: JSON.stringify({ name: 'ws-node-auth' }),
     });
     const workspaceKey = ws.body.data.api_key as string;
-    // Enable the fleet surface for this workspace (global default is off).
-    const put = await api('/v1/workspace/fleet-nodes', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(put.body.data.enabled).toBe(true);
 
     const token = await enrollNode(workspaceKey, 'header-node');
 
@@ -88,11 +79,11 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(await tryUpgrade({}, `?token=${token}`)).toBe(101);
   });
 
-  it('gates agent realtime upgrades when workspace streams are disabled', async () => {
+  it('accepts agent realtime upgrades without a workspace stream mode', async () => {
     const ws = await api('/v1/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'stream-off' }),
+      body: JSON.stringify({ name: 'agent-ws-on' }),
     });
     const workspaceKey = ws.body.data.api_key as string;
 
@@ -104,39 +95,18 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(agent.status).toBe(201);
     const token = agent.body.data.token as string;
 
-    expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(404);
-
-    const enabled = await api('/v1/workspace/stream', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(enabled.status).toBe(200);
-    expect(enabled.body.data.enabled).toBe(true);
     expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(101);
   });
 
-  it('rejects the upgrade while the workspace fleet flag is off (404)', async () => {
+  it('accepts workspace observer realtime upgrades with workspace keys', async () => {
     const ws = await api('/v1/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'ws-off' }),
+      body: JSON.stringify({ name: 'workspace-ws-on' }),
     });
     const workspaceKey = ws.body.data.api_key as string;
-    // Enable just long enough to mint a node token, then turn it back off.
-    await api('/v1/workspace/fleet-nodes', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ enabled: true }),
-    });
-    const token = await enrollNode(workspaceKey, 'gated-node');
-    await api('/v1/workspace/fleet-nodes', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-      body: JSON.stringify({ enabled: false }),
-    });
 
-    expect(await tryUpgrade({ authorization: `Bearer ${token}` })).toBe(404);
+    expect(await tryUpgrade({}, `?token=${workspaceKey}`, '/v1/ws')).toBe(101);
   });
 
   it('rejects a missing or malformed token (401)', async () => {

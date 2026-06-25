@@ -12,7 +12,7 @@ import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 import { actionInvocations } from '../../db/schema.js';
 import { replayMissedEvents } from '../../engine/resyncQuery.js';
-import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import { handleNodeControlMessage, markDirectNodeOfflineForAgent, markNodeOffline } from '../../engine/node.js';
 import { reserveNodeCapacity } from '../../engine/placement.js';
 import { markDrainedInvocationDispatched } from '../../engine/action.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
@@ -316,8 +316,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       handleMessage: (raw) => this.onAgentMessage(workspaceId, agentId, socket, raw),
       handleClose: async () => {
         conn.sockets.delete(socket);
-        if (conn.sockets.size === 0 && this.presence) {
-          await this.presence.disconnect(workspaceId, agentId).catch(() => {});
+        if (conn.sockets.size === 0) {
+          if (this.presence) {
+            await this.presence.disconnect(workspaceId, agentId).catch(() => {});
+          }
+          await markDirectNodeOfflineForAgent(this.db, workspaceId, agentId).catch(() => {});
         }
       },
     };

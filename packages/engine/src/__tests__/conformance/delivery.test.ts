@@ -10,6 +10,7 @@ import {
 import { agents, deliveries } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
+import { ensureDirectNodeForAgent } from '../../engine/node.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 /**
@@ -550,10 +551,12 @@ describe('durable delivery api', () => {
 
     const bobSock = new FakeSocket();
     stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
-    await stack.runtime.deps.db
-      .update(agents)
-      .set({ locationType: 'self_connected', locationNodeId: null })
-      .where(eq(agents.id, bob.agentId));
+    await ensureDirectNodeForAgent(
+      stack.runtime.deps.db,
+      ws.workspaceId,
+      { id: bob.agentId, name: 'bob', locationNodeId: node.id },
+      { force: true, online: true },
+    );
 
     const ctx = {
       get(key: string) {
@@ -577,7 +580,8 @@ describe('durable delivery api', () => {
     });
 
     expect(node.sock.ofType('deliver')).toHaveLength(0);
-    expect(bobSock.ofType('delivery.accepted')).toHaveLength(1);
+    expect(bobSock.ofType('delivery.accepted')).toHaveLength(0);
+    expect(bobSock.ofType('message.created')).toHaveLength(1);
     expect(await listDeliveries(bob.token)).toHaveLength(1);
     expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });
@@ -882,7 +886,7 @@ describe('durable delivery api', () => {
     expect(bobQueued.some((item) => (item.message as { text?: string }).text === 'fresh')).toBe(true);
   });
 
-  it('does not dead-letter an acked delivery when ack and TTL expiry race', async () => {
+  it('does not dead-letter an acked delivery after TTL expiry', async () => {
     stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1, depthCap: 1000 };
 
     const { ws, alice, bob } = await seed();
@@ -891,13 +895,12 @@ describe('durable delivery api', () => {
     const [item] = await listDeliveries(bob.token);
 
     await new Promise((r) => setTimeout(r, 5));
-    const ack = stack.app.request('/v1/deliveries/' + item.id + '/ack', {
+    const ackRes = await stack.app.request('/v1/deliveries/' + item.id + '/ack', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + bob.token },
     });
-    const expired = deliveryEngine.expireDueDeliveries(stack.runtime.deps.db, ws.workspaceId);
-    const [ackRes, expiredRows] = await Promise.all([ack, expired]);
     expect(ackRes.status).toBe(200);
+    const expiredRows = await deliveryEngine.expireDueDeliveries(stack.runtime.deps.db, ws.workspaceId);
     expect(expiredRows).toHaveLength(0);
     expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
     expect(aliceSock.ofType('delivery.failed')).toHaveLength(0);

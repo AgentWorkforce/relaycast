@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { requireFleetNodes } from '../middleware/fleetNodes.js';
 import { errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import {
@@ -76,7 +75,7 @@ function strictExternalUrl(c: Parameters<typeof jsonError>[0]): boolean {
 }
 
 // POST /v1/nodes - enroll or rotate a node token (workspace-key only)
-nodeRoutes.post('/nodes', requireWorkspaceKey, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, createNodeSchema, 'invalid node body');
     if (!parsed.ok) {
@@ -112,7 +111,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, requireFleetNodes, rateLimit, asy
 });
 
 // GET /v1/nodes?capability=&name= - node roster
-nodeRoutes.get('/nodes', requireAuth, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.get('/nodes', requireAuth, rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodes(c.get('db'), c.get('workspace').id, {
       capability: c.req.query('capability'),
@@ -125,7 +124,7 @@ nodeRoutes.get('/nodes', requireAuth, requireFleetNodes, rateLimit, async (c) =>
 });
 
 // GET /v1/nodes/:name/agents - active agent bindings for a node
-nodeRoutes.get('/nodes/:name/agents', requireAuth, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name/agents', requireAuth, rateLimit, async (c) => {
   try {
     const result = await nodeEngine.listNodeAgents(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {
@@ -138,7 +137,7 @@ nodeRoutes.get('/nodes/:name/agents', requireAuth, requireFleetNodes, rateLimit,
 });
 
 // POST /v1/nodes/:name/agents - bind an agent to a node delivery host
-nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const parsed = await parseJsonBody(c, bindAgentSchema, (failure) => {
       const hasAgentIssue = failure.error.issues.some((issue) => issue.path[0] === 'agent_name');
@@ -164,7 +163,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, requireFleetNodes, r
 });
 
 // DELETE /v1/nodes/:name/agents/:agentName - remove an active node binding
-nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, rateLimit, async (c) => {
   try {
     const deleted = await nodeEngine.unbindAgentFromNode(
       c.get('db'),
@@ -182,7 +181,7 @@ nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, require
 });
 
 // GET /v1/nodes/:name - single node roster entry
-nodeRoutes.get('/nodes/:name', requireAuth, requireFleetNodes, rateLimit, async (c) => {
+nodeRoutes.get('/nodes/:name', requireAuth, rateLimit, async (c) => {
   try {
     const result = await nodeEngine.getPublicNode(c.get('db'), c.get('workspace').id, c.req.param('name'));
     if (!result) {

@@ -7,9 +7,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as groupDmEngine from '../engine/groupDm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
-import { and, eq, isNull } from 'drizzle-orm';
-import { dmParticipants } from '../db/schema.js';
-import { fanoutToAgents } from './fanout.js';
+import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
@@ -158,24 +156,7 @@ groupDmRoutes.post(
           _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
         };
         const eventData = toGroupDmReceivedEventData(idempotent.data);
-        try {
-          const rows = await db
-            .select({ agentId: dmParticipants.agentId })
-            .from(dmParticipants)
-            .where(
-              and(
-                eq(dmParticipants.conversationId, conversationId),
-                isNull(dmParticipants.leftAt),
-              ),
-            );
-          runInBackground(
-            c,
-            fanoutToAgents(c, rows.map((r) => r.agentId), 'group_dm.received', eventData),
-            'fanout group_dm.received',
-          );
-        } catch {
-          // Ignore fanout failures
-        }
+        runInBackground(c, publishWorkspaceEvent(c, 'group_dm.received', eventData), 'publish group_dm.received');
 
         if (_deliveries && _deliveries.length > 0) {
           runInBackground(

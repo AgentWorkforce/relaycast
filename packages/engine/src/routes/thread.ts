@@ -6,7 +6,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
-import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
+import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
@@ -94,18 +94,10 @@ threadRoutes.post(
         };
         const eventData = toThreadReplyEventData(idempotent.data);
         if (publicReplyData.channel_id) {
-          const channelId = publicReplyData.channel_id;
           runInBackground(
             c,
-            (async () => {
-              const dmAgentIds = await getDmParticipantAgentIds(c, channelId);
-              if (dmAgentIds) {
-                await fanoutToAgents(c, dmAgentIds, 'thread.reply', eventData);
-              } else {
-                await fanoutToChannel(c, channelId, 'thread.reply', eventData);
-              }
-            })(),
-            'fanout thread.reply',
+            publishWorkspaceEvent(c, 'thread.reply', eventData, publicReplyData.channel_id),
+            'publish thread.reply',
           );
         }
 

@@ -244,6 +244,19 @@ export const FleetActionInvokeMessageSchema = z
   .strict();
 export type FleetActionInvokeMessage = z.infer<typeof FleetActionInvokeMessageSchema>;
 
+export const FleetContextUpdateMessageSchema = z
+  .object({
+    ...FleetWireEnvelopeFields,
+    type: z.literal('context.update'),
+    topic: z.enum(['presence', 'channel', 'thread']),
+    event: z.string(),
+    channel_id: z.string().nullable().optional(),
+    agent_ids: z.array(z.string()).optional(),
+    data: FleetWireJsonValueSchema,
+  })
+  .strict();
+export type FleetContextUpdateMessage = z.infer<typeof FleetContextUpdateMessageSchema>;
+
 export const FleetPingMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
@@ -275,6 +288,7 @@ export type FleetBrokerToRelaycastMessageType = FleetBrokerToRelaycastMessage['t
 export const FleetRelaycastToBrokerMessageSchema = z.discriminatedUnion('type', [
   FleetDeliverMessageSchema,
   FleetActionInvokeMessageSchema,
+  FleetContextUpdateMessageSchema,
   FleetPingMessageSchema,
   FleetReplyMessageSchema,
   FleetErrorMessageSchema,

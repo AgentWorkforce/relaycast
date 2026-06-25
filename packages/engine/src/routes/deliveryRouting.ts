@@ -11,7 +11,6 @@ import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '..
 import { hmacSha256Hex } from '../lib/crypto.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
-import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 type HonoContext = Context<AppEnv>;
@@ -71,11 +70,23 @@ async function fanoutToAgentsForContext(
   const unique = [...new Set(agentIds)];
   const tasks: Promise<unknown>[] = [
     ctx.engine.realtime.deliverToAgents({ workspaceId: ctx.workspaceId, agentIds: unique, event: payload }),
+    ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }),
   ];
-  if (await isWorkspaceStreamEnabled(ctx.engine.kv, ctx.workspaceId, ctx.engine.config?.workspaceStreamEnabled ?? false)) {
-    tasks.push(ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }));
-  }
   await Promise.allSettled(tasks);
+}
+
+async function deliverDirectWsEvent(
+  ctx: RoutingContext,
+  agentIds: string[],
+  type: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
+  await ctx.engine.realtime.deliverToAgents({
+    workspaceId: ctx.workspaceId,
+    agentIds: [...new Set(agentIds)],
+    event: payload,
+  });
 }
 
 async function resolveLiveLocations(
@@ -342,13 +353,13 @@ async function routeOneDeliveryOutcome(
     return;
   }
 
-  await fanoutToAgentsForContext(ctx, [delivery.agentId], 'delivery.accepted', {
-    delivery_id: delivery.id,
-    message_id: delivery.messageId,
-    channel_id: (eventData.channel_id as string | undefined) ?? null,
-    reason: delivery.reason,
-    seq: delivery.seq,
-  });
+  if (locationType === 'via_node' && locationNodeId && nodeKind === 'direct_ws') {
+    await deliverDirectWsEvent(ctx, [delivery.agentId], eventType, eventData);
+    await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+    return;
+  }
+
+  await deliverDirectWsEvent(ctx, [delivery.agentId], eventType, eventData);
   await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
 }
 

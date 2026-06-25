@@ -17,6 +17,7 @@ import {
   missingWsToken,
   queryOrBearerToken,
 } from './engine/wsAuth.js';
+import { ensureDirectNodeForAgent } from './engine/node.js';
 
 // Route imports
 import { healthRoutes } from './routes/health.js';
@@ -103,7 +104,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return jsonError(c, 'unauthorized', 'Missing token', 401);
     }
 
-    const { auth, connections, kv, config, presence } = c.get('engine');
+    const { auth, connections, presence } = c.get('engine');
     const db = c.get('db');
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
@@ -111,16 +112,19 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       version: originInfo.origin_version,
     };
     const originActor = c.get('originActor') ?? 'unknown';
-    const authResult = await authenticateRealtimeWs({ auth, db, kv, config }, token);
+    const authResult = await authenticateRealtimeWs({ auth, db }, token);
 
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
 
     if (authResult.scope === 'agent') {
+      await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
+        force: true,
+        online: true,
+      });
       // Register the agent online (fire-and-forget)
       presence.heartbeat(authResult.workspace.id, authResult.agent.id, authResult.agent.name).catch(() => {});
-
       const response = await connections.upgrade({
         request: c.req.raw,
         scope: 'agent',
@@ -170,9 +174,9 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return jsonError(c, error.code, error.message, error.status);
     }
 
-    const { auth, nodeConnections, kv, config } = c.get('engine');
+    const { auth, nodeConnections } = c.get('engine');
     const db = c.get('db');
-    const authResult = await authenticateNodeWs({ auth, db, kv, config }, token);
+    const authResult = await authenticateNodeWs({ auth, db }, token);
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }

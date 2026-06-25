@@ -50,52 +50,6 @@ describe('Relay workspace methods', () => {
     expect(init.method).toBe('GET');
   });
 
-  it('workspace.fleetNodes.get() calls GET /v1/workspace/fleet-nodes', async () => {
-    const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-    mockFetch.mockImplementation(() =>
-      mockResponse({ enabled: true, default_enabled: false, override: true }),
-    );
-    const result = await relay.workspace.fleetNodes.get();
-
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://cast.agentrelay.com/v1/workspace/fleet-nodes');
-    expect(init.method).toBe('GET');
-    expect(result).toEqual({ enabled: true, defaultEnabled: false, override: true });
-  });
-
-  it('workspace.fleetNodes.set() calls PUT /v1/workspace/fleet-nodes with enabled', async () => {
-    const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-    mockFetch.mockImplementation(() =>
-      mockResponse({ enabled: true, default_enabled: false, override: true }),
-    );
-    await relay.workspace.fleetNodes.set(true);
-
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://cast.agentrelay.com/v1/workspace/fleet-nodes');
-    expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body as string)).toEqual({ enabled: true });
-  });
-
-  it('workspace.fleetNodes.inherit() calls PUT /v1/workspace/fleet-nodes with inherit mode', async () => {
-    const { RelayCast } = await import('../relay.js');
-    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-    mockFetch.mockImplementation(() =>
-      mockResponse({ enabled: false, default_enabled: false, override: null }),
-    );
-    const result = await relay.workspace.fleetNodes.inherit();
-
-    const [url, init] = mockFetch.mock.calls[0]!;
-    expect(url).toBe('https://cast.agentrelay.com/v1/workspace/fleet-nodes');
-    expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body as string)).toEqual({ mode: 'inherit' });
-    expect(result).toEqual({ enabled: false, defaultEnabled: false, override: null });
-  });
-
   it('dmMessages() camelizes DM message fields', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

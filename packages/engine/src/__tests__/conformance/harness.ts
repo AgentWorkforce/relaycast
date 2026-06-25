@@ -14,8 +14,6 @@ export interface TestStack {
 export function makeNodeStack(options?: {
   ttlMs?: number;
   mailbox?: EngineConfig['mailbox'];
-  /** Phase 6 rollout flag default. Defaults to true so node tests run unchanged. */
-  fleetNodesEnabled?: boolean;
   environment?: string;
 }): TestStack {
   const runtime = createNodeRuntime({
@@ -24,8 +22,6 @@ export function makeNodeStack(options?: {
     migrate: true,
     config: {
       environment: options?.environment ?? 'test',
-      workspaceStreamEnabled: true,
-      fleetNodesEnabled: options?.fleetNodesEnabled ?? true,
       mailbox: options?.mailbox,
     },
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.

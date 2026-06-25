@@ -348,22 +348,11 @@ export async function invokeAction(
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
-    /**
-     * Phase 6 rollout flag. Defaults to `true` so existing callers/tests behave
-     * unchanged; the action route passes the resolved per-workspace value. When
-     * `false`, the two node-control branches below (built-in `spawn` placement and
-     * node-handler dispatch) refuse, while agent-handler actions stay available.
-     */
-    fleetNodesEnabled?: boolean;
   } = {},
 ) {
-  const fleetNodesEnabled = options.fleetNodesEnabled ?? true;
   const action = await fetchAction(db, workspaceId, actionName);
 
   if (!action && actionName === 'spawn') {
-    if (!fleetNodesEnabled) {
-      throw codedError('Fleet nodes are disabled for this workspace', 'fleet_nodes_disabled', 404);
-    }
     return dispatchSpawn({
       db,
       registry: options.nodeConnections,
@@ -385,9 +374,6 @@ export async function invokeAction(
   }
 
   if (action.handlerNodeId) {
-    if (!fleetNodesEnabled) {
-      throw codedError('Fleet nodes are disabled for this workspace', 'fleet_nodes_disabled', 404);
-    }
     if (!options.nodeConnections) {
       throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
     }

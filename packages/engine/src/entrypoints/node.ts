@@ -24,6 +24,7 @@ import {
   missingWsToken,
   queryOrBearerToken,
 } from '../engine/wsAuth.js';
+import { ensureDirectNodeForAgent } from '../engine/node.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -97,8 +98,8 @@ export function startServer(options: StartServerOptions): RunningServer {
 
   // WebSocket upgrades (Node owns these at the socket level).
   const wss = new WebSocketServer({ noServer: true });
-  const { auth, db, kv, config } = runtime.deps;
-  const wsAuthDeps = { auth, db, kv, config };
+  const { auth, db } = runtime.deps;
+  const wsAuthDeps = { auth, db };
 
   (server as unknown as Server).on(
     'upgrade',
@@ -146,6 +147,10 @@ export function startServer(options: StartServerOptions): RunningServer {
         }
 
         if (authResult.scope === 'agent') {
+          await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
+            force: true,
+            online: true,
+          });
           wss.handleUpgrade(req, socket, head, (ws) => {
             const handle = runtime.realtime.attachAgentSocket(
               authResult.workspace.id,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, MessageSquareText, PanelLeft, PanelRight } from 'lucide-react';
+import { MessageSquareText, PanelLeft, PanelRight } from 'lucide-react';
 import { useEvent, usePresence, useChannels, useWebSocket, useRelay } from '@relaycast/react';
 import { AgentSidebar } from './AgentSidebar';
 import { ChatFeed } from './ChatFeed';
@@ -35,9 +35,6 @@ export function DashboardLayout() {
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [unreadChannelCounts, setUnreadChannelCounts] = useState<Record<string, number>>({});
-  const [streamEnabled, setStreamEnabled] = useState<boolean | null>(null);
-  const [streamMessage, setStreamMessage] = useState<string>('');
-  const [streamPending, setStreamPending] = useState(false);
   const [threadMessageId, setThreadMessageId] = useState<string | null>(null);
 
   const fetchDMs = useCallback(() => {
@@ -91,35 +88,6 @@ export function DashboardLayout() {
     }
     return true;
   });
-
-  const refreshStreamStatus = useCallback(async () => {
-    try {
-      const data = await relay.workspace.stream.get();
-      setStreamEnabled(data.enabled);
-      setStreamMessage(data.enabled ? '' : 'Workspace stream is disabled. Realtime updates will be incomplete.');
-    } catch {
-      setStreamEnabled(null);
-      setStreamMessage('');
-    }
-  }, [relay]);
-
-  useEffect(() => {
-    void refreshStreamStatus();
-  }, [refreshStreamStatus]);
-
-  async function handleEnableStream() {
-    setStreamPending(true);
-    setStreamMessage('');
-    try {
-      const data = await relay.workspace.stream.set(true);
-      setStreamEnabled(data.enabled);
-    } catch (error) {
-      setStreamEnabled(false);
-      setStreamMessage(error instanceof Error && error.message ? error.message : 'Failed to enable workspace stream. Please try again.');
-    } finally {
-      setStreamPending(false);
-    }
-  }
 
   function handleSelectAgent(name: string | null) {
     setSelectedAgent(name);
@@ -194,29 +162,6 @@ export function DashboardLayout() {
   const rightPanel = renderRightPanel();
   const mobileDetailsLabel = selectedAgentData ? 'Agent' : threadMessageId ? 'Thread' : 'Console';
 
-  function StreamBanner({ className }: { className?: string }) {
-    return (
-      <div className={cn('brand-card flex items-start justify-between gap-3 px-4 py-3', className)}>
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--status-warning)]" />
-          <div>
-            <div className="text-sm font-medium text-[var(--foreground)]">Workspace stream is disabled</div>
-            <div className="text-sm text-[var(--text-secondary)]">
-              {streamMessage || 'Enable stream to restore full realtime dashboard updates.'}
-            </div>
-          </div>
-        </div>
-        <button
-          onClick={handleEnableStream}
-          disabled={streamPending}
-          className="shrink-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-soft)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {streamPending ? 'Enabling…' : 'Enable stream'}
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="brand-grid min-h-screen">
       <div className="hidden min-h-screen lg:flex lg:gap-3">
@@ -234,8 +179,6 @@ export function DashboardLayout() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">
-          {streamEnabled === false && <StreamBanner className="mb-3" />}
-
           <div className="flex min-h-0 flex-1 gap-3">
             <ChatFeed
               selectedChannel={selectedChannel}
@@ -252,8 +195,6 @@ export function DashboardLayout() {
       </div>
 
       <div className="flex min-h-screen flex-col gap-3 p-3 lg:hidden">
-        {streamEnabled === false && <StreamBanner />}
-
         <div className="brand-glass flex items-center gap-2 p-2">
           <MobilePaneButton
             label="Browse"

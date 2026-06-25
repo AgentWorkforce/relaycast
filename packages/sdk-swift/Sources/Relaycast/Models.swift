@@ -81,28 +81,6 @@ public struct SetSystemPromptRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct WorkspaceStreamConfig: Codable, Equatable, Sendable {
-    public let enabled: Bool
-    public let defaultEnabled: Bool
-    public let overrideValue: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case enabled
-        case defaultEnabled
-        case overrideValue = "override"
-    }
-}
-
-struct WorkspaceStreamSetRequest: Codable, Equatable, Sendable {
-    var enabled: Bool?
-    var mode: String?
-
-    init(enabled: Bool? = nil, mode: String? = nil) {
-        self.enabled = enabled
-        self.mode = mode
-    }
-}
-
 public struct WorkspaceStats: Codable, Equatable, Sendable {
     public let agents: JSONValue?
     public let messages: JSONValue?

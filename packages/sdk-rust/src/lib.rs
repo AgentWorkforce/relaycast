@@ -274,7 +274,6 @@ pub use types::{
     WorkspaceDmConversation,
     WorkspaceDmMessage,
     WorkspaceStats,
-    WorkspaceStreamConfig,
     // Events
     WsEvent,
     // === Parity surfaces: A2A, directory, routing, skills, nodes, triggers, certify, console ===

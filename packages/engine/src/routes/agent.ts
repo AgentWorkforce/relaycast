@@ -8,6 +8,7 @@ import * as agentEngine from '../engine/agent.js';
 import * as directoryEngine from '../engine/directory.js';
 import * as sessionEventEngine from '../engine/sessionEvent.js';
 import { fanoutToWorkspace } from './fanout.js';
+import { sendNodePresenceContext } from '../engine/nodeContext.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -103,6 +104,19 @@ async function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent
     ...(eventId ? { event_id: eventId } : {}),
   };
   runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
+  runInBackground(
+    c,
+    sendNodePresenceContext(
+      {
+        db: c.get('db'),
+        nodeConnections: c.get('engine').nodeConnections,
+        realtime: c.get('engine').realtime,
+        workspaceId: c.get('workspace').id,
+      },
+      { subjectAgentId: agent.id, event: eventType, data: eventData },
+    ),
+    `node context ${eventType}`,
+  );
   await sendWebhookEvent(c, {
     type: eventType,
     workspaceId: c.get('workspace').id,
@@ -434,6 +448,19 @@ agentRoutes.post(
           payload,
         };
         runInBackground(c, fanoutToWorkspace(c, eventType, eventData), `fanout ${eventType}`);
+        runInBackground(
+          c,
+          sendNodePresenceContext(
+            {
+              db,
+              nodeConnections: c.get('engine').nodeConnections,
+              realtime: c.get('engine').realtime,
+              workspaceId: workspace.id,
+            },
+            { subjectAgentId: agentRecord.id, event: eventType, data: eventData },
+          ),
+          `node context ${eventType}`,
+        );
         await sendWebhookEvent(c, {
           type: eventType,
           workspaceId: workspace.id,

@@ -248,69 +248,6 @@ async fn agent_token_resolution_uses_current_agent_endpoint() {
 }
 
 #[tokio::test]
-async fn workspace_stream_methods_use_expected_endpoints() {
-    let server = MockServer::start().await;
-    let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
-        .expect("failed to create relay client");
-
-    Mock::given(method("GET"))
-        .and(path("/v1/workspace/stream"))
-        .respond_with(ok(json!({
-            "enabled": true,
-            "default_enabled": true,
-            "override": null
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let current = relay
-        .workspace_stream_get()
-        .await
-        .expect("workspace_stream_get failed");
-    assert!(current.enabled);
-    assert!(current.default_enabled);
-    assert_eq!(current.override_value, None);
-
-    Mock::given(method("PUT"))
-        .and(path("/v1/workspace/stream"))
-        .and(body_json(json!({ "enabled": false })))
-        .respond_with(ok(json!({
-            "enabled": false,
-            "default_enabled": true,
-            "override": false
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let updated = relay
-        .workspace_stream_set(false)
-        .await
-        .expect("workspace_stream_set failed");
-    assert!(!updated.enabled);
-    assert_eq!(updated.override_value, Some(false));
-
-    Mock::given(method("PUT"))
-        .and(path("/v1/workspace/stream"))
-        .and(body_json(json!({ "mode": "inherit" })))
-        .respond_with(ok(json!({
-            "enabled": true,
-            "default_enabled": true,
-            "override": null
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let inherited = relay
-        .workspace_stream_inherit()
-        .await
-        .expect("workspace_stream_inherit failed");
-    assert_eq!(inherited.override_value, None);
-}
-
-#[tokio::test]
 async fn spawn_and_release_methods_use_expected_endpoints() {
     let server = MockServer::start().await;
     let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))

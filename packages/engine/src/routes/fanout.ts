@@ -1,10 +1,10 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
-import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { dmConversations, dmParticipants } from '../db/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
+import { sendNodeContextForChannel } from '../engine/nodeContext.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -23,18 +23,12 @@ function buildEvent(
   };
 }
 
-async function workspaceStreamEnabled(c: HonoContext, workspaceId: string): Promise<boolean> {
-  const { kv, config } = c.get('engine');
-  return isWorkspaceStreamEnabled(kv, workspaceId, config.workspaceStreamEnabled ?? false);
-}
-
 async function publishToWorkspaceStream(
   c: HonoContext,
   workspaceId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.workspace_stream');
-  if (!(await workspaceStreamEnabled(c, workspaceId))) return;
   try {
     await c.get('engine').realtime.publishToWorkspaceStream({ workspaceId, event: payload });
   } catch (err) {
@@ -45,12 +39,23 @@ async function publishToWorkspaceStream(
   }
 }
 
+export async function publishWorkspaceEvent(
+  c: HonoContext,
+  type: string,
+  data: Record<string, unknown>,
+  channelId?: string,
+): Promise<void> {
+  const workspaceId = c.get('workspace').id;
+  const event = buildEvent(type, workspaceId, data, channelId);
+  await publishToWorkspaceStream(c, workspaceId, transformForClient(event));
+}
+
 export async function fanoutToChannel(
   c: HonoContext,
   channelId: string,
   type: string,
   data: Record<string, unknown>,
-  members?: string[], // Optional: provide members for member-cache initialization
+  _members?: string[], // Optional: provide members for member-cache initialization
   workspaceIdOverride?: string,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.channel');
@@ -72,19 +77,30 @@ export async function fanoutToChannel(
   const ws = workspaceId;
 
   const tasks: Promise<unknown>[] = [];
-  tasks.push(
-    c.get('engine').realtime
-      .broadcastToChannel({ workspaceId: ws, channelId, event: payload, members })
-      .catch((err) => {
-        logger.error(`broadcastToChannel error for channel ${channelId}, event ${type}`, {
-          workspace_id: ws,
-          channel_id: channelId,
-          event_type: type,
-          ...toErrorDetails(err),
-        });
-      }),
-  );
   tasks.push(publishToWorkspaceStream(c, ws, payload));
+  tasks.push(
+    sendNodeContextForChannel(
+      {
+        db: c.get('db'),
+        nodeConnections: c.get('engine').nodeConnections,
+        realtime: c.get('engine').realtime,
+        workspaceId: ws,
+      },
+      {
+        channelId,
+        topic: type.startsWith('thread.') ? 'thread' : 'channel',
+        event: type,
+        data,
+      },
+    ).catch((err) => {
+      logger.error(`node context error for channel ${channelId}, event ${type}`, {
+        workspace_id: ws,
+        channel_id: channelId,
+        event_type: type,
+        ...toErrorDetails(err),
+      });
+    }),
+  );
 
   await Promise.allSettled(tasks);
 }
@@ -114,8 +130,7 @@ export async function fanoutToWorkspace(
   const logger = getRequestLogger(c, 'fanout.workspace');
   const workspaceId = c.get('workspace').id;
   try {
-    const agentIds = await c.get('engine').presence.getOnline(workspaceId);
-    await fanoutToAgents(c, agentIds, type, data);
+    await publishWorkspaceEvent(c, type, data);
   } catch (err) {
     logger.error(`fanoutToWorkspace error for workspace ${workspaceId}, event ${type}`, {
       workspace_id: workspaceId,
