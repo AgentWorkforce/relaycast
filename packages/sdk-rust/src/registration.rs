@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::error::RelayError;
-use crate::{AgentClient, RelayCast, SpawnAgentRequest};
+use crate::{AgentClient, CreateAgentRequest, RelayCast};
 
 const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
 
@@ -160,7 +160,7 @@ impl AgentRegistrationClient {
         lock_unpoisoned(&self.registration_cooldowns).remove(trimmed);
     }
 
-    /// Register (or rotate) an agent token via `/v1/agents/spawn`.
+    /// Register (or rotate) an agent token via `/v1/agents` and token rotation.
     pub async fn register_agent_token(
         &self,
         agent_name: &str,
@@ -182,17 +182,19 @@ impl AgentRegistrationClient {
             });
         }
 
-        let request = SpawnAgentRequest {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "cli".to_string(),
+            serde_json::Value::String(registration_cli_from_hint(cli_hint, &self.default_cli)),
+        );
+        let request = CreateAgentRequest {
             name: trimmed_name.to_string(),
-            cli: registration_cli_from_hint(cli_hint, &self.default_cli),
-            task: format!("relay worker session for {}", trimmed_name),
-            channel: None,
+            agent_type: Some("agent".to_string()),
             persona: None,
-            model: None,
-            metadata: None,
+            metadata: Some(metadata),
         };
 
-        match self.relay.spawn_agent(request).await {
+        match self.relay.register_agent(request).await {
             Ok(result) => {
                 if result.token.trim().is_empty() {
                     return Err(AgentRegistrationError::MissingToken {
@@ -203,6 +205,49 @@ impl AgentRegistrationClient {
                     .insert(trimmed_name.to_string(), result.token.clone());
                 lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
                 Ok(result.token)
+            }
+            Err(RelayError::Api { status: 409, .. }) => {
+                match self.relay.rotate_agent_token(trimmed_name).await {
+                    Ok(result) => {
+                        if result.token.trim().is_empty() {
+                            return Err(AgentRegistrationError::MissingToken {
+                                agent_name: trimmed_name.to_string(),
+                            });
+                        }
+                        lock_unpoisoned(&self.agent_tokens)
+                            .insert(trimmed_name.to_string(), result.token.clone());
+                        lock_unpoisoned(&self.registration_cooldowns).remove(trimmed_name);
+                        Ok(result.token)
+                    }
+                    Err(RelayError::Api {
+                        status: 429,
+                        message,
+                        code,
+                    }) => {
+                        let retry_after_secs = DEFAULT_REGISTRATION_COOLDOWN_SECS;
+                        let blocked_until = Instant::now() + Duration::from_secs(retry_after_secs);
+                        lock_unpoisoned(&self.registration_cooldowns)
+                            .insert(trimmed_name.to_string(), blocked_until);
+                        Err(AgentRegistrationError::RateLimited {
+                            agent_name: trimmed_name.to_string(),
+                            retry_after_secs,
+                            detail: format!("{message} (code: {code})"),
+                        })
+                    }
+                    Err(RelayError::Api {
+                        status,
+                        message,
+                        code,
+                    }) => Err(AgentRegistrationError::Api {
+                        agent_name: trimmed_name.to_string(),
+                        status,
+                        detail: format!("{message} (code: {code})"),
+                    }),
+                    Err(error) => Err(AgentRegistrationError::Transport {
+                        agent_name: trimmed_name.to_string(),
+                        detail: error.to_string(),
+                    }),
+                }
             }
             Err(RelayError::Api {
                 status: 429,
@@ -378,7 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_token_parses_spawn_success() {
+    async fn register_agent_token_parses_register_success() {
         let server = MockServer::start().await;
         let relay =
             RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
@@ -386,19 +431,15 @@ mod tests {
         let client = AgentRegistrationClient::new(relay, "claude");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agents/spawn"))
+            .and(path("/v1/agents"))
             .and(body_string_contains("\"name\":\"worker-b\""))
             .and(body_string_contains("\"cli\":\"codex\""))
             .respond_with(ok(json!({
                 "id": "a_worker_b",
                 "name": "worker-b",
                 "token": "at_live_worker_b",
-                "cli": "codex",
-                "task": "relay worker session for worker-b",
-                "channel": null,
                 "status": "online",
-                "created_at": "2026-01-01T00:00:00.000Z",
-                "already_existed": false
+                "created_at": "2026-01-01T00:00:00.000Z"
             })))
             .expect(1)
             .mount(&server)
@@ -428,7 +469,7 @@ mod tests {
         }));
 
         Mock::given(method("POST"))
-            .and(path("/v1/agents/spawn"))
+            .and(path("/v1/agents"))
             .respond_with(rate_limited)
             .expect(1)
             .mount(&server)

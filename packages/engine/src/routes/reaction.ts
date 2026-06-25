@@ -7,6 +7,7 @@ import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
 import { channels, messages } from '../db/schema.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
+import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -68,6 +69,24 @@ reactionRoutes.post(
             }
           })(),
           'fanout message.reacted',
+        );
+        runInBackground(
+          c,
+          sendNodeDeliveriesForChannel(
+            {
+              db,
+              nodeConnections: c.get('engine').nodeConnections,
+              workspaceId: workspace.id,
+            },
+            {
+              channelId: channel_id,
+              messageId: c.req.param('id'),
+              event: 'message.reacted',
+              eventKey: reactionData.id,
+              data: eventData,
+            },
+          ),
+          'node deliver message.reacted',
         );
       }
       await sendWebhookEvent(c, {
@@ -135,6 +154,24 @@ reactionRoutes.delete(
               }
             })(),
             'fanout message.reacted',
+          );
+          runInBackground(
+            c,
+            sendNodeDeliveriesForChannel(
+              {
+                db,
+                nodeConnections: c.get('engine').nodeConnections,
+                workspaceId: workspace.id,
+              },
+              {
+                channelId: row.channelId,
+                messageId: c.req.param('id'),
+                event: 'message.reacted',
+                eventKey: `removed:${c.req.param('id')}:${agent!.id}:${Date.now()}`,
+                data: enriched,
+              },
+            ),
+            'node deliver message.reacted',
           );
         }
       } catch {

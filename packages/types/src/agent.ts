@@ -87,17 +87,18 @@ export const SpawnAgentRequestSchema = z.object({
 });
 export type SpawnAgentRequest = z.infer<typeof SpawnAgentRequestSchema>;
 
-export const SpawnAgentResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  token: z.string(),
-  cli: CliTypeSchema,
-  task: z.string(),
-  channel: z.string().nullable(),
-  status: AgentStatusSchema,
+const LifecycleActionInvocationResponseSchema = z.object({
+  invocation_id: z.string(),
+  action_name: z.string(),
+  handler_agent_id: z.string().nullable(),
+  handler_node_id: z.string().nullable(),
+  dispatched_node_id: z.string().nullable().optional(),
+  input: z.record(z.string(), z.unknown()),
+  status: z.string(),
   created_at: z.string(),
-  already_existed: z.boolean(),
 });
+
+export const SpawnAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type SpawnAgentResponse = z.infer<typeof SpawnAgentResponseSchema>;
 
 export const ReleaseAgentRequestSchema = z.object({
@@ -107,10 +108,5 @@ export const ReleaseAgentRequestSchema = z.object({
 });
 export type ReleaseAgentRequest = z.infer<typeof ReleaseAgentRequestSchema>;
 
-export const ReleaseAgentResponseSchema = z.object({
-  name: z.string(),
-  released: z.boolean(),
-  deleted: z.boolean(),
-  reason: z.string().nullable(),
-});
+export const ReleaseAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type ReleaseAgentResponse = z.infer<typeof ReleaseAgentResponseSchema>;

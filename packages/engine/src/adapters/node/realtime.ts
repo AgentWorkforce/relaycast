@@ -16,7 +16,6 @@ import { directNodeIdForAgent, handleNodeControlMessage, markDirectNodeOfflineFo
 import { reserveNodeCapacity } from '../../engine/placement.js';
 import { markDrainedInvocationDispatched } from '../../engine/action.js';
 import { deliverPendingToNode } from '../../engine/delivery.js';
-import { transformForClient } from '../../engine/wsTransform.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
 
@@ -63,26 +62,6 @@ interface ChannelState {
   seq: number;
   members: string[];
   muted: string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function directDeliverToClientEvent(
-  workspaceId: string,
-  message: Extract<FleetRelaycastToBrokerMessage, { type: 'deliver' }>,
-): EngineEvent | null {
-  if (!isRecord(message.payload)) return null;
-  const type = message.payload.type;
-  if (typeof type !== 'string') return null;
-  const data = isRecord(message.payload.data) ? message.payload.data : {};
-  return transformForClient({
-    type,
-    workspace_id: workspaceId,
-    data,
-    timestamp: new Date().toISOString(),
-  });
 }
 
 /**
@@ -287,16 +266,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
-    if (nodeId.startsWith('node_direct_') && message.type === 'deliver') {
-      const agentId = message.agent_id || nodeId.slice('node_direct_'.length);
-      const conn = this.agents.get(this.agentKey(workspaceId, agentId));
-      if (!conn || conn.sockets.size === 0) return false;
-      const event = directDeliverToClientEvent(workspaceId, message);
-      if (!event) return false;
-      await this.pushToAgent(workspaceId, agentId, event);
-      return true;
-    }
-
     const key = this.nodeKey(workspaceId, nodeId);
     const current = this.nodeSockets.get(key)?.socket;
     if (current) {

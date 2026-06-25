@@ -5,6 +5,9 @@ import {
   createWorkspace,
   registerAgent,
   FakeSocket,
+  attachDirectNodeSocket,
+  contextUpdatesOfType,
+  deliverFramesOfType,
   type TestStack,
 } from './harness.js';
 import { actionInvocations, agents, deliveries, nodes } from '../../db/schema.js';
@@ -113,17 +116,14 @@ describe('node adapter conformance', () => {
       const ws = await createWorkspace(stack.app, 'presence-ws');
       const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
       const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
-      const rt = stack.runtime.realtime;
       const presence = stack.runtime.presence;
-      const bSock = new FakeSocket();
-      rt.attachAgentSocket(ws.workspaceId, alice.agentId, new FakeSocket());
-      rt.attachAgentSocket(ws.workspaceId, bob.agentId, bSock);
+      const { sock: bSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
       await presence.heartbeat(ws.workspaceId, alice.agentId, 'alice');
       await presence.heartbeat(ws.workspaceId, bob.agentId, 'bob');
       expect(await presence.getOnline(ws.workspaceId)).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
       // Bob should have learned Alice (and itself) became active through node-scoped context.
-      expect(bSock.ofType('agent.status.active').length).toBeGreaterThanOrEqual(1);
+      expect(contextUpdatesOfType(bSock, 'agent.status.active').length).toBeGreaterThanOrEqual(1);
 
       // Let Alice go stale (ttl 1s) and sweep.
       await new Promise((r) => setTimeout(r, 1100));
@@ -132,9 +132,13 @@ describe('node adapter conformance', () => {
       await presence.sweep();
 
       expect(await presence.getOnline(ws.workspaceId)).toEqual([bob.agentId]);
-      const offline = bSock.ofType('agent.status.offline');
+      const offline = contextUpdatesOfType(bSock, 'agent.status.offline');
       expect(offline.length).toBeGreaterThanOrEqual(1);
-      expect(offline[0]).toMatchObject({ agent: { name: 'alice' }, status: 'offline' });
+      expect(offline[0]).toMatchObject({
+        type: 'context.update',
+        event: 'agent.status.offline',
+        data: { agent_name: 'alice', status: 'offline' },
+      });
     });
   });
 
@@ -195,8 +199,7 @@ describe('node adapter conformance', () => {
       }
 
       // Attach a live socket for bob, then alice posts a message.
-      const bobSock = new FakeSocket();
-      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
       const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
         method: 'POST',
@@ -234,19 +237,24 @@ describe('node adapter conformance', () => {
       // fanout runs in background; give the event loop a tick.
       await new Promise((r) => setTimeout(r, 50));
 
-      const delivered = bobSock.ofType('message.created');
+      const delivered = deliverFramesOfType(bobSock, 'message.created');
       expect(delivered).toEqual([
         expect.objectContaining({
-          type: 'message.created',
-          channel: 'team-chat',
-          message: expect.objectContaining({
-            id: posted.data.id,
-            agent_name: 'alice',
-            text: 'hello bob',
+          type: 'deliver',
+          msg_id: posted.data.id,
+          agent: 'bob',
+          payload: expect.objectContaining({
+            type: 'message.created',
+            data: expect.objectContaining({
+              id: posted.data.id,
+              channel_name: 'team-chat',
+              from_name: 'alice',
+              text: 'hello bob',
+            }),
           }),
         }),
       ]);
-      expect(typeof delivered[0].agent_seq).toBe('number');
+      expect(typeof delivered[0].seq).toBe('number');
     });
 
     it('does not create or push message deliveries for muted channel members', async () => {
@@ -274,8 +282,7 @@ describe('node adapter conformance', () => {
       });
       expect(muteRes.status).toBeLessThan(300);
 
-      const bobSock = new FakeSocket();
-      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
       bobSock.received.length = 0;
 
       const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
@@ -296,7 +303,7 @@ describe('node adapter conformance', () => {
         ));
 
       expect(rows).toHaveLength(0);
-      expect(bobSock.ofType('message.created')).toHaveLength(0);
+      expect(deliverFramesOfType(bobSock, 'message.created')).toHaveLength(0);
     });
 
     it('creates a mention delivery for muted channel members when explicitly mentioned', async () => {
@@ -324,8 +331,7 @@ describe('node adapter conformance', () => {
       });
       expect(muteRes.status).toBeLessThan(300);
 
-      const bobSock = new FakeSocket();
-      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
       bobSock.received.length = 0;
 
       const postRes = await stack.app.request('/v1/channels/mentions-chat/messages', {
@@ -349,14 +355,18 @@ describe('node adapter conformance', () => {
         expect.objectContaining({ reason: 'mention' }),
       ]);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(bobSock.ofType('message.created')).toEqual([
+      expect(deliverFramesOfType(bobSock, 'message.created')).toEqual([
         expect.objectContaining({
-          type: 'message.created',
-          channel: 'mentions-chat',
-          message: expect.objectContaining({
-            id: posted.data.id,
-            agent_name: 'alice',
-            text: '@bob please look',
+          type: 'deliver',
+          msg_id: posted.data.id,
+          payload: expect.objectContaining({
+            type: 'message.created',
+            data: expect.objectContaining({
+              id: posted.data.id,
+              channel_name: 'mentions-chat',
+              from_name: 'alice',
+              text: '@bob please look',
+            }),
           }),
         }),
       ]);
@@ -386,17 +396,20 @@ describe('node adapter conformance', () => {
         ));
       expect(queued).toMatchObject({ status: 'queued' });
 
-      const bobSock = new FakeSocket();
-      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(bobSock.ofType('message.created')).toEqual([
+      expect(deliverFramesOfType(bobSock, 'message.created')).toEqual([
         expect.objectContaining({
-          type: 'message.created',
-          message: expect.objectContaining({
-            id: posted.data.id,
-            agent_name: 'alice',
-            text: 'queued for direct reconnect',
+          type: 'deliver',
+          msg_id: posted.data.id,
+          payload: expect.objectContaining({
+            type: 'message.created',
+            data: expect.objectContaining({
+              id: posted.data.id,
+              from_name: 'alice',
+              text: 'queued for direct reconnect',
+            }),
           }),
         }),
       ]);

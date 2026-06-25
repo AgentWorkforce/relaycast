@@ -79,7 +79,7 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(await tryUpgrade({}, `?token=${token}`)).toBe(101);
   });
 
-  it('accepts agent realtime upgrades without a workspace stream mode', async () => {
+  it('rejects agent tokens on the observer workspace stream', async () => {
     const ws = await api('/v1/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -95,7 +95,7 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(agent.status).toBe(201);
     const token = agent.body.data.token as string;
 
-    expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(101);
+    expect(await tryUpgrade({}, `?token=${token}`, '/v1/ws')).toBe(401);
   });
 
   it('accepts workspace observer realtime upgrades with workspace keys', async () => {

@@ -6,6 +6,8 @@ import {
   createWorkspace,
   registerAgent,
   FakeSocket,
+  attachDirectNodeSocket,
+  deliverFramesOfType,
   type TestStack,
 } from './harness.js';
 import { agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
@@ -692,8 +694,7 @@ describe('node delivery contracts', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
     const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
-    const carolSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, carol.agentId, carolSock);
+    const { sock: carolSock } = await attachDirectNodeSocket(stack, ws.workspaceId, carol);
     const node = await createHttpNode(ws.workspaceKey, {
       name: 'slow-http-node',
     });
@@ -713,13 +714,16 @@ describe('node delivery contracts', () => {
 
     await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitForAssertion(async () => {
-      expect(carolSock.ofType('message.created')).toEqual([
+      expect(deliverFramesOfType(carolSock, 'message.created')).toEqual([
         expect.objectContaining({
-          type: 'message.created',
-          message: expect.objectContaining({
-            agent_id: alice.agentId,
-            agent_name: 'alice',
-            text: 'do not block carol',
+          type: 'deliver',
+          payload: expect.objectContaining({
+            type: 'message.created',
+            data: expect.objectContaining({
+              agent_id: alice.agentId,
+              from_name: 'alice',
+              text: 'do not block carol',
+            }),
           }),
         }),
       ]);

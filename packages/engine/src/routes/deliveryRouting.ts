@@ -76,20 +76,6 @@ async function fanoutToAgentsForContext(
   await Promise.allSettled(tasks);
 }
 
-async function deliverDirectWsEvent(
-  ctx: RoutingContext,
-  agentIds: string[],
-  type: string,
-  data: Record<string, unknown>,
-): Promise<void> {
-  const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
-  await ctx.engine.realtime.deliverToAgents({
-    workspaceId: ctx.workspaceId,
-    agentIds: [...new Set(agentIds)],
-    event: payload,
-  });
-}
-
 async function resolveLiveLocations(
   ctx: RoutingContext,
   deliveries: DeliveryFanoutRecord[],
@@ -414,8 +400,9 @@ async function routeOneDeliveryOutcome(
     return;
   }
 
-  await deliverDirectWsEvent(ctx, [delivery.agentId], eventType, eventData);
-  await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+  // No agent-owned realtime socket exists anymore. If a legacy/unbound row
+  // reaches this point, leave it queued so a later node binding/replay can
+  // deliver it instead of falsely marking it delivered.
 }
 
 async function routeDeliveryOutcomesForContext(

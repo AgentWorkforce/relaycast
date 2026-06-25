@@ -221,18 +221,7 @@ pub struct SpawnAgentRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnAgentResponse {
-    pub id: String,
-    pub name: String,
-    pub token: String,
-    pub cli: String,
-    pub task: String,
-    pub channel: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub already_existed: bool,
-}
+pub type SpawnAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseAgentRequest {
@@ -243,13 +232,7 @@ pub struct ReleaseAgentRequest {
     pub delete_agent: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReleaseAgentResponse {
-    pub name: String,
-    pub released: bool,
-    pub deleted: bool,
-    pub reason: Option<String>,
-}
+pub type ReleaseAgentResponse = InvokeActionResult;
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentListQuery {
@@ -497,13 +480,6 @@ where
             _ => None,
         })
         .collect())
-}
-
-fn deserialize_string_or_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -927,6 +903,8 @@ pub struct CommandInvocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionInvocationStatus {
+    Pending,
+    Dispatched,
     Invoked,
     Completed,
     Failed,
@@ -973,7 +951,11 @@ pub struct InvokeActionRequest {
 pub struct InvokeActionResult {
     pub invocation_id: String,
     pub action_name: String,
-    pub handler_agent_id: String,
+    pub handler_agent_id: Option<String>,
+    #[serde(default)]
+    pub handler_node_id: Option<String>,
+    #[serde(default)]
+    pub dispatched_node_id: Option<String>,
     #[serde(default)]
     pub input: serde_json::Map<String, serde_json::Value>,
     pub status: ActionInvocationStatus,
@@ -1041,6 +1023,13 @@ pub struct SessionEvent {
 pub struct ListSessionEventsQuery {
     pub event_type: Option<String>,
     pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectNodeToken {
+    pub node_id: String,
+    pub node_name: String,
+    pub token: String,
 }
 
 // === WebSocket Events ===
@@ -1144,10 +1133,6 @@ pub enum WsEvent {
     AgentStatusOffline(AgentStatusEvent),
     #[serde(rename = "agent.status.changed")]
     AgentStatusChanged(AgentStatusEvent),
-    #[serde(rename = "agent.spawn_requested")]
-    AgentSpawnRequested(AgentSpawnRequestedEvent),
-    #[serde(rename = "agent.release_requested")]
-    AgentReleaseRequested(AgentReleaseRequestedEvent),
     #[serde(rename = "channel.created")]
     ChannelCreated(ChannelCreatedEvent),
     #[serde(rename = "channel.updated")]
@@ -1236,32 +1221,6 @@ pub struct AgentStatusEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedEvent {
-    pub agent: AgentSpawnRequestedPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnRequestedPayload {
-    pub name: String,
-    pub cli: String,
-    #[serde(default, deserialize_with = "deserialize_string_or_default")]
-    pub task: String,
-    #[serde(default)]
-    pub channel: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub already_existed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentReleaseRequestedEvent {
-    pub agent: AgentEventPayload,
-    pub reason: Option<String>,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelCreatedEvent {
     pub channel: ChannelEventPayload,
 }
@@ -1324,6 +1283,10 @@ pub struct ActionInvokedEvent {
     pub action_name: String,
     pub caller_name: String,
     pub handler_agent_id: String,
+    #[serde(default)]
+    pub handler_agent_name: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
 }
 
 /// Literal `completed` status for [`ActionCompletedEvent`]; deserialization

@@ -11,7 +11,7 @@ from relay_sdk.ws import WsClient
 
 class TestWsClientInit:
     def test_default_base_url(self):
-        ws = WsClient(token="at_xxx")
+        ws = WsClient(token="rk_xxx")
         assert ws._base_url == "wss://cast.agentrelay.com"
 
     def test_custom_base_url_https(self):
@@ -229,13 +229,13 @@ class TestWsClientOriginParams:
 
         url = connect_mock.call_args.args[0]
         assert "/v1/ws?" in url
-        assert "token=at_xxx" in url
+        assert "token=rk_xxx" in url
         assert "origin_client=%40relaycast%2Fpython-sdk" in url
         assert f"origin_version={relay_sdk.SDK_VERSION}" in url
 
     @pytest.mark.asyncio
     async def test_connect_url_includes_agent_relay_distinct_id_query_param(self):
-        ws = WsClient(token="at_xxx", agent_relay_distinct_id="abc123def4567890")
+        ws = WsClient(token="rk_xxx", agent_relay_distinct_id="abc123def4567890")
         with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
             with pytest.raises(RuntimeError):
                 await ws._connect_once()
@@ -245,7 +245,7 @@ class TestWsClientOriginParams:
 
     @pytest.mark.asyncio
     async def test_connect_url_omits_invalid_agent_relay_distinct_id_query_param(self):
-        ws = WsClient(token="at_xxx", agent_relay_distinct_id="evil\r\nX-Inject: bad")
+        ws = WsClient(token="rk_xxx", agent_relay_distinct_id="evil\r\nX-Inject: bad")
         with patch("relay_sdk.ws.websockets.connect", side_effect=RuntimeError("stop")) as connect_mock:
             with pytest.raises(RuntimeError):
                 await ws._connect_once()

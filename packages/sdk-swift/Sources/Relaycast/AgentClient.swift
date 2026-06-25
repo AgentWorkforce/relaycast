@@ -160,7 +160,25 @@ public final class AgentClient: @unchecked Sendable {
         socket.on.permanentlyDisconnected { [weak self] _ in
             self?.stopAutoHeartbeat()
         }
-        socket.connect()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                async let me = self.me()
+                async let nodeToken: DirectNodeToken = self.client.post("/v1/agent/node-token")
+                let (agent, directNode) = try await (me, nodeToken)
+                socket.configureNodeTransport(
+                    token: directNode.token,
+                    registration: DirectNodeRegistration(
+                        nodeId: directNode.nodeId,
+                        name: directNode.nodeName,
+                        agentName: agent.name
+                    )
+                )
+                socket.connect()
+            } catch {
+                socket.reportError(error.localizedDescription)
+            }
+        }
     }
 
     public func heartbeat() async throws {

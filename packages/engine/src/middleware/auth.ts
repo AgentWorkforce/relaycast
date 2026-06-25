@@ -37,6 +37,9 @@ function makeAuthMiddleware(require: AuthRequire) {
         touchLastSeen(db, result.agent.id).catch(() => {});
       }
     }
+    if (result.node) {
+      c.set('node', result.node);
+    }
 
     await next();
   });
@@ -50,3 +53,6 @@ export const requireAuth = makeAuthMiddleware('any');
 
 /** Requires an agent token (`at_live_...`). */
 export const requireAgentToken = makeAuthMiddleware('agent');
+
+/** Requires a node token (`nt_live_...`). */
+export const requireNodeToken = makeAuthMiddleware('node');

@@ -265,15 +265,19 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             "metadata": {"ticket": "SDK-101"}
         })))
         .respond_with(ok(json!({
-            "id": "a_1",
-            "name": "WorkerOne",
-            "token": "at_live_worker",
-            "cli": "codex",
-            "task": "Run parity check",
-            "channel": "general",
-            "status": "online",
-            "created_at": "2026-01-01T00:00:00.000Z",
-            "already_existed": false
+            "invocation_id": "inv_spawn_1",
+            "action_name": "spawn",
+            "handler_agent_id": null,
+            "handler_node_id": "node_runner_1",
+            "dispatched_node_id": "node_runner_1",
+            "input": {
+                "name": "WorkerOne",
+                "cli": "codex",
+                "task": "Run parity check",
+                "channel": "general"
+            },
+            "status": "dispatched",
+            "created_at": "2026-01-01T00:00:00.000Z"
         })))
         .expect(1)
         .mount(&server)
@@ -291,8 +295,9 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         })
         .await
         .expect("spawn_agent failed");
-    assert_eq!(spawned.name, "WorkerOne");
-    assert!(!spawned.already_existed);
+    assert_eq!(spawned.invocation_id, "inv_spawn_1");
+    assert_eq!(spawned.action_name, "spawn");
+    assert_eq!(spawned.handler_node_id.as_deref(), Some("node_runner_1"));
 
     Mock::given(method("POST"))
         .and(path("/v1/agents/release"))
@@ -302,10 +307,18 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
             "delete_agent": true
         })))
         .respond_with(ok(json!({
-            "name": "WorkerOne",
-            "released": true,
-            "deleted": true,
-            "reason": "task completed"
+            "invocation_id": "inv_release_1",
+            "action_name": "release",
+            "handler_agent_id": null,
+            "handler_node_id": "node_runner_1",
+            "dispatched_node_id": "node_runner_1",
+            "input": {
+                "name": "WorkerOne",
+                "reason": "task completed",
+                "delete_agent": true
+            },
+            "status": "dispatched",
+            "created_at": "2026-01-01T00:00:01.000Z"
         })))
         .expect(1)
         .mount(&server)
@@ -319,8 +332,8 @@ async fn spawn_and_release_methods_use_expected_endpoints() {
         })
         .await
         .expect("release_agent failed");
-    assert!(released.released);
-    assert!(released.deleted);
+    assert_eq!(released.invocation_id, "inv_release_1");
+    assert_eq!(released.action_name, "release");
 }
 
 #[tokio::test]
@@ -1039,52 +1052,6 @@ fn ws_command_invoked_deserializes_handler_agent_id() {
         WsEvent::CommandInvoked(cmd) => {
             assert_eq!(cmd.handler_agent_id, "a_handler_1");
             assert_eq!(cmd.command, "/spawn");
-        }
-        other => panic!("unexpected event variant: {other:?}"),
-    }
-}
-
-#[test]
-fn ws_agent_spawn_requested_tolerates_missing_or_null_optional_fields() {
-    let missing = serde_json::from_value::<WsEvent>(json!({
-        "type": "agent.spawn_requested",
-        "agent": {
-            "name": "worker-1",
-            "cli": "codex"
-        }
-    }))
-    .expect("failed to parse spawn request with missing fields");
-
-    match missing {
-        WsEvent::AgentSpawnRequested(event) => {
-            assert_eq!(event.agent.name, "worker-1");
-            assert_eq!(event.agent.cli, "codex");
-            assert_eq!(event.agent.task, "");
-            assert_eq!(event.agent.channel, None);
-            assert!(!event.agent.already_existed);
-        }
-        other => panic!("unexpected event variant: {other:?}"),
-    }
-
-    let nulled = serde_json::from_value::<WsEvent>(json!({
-        "type": "agent.spawn_requested",
-        "agent": {
-            "name": "worker-2",
-            "cli": "claude",
-            "task": null,
-            "channel": null,
-            "already_existed": true
-        }
-    }))
-    .expect("failed to parse spawn request with null task/channel");
-
-    match nulled {
-        WsEvent::AgentSpawnRequested(event) => {
-            assert_eq!(event.agent.name, "worker-2");
-            assert_eq!(event.agent.cli, "claude");
-            assert_eq!(event.agent.task, "");
-            assert_eq!(event.agent.channel, None);
-            assert!(event.agent.already_existed);
         }
         other => panic!("unexpected event variant: {other:?}"),
     }

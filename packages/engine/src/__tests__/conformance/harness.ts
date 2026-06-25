@@ -91,3 +91,38 @@ export async function registerAgent(app: Hono<AppEnv>, workspaceKey: string, nam
   const data = body.data ?? {};
   return { token: data.token ?? data.agent_token ?? '', agentId: data.id ?? '', name };
 }
+
+export async function attachDirectNodeSocket(
+  stack: TestStack,
+  workspaceId: string,
+  agent: CreatedAgent,
+): Promise<{ sock: FakeSocket; handle: { handleMessage(raw: string): Promise<void>; handleClose(): Promise<void> }; nodeId: string }> {
+  const nodeId = `node_direct_${agent.agentId}`;
+  const sock = new FakeSocket();
+  const handle = stack.runtime.realtime.attachNodeSocket(workspaceId, nodeId, sock);
+  await handle.handleMessage(JSON.stringify({
+    v: 1,
+    id: `test-direct-${agent.agentId}`,
+    type: 'node.register',
+    node_id: nodeId,
+    name: `direct-${agent.agentId}`,
+    capabilities: [],
+    max_agents: 1,
+    tags: ['implicit', 'direct', 'test'],
+    version: 'test-direct-node',
+    resume_cursor: null,
+  }));
+  return { sock, handle, nodeId };
+}
+
+export function deliverFramesOfType(sock: FakeSocket, type: string): Record<string, unknown>[] {
+  return sock.ofType('deliver').filter((frame) => {
+    const payload = frame.payload;
+    return !!payload && typeof payload === 'object' && !Array.isArray(payload)
+      && (payload as Record<string, unknown>).type === type;
+  });
+}
+
+export function contextUpdatesOfType(sock: FakeSocket, event: string): Record<string, unknown>[] {
+  return sock.ofType('context.update').filter((frame) => frame.event === event);
+}

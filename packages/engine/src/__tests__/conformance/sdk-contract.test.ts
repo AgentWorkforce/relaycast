@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
 import { webhooks } from '../../db/schema.js';
-import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import {
+  makeNodeStack,
+  createWorkspace,
+  registerAgent,
+  FakeSocket,
+  attachDirectNodeSocket,
+  deliverFramesOfType,
+  type TestStack,
+} from './harness.js';
 
 describe('SDK v8 service contract', () => {
   let stack: TestStack;
@@ -89,8 +97,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(workspaceGet.status).toBe(404);
 
-    const handlerSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, handler.agentId, handlerSock);
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
     const invoke = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
@@ -101,10 +108,16 @@ describe('SDK v8 service contract', () => {
     expect(invokeBody.data.invocation_id).toMatch(/^inv_/);
 
     await new Promise((r) => setTimeout(r, 50));
-    expect(handlerSock.ofType('action.invoked')).toHaveLength(1);
+    expect(handlerNode.sock.ofType('action.invoke')).toHaveLength(1);
+    expect(handlerNode.sock.ofType('action.invoke')[0]).toMatchObject({
+      invocation_id: invokeBody.data.invocation_id,
+      action: 'summarize',
+      agent_id: handler.agentId,
+      agent_name: 'handler',
+      input: { text: 'hello' },
+    });
 
-    const deniedSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, denied.agentId, deniedSock);
+    const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${denied.token}` },
@@ -112,7 +125,7 @@ describe('SDK v8 service contract', () => {
     });
     expect(deniedInvoke.status).toBe(403);
     await new Promise((r) => setTimeout(r, 50));
-    expect(deniedSock.ofType('action.denied')).toHaveLength(1);
+    expect(deliverFramesOfType(deniedNode.sock, 'action.denied')).toHaveLength(1);
   });
 
   it('requires inbound webhook tokens and accepts SDK message/author payloads', async () => {
@@ -327,8 +340,7 @@ describe('SDK v8 service contract', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
 
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
     const post = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
@@ -345,7 +357,62 @@ describe('SDK v8 service contract', () => {
     expect(react.status).toBe(201);
 
     await new Promise((r) => setTimeout(r, 50));
-    expect(bobSock.ofType('message.reacted')).toHaveLength(1);
-    expect(bobSock.ofType('reaction.added')).toHaveLength(0);
+    const delivered = deliverFramesOfType(bobSock, 'message.reacted');
+    expect(delivered.length).toBeGreaterThanOrEqual(1);
+    expect(delivered[0]).toMatchObject({
+      type: 'deliver',
+      agent: 'bob',
+      msg_id: posted.data.id,
+      seq: 0,
+      payload: {
+        type: 'message.reacted',
+        data: {
+          message_id: posted.data.id,
+          agent_name: 'bob',
+          emoji: 'eyes',
+          action: 'added',
+        },
+      },
+    });
+    expect(deliverFramesOfType(bobSock, 'reaction.added')).toHaveLength(0);
+  });
+
+  it('emits canonical message.read events over node delivery frames', async () => {
+    const ws = await createWorkspace(stack.app, 'sdk-read-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'read here' }),
+    });
+    const posted = await post.json() as { data: { id: string } };
+
+    const read = await stack.app.request(`/v1/messages/${posted.data.id}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(read.status).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 50));
+    const delivered = deliverFramesOfType(bobSock, 'message.read');
+    expect(delivered.length).toBeGreaterThanOrEqual(1);
+    expect(delivered[0]).toMatchObject({
+      type: 'deliver',
+      agent: 'bob',
+      msg_id: posted.data.id,
+      seq: 0,
+      payload: {
+        type: 'message.read',
+        data: {
+          message_id: posted.data.id,
+          agent_id: bob.agentId,
+          agent_name: 'bob',
+        },
+      },
+    });
   });
 });

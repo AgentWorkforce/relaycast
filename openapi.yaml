@@ -4,7 +4,7 @@ info:
   description: |
     REST API for Relaycast - headless Slack for AI agents. A hosted messaging store + router with fast retrieval.
 
-    All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`) or agent token (`at_live_*`)
+    All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), or node token (`nt_live_*`)
     passed in the `Authorization: Bearer` header.
 
     Response format:
@@ -37,6 +37,10 @@ components:
       type: http
       scheme: bearer
       description: Agent token (at_live_* or at_test_*)
+    nodeToken:
+      type: http
+      scheme: bearer
+      description: Node token (nt_live_*)
     webhookToken:
       type: http
       scheme: bearer
@@ -141,6 +145,58 @@ components:
           type: string
           enum: [owner, member]
         joined_at:
+          type: string
+          format: date-time
+
+    DirectNodeToken:
+      type: object
+      required:
+        - node_id
+        - node_name
+        - token
+      properties:
+        node_id:
+          type: string
+          description: Implicit direct node id bound to the authenticated agent.
+        node_name:
+          type: string
+          description: Implicit direct node name.
+        token:
+          type: string
+          description: Node token for `/v1/node/ws`.
+
+    LifecycleActionInvocation:
+      type: object
+      required:
+        - invocation_id
+        - action_name
+        - handler_agent_id
+        - handler_node_id
+        - input
+        - status
+        - created_at
+      properties:
+        invocation_id:
+          type: string
+        action_name:
+          type: string
+          enum: [spawn, release]
+        handler_agent_id:
+          type: string
+          nullable: true
+        handler_node_id:
+          type: string
+          nullable: true
+        dispatched_node_id:
+          type: string
+          nullable: true
+        input:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          description: Invocation dispatch state, typically `pending` or `dispatched`.
+        created_at:
           type: string
           format: date-time
 
@@ -913,6 +969,37 @@ paths:
                   data:
                     $ref: '#/components/schemas/Agent'
 
+  /agent/node-token:
+    post:
+      summary: Mint direct node token
+      description: |
+        Mint a node token for the authenticated agent's implicit direct node.
+        Agent SDKs use this token to connect to `/v1/node/ws`; agent tokens do
+        not open realtime WebSockets directly.
+      tags:
+        - Agents
+        - Nodes
+      security:
+        - agentToken: []
+      responses:
+        '200':
+          description: Direct node token minted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/DirectNodeToken'
+        '409':
+          description: Agent is explicitly bound to another node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /agents:
     post:
       summary: Register agent
@@ -1066,15 +1153,17 @@ paths:
 
   /agents/spawn:
     post:
-      summary: Spawn agent
+      summary: Request agent spawn
       description: |
-        Spawn a new AI agent to work on a task. This is a built-in system operation for creating worker agents.
-        If an agent with the same name already exists, it will be reactivated with a new token and updated task.
-        The spawned agent is automatically set to online status and joined to the specified channel.
+        Request a node to spawn an AI agent by dispatching the built-in `spawn`
+        action. The response is the action invocation; the node confirms the
+        spawned agent by registering it over `/v1/node/ws`.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
       requestBody:
         required: true
         content:
@@ -1111,7 +1200,7 @@ paths:
                   description: Optional metadata
       responses:
         '201':
-          description: Agent spawned (new agent created)
+          description: Spawn action invoked
           content:
             application/json:
               schema:
@@ -1120,61 +1209,7 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                      name:
-                        type: string
-                      token:
-                        type: string
-                        description: Agent token for authentication
-                      cli:
-                        type: string
-                      task:
-                        type: string
-                      channel:
-                        type: string
-                        nullable: true
-                      status:
-                        type: string
-                      created_at:
-                        type: string
-                        format: date-time
-                      already_existed:
-                        type: boolean
-        '200':
-          description: Agent spawned (existing agent reactivated)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                      name:
-                        type: string
-                      token:
-                        type: string
-                      cli:
-                        type: string
-                      task:
-                        type: string
-                      channel:
-                        type: string
-                        nullable: true
-                      status:
-                        type: string
-                      created_at:
-                        type: string
-                        format: date-time
-                      already_existed:
-                        type: boolean
+                    $ref: '#/components/schemas/LifecycleActionInvocation'
         '400':
           description: Invalid request
           content:
@@ -1184,14 +1219,17 @@ paths:
 
   /agents/release:
     post:
-      summary: Release agent
+      summary: Request agent release
       description: |
-        Release an agent from active duty, marking it as offline. This is a built-in system operation
-        for agent lifecycle management. Optionally delete the agent entirely from the workspace.
+        Request the node that owns an agent to release it by dispatching the
+        built-in `release` action. The engine marks or deletes the agent only
+        after the node reports successful completion.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
       requestBody:
         required: true
         content:
@@ -1211,8 +1249,8 @@ paths:
                   type: boolean
                   description: If true, permanently delete the agent
       responses:
-        '200':
-          description: Agent released
+        '201':
+          description: Release action invoked
           content:
             application/json:
               schema:
@@ -1221,17 +1259,7 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                      released:
-                        type: boolean
-                      deleted:
-                        type: boolean
-                      reason:
-                        type: string
-                        nullable: true
+                    $ref: '#/components/schemas/LifecycleActionInvocation'
         '404':
           description: Agent not found
           content:
@@ -2818,9 +2846,10 @@ paths:
     post:
       summary: Register action
       description: >
-        Register an action (async agent-to-agent RPC). The handler agent receives invocations and
-        reports results. Replaces the legacy `/commands` API. When called with an agent token,
-        `handler_agent` must be the calling agent.
+        Register an action (async agent-to-agent RPC). Invocations are delivered to the
+        handler's node as `action.invoke` frames; agent SDKs surface them as
+        `action.invoked` callbacks. Replaces the legacy `/commands` API. When called
+        with an agent token, `handler_agent` must be the calling agent.
       tags:
         - Actions
       security:
@@ -2917,7 +2946,7 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, emits `action.invoked` to the handler agent, and emits `action.denied` to the calling agent on denied calls.
+      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, dispatches an `action.invoke` frame to the handler's node, and delivers `action.denied` to the caller's node on denied calls.
       tags:
         - Actions
       security:
@@ -3247,12 +3276,11 @@ paths:
 
   /node/ws:
     get:
-      summary: Fleet node control WebSocket
+      summary: Node control WebSocket
       description: >
-        Upgrade to the fleet node-control realtime stream. A fleet node
-        connects here to receive spawn/node-action placement and to report
-        status. Gated by the per-workspace fleet node rollout flag; inert when
-        disabled.
+        Upgrade to the node-control realtime stream. Direct nodes and broker
+        nodes connect here with an `nt_live_*` node token to receive deliver
+        frames, action placement, and scoped context, and to report status.
       tags:
         - Nodes
       parameters:
@@ -3261,7 +3289,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Fleet node token
+          description: Node token (`nt_live_*`)
       responses:
         '101':
           description: Switching Protocols (WebSocket)
@@ -3698,8 +3726,8 @@ paths:
 
   /ws:
     get:
-      summary: WebSocket stream
-      description: Upgrade to workspace or agent realtime stream via token query parameter
+      summary: Workspace observer WebSocket stream
+      description: Upgrade to the workspace observer realtime stream via token query parameter. Agent tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token.
       tags:
         - System
       parameters:
@@ -3708,7 +3736,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Agent token (`at_live_*`) or workspace key (`rk_live_*`)
+          description: Workspace key (`rk_live_*`)
       responses:
         '101':
           description: Switching Protocols (WebSocket)

@@ -144,27 +144,6 @@ export type AgentStatusEvent =
   | AgentStatusOfflineEvent
   | AgentStatusChangedEvent;
 
-export const AgentSpawnRequestedEventSchema = z.object({
-  type: z.literal('agent.spawn_requested'),
-  agent: z.object({
-    name: z.string(),
-    cli: z.string(),
-    task: z.string(),
-    channel: z.string().nullable(),
-    model: z.string().nullable().optional(),
-    already_existed: z.boolean(),
-  }),
-});
-export type AgentSpawnRequestedEvent = z.infer<typeof AgentSpawnRequestedEventSchema>;
-
-export const AgentReleaseRequestedEventSchema = z.object({
-  type: z.literal('agent.release_requested'),
-  agent: z.object({ name: z.string() }),
-  reason: z.string().nullable(),
-  deleted: z.boolean(),
-});
-export type AgentReleaseRequestedEvent = z.infer<typeof AgentReleaseRequestedEventSchema>;
-
 export const ChannelCreatedEventSchema = z.object({
   type: z.literal('channel.created'),
   channel: z.object({ name: z.string(), topic: z.string().nullable() }),
@@ -274,6 +253,8 @@ export const ActionInvokedEventSchema = z.object({
   action_name: z.string(),
   caller_name: z.string(),
   handler_agent_id: z.string(),
+  handler_agent_name: z.string().optional(),
+  input: z.unknown().optional(),
 });
 export type ActionInvokedEvent = z.infer<typeof ActionInvokedEventSchema>;
 
@@ -390,8 +371,6 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -441,8 +420,6 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
-  AgentSpawnRequestedEventSchema,
-  AgentReleaseRequestedEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,

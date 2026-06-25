@@ -6,6 +6,7 @@ import * as receiptEngine from '../engine/receipt.js';
 import { and, eq } from 'drizzle-orm';
 import { messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
+import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -42,6 +43,24 @@ receiptRoutes.post(
           .where(and(eq(messages.id, c.req.param('id')), eq(messages.workspaceId, workspace.id)));
         if (row?.channelId) {
           runInBackground(c, fanoutToChannel(c, row.channelId, 'message.read', eventData), 'fanout message.read');
+          runInBackground(
+            c,
+            sendNodeDeliveriesForChannel(
+              {
+                db,
+                nodeConnections: c.get('engine').nodeConnections,
+                workspaceId: workspace.id,
+              },
+              {
+                channelId: row.channelId,
+                messageId: result.message_id,
+                event: 'message.read',
+                eventKey: `${result.message_id}:${result.agent_id}:${result.read_at}`,
+                data: eventData,
+              },
+            ),
+            'node deliver message.read',
+          );
         }
       } catch {
         // Ignore fanout failures

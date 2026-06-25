@@ -24,7 +24,6 @@ import {
   missingWsToken,
   queryOrBearerToken,
 } from '../engine/wsAuth.js';
-import { ensureDirectNodeForAgent } from '../engine/node.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -143,27 +142,6 @@ export function startServer(options: StartServerOptions): RunningServer {
         const authResult = await authenticateRealtimeWs(wsAuthDeps, token);
         if (!authResult.ok) {
           rejectUpgrade(socket, authResult.status, authResult.upgradeMessage);
-          return;
-        }
-
-        if (authResult.scope === 'agent') {
-          await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
-            online: true,
-          });
-          wss.handleUpgrade(req, socket, head, (ws) => {
-            const handle = runtime.realtime.attachAgentSocket(
-              authResult.workspace.id,
-              authResult.agent.id,
-              toEngineSocket(ws),
-            );
-            runtime.deps.presence.heartbeat(
-              authResult.workspace.id,
-              authResult.agent.id,
-              authResult.agent.name,
-            ).catch(() => {});
-            ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
-            ws.on('close', () => { void handle.handleClose(); });
-          });
           return;
         }
 

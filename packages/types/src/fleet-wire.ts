@@ -241,6 +241,8 @@ export const FleetActionInvokeMessageSchema = z
     type: z.literal('action.invoke'),
     invocation_id: z.string(),
     action: z.string(),
+    agent_id: z.string().optional(),
+    agent_name: z.string().optional(),
     input: FleetWireJsonValueSchema,
   })
   .strict();

@@ -277,29 +277,21 @@ public struct SpawnAgentRequest: Codable, Equatable, Sendable {
     public var task: String
     public var channel: String?
     public var persona: String?
+    public var model: String?
     public var metadata: [String: JSONValue]?
 
-    public init(name: String, cli: String, task: String, channel: String? = nil, persona: String? = nil, metadata: [String: JSONValue]? = nil) {
+    public init(name: String, cli: String, task: String, channel: String? = nil, persona: String? = nil, model: String? = nil, metadata: [String: JSONValue]? = nil) {
         self.name = name
         self.cli = cli
         self.task = task
         self.channel = channel
         self.persona = persona
+        self.model = model
         self.metadata = metadata
     }
 }
 
-public struct SpawnAgentResponse: Codable, Equatable, Sendable {
-    public let id: String
-    public let name: String
-    public let token: String
-    public let cli: String
-    public let task: String
-    public let channel: String?
-    public let status: AgentStatus
-    public let createdAt: String
-    public let alreadyExisted: Bool
-}
+public typealias SpawnAgentResponse = InvokeActionResult
 
 public struct ReleaseAgentRequest: Codable, Equatable, Sendable {
     public var name: String
@@ -313,12 +305,7 @@ public struct ReleaseAgentRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct ReleaseAgentResponse: Codable, Equatable, Sendable {
-    public let name: String
-    public let released: Bool
-    public let deleted: Bool
-    public let reason: String?
-}
+public typealias ReleaseAgentResponse = InvokeActionResult
 
 public struct ResolvedIdentity: Codable, Equatable, Sendable {
     public let agentId: String
@@ -1027,6 +1014,8 @@ public struct InvokeActionResult: Codable, Equatable, Sendable {
     public let invocationId: String
     public let actionName: String
     public let handlerAgentId: String?
+    public let handlerNodeId: String?
+    public let dispatchedNodeId: String?
     public let input: [String: JSONValue]?
     public let status: String
     public let createdAt: String?
@@ -1484,6 +1473,12 @@ public struct SessionEvent: Codable, Equatable, Sendable {
     public let type: String
     public let payload: [String: JSONValue]?
     public let createdAt: String?
+}
+
+public struct DirectNodeToken: Codable, Equatable, Sendable {
+    public let nodeId: String
+    public let nodeName: String
+    public let token: String
 }
 
 public struct WsEvent: Codable, Equatable, Sendable {

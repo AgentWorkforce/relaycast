@@ -1,6 +1,6 @@
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { actions, actionInvocations, agents, nodes } from '../db/schema.js';
+import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
@@ -27,6 +27,10 @@ function capabilityName(capability: string | { name?: string } | null | undefine
 
 function isSpawnInvocation(actionName: string): boolean {
   return actionName === 'spawn' || actionName.startsWith('spawn:');
+}
+
+function isReleaseInvocation(actionName: string): boolean {
+  return actionName === 'release';
 }
 
 function normalizeAttemptedNodeIds(value: unknown): string[] {
@@ -267,6 +271,7 @@ async function createInvocation(
     input?: Record<string, unknown>;
     caller_id?: string | null;
     caller_name?: string | null;
+    action_name?: string;
     status?: string;
   },
 ) {
@@ -277,7 +282,7 @@ async function createInvocation(
       id: invocationId,
       workspaceId,
       actionId: action?.id ?? null,
-      actionName: action?.name ?? 'spawn',
+      actionName: action?.name ?? data.action_name ?? 'spawn',
       callerId: data.caller_id ?? null,
       callerName: data.caller_name ?? null,
       input: data.input ?? {},
@@ -285,6 +290,65 @@ async function createInvocation(
     })
     .returning();
   return invocation;
+}
+
+async function dispatchRelease(args: {
+  db: Db;
+  registry?: NodeConnectionRegistry;
+  workspaceId: string;
+  data: {
+    input?: Record<string, unknown>;
+    caller_id?: string;
+    caller_name?: string;
+  };
+}) {
+  if (!args.registry) {
+    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
+  }
+  const input = recordInput(args.data.input);
+  const name = typeof input.name === 'string' ? input.name : null;
+  if (!name) {
+    throw codedError('release action input.name is required', 'invalid_release_request', 400);
+  }
+
+  const [agent] = await args.db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+  if (!agent) {
+    throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
+  }
+  if (agent.locationType !== 'via_node' || !agent.locationNodeId) {
+    throw codedError(`Agent "${name}" is not bound to a node`, 'agent_not_node_bound', 409);
+  }
+
+  const invocation = await createInvocation(args.db, args.workspaceId, null, {
+    input,
+    caller_id: args.data.caller_id,
+    caller_name: args.data.caller_name,
+    action_name: 'release',
+  });
+
+  const dispatched = await dispatchNodeInvocation({
+    db: args.db,
+    registry: args.registry,
+    workspaceId: args.workspaceId,
+    invocationId: invocation.id,
+    nodeId: agent.locationNodeId,
+    action: 'release',
+    input,
+  });
+
+  return {
+    invocation_id: invocation.id,
+    action_name: 'release',
+    handler_agent_id: null,
+    handler_node_id: agent.locationNodeId,
+    dispatched_node_id: dispatched.accepted ? agent.locationNodeId : null,
+    input: recordInput(invocation.input),
+    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    created_at: invocation.createdAt.toISOString(),
+  };
 }
 
 async function dispatchSpawn(args: {
@@ -361,6 +425,15 @@ export async function invokeAction(
     });
   }
 
+  if (!action && actionName === 'release') {
+    return dispatchRelease({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      data,
+    });
+  }
+
   if (!action) {
     throw codedError(`Action "${actionName}" not found`, 'action_not_found', 404);
   }
@@ -415,21 +488,46 @@ export async function invokeAction(
     throw codedError(`Action "${actionName}" has no handler`, 'handler_unavailable', 503);
   }
 
+  if (!options.nodeConnections) {
+    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
+  }
+  const [handlerAgent] = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      locationType: agents.locationType,
+      locationNodeId: agents.locationNodeId,
+    })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, action.handlerAgentId)));
+  if (!handlerAgent || handlerAgent.locationType !== 'via_node' || !handlerAgent.locationNodeId) {
+    throw codedError(`Action "${actionName}" handler is not bound to a node`, 'handler_unavailable', 503);
+  }
+
   const invocation = await createInvocation(db, workspaceId, action, {
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
-    status: 'dispatched',
+  });
+  const dispatched = await dispatchNodeInvocation({
+    db,
+    registry: options.nodeConnections,
+    workspaceId,
+    invocationId: invocation.id,
+    nodeId: handlerAgent.locationNodeId,
+    action: action.name,
+    input: recordInput(invocation.input),
+    agent: { id: handlerAgent.id, name: handlerAgent.name },
   });
 
   return {
     invocation_id: invocation.id,
     action_name: actionName,
     handler_agent_id: action.handlerAgentId,
-    handler_node_id: null,
-    dispatched_node_id: null,
+    handler_node_id: handlerAgent.locationNodeId,
+    dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : null,
     input: recordInput(invocation.input),
-    status: invocation.status,
+    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -450,6 +548,70 @@ function publicInvocation(row: InvocationRow) {
     created_at: row.createdAt.toISOString(),
     completed_at: row.completedAt?.toISOString() ?? null,
   };
+}
+
+async function applyReleaseCompletionEffect(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  invocation: Pick<InvocationRow, 'actionName' | 'input'>,
+  data: { error?: string },
+): Promise<void> {
+  if (!isReleaseInvocation(invocation.actionName) || data.error) return;
+
+  const input = recordInput(invocation.input);
+  const name = typeof input.name === 'string' ? input.name : null;
+  if (!name) return;
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, name),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+    ));
+  if (!agent) return;
+
+  await db
+    .update(agentNodeBindings)
+    .set({ status: 'inactive', updatedAt: new Date() })
+    .where(and(
+      eq(agentNodeBindings.workspaceId, workspaceId),
+      eq(agentNodeBindings.nodeId, nodeId),
+      eq(agentNodeBindings.agentId, agent.id),
+      eq(agentNodeBindings.status, 'active'),
+    ));
+
+  await db
+    .update(nodes)
+    .set({
+      activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+    })
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+
+  if (input.delete_agent === true) {
+    await db.delete(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+    return;
+  }
+
+  const existingMetadata = agent.metadata ?? {};
+  const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
+  await db
+    .update(agents)
+    .set({
+      status: 'offline',
+      lastSeen: new Date(),
+      metadata: {
+        ...restMetadata,
+        release: {
+          reason: typeof input.reason === 'string' ? input.reason : null,
+          released_at: new Date().toISOString(),
+        },
+      },
+    })
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
 }
 
 async function dispatchNodeAttempt(
@@ -517,6 +679,7 @@ async function dispatchNodeInvocation(args: {
   nodeId: string;
   action: string;
   input: Record<string, unknown>;
+  agent?: { id: string; name: string } | null;
   pending?: boolean;
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
@@ -527,6 +690,7 @@ async function dispatchNodeInvocation(args: {
     type: 'action.invoke',
     invocation_id: args.invocationId,
     action: args.action,
+    ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
     input: toFleetWireJson(args.input),
   });
 
@@ -572,6 +736,28 @@ async function selectRetryPlacement(
   });
 }
 
+async function targetAgentForInvocation(
+  db: Db,
+  invocation: Pick<InvocationRow, 'id' | 'workspaceId'>,
+): Promise<{ agentId: string; agentName: string; nodeId: string } | null> {
+  const [row] = await db
+    .select({
+      agentId: agents.id,
+      agentName: agents.name,
+      locationType: agents.locationType,
+      nodeId: agents.locationNodeId,
+    })
+    .from(actionInvocations)
+    .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .innerJoin(agents, eq(actions.handlerAgentId, agents.id))
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+    ));
+  if (!row || row.locationType !== 'via_node' || !row.nodeId) return null;
+  return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId };
+}
+
 export async function rescheduleNodeInvocation(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -580,6 +766,21 @@ export async function rescheduleNodeInvocation(
 ) {
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
     await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+  }
+  const targetAgent = await targetAgentForInvocation(db, invocation);
+  if (targetAgent) {
+    const dispatched = await dispatchNodeInvocation({
+      db,
+      registry,
+      workspaceId: invocation.workspaceId,
+      invocationId: invocation.id,
+      nodeId: targetAgent.nodeId,
+      action: invocation.actionName,
+      input: recordInput(invocation.input),
+      agent: { id: targetAgent.agentId, name: targetAgent.agentName },
+      retryAfterAt: opts.retryAfterAt ?? null,
+    });
+    return dispatched.accepted;
   }
   const attempted = attemptedNodeSet(invocation);
   const current = invocation.dispatchedNodeId ? [invocation.dispatchedNodeId] : [];
@@ -706,7 +907,7 @@ export async function completeInvocation(
 
   if (!existing) return null;
 
-  if (existing.handlerNodeId || existing.dispatchedNodeId) {
+  if (existing.handlerNodeId || (!existing.handlerAgentId && existing.dispatchedNodeId)) {
     throw codedError('Node-owned invocations must be completed over the node control channel', 'node_owned_invocation', 403);
   }
 
@@ -816,6 +1017,10 @@ export async function completeNodeInvocation(
 
   if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId) {
     await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
+  }
+
+  if (updated) {
+    await applyReleaseCompletionEffect(db, workspaceId, nodeId, existing, data);
   }
 
   return updated ? publicInvocation(updated) : null;

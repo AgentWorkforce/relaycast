@@ -5,6 +5,8 @@ import {
   createWorkspace,
   registerAgent,
   FakeSocket,
+  attachDirectNodeSocket,
+  deliverFramesOfType,
   type TestStack,
 } from './harness.js';
 import { agents, deliveries } from '../../db/schema.js';
@@ -703,8 +705,7 @@ describe('durable delivery api', () => {
     const ws = await createWorkspace(stack.app, 'mailbox-dm-thread-reply');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
     const root = await stack.app.request('/v1/dm', {
       method: 'POST',
@@ -724,13 +725,17 @@ describe('durable delivery api', () => {
     const replyId = ((await reply.json()) as { data: { id: string } }).data.id;
 
     await waitForAssertion(() => {
-      expect(bobSock.ofType('thread.reply')).toEqual([
+      expect(deliverFramesOfType(bobSock, 'thread.reply')).toEqual([
         expect.objectContaining({
-          type: 'thread.reply',
-          message: expect.objectContaining({
-            id: replyId,
-            agent_name: 'alice',
-            text: 'dm thread reply',
+          type: 'deliver',
+          msg_id: replyId,
+          payload: expect.objectContaining({
+            type: 'thread.reply',
+            data: expect.objectContaining({
+              id: replyId,
+              from_name: 'alice',
+              text: 'dm thread reply',
+            }),
           }),
         }),
       ]);

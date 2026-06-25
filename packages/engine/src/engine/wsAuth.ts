@@ -1,4 +1,4 @@
-import type { AuthProvider, Agent, Workspace } from '../ports/auth.js';
+import type { AuthProvider, Workspace } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { getNodeByTokenHash } from './node.js';
 
@@ -13,7 +13,6 @@ export interface WsAuthError {
 }
 
 export type RealtimeWsAuthResult =
-  | { ok: true; scope: 'agent'; workspace: Workspace; agent: Agent }
   | { ok: true; scope: 'workspace'; workspace: Workspace }
   | WsAuthError;
 
@@ -62,11 +61,7 @@ function invalidWsToken(message: string): WsAuthError {
 
 export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): Promise<RealtimeWsAuthResult> {
   if (token.startsWith('at_live_')) {
-    const result = await deps.auth.authenticate({ token, require: 'agent', db: deps.db });
-    if (!result.ok || !result.agent) {
-      return invalidWsToken('Invalid agent token');
-    }
-    return { ok: true, scope: 'agent', workspace: result.workspace, agent: result.agent };
+    return invalidWsToken('Agent realtime WebSockets have moved to node transport');
   }
 
   if (token.startsWith('rk_live_')) {

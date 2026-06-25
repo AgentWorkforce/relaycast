@@ -1,6 +1,4 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/sqlite-core';
-import { transformForClient } from './wsTransform.js';
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
@@ -21,8 +19,6 @@ type ScopedNodeRow = {
   nodeKind: string;
   nodeRole: string;
 };
-
-const DELIVERY_ROUTED_EVENTS = new Set(['message.created', 'thread.reply', 'dm.received', 'group_dm.received']);
 
 function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }> {
   const grouped = new Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }>();
@@ -45,11 +41,10 @@ async function sendContextToRows(
   },
 ): Promise<void> {
   const grouped = groupByNode(rows);
-  const directAgentIds: string[] = [];
   const tasks: Promise<unknown>[] = [];
   for (const [nodeId, group] of grouped.entries()) {
     const agentIds = [...new Set(group.agentIds)];
-    if ((group.nodeKind === 'ws' && group.nodeRole === 'broker') || group.nodeKind === 'fleet_ws') {
+    if (group.nodeKind === 'ws' || group.nodeKind === 'fleet_ws' || group.nodeKind === 'direct_ws') {
       tasks.push(
         deps.nodeConnections.sendToNode(deps.workspaceId, nodeId, {
           v: 1,
@@ -63,12 +58,6 @@ async function sendContextToRows(
       );
       continue;
     }
-    if ((group.nodeKind === 'ws' && group.nodeRole === 'direct') || group.nodeKind === 'direct_ws') {
-      if (!DELIVERY_ROUTED_EVENTS.has(message.event)) {
-        directAgentIds.push(...agentIds);
-      }
-      continue;
-    }
     console.warn('[node.context] unsupported node kind for context update', {
       workspace_id: deps.workspaceId,
       node_id: nodeId,
@@ -78,21 +67,6 @@ async function sendContextToRows(
       topic: message.topic,
       event: message.event,
     });
-  }
-  if (directAgentIds.length > 0) {
-    tasks.push(
-      deps.realtime.deliverToAgents({
-        workspaceId: deps.workspaceId,
-        agentIds: [...new Set(directAgentIds)],
-        event: transformForClient({
-          type: message.event,
-          workspace_id: deps.workspaceId,
-          ...(message.channelId ? { channel_id: message.channelId } : {}),
-          data: message.data,
-          timestamp: new Date().toISOString(),
-        }),
-      }),
-    );
   }
   await Promise.allSettled(tasks);
 }
@@ -150,8 +124,6 @@ export async function sendNodePresenceContext(
     data: Record<string, unknown>;
   },
 ): Promise<void> {
-  const subjectMemberships = alias(channelMembers, 'subject_memberships');
-  const peerMemberships = alias(channelMembers, 'peer_memberships');
   const rows = await deps.db
     .select({
       nodeId: agentNodeBindings.nodeId,
@@ -159,13 +131,7 @@ export async function sendNodePresenceContext(
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
     })
-    .from(subjectMemberships)
-    .innerJoin(peerMemberships, eq(peerMemberships.channelId, subjectMemberships.channelId))
-    .innerJoin(agentNodeBindings, and(
-      eq(agentNodeBindings.agentId, peerMemberships.agentId),
-      eq(agentNodeBindings.workspaceId, deps.workspaceId),
-      eq(agentNodeBindings.status, 'active'),
-    ))
+    .from(agentNodeBindings)
     .innerJoin(agents, and(
       eq(agents.workspaceId, deps.workspaceId),
       eq(agents.id, agentNodeBindings.agentId),
@@ -177,7 +143,8 @@ export async function sendNodePresenceContext(
       eq(nodes.id, agentNodeBindings.nodeId),
     ))
     .where(and(
-      eq(subjectMemberships.agentId, args.subjectAgentId),
+      eq(agentNodeBindings.workspaceId, deps.workspaceId),
+      eq(agentNodeBindings.status, 'active'),
       inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
     ));
 

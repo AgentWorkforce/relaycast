@@ -75,6 +75,7 @@ import { HttpClient, type RequestOptions } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
 import type { Subscription } from './subscription.js';
 import { stableRelaycastEventId } from './event-id.js';
+import { SDK_VERSION } from './version.js';
 
 function stripHash(channel: string): string {
   return channel.startsWith('#') ? channel.slice(1) : channel;
@@ -121,7 +122,7 @@ function idempotencyHeaders(opts?: IdempotencyOption): RequestOptions {
 
 export interface AgentClientOptions {
   autoHeartbeatMs?: number | false;
-  ws?: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  ws?: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
 }
 
 type RelaycastMessageHandler = (event: RelaycastMessageEvent) => void | Promise<void>;
@@ -129,6 +130,12 @@ type ManagedSubscription = {
   channels: Set<string>;
   handler: RelaycastMessageHandler;
   stops: Array<() => void>;
+};
+
+type DirectNodeToken = {
+  nodeId: string;
+  nodeName: string;
+  token: string;
 };
 
 function normalizeSubscriptionChannel(channel: string): string {
@@ -153,7 +160,8 @@ export class AgentClient {
   private autoHeartbeatMs: number | false;
   private autoHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pendingHeartbeat: Promise<void> | null = null;
-  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl'>;
+  private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
+  private directNodeToken: DirectNodeToken | null = null;
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -200,15 +208,41 @@ export class AgentClient {
     }
   }
 
+  private async fetchDirectNodeToken(): Promise<string> {
+    const token = await this.client.post<DirectNodeToken>('/v1/agent/node-token', {});
+    this.directNodeToken = token;
+    return token.token;
+  }
+
+  private directNodeRegistration(): Record<string, unknown> {
+    if (!this.directNodeToken) {
+      throw new Error('Direct node token has not been initialized');
+    }
+    return {
+      v: 1,
+      id: `sdk-direct-${Date.now()}`,
+      type: 'node.register',
+      node_id: this.directNodeToken.nodeId,
+      name: this.directNodeToken.nodeName,
+      capabilities: [],
+      max_agents: 1,
+      tags: ['implicit', 'direct', 'sdk'],
+      version: `sdk-typescript/${SDK_VERSION}`,
+    };
+  }
+
   // === WebSocket ===
 
   connect(): void {
     if (this.ws) return;
     this.ws = new WsClient(withInternalWsOrigin(
       {
-        token: this.client.apiKey,
-        baseUrl: this.client.baseUrl,
         ...this.wsOptions,
+        token: () => this.fetchDirectNodeToken(),
+        baseUrl: this.client.baseUrl,
+        path: '/v1/node/ws',
+        nodeRegistration: () => this.directNodeRegistration(),
+        autoAckDeliveries: true,
       },
       {
         client: this.client.originClient,

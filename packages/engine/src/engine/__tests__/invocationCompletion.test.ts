@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emitInvocationCompletionEffects, type InvocationCompletionDeps } from '../invocationCompletion.js';
+import { sendNodeDeliveriesToAgents } from '../nodeDeliver.js';
+
+vi.mock('../nodeDeliver.js', () => ({
+  sendNodeDeliveriesToAgents: vi.fn(async () => {}),
+}));
 
 /**
  * The caller of an action receives a targeted completion delivery; it must not
@@ -9,14 +14,15 @@ import { emitInvocationCompletionEffects, type InvocationCompletionDeps } from '
  */
 describe('emitInvocationCompletionEffects caller dedupe', () => {
   it('delivers the completion to an online caller exactly once', async () => {
-    const deliverToAgents = vi.fn(async () => {});
+    const sendNodeDeliveriesToAgentsMock = vi.mocked(sendNodeDeliveriesToAgents);
+    sendNodeDeliveriesToAgentsMock.mockClear();
     const publishToWorkspaceStream = vi.fn(async () => {});
     const deps = {
       db: { insert: () => { throw new Error('skip durable outbox in test'); } },
       realtime: {
-        deliverToAgents,
         publishToWorkspaceStream,
       },
+      nodeConnections: {},
       webhookQueue: { send: vi.fn(async () => {}) },
     } as unknown as InvocationCompletionDeps;
 
@@ -29,11 +35,20 @@ describe('emitInvocationCompletionEffects caller dedupe', () => {
       error: null,
     });
 
-    const deliveredAgentIds = deliverToAgents.mock.calls.flatMap(
-      ([args]) => (args as { agentIds: string[] }).agentIds,
-    );
-    expect(deliveredAgentIds.filter((id) => id === 'caller-1')).toHaveLength(1);
-    expect(deliveredAgentIds).not.toContain('other-1');
+    expect(sendNodeDeliveriesToAgentsMock).toHaveBeenCalledTimes(1);
+    expect(sendNodeDeliveriesToAgentsMock.mock.calls[0]?.[1]).toMatchObject({
+      agentIds: ['caller-1'],
+      event: 'action.completed',
+      eventKey: 'inv-1',
+      messageId: 'inv-1',
+      data: {
+        invocation_id: 'inv-1',
+        action_name: 'echo',
+        status: 'completed',
+        output: { ok: true },
+        error: null,
+      },
+    });
     expect(publishToWorkspaceStream).toHaveBeenCalledTimes(1);
   });
 });

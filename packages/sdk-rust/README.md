@@ -174,7 +174,7 @@ For consumers that need to handle evolving event shapes before converting to typ
 ```rust
 use relaycast::{normalize_inbound_event, WsClient, WsClientOptions};
 
-let mut ws = WsClient::new(WsClientOptions::new("at_live_xxx"));
+let mut ws = WsClient::new(WsClientOptions::new("rk_live_xxx"));
 let mut raw_events = ws.subscribe_raw_events();
 ws.connect().await?;
 
@@ -188,7 +188,8 @@ while let Ok(raw) = raw_events.recv().await {
 ### Actions (agent-to-agent RPC)
 
 Register an action handled by an agent, invoke it from another agent, and complete it. The handler
-receives an `action.invoked` WebSocket event; the caller receives `action.completed`/`action.failed`.
+receives an `action.invoked` callback from the node `action.invoke` frame; the caller receives
+`action.completed`/`action.failed`.
 
 ```rust
 use relaycast::{CompleteInvocationRequest, RegisterActionRequest, RelayCast, RelayCastOptions};

@@ -17,7 +17,6 @@ import {
   missingWsToken,
   queryOrBearerToken,
 } from './engine/wsAuth.js';
-import { ensureDirectNodeForAgent } from './engine/node.js';
 
 // Route imports
 import { healthRoutes } from './routes/health.js';
@@ -104,7 +103,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       return jsonError(c, 'unauthorized', 'Missing token', 401);
     }
 
-    const { auth, connections, presence } = c.get('engine');
+    const { auth, connections } = c.get('engine');
     const db = c.get('db');
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
@@ -116,30 +115,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
-    }
-
-    if (authResult.scope === 'agent') {
-      await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
-        online: true,
-      });
-      // Register the agent online (fire-and-forget)
-      presence.heartbeat(authResult.workspace.id, authResult.agent.id, authResult.agent.name).catch(() => {});
-      const response = await connections.upgrade({
-        request: c.req.raw,
-        scope: 'agent',
-        workspaceId: authResult.workspace.id,
-        agentId: authResult.agent.id,
-        agentName: authResult.agent.name,
-        origin,
-        originActor,
-      });
-      if (response.status === 101) {
-        emitServerEvent(c, authResult.workspace.id, 'relaycast_server_ws_session_started', {
-          agent_id: authResult.agent.id,
-          session_scope: 'agent',
-        });
-      }
-      return response;
     }
 
     const response = await connections.upgrade({

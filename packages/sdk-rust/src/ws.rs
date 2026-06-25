@@ -1,6 +1,6 @@
 //! WebSocket client for real-time events.
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -45,6 +45,17 @@ pub struct WsClientOptions {
     pub max_reconnect_attempts: Option<u32>,
     /// Maximum reconnect delay in milliseconds (default: 30000).
     pub max_reconnect_delay_ms: Option<u64>,
+    /// WebSocket path. Defaults to `/v1/ws` for workspace observer streams.
+    pub path: Option<String>,
+    /// Optional node registration sent after connecting to `/v1/node/ws`.
+    pub node_registration: Option<NodeRegistration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeRegistration {
+    pub node_id: String,
+    pub name: String,
+    pub agent_name: String,
 }
 
 impl WsClientOptions {
@@ -60,6 +71,8 @@ impl WsClientOptions {
             agent_relay_distinct_id: None,
             max_reconnect_attempts: None,
             max_reconnect_delay_ms: None,
+            path: None,
+            node_registration: None,
         }
     }
 
@@ -109,6 +122,13 @@ impl WsClientOptions {
         self.max_reconnect_delay_ms = Some(delay_ms);
         self
     }
+
+    /// Connect to the node-control WebSocket and register this node on open.
+    pub fn with_node_registration(mut self, registration: NodeRegistration) -> Self {
+        self.path = Some("/v1/node/ws".to_string());
+        self.node_registration = Some(registration);
+        self
+    }
 }
 
 /// A handle for subscribing to WebSocket events.
@@ -138,6 +158,8 @@ pub struct WsClient {
     agent_relay_distinct_id: Option<String>,
     max_reconnect_attempts: u32,
     max_reconnect_delay_ms: u64,
+    path: String,
+    node_registration: Option<NodeRegistration>,
     event_tx: broadcast::Sender<WsEvent>,
     raw_event_tx: broadcast::Sender<serde_json::Value>,
     lifecycle_tx: broadcast::Sender<WsLifecycleEvent>,
@@ -183,6 +205,8 @@ impl WsClient {
             max_reconnect_delay_ms: options
                 .max_reconnect_delay_ms
                 .unwrap_or(DEFAULT_MAX_RECONNECT_DELAY_MS),
+            path: options.path.unwrap_or_else(|| "/v1/ws".to_string()),
+            node_registration: options.node_registration,
             event_tx,
             raw_event_tx,
             lifecycle_tx,
@@ -222,7 +246,7 @@ impl WsClient {
             return Ok(());
         }
 
-        let mut url = Url::parse(&format!("{}/v1/ws", self.base_url))?;
+        let mut url = Url::parse(&format!("{}{}", self.base_url, self.path))?;
         {
             let token = self.token.lock().await.clone();
             let mut query = url.query_pairs_mut();
@@ -255,6 +279,8 @@ impl WsClient {
         let agent_relay_distinct_id = self.agent_relay_distinct_id.clone();
         let max_reconnect_attempts = self.max_reconnect_attempts;
         let max_reconnect_delay_ms = self.max_reconnect_delay_ms;
+        let path = self.path.clone();
+        let node_registration = self.node_registration.clone();
 
         *is_connected.lock().await = true;
 
@@ -269,7 +295,7 @@ impl WsClient {
                 let stream = if let Some(stream) = current_stream.take() {
                     stream
                 } else {
-                    let mut reconnect_url = match Url::parse(&format!("{}/v1/ws", base_url)) {
+                    let mut reconnect_url = match Url::parse(&format!("{}{}", base_url, path)) {
                         Ok(url) => url,
                         Err(err) => {
                             let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
@@ -340,10 +366,17 @@ impl WsClient {
                 let (mut write, mut read) = stream.split();
                 reconnect_attempt = 0;
                 *is_connected.lock().await = true;
+                if let Some(registration) = &node_registration {
+                    if let Err(err) = send_node_register(&mut write, registration).await {
+                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                        *is_connected.lock().await = false;
+                        continue;
+                    }
+                }
                 let _ = lifecycle_tx.send(WsLifecycleEvent::Open);
 
                 // Re-subscribe all known channels on every new socket.
-                if !subscribed_channels.is_empty() {
+                if node_registration.is_none() && !subscribed_channels.is_empty() {
                     let msg = serde_json::json!({
                         "type": "subscribe",
                         "channels": subscribed_channels.iter().cloned().collect::<Vec<_>>()
@@ -366,8 +399,14 @@ impl WsClient {
                                 Some(Ok(Message::Text(text))) => {
                                     match serde_json::from_str::<serde_json::Value>(&text) {
                                         Ok(value) => {
-                                            let _ = raw_event_tx.send(value.clone());
-                                            match serde_json::from_value::<WsEvent>(value) {
+                                            let event_value = normalize_node_message(value.clone()).unwrap_or_else(|| value.clone());
+                                            let _ = raw_event_tx.send(event_value.clone());
+                                            if node_registration.is_some() {
+                                                if let Some(ack) = node_delivery_ack(&value) {
+                                                    let _ = write.send(Message::Text(ack.to_string())).await;
+                                                }
+                                            }
+                                            match serde_json::from_value::<WsEvent>(event_value) {
                                                 Ok(event) => {
                                                     let _ = event_tx.send(event);
                                                 }
@@ -402,26 +441,30 @@ impl WsClient {
                                     for ch in &channels {
                                         subscribed_channels.insert(ch.clone());
                                     }
-                                    let msg = serde_json::json!({
-                                        "type": "subscribe",
-                                        "channels": channels
-                                    });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
-                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
-                                        break;
+                                    if node_registration.is_none() {
+                                        let msg = serde_json::json!({
+                                            "type": "subscribe",
+                                            "channels": channels
+                                        });
+                                        if let Err(err) = write.send(Message::Text(msg.to_string())).await {
+                                            let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                            break;
+                                        }
                                     }
                                 }
                                 Some(WsCommand::Unsubscribe(channels)) => {
                                     for ch in &channels {
                                         subscribed_channels.remove(ch);
                                     }
-                                    let msg = serde_json::json!({
-                                        "type": "unsubscribe",
-                                        "channels": channels
-                                    });
-                                    if let Err(err) = write.send(Message::Text(msg.to_string())).await {
-                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
-                                        break;
+                                    if node_registration.is_none() {
+                                        let msg = serde_json::json!({
+                                            "type": "unsubscribe",
+                                            "channels": channels
+                                        });
+                                        if let Err(err) = write.send(Message::Text(msg.to_string())).await {
+                                            let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                            break;
+                                        }
                                     }
                                 }
                                 Some(WsCommand::Disconnect) | None => {
@@ -432,7 +475,22 @@ impl WsClient {
                             }
                         }
                         _ = ping_interval.tick() => {
-                            let ping = serde_json::json!({"type": "ping"});
+                            let ping = if let Some(registration) = &node_registration {
+                                serde_json::json!({
+                                    "v": 1,
+                                    "type": "node.heartbeat",
+                                    "load": 0,
+                                    "active_agents": 1,
+                                    "handlers_live": false,
+                                    "node_id": registration.node_id,
+                                    "name": registration.name,
+                                    "capabilities": [],
+                                    "max_agents": 1,
+                                    "version": SDK_VERSION,
+                                })
+                            } else {
+                                serde_json::json!({"type": "ping"})
+                            };
                             if let Err(err) = write.send(Message::Text(ping.to_string())).await {
                                 let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
                                 break;
@@ -534,6 +592,110 @@ fn reconnect_delay_ms(attempt: u32, max_delay_ms: u64) -> u64 {
     let exp = attempt.saturating_sub(1);
     let delay = 1_000u64.saturating_mul(2u64.saturating_pow(exp));
     delay.min(max_delay_ms.max(1_000))
+}
+
+async fn send_node_register<S>(
+    write: &mut S,
+    registration: &NodeRegistration,
+) -> std::result::Result<(), tokio_tungstenite::tungstenite::Error>
+where
+    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let msg = serde_json::json!({
+        "v": 1,
+        "id": format!("register-{}", registration.node_id),
+        "type": "node.register",
+        "node_id": registration.node_id,
+        "name": registration.name,
+        "capabilities": [],
+        "max_agents": 1,
+        "tags": ["implicit", "direct", "sdk"],
+        "version": SDK_VERSION,
+        "resume_cursor": null,
+    });
+    write.send(Message::Text(msg.to_string())).await
+}
+
+fn node_delivery_ack(value: &serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "deliver" {
+        return None;
+    }
+    Some(serde_json::json!({
+        "v": 1,
+        "type": "delivery.ack",
+        "agent": value.get("agent")?.as_str()?,
+        "up_to_seq": value.get("seq")?.as_u64()?,
+    }))
+}
+
+fn normalize_node_deliver(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "deliver" {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let event_type = payload.get("type")?.as_str()?;
+    let data = payload.get("data")?.clone();
+    let data_obj = data.as_object()?;
+
+    if event_type == "message.created" {
+        return Some(serde_json::json!({
+            "type": event_type,
+            "channel": data_obj.get("channel_name").and_then(|v| v.as_str()).unwrap_or(""),
+            "message": {
+                "id": data_obj.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_id": data_obj.get("agent_id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_name": data_obj
+                    .get("agent_name")
+                    .or_else(|| data_obj.get("from_name"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::String("unknown".to_string())),
+                "text": data_obj.get("text").cloned().unwrap_or(serde_json::Value::String(String::new())),
+                "attachments": data_obj.get("attachments").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "injection_mode": data_obj.get("injection_mode").cloned().unwrap_or(serde_json::Value::Null),
+            }
+        }));
+    }
+
+    if event_type == "thread.reply" {
+        return Some(serde_json::json!({
+            "type": event_type,
+            "channel": data_obj.get("channel_name").and_then(|v| v.as_str()).unwrap_or(""),
+            "parent_id": data_obj.get("thread_id").cloned().unwrap_or(serde_json::Value::Null),
+            "message": {
+                "id": data_obj.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_id": data_obj.get("agent_id").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_name": data_obj
+                    .get("agent_name")
+                    .or_else(|| data_obj.get("from_name"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::String("unknown".to_string())),
+                "text": data_obj.get("text").cloned().unwrap_or(serde_json::Value::String(String::new())),
+            }
+        }));
+    }
+
+    let mut event = data_obj.clone();
+    event.insert("type".to_string(), serde_json::Value::String(event_type.to_string()));
+    Some(serde_json::Value::Object(event))
+}
+
+fn normalize_node_message(value: serde_json::Value) -> Option<serde_json::Value> {
+    normalize_node_deliver(value.clone()).or_else(|| normalize_node_action_invoke(value))
+}
+
+fn normalize_node_action_invoke(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "action.invoke" {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "action.invoked",
+        "invocation_id": value.get("invocation_id").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "action_name": value.get("action").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "caller_name": "node",
+        "handler_agent_id": value.get("agent_id").cloned().unwrap_or(serde_json::Value::String(String::new())),
+        "handler_agent_name": value.get("agent_name").cloned().unwrap_or(serde_json::Value::Null),
+        "input": value.get("input").cloned().unwrap_or(serde_json::json!({})),
+    }))
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> &str {

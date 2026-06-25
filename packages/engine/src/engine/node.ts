@@ -42,6 +42,10 @@ function directNodeNameForAgent(agentId: string): string {
   return `direct-${agentId}`;
 }
 
+function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>): boolean {
+  return agent.locationNodeId === directNodeIdForAgent(agent.id);
+}
+
 function capabilityName(capability: CapabilityLike | null | undefined): string | null {
   if (typeof capability === 'string') return capability;
   return capability?.name ?? null;
@@ -270,6 +274,14 @@ export async function registerNode(
   }
 
   const now = new Date();
+  const [existing] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
+  if (!existing) {
+    throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
+  }
+
   const [existingByName] = await db
     .select()
     .from(nodes)
@@ -279,30 +291,32 @@ export async function registerNode(
     throw codedError(`Node name "${message.name}" is already enrolled`, 'node_name_conflict', 409);
   }
 
+  const role: NodeRole = existing.role === 'direct' ? 'direct' : 'broker';
+  const capabilities = role === 'direct' ? [] : normalizeCapabilities(message.capabilities);
+  const maxAgents = role === 'direct' ? 1 : message.max_agents;
   const [updated] = await db
     .update(nodes)
     .set({
       name: message.name,
-      capabilities: message.capabilities,
+      capabilities,
       kind: 'ws',
-      role: 'broker',
+      role,
       deliveryAdapter: 'ws.node.v1',
-      deliveryConfig: null,
-      maxAgents: message.max_agents,
-      tags: message.tags,
+      deliveryConfig: role === 'direct' ? existing.deliveryConfig : null,
+      maxAgents,
+      activeAgents: role === 'direct' ? 1 : existing.activeAgents,
+      tags: role === 'direct' ? existing.tags : message.tags,
       version: message.version,
       status: 'online',
-      handlersLive: message.capabilities.length > 0,
+      handlersLive: role === 'broker' && capabilities.length > 0,
       lastHeartbeatAt: now,
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)))
     .returning();
 
-  if (!updated) {
-    throw codedError('Node token is not enrolled in this workspace', 'node_not_found', 404);
+  if (role === 'broker') {
+    await ensureCapabilityActions(db, workspaceId, updated.id, capabilities);
   }
-
-  await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
   return publicNode(updated);
 }
 
@@ -326,9 +340,21 @@ export async function heartbeatNode(
   const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
   if (message.name !== undefined) rosterUpdate.name = message.name;
   if (message.capabilities !== undefined) {
-    rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+    const [node] = await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (node?.role !== 'direct') {
+      rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+    }
   }
-  if (message.max_agents !== undefined) rosterUpdate.maxAgents = message.max_agents;
+  if (message.max_agents !== undefined) {
+    const [node] = await db
+      .select({ role: nodes.role })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    rosterUpdate.maxAgents = node?.role === 'direct' ? 1 : message.max_agents;
+  }
   if (message.version !== undefined) rosterUpdate.version = message.version;
 
   const [updated] = await db
@@ -344,7 +370,7 @@ export async function heartbeatNode(
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
     .returning();
 
-  if (updated && message.capabilities !== undefined) {
+  if (updated && updated.role !== 'direct' && message.capabilities !== undefined) {
     await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
   }
 
@@ -881,7 +907,13 @@ export async function registerAgentViaNode(
         },
         setWhere: or(
           ne(agents.status, 'active'),
-          and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+          and(
+            eq(agents.locationType, 'via_node'),
+            or(
+              eq(agents.locationNodeId, nodeId),
+              sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
+            ),
+          ),
         ),
       })
       .returning();
@@ -1005,7 +1037,9 @@ export async function reconcileInventory(
         eq(nodes.id, existing.locationNodeId ?? ''),
       ));
     const boundNodeLive = !!boundNode && isNodeLive(boundNode);
-    const conflict = existing.locationType !== 'via_node' || !existing.locationNodeId || (existing.locationNodeId !== nodeId && boundNodeLive);
+    const conflict = existing.locationType !== 'via_node'
+      || !existing.locationNodeId
+      || (existing.locationNodeId !== nodeId && boundNodeLive && !isImplicitDirectLocation(existing));
     if (conflict) {
       console.warn('[node.inventory] rejected active-name claim', {
         workspace_id: workspaceId,
@@ -1198,6 +1232,7 @@ export async function handleNodeControlMessage(args: {
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
+        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
         return;
       }
       case 'node.heartbeat':

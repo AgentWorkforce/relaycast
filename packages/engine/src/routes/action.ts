@@ -7,7 +7,8 @@ import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as actionEngine from '../engine/action.js';
 import { emitInvocationCompletionEffects } from '../engine/invocationCompletion.js';
-import { fanoutToWorkspace, fanoutToAgents } from './fanout.js';
+import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
+import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -182,13 +183,6 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       handler_node_id: result.handler_node_id,
     };
 
-    if (result.handler_agent_id) {
-      runInBackground(
-        c,
-        fanoutToAgents(c, [result.handler_agent_id], 'action.invoked', eventData),
-        'fanout action.invoked',
-      );
-    }
     await sendWebhookEvent(c, {
       type: 'action.invoked',
       workspaceId: workspace.id,
@@ -211,7 +205,24 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         caller_name: agent.name,
         error: error.message,
       };
-      runInBackground(c, fanoutToAgents(c, [agent.id], 'action.denied', eventData), 'fanout action.denied');
+      runInBackground(
+        c,
+        sendNodeDeliveriesToAgents(
+          {
+            db: c.get('db'),
+            nodeConnections: c.get('engine').nodeConnections,
+            workspaceId: workspace.id,
+          },
+          {
+            agentIds: [agent.id],
+            event: 'action.denied',
+            eventKey: `${c.req.param('name')}:${agent.id}`,
+            data: eventData,
+            messageId: c.req.param('name'),
+          },
+        ),
+        'node deliver action.denied',
+      );
       await sendWebhookEvent(c, {
         type: 'action.denied',
         workspaceId: workspace.id,
