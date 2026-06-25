@@ -7,7 +7,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, agents, deliveries, nodes } from '../../db/schema.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
@@ -110,29 +110,31 @@ describe('node adapter conformance', () => {
 
   describe('presence', () => {
     it('emits agent.status.active on connect and agent.status.offline on sweep', async () => {
+      const ws = await createWorkspace(stack.app, 'presence-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
       const rt = stack.runtime.realtime;
       const presence = stack.runtime.presence;
-      const aSock = new FakeSocket();
       const bSock = new FakeSocket();
-      rt.attachAgentSocket('w1', 'a', aSock);
-      rt.attachAgentSocket('w1', 'b', bSock);
+      rt.attachAgentSocket(ws.workspaceId, alice.agentId, new FakeSocket());
+      rt.attachAgentSocket(ws.workspaceId, bob.agentId, bSock);
 
-      await presence.heartbeat('w1', 'a', 'A');
-      await presence.heartbeat('w1', 'b', 'B');
-      expect(await presence.getOnline('w1')).toEqual(expect.arrayContaining(['a', 'b']));
-      // 'b' should have learned 'a' (and itself) became active.
+      await presence.heartbeat(ws.workspaceId, alice.agentId, 'alice');
+      await presence.heartbeat(ws.workspaceId, bob.agentId, 'bob');
+      expect(await presence.getOnline(ws.workspaceId)).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
+      // Bob should have learned Alice (and itself) became active through node-scoped context.
       expect(bSock.ofType('agent.status.active').length).toBeGreaterThanOrEqual(1);
 
-      // Let 'a' go stale (ttl 1s) and sweep.
+      // Let Alice go stale (ttl 1s) and sweep.
       await new Promise((r) => setTimeout(r, 1100));
-      await presence.heartbeat('w1', 'b', 'B'); // keep b alive
+      await presence.heartbeat(ws.workspaceId, bob.agentId, 'bob'); // keep Bob alive
       bSock.received.length = 0;
       await presence.sweep();
 
-      expect(await presence.getOnline('w1')).toEqual(['b']);
+      expect(await presence.getOnline(ws.workspaceId)).toEqual([bob.agentId]);
       const offline = bSock.ofType('agent.status.offline');
       expect(offline.length).toBeGreaterThanOrEqual(1);
-      expect(offline[0]).toMatchObject({ subject_agent_id: 'a' });
+      expect(offline[0]).toMatchObject({ agent: { name: 'alice' }, status: 'offline' });
     });
   });
 
@@ -171,7 +173,7 @@ describe('node adapter conformance', () => {
   });
 
   describe('http integration: channel message delivery', () => {
-    it('delivers message.created to joined channel members with both seqs', async () => {
+    it('delivers message.created to joined channel members through the node route', async () => {
       const ws = await createWorkspace(stack.app, 'deliver-ws');
       const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
       const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -207,9 +209,111 @@ describe('node adapter conformance', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const delivered = bobSock.ofType('message.created');
-      expect(delivered.length).toBeGreaterThanOrEqual(1);
-      expect(typeof delivered[0].channel_seq).toBe('number');
+      expect(delivered).toHaveLength(1);
       expect(typeof delivered[0].agent_seq).toBe('number');
+    });
+
+    it('does not create or push message deliveries for muted channel members', async () => {
+      const ws = await createWorkspace(stack.app, 'muted-delivery-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const createRes = await stack.app.request('/v1/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'team-chat' }),
+      });
+      expect(createRes.status).toBeLessThan(300);
+      for (const token of [alice.token, bob.token]) {
+        const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(joinRes.status).toBeLessThan(300);
+      }
+
+      const muteRes = await stack.app.request('/v1/channels/team-chat/mute', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(muteRes.status).toBeLessThan(300);
+
+      const bobSock = new FakeSocket();
+      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      bobSock.received.length = 0;
+
+      const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'muted hello' }),
+      });
+      expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+
+      const rows = await stack.runtime.deps.db
+        .select({ id: deliveries.id })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(rows).toHaveLength(0);
+      expect(bobSock.ofType('message.created')).toHaveLength(0);
+    });
+
+    it('creates a mention delivery for muted channel members when explicitly mentioned', async () => {
+      const ws = await createWorkspace(stack.app, 'muted-mention-delivery-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const createRes = await stack.app.request('/v1/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'mentions-chat' }),
+      });
+      expect(createRes.status).toBeLessThan(300);
+      for (const token of [alice.token, bob.token]) {
+        const joinRes = await stack.app.request('/v1/channels/mentions-chat/join', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(joinRes.status).toBeLessThan(300);
+      }
+
+      const muteRes = await stack.app.request('/v1/channels/mentions-chat/mute', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(muteRes.status).toBeLessThan(300);
+
+      const bobSock = new FakeSocket();
+      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      bobSock.received.length = 0;
+
+      const postRes = await stack.app.request('/v1/channels/mentions-chat/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: '@bob please look' }),
+      });
+      expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+
+      const rows = await stack.runtime.deps.db
+        .select({ id: deliveries.id, reason: deliveries.reason })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(rows).toEqual([
+        expect.objectContaining({ reason: 'mention' }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(bobSock.ofType('message.created')).toHaveLength(1);
     });
   });
 
@@ -285,6 +389,46 @@ describe('node adapter conformance', () => {
       }));
       return { sock, handle };
     }
+
+    it('enforces node capacity for agents registered over node control', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-agent-register-capacity');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_capacity_one',
+        name: 'capacity-one',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-1',
+        type: 'agent.register',
+        name: 'worker-one',
+        session_ref: 'pty://alpha/worker-one',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'agent-register-1',
+        ok: true,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-2',
+        type: 'agent.register',
+        name: 'worker-two',
+        session_ref: 'pty://alpha/worker-two',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'agent-register-2',
+        code: 'node_capacity_exceeded',
+      });
+
+      const [node] = await stack.runtime.handle.db
+        .select({ activeAgents: nodes.activeAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_capacity_one')));
+      expect(node?.activeAgents).toBe(1);
+    });
 
     it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-node-ws');

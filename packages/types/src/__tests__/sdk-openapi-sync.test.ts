@@ -32,9 +32,6 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/.well-known/agent-card.json',
   '/v1/a2a/rpc',
   '/v1/a2a/webhook/{param}/{param}',
-  // Operator/admin endpoint (workspace-key auth) to read/set the per-workspace
-  // fleet rollout flag; not part of the agent/workspace SDK surface.
-  '/v1/workspace/fleet-nodes',
 ]);
 
 const CORE_SDK_PATHS = new Set([

@@ -14,20 +14,23 @@ export interface InProcessPresenceOptions {
   ttlMs?: number;
   /** How often the stale-sweep runs. Set 0 to disable the timer (tests call sweep() directly). */
   sweepIntervalMs?: number;
+  /** Optional hook for adapter-specific scoped presence side effects. */
+  onPresenceEvent?: (workspaceId: string, event: EngineEvent) => Promise<void> | void;
 }
 
 /**
  * Single-process presence tracker replacing PresenceDO. Heartbeats are kept in
  * a per-workspace map; a `setInterval` sweep (mirroring the DO alarm) marks
- * agents offline after the TTL and fans out `agent.status.offline` events through
- * the realtime bus. Emits `agent.status.active` on the offline→online transition.
+ * agents offline after the TTL and publishes `agent.status.offline` to observers
+ * and the scoped presence hook. Emits `agent.status.active` on the offline→online
+ * transition.
  */
 export class InProcessPresence implements PresenceTracker {
   private readonly workspaces = new Map<string, Map<string, PresenceEntry>>();
   private readonly ttlMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly bus: RealtimeBus, options: InProcessPresenceOptions = {}) {
+  constructor(private readonly bus: RealtimeBus, private readonly options: InProcessPresenceOptions = {}) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     const sweepMs = options.sweepIntervalMs ?? DEFAULT_SWEEP_MS;
     if (sweepMs > 0) {
@@ -78,10 +81,10 @@ export class InProcessPresence implements PresenceTracker {
     };
   }
 
-  private async broadcast(workspaceId: string, onlineAgentIds: string[], event: EngineEvent): Promise<void> {
+  private async broadcast(workspaceId: string, event: EngineEvent): Promise<void> {
     await Promise.allSettled([
-      this.bus.deliverToAgents({ workspaceId, agentIds: onlineAgentIds, event }),
       this.bus.publishToWorkspaceStream({ workspaceId, event }),
+      this.options.onPresenceEvent?.(workspaceId, event),
     ]);
   }
 
@@ -94,7 +97,7 @@ export class InProcessPresence implements PresenceTracker {
 
     if (wasOffline) {
       const event = this.buildEvent('agent.status.active', agentId, name);
-      await this.broadcast(workspaceId, this.onlineIds(workspaceId), event);
+      await this.broadcast(workspaceId, event);
     }
   }
 
@@ -105,7 +108,7 @@ export class InProcessPresence implements PresenceTracker {
     const name = agentName?.trim() || prev.name || agentId;
     map.delete(agentId);
     const event = this.buildEvent('agent.status.offline', agentId, name);
-    await this.broadcast(workspaceId, this.onlineIds(workspaceId), event);
+    await this.broadcast(workspaceId, event);
   }
 
   async getOnline(workspaceId: string): Promise<string[]> {
@@ -124,9 +127,8 @@ export class InProcessPresence implements PresenceTracker {
       }
       if (stale.length === 0) continue;
       for (const s of stale) map.delete(s.id);
-      const stillOnline = this.onlineIds(workspaceId);
       for (const s of stale) {
-        await this.broadcast(workspaceId, stillOnline, this.buildEvent('agent.status.offline', s.id, s.name));
+        await this.broadcast(workspaceId, this.buildEvent('agent.status.offline', s.id, s.name));
       }
       // Reclaim the workspace entry once it has no tracked agents, so the map
       // doesn't grow unbounded with workspace churn.

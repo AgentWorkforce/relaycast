@@ -27,7 +27,7 @@ const BROKER_TO_RELAYCAST_TYPES = new Set([
   'inventory.sync',
 ]);
 
-const RELAYCAST_TO_BROKER_TYPES = new Set(['deliver', 'action.invoke', 'ping', 'reply', 'error']);
+const RELAYCAST_TO_BROKER_TYPES = new Set(['deliver', 'action.invoke', 'context.update', 'ping', 'reply', 'error']);
 
 const EXPECTED_FIXTURES = [
   'action.invoke.json',
@@ -35,6 +35,7 @@ const EXPECTED_FIXTURES = [
   'action.result.output.json',
   'agent.deregister.json',
   'agent.register.json',
+  'context.update.json',
   'deliver.json',
   'delivery.ack.json',
   'error.json',

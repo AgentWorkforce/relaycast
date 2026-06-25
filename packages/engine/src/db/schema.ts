@@ -6,6 +6,7 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  foreignKey,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
@@ -65,6 +66,7 @@ export const agents = sqliteTable(
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
   ],
@@ -82,6 +84,9 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    kind: text('kind').notNull().default('fleet_ws'),
+    deliveryAdapter: text('delivery_adapter').notNull().default('fleet.ws.v1'),
+    deliveryConfig: text('delivery_config', { mode: 'json' }).$type<Record<string, unknown>>(),
     capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
     maxAgents: integer('max_agents').notNull().default(0),
     activeAgents: integer('active_agents').notNull().default(0),
@@ -96,9 +101,50 @@ export const nodes = sqliteTable(
   },
   (table) => [
     uniqueIndex('nodes_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('nodes_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+  ],
+);
+
+// ============================================
+// Agent Node Bindings
+// ============================================
+export const agentNodeBindings = sqliteTable(
+  'agent_node_bindings',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    nodeId: text('node_id')
+      .notNull()
+      .references(() => nodes.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('active'),
+    sessionRef: text('session_ref'),
+    priority: integer('priority').notNull().default(0),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }),
+  },
+  (table) => [
+    uniqueIndex('agent_node_bindings_agent_node_unique').on(table.agentId, table.nodeId),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_node_bindings_agent_workspace_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.workspaceId, table.nodeId],
+      foreignColumns: [nodes.workspaceId, nodes.id],
+      name: 'agent_node_bindings_node_workspace_fk',
+    }).onDelete('cascade'),
+    index('idx_agent_node_bindings_workspace').on(table.workspaceId, table.status),
+    index('idx_agent_node_bindings_agent').on(table.workspaceId, table.agentId, table.status),
+    index('idx_agent_node_bindings_node').on(table.workspaceId, table.nodeId, table.status),
   ],
 );
 
@@ -765,6 +811,12 @@ export const deliveries = sqliteTable(
     seq: integer('seq').notNull().default(0),
     locationType: text('location_type').notNull().default('self_connected'),
     locationNodeId: text('location_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
+    routeNodeId: text('route_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
+    routeNodeKind: text('route_node_kind'),
+    deliveryAdapter: text('delivery_adapter'),
+    dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp' }),
+    lastDispatchError: text('last_dispatch_error'),
     expiresAt: integer('expires_at', { mode: 'timestamp' }),
     deliveredAt: integer('delivered_at', { mode: 'timestamp' }),
     ackedAt: integer('acked_at', { mode: 'timestamp' }),
@@ -783,6 +835,7 @@ export const deliveries = sqliteTable(
     index('idx_deliveries_agent_status_seq').on(table.workspaceId, table.agentId, table.status, table.seq),
     index('idx_deliveries_expires').on(table.workspaceId, table.status, table.expiresAt),
     index('idx_deliveries_status').on(table.workspaceId, table.status, table.createdAt),
+    index('idx_deliveries_http_push_due').on(table.workspaceId, table.routeNodeKind, table.status, table.nextAttemptAt),
   ],
 );
 

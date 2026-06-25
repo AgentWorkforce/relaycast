@@ -152,6 +152,7 @@ export async function postMessage(
     messageId,
     channelId,
     senderAgentId: agentId,
+    mentionHandles: Array.from(mentionedHandles),
   });
 
   return {

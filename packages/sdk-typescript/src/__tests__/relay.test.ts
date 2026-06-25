@@ -315,52 +315,6 @@ describe('RelayCast', () => {
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     });
 
-    it('stream.get() maps default_enabled to defaultEnabled', async () => {
-      const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-      mockFetch.mockImplementation(() =>
-        mockResponse({ enabled: true, default_enabled: false, override: null }),
-      );
-      const result = await relay.workspace.stream.get();
-
-      const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://cast.agentrelay.com/v1/workspace/stream');
-      expect(init.method).toBe('GET');
-      expect(result).toEqual({ enabled: true, defaultEnabled: false, override: null });
-    });
-
-    it('stream.set() maps default_enabled to defaultEnabled', async () => {
-      const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-      mockFetch.mockImplementation(() =>
-        mockResponse({ enabled: false, default_enabled: false, override: true }),
-      );
-      const result = await relay.workspace.stream.set(false);
-
-      const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://cast.agentrelay.com/v1/workspace/stream');
-      expect(init.method).toBe('PUT');
-      expect(init.body).toBe(JSON.stringify({ enabled: false }));
-      expect(result).toEqual({ enabled: false, defaultEnabled: false, override: true });
-    });
-
-    it('stream.inherit() maps default_enabled to defaultEnabled', async () => {
-      const { RelayCast } = await import('../relay.js');
-      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
-
-      mockFetch.mockImplementation(() =>
-        mockResponse({ enabled: true, default_enabled: true, override: null }),
-      );
-      const result = await relay.workspace.stream.inherit();
-
-      const [url, init] = mockFetch.mock.calls[0]!;
-      expect(url).toBe('https://cast.agentrelay.com/v1/workspace/stream');
-      expect(init.method).toBe('PUT');
-      expect(init.body).toBe(JSON.stringify({ mode: 'inherit' }));
-      expect(result).toEqual({ enabled: true, defaultEnabled: true, override: null });
-    });
   });
 
   describe('agents', () => {

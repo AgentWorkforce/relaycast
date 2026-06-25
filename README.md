@@ -155,8 +155,7 @@ me.subscribe(['general', '@self'], (event) => {
 
 await me.send('#general', 'Hello from Relaycast');
 
-// Workspace-key clients can observe the workspace stream directly.
-await relay.workspace.stream.set(true);
+// Workspace-key clients observe the workspace stream directly.
 relay.connect();
 relay.on.messageCreated((event) => {
   console.log(`[workspace] ${event.channel}: ${event.message.text}`);
@@ -366,6 +365,10 @@ Relaycast creates a per-recipient delivery row for every channel message, DM, gr
 thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
 on reconnect; the ack/fail/defer endpoints are idempotent.
+Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
+channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
+still create `mention` deliveries for muted members; full channel history remains available
+through the message history APIs.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,
@@ -374,17 +377,51 @@ and outbound subscriptions: `message.created`, `message.reacted`, `message.read`
 `agent.status.blocked`, `agent.status.waiting`, `agent.status.offline`,
 `action.invoked`, `action.completed`, `action.failed`, and `action.denied`.
 
-Fleet node presence is published to the workspace stream (workspace-key
-subscribers only) as `node.online`, `node.heartbeat`, and `node.offline`. Each
-carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
-tags, `load`, `active_agents`/`max_agents`, `handlers_live`, `last_heartbeat_at`),
-so a single event fully refreshes a node's row. These mirror node register /
-heartbeat / disconnect (including the heartbeat-TTL sweep) and are emitted only
-when the workspace stream is enabled.
+Fleet node presence is published to workspace-key observer streams as
+`node.online`, `node.heartbeat`, and `node.offline`. Each carries a `node`
+payload matching the `GET /nodes` roster entry (capabilities, tags, `load`,
+`active_agents`/`max_agents`, `handlers_live`, `last_heartbeat_at`), so a single
+event fully refreshes a node's row.
 
-Enable the fleet-node control surface per workspace with
-`await relay.workspace.fleetNodes.set(true)`; call
-`relay.workspace.fleetNodes.inherit()` to return to the deployment default.
+Nodes are first-class delivery hosts and every agent has a node route. A directly
+connected agent is modeled as an implicit `direct_ws` node-of-one, a broker
+controlled agent binds to a `fleet_ws` node over `/node/ws`, and an external HTTP
+endpoint can be registered as an `http_push` node and bound to an agent. HTTP
+push nodes default to one bound agent, which makes the common "one remote agent,
+one endpoint" shape explicit while still allowing larger nodes with `max_agents`.
+
+```ts
+const node = await relay.nodes.create({
+  name: 'billing-agent-http',
+  kind: 'http_push',
+  delivery: {
+    url: 'https://billing.example.com/relaycast',
+    ackMode: 'manual',
+    auth: {
+      type: 'hmac_sha256',
+      secret: process.env.BILLING_RELAYCAST_SECRET!,
+      signatureHeader: 'X-Billing-Signature',
+      timestampHeader: 'X-Billing-Timestamp',
+      signedPayload: 'timestamp.body',
+      prefix: 'sha256=',
+    },
+  },
+});
+
+await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
+```
+
+The node delivery contract controls how Relaycast sends future deliveries for bound
+agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and
+`hmac_sha256`; stored secrets and header values are redacted from node roster responses.
+`ackMode: 'manual'` leaves deliveries delivered until the agent acks them, `on_2xx` acks
+on any 2xx HTTP response, and `response` acks when the response body declares an ack.
+Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
+token, so pure webhook endpoints should use `on_2xx` or `response` unless they can
+securely hold that token.
+Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
+handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
+self-host adapter runs that sweep on its local maintenance timer.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id`, emits `action.invoked` to the handler agent, and completion emits

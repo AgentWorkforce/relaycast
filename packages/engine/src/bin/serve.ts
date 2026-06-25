@@ -57,9 +57,8 @@ async function main(): Promise<void> {
   }
 
   const baseUrl = opts.baseUrl ?? `http://localhost:${opts.port}`;
-  // Optional self-host tuning via env: the fleet rollout default and the bounded
-  // mailbox TTL / depth cap. Lets operators (and the fleet E2E) configure a short
-  // TTL / small depth cap without code changes.
+  // Optional self-host tuning via env: bounded mailbox TTL / depth cap. Lets
+  // operators configure a short TTL / small depth cap without code changes.
   const num = (v: string | undefined): number | undefined => {
     if (v == null || v.trim() === '') return undefined;
     const n = Number(v);
@@ -76,7 +75,6 @@ async function main(): Promise<void> {
     baseUrl,
     config: {
       environment: opts.environment,
-      ...(process.env.RELAYCAST_FLEET_NODES_ENABLED === '1' ? { fleetNodesEnabled: true } : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
   });

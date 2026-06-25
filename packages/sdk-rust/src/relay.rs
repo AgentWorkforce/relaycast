@@ -160,33 +160,6 @@ impl RelayCast {
         self.client.delete("/v1/workspace", None).await
     }
 
-    /// Get effective workspace stream configuration.
-    pub async fn workspace_stream_get(&self) -> Result<WorkspaceStreamConfig> {
-        self.client.get("/v1/workspace/stream", None, None).await
-    }
-
-    /// Set workspace stream override.
-    pub async fn workspace_stream_set(&self, enabled: bool) -> Result<WorkspaceStreamConfig> {
-        self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "enabled": enabled })),
-                None,
-            )
-            .await
-    }
-
-    /// Clear workspace stream override and inherit default behavior.
-    pub async fn workspace_stream_inherit(&self) -> Result<WorkspaceStreamConfig> {
-        self.client
-            .put(
-                "/v1/workspace/stream",
-                Some(serde_json::json!({ "mode": "inherit" })),
-                None,
-            )
-            .await
-    }
-
     // === System Prompt ===
 
     /// Get the workspace system prompt.
@@ -1020,6 +993,11 @@ impl RelayCast {
 
     // === Fleet nodes ===
 
+    /// Enroll or rotate a node token.
+    pub async fn create_node(&self, request: CreateNodeRequest) -> Result<CreateNodeResponse> {
+        self.client.post("/v1/nodes", Some(request), None).await
+    }
+
     /// List fleet nodes on the roster.
     pub async fn list_nodes(&self, query: Option<NodeListQuery>) -> Result<Vec<NodeRosterEntry>> {
         let query = query.unwrap_or_default();
@@ -1050,6 +1028,46 @@ impl RelayCast {
             .get(
                 &format!("/v1/nodes/{}", urlencoding::encode(name)),
                 None,
+                None,
+            )
+            .await
+    }
+
+    /// List active agent bindings for a node.
+    pub async fn list_node_agents(&self, name: &str) -> Result<Vec<NodeAgentBinding>> {
+        self.client
+            .get(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                None,
+                None,
+            )
+            .await
+    }
+
+    /// Bind an agent to a node delivery host.
+    pub async fn bind_agent_to_node(
+        &self,
+        name: &str,
+        request: BindAgentToNodeRequest,
+    ) -> Result<NodeAgentBinding> {
+        self.client
+            .post(
+                &format!("/v1/nodes/{}/agents", urlencoding::encode(name)),
+                Some(request),
+                None,
+            )
+            .await
+    }
+
+    /// Remove an active node binding for an agent.
+    pub async fn unbind_agent_from_node(&self, name: &str, agent_name: &str) -> Result<()> {
+        self.client
+            .delete(
+                &format!(
+                    "/v1/nodes/{}/agents/{}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(agent_name)
+                ),
                 None,
             )
             .await

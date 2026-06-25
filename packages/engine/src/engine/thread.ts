@@ -1,11 +1,13 @@
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents } from '../db/schema.js';
+import { messages, channels, agents, dmConversations } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
   buildChannelDeliveryWrite,
+  buildGroupDmDeliveryWrite,
   fetchChannelDeliveryOutcomes,
+  fetchGroupDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
@@ -36,6 +38,10 @@ export async function postReply(
   const threadId = parent.threadId || parent.id;
 
   const [ch] = await db.select({ name: channels.name }).from(channels).where(eq(channels.id, parent.channelId));
+  const [dmConversation] = await db
+    .select({ id: dmConversations.id })
+    .from(dmConversations)
+    .where(eq(dmConversations.channelId, parent.channelId));
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
@@ -68,26 +74,42 @@ export async function postReply(
     ];
 
     writes.push(
-      buildChannelDeliveryWrite(writeDb, {
-        workspaceId,
-        messageId: replyId,
-        channelId: parent.channelId,
-        senderAgentId: agentId,
-        mode: 'immediate',
-        ttlMs: mailbox.ttlMs,
-        depthCap: mailbox.depthCap,
-        reason: 'thread-reply',
-      }),
+      dmConversation
+        ? buildGroupDmDeliveryWrite(writeDb, {
+          workspaceId,
+          messageId: replyId,
+          conversationId: dmConversation.id,
+          senderAgentId: agentId,
+          mode: 'immediate',
+          ttlMs: mailbox.ttlMs,
+          depthCap: mailbox.depthCap,
+        })
+        : buildChannelDeliveryWrite(writeDb, {
+          workspaceId,
+          messageId: replyId,
+          channelId: parent.channelId,
+          senderAgentId: agentId,
+          mode: 'immediate',
+          ttlMs: mailbox.ttlMs,
+          depthCap: mailbox.depthCap,
+          reason: 'thread-reply',
+        }),
     );
 
     return writes;
   });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
-  const deliveryOutcomes: DeliveryOutcomeRecords = await fetchChannelDeliveryOutcomes(db, {
-    messageId: replyId,
-    channelId: parent.channelId,
-    senderAgentId: agentId,
-  });
+  const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
+    ? await fetchGroupDeliveryOutcomes(db, {
+      messageId: replyId,
+      conversationId: dmConversation.id,
+      senderAgentId: agentId,
+    })
+    : await fetchChannelDeliveryOutcomes(db, {
+      messageId: replyId,
+      channelId: parent.channelId,
+      senderAgentId: agentId,
+    });
 
   return {
     id: reply.id,

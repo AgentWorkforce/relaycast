@@ -15,6 +15,8 @@ import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions }
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { sendNodePresenceContext } from '../../engine/nodeContext.js';
+import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
 
 export {
   InProcessRealtime,
@@ -97,7 +99,28 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
 
   const telemetry = options.telemetry ?? new NoopTelemetrySink();
   const realtime = new InProcessRealtime(db);
-  const presence = new InProcessPresence(realtime, options.presence);
+  const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
+  const presence = new InProcessPresence(realtime, {
+    ...options.presence,
+    onPresenceEvent: async (workspaceId, event) => {
+      await upstreamOnPresenceEvent?.(workspaceId, event);
+      const subjectAgentId = typeof event.subject_agent_id === 'string' ? event.subject_agent_id : null;
+      const eventType = typeof event.type === 'string' ? event.type : null;
+      if (!subjectAgentId || !eventType) return;
+      await sendNodePresenceContext(
+        { db, nodeConnections: realtime, realtime, workspaceId },
+        {
+          subjectAgentId,
+          event: eventType,
+          data: {
+            agent_id: subjectAgentId,
+            agent_name: typeof event.agent_name === 'string' ? event.agent_name : subjectAgentId,
+            status: event.status,
+          },
+        },
+      );
+    },
+  });
   realtime.setPresence(presence);
 
   const rateLimiter = new InProcessRateLimiter();
@@ -139,6 +162,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const sweepTimer = setInterval(() => {
     void sweepOfflineNodes(db, realtime).catch(() => {});
     void sweepTimedOutInvocations(db, realtime).catch(() => {});
+    void sweepDueHttpPushDeliveries(deps).catch(() => {});
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();
 

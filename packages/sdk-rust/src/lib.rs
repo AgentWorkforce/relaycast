@@ -274,7 +274,6 @@ pub use types::{
     WorkspaceDmConversation,
     WorkspaceDmMessage,
     WorkspaceStats,
-    WorkspaceStreamConfig,
     // Events
     WsEvent,
     // === Parity surfaces: A2A, directory, routing, skills, nodes, triggers, certify, console ===
@@ -309,7 +308,14 @@ pub use types::{
     SkillSearchQuery,
     SkillSearchResult,
     // Fleet nodes
+    BindAgentToNodeRequest,
+    CreateNodeRequest,
+    CreateNodeResponse,
+    HttpPushNodeDelivery,
+    NodeAgentBinding,
     NodeCapability,
+    NodeDeliveryAuth,
+    NodeDeliveryConfig,
     NodeListQuery,
     NodeRosterEntry,
     // Triggers

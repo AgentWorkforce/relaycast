@@ -256,6 +256,9 @@ final class RelaycastTests: XCTestCase {
                 "data": [[
                     "id": "node_1",
                     "name": "alpha",
+                    "kind": "fleet_ws",
+                    "delivery_adapter": "fleet.ws.v1",
+                    "delivery": NSNull(),
                     "capabilities": [["name": "code", "kind": "executor", "metadata": ["region": "us"]]],
                     "tags": ["primary"],
                     "version": "1.2.3",
@@ -278,6 +281,156 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(nodes[0].capabilities.first?.kind, "executor")
         XCTAssertEqual(nodes[0].activeAgents, 2)
         XCTAssertTrue(nodes[0].handlersLive)
+        XCTAssertEqual(nodes[0].kind, "fleet_ws")
+    }
+
+    func testNodesCreateAndBindings() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v1/nodes"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["name"] as? String, "http-node")
+                XCTAssertEqual(json["kind"] as? String, "http_push")
+                let delivery = try XCTUnwrap(json["delivery"] as? [String: Any])
+                let auth = try XCTUnwrap(delivery["auth"] as? [String: Any])
+                XCTAssertEqual(auth["signature_header"] as? String, "X-Custom-Signature")
+                return jsonResponse([
+                    "ok": true,
+                    "data": [
+                        "id": "node_1",
+                        "name": "http-node",
+                        "kind": "http_push",
+                        "delivery_adapter": "http.hmac.v1",
+                        "delivery": [
+                            "url": "https://receiver.example.test/relaycast",
+                            "ack_mode": "manual",
+                            "auth": [
+                                "type": "hmac_sha256",
+                                "secret": "[redacted]",
+                                "signature_header": "X-Custom-Signature"
+                            ]
+                        ],
+                        "capabilities": [],
+                        "tags": [],
+                        "version": "unknown",
+                        "status": "offline",
+                        "live": false,
+                        "handlers_live": false,
+                        "load": 0,
+                        "active_agents": 0,
+                        "max_agents": 1,
+                        "last_heartbeat_at": NSNull(),
+                        "created_at": "2026-06-06T00:00:00Z",
+                        "token": "nt_live_test"
+                    ]
+                ])
+            case ("GET", "/v1/nodes/http-node/agents"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": [[
+                        "id": "anb_1",
+                        "agent_id": "agent_1",
+                        "agent_name": "billing-agent",
+                        "node_id": "node_1",
+                        "node_name": "http-node",
+                        "node_kind": "http_push",
+                        "status": "active",
+                        "session_ref": NSNull(),
+                        "priority": 0,
+                        "created_at": "2026-06-06T00:00:00Z",
+                        "updated_at": NSNull()
+                    ]]
+                ])
+            case ("POST", "/v1/nodes/http-node/agents"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["agent_name"] as? String, "billing-agent")
+                return jsonResponse([
+                    "ok": true,
+                    "data": [
+                        "id": "anb_1",
+                        "agent_id": "agent_1",
+                        "agent_name": "billing-agent",
+                        "node_id": "node_1",
+                        "node_name": "http-node",
+                        "node_kind": "http_push",
+                        "status": "active",
+                        "session_ref": NSNull(),
+                        "priority": 5,
+                        "created_at": "2026-06-06T00:00:00Z",
+                        "updated_at": NSNull()
+                    ]
+                ])
+            case ("DELETE", "/v1/nodes/http-node/agents/billing-agent"):
+                return (
+                    HTTPURLResponse(url: URL(string: "https://relay.test")!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            default:
+                return jsonResponse(["ok": false, "error": ["code": "not_found", "message": "Missing"]], status: 404)
+            }
+        }
+
+        let created = try await relay.nodes.create(CreateNodeRequest(
+            name: "http-node",
+            kind: "http_push",
+            delivery: .httpPush(HttpPushNodeDelivery(
+                url: "https://receiver.example.test/relaycast",
+                ackMode: "manual",
+                auth: NodeDeliveryAuth(
+                    type: "hmac_sha256",
+                    secret: "secret",
+                    signatureHeader: "X-Custom-Signature",
+                    timestampHeader: "X-Custom-Timestamp",
+                    signedPayload: "timestamp.body",
+                    prefix: "sig="
+                )
+            ))
+        ))
+        XCTAssertEqual(created.token, "nt_live_test")
+        XCTAssertEqual(created.deliveryAdapter, "http.hmac.v1")
+        guard case .httpPush(let createdDelivery) = created.delivery else {
+            return XCTFail("expected typed http_push delivery")
+        }
+        XCTAssertEqual(createdDelivery.url, "https://receiver.example.test/relaycast")
+        XCTAssertEqual(createdDelivery.ackMode, "manual")
+        XCTAssertEqual(createdDelivery.auth?.signatureHeader, "X-Custom-Signature")
+
+        let bindings = try await relay.nodes.listAgents("http-node")
+        XCTAssertEqual(bindings[0].agentName, "billing-agent")
+
+        let binding = try await relay.nodes.bindAgent("http-node", request: BindAgentToNodeRequest(agentName: "billing-agent", priority: 5))
+        XCTAssertEqual(binding.priority, 5)
+
+        try await relay.nodes.unbindAgent("http-node", agentName: "billing-agent")
+    }
+
+    func testCreateNodeRequestEncodesRawDeliveryConfig() throws {
+        let request = CreateNodeRequest(
+            name: "custom-node",
+            kind: "custom",
+            delivery: [
+                "adapter": "custom.signature.v1",
+                "signature": [
+                    "header": "X-Custom-Signature",
+                    "scheme": "ed25519"
+                ]
+            ]
+        )
+
+        let data = try makeRelaycastEncoder().encode(request)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let delivery = try XCTUnwrap(json["delivery"] as? [String: Any])
+        let signature = try XCTUnwrap(delivery["signature"] as? [String: Any])
+        XCTAssertEqual(delivery["adapter"] as? String, "custom.signature.v1")
+        XCTAssertEqual(signature["header"] as? String, "X-Custom-Signature")
     }
 
     func testTriggersCreateAndUpdate() async throws {

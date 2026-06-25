@@ -1,19 +1,15 @@
-import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider, Agent, Workspace } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
-import type { KeyValueStore } from '../ports/kv.js';
 import { getNodeByTokenHash } from './node.js';
-import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
-import { isWorkspaceStreamEnabled } from '../lib/workspaceStream.js';
 
-type WsAuthErrorCode = 'unauthorized' | 'invalid_token' | 'not_found' | 'fleet_nodes_disabled';
+type WsAuthErrorCode = 'unauthorized' | 'invalid_token';
 
 export interface WsAuthError {
   ok: false;
-  status: 401 | 404;
+  status: 401;
   code: WsAuthErrorCode;
   message: string;
-  upgradeMessage: 'Unauthorized' | 'Not Found';
+  upgradeMessage: 'Unauthorized';
 }
 
 export type RealtimeWsAuthResult =
@@ -31,8 +27,6 @@ export type NodeWsAuthResult =
 interface WsAuthDeps {
   auth: AuthProvider;
   db: EngineDb;
-  kv: KeyValueStore;
-  config?: EngineConfig;
 }
 
 export function extractBearerToken(authHeader: string | undefined): string | undefined {
@@ -66,24 +60,11 @@ function invalidWsToken(message: string): WsAuthError {
   };
 }
 
-function notFoundWsToken(code: WsAuthErrorCode, message: string): WsAuthError {
-  return {
-    ok: false,
-    status: 404,
-    code,
-    message,
-    upgradeMessage: 'Not Found',
-  };
-}
-
 export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): Promise<RealtimeWsAuthResult> {
   if (token.startsWith('at_live_')) {
     const result = await deps.auth.authenticate({ token, require: 'agent', db: deps.db });
     if (!result.ok || !result.agent) {
       return invalidWsToken('Invalid agent token');
-    }
-    if (!(await isWorkspaceStreamEnabled(deps.kv, result.workspace.id, deps.config?.workspaceStreamEnabled ?? false))) {
-      return notFoundWsToken('not_found', 'Workspace stream is disabled');
     }
     return { ok: true, scope: 'agent', workspace: result.workspace, agent: result.agent };
   }
@@ -92,9 +73,6 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
     const result = await deps.auth.authenticate({ token, require: 'workspace', db: deps.db });
     if (!result.ok) {
       return invalidWsToken('Invalid workspace key');
-    }
-    if (!(await isWorkspaceStreamEnabled(deps.kv, result.workspace.id, deps.config?.workspaceStreamEnabled ?? false))) {
-      return notFoundWsToken('not_found', 'Workspace stream is disabled');
     }
     return { ok: true, scope: 'workspace', workspace: result.workspace };
   }
@@ -111,10 +89,6 @@ export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promi
   const node = await getNodeByTokenHash(deps.db, hash);
   if (!node) {
     return invalidWsToken('Invalid node token');
-  }
-
-  if (!(await isFleetNodesEnabled(deps.kv, node.workspaceId, deps.config?.fleetNodesEnabled ?? false))) {
-    return notFoundWsToken('fleet_nodes_disabled', 'Fleet nodes are disabled for this workspace');
   }
 
   return { ok: true, node };

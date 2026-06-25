@@ -8,11 +8,10 @@ import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
 import * as triggerEngine from '../engine/trigger.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
-import { fanoutToChannel } from './fanout.js';
+import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
-import { isFleetNodesEnabled } from '../lib/fleetNodes.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -128,7 +127,7 @@ messageRoutes.post(
           _delivery_rejections?: Parameters<typeof notifyDeliveryRejections>[2];
         };
         const eventData = toMessageCreatedEventData(idempotent.data);
-        runInBackground(c, fanoutToChannel(c, channel.id, 'message.created', eventData), 'fanout message.created');
+        runInBackground(c, publishWorkspaceEvent(c, 'message.created', eventData, channel.id), 'publish message.created');
         if (_deliveries && _deliveries.length > 0) {
           runInBackground(
             c,
@@ -153,14 +152,8 @@ messageRoutes.post(
 
         runInBackground(
           c,
-          // Phase 6 rollout flag: declarative trigger evaluation is part of the
-          // fleet node control surface, so it is skipped entirely when the flag is
-          // off. Checked here (not per-trigger) so the policy lives at one boundary.
           (async () => {
-            const { kv, config, nodeConnections } = c.get('engine');
-            if (!(await isFleetNodesEnabled(kv, workspace.id, config.fleetNodesEnabled ?? false))) {
-              return;
-            }
+            const { nodeConnections } = c.get('engine');
             await triggerEngine.fireMessageTriggers({
               db,
               nodeConnections,

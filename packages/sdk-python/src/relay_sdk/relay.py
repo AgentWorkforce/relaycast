@@ -15,10 +15,15 @@ from .models import (
     DirectoryRating,
     DirectorySearchResult,
     ImportSkillsRequest,
+    BindAgentToNodeRequest,
+    CreateNodeRequest,
+    CreateNodeResponse,
     RateDirectoryAgentRequest,
     RegisterA2aOptions,
     RegisterA2aResponse,
     RemoveA2aAgentResponse,
+    NodeAgentBinding,
+    NodeRosterEntry,
     RouteFeedbackRequest,
     RouteFeedbackResult,
     RouteResult,
@@ -132,6 +137,41 @@ class _AgentsNamespace:
     unregister = delete
 
 
+class _NodesNamespace:
+    """Sync node operations."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
+        result = self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+        return CreateNodeResponse.model_validate(result)
+
+    def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
+        query: dict[str, str] = {}
+        if capability:
+            query["capability"] = capability
+        if name:
+            query["name"] = name
+        result = self._client.get("/v1/nodes", query or None)
+        return [NodeRosterEntry.model_validate(node) for node in result]
+
+    def get(self, name: str) -> NodeRosterEntry:
+        result = self._client.get(f"/v1/nodes/{_enc(name)}")
+        return NodeRosterEntry.model_validate(result)
+
+    def list_agents(self, name: str) -> list[NodeAgentBinding]:
+        result = self._client.get(f"/v1/nodes/{_enc(name)}/agents")
+        return [NodeAgentBinding.model_validate(binding) for binding in result]
+
+    def bind_agent(self, name: str, data: BindAgentToNodeRequest) -> NodeAgentBinding:
+        result = self._client.post(f"/v1/nodes/{_enc(name)}/agents", data.model_dump(exclude_none=True))
+        return NodeAgentBinding.model_validate(result)
+
+    def unbind_agent(self, name: str, agent_name: str) -> None:
+        self._client.delete(f"/v1/nodes/{_enc(name)}/agents/{_enc(agent_name)}")
+
+
 class Relay:
     """Synchronous Relay client.
 
@@ -164,6 +204,7 @@ class Relay:
         )
         self.workspace = _WorkspaceNamespace(self._client)
         self.agents = _AgentsNamespace(self._client)
+        self.nodes = _NodesNamespace(self._client)
 
 
     def register_agent(
@@ -402,6 +443,41 @@ class _AsyncAgentsNamespace:
     unregister = delete
 
 
+class _AsyncNodesNamespace:
+    """Async node operations."""
+
+    def __init__(self, client: AsyncHttpClient) -> None:
+        self._client = client
+
+    async def create(self, data: CreateNodeRequest) -> CreateNodeResponse:
+        result = await self._client.post("/v1/nodes", data.model_dump(exclude_none=True))
+        return CreateNodeResponse.model_validate(result)
+
+    async def list(self, *, capability: str | None = None, name: str | None = None) -> list[NodeRosterEntry]:
+        query: dict[str, str] = {}
+        if capability:
+            query["capability"] = capability
+        if name:
+            query["name"] = name
+        result = await self._client.get("/v1/nodes", query or None)
+        return [NodeRosterEntry.model_validate(node) for node in result]
+
+    async def get(self, name: str) -> NodeRosterEntry:
+        result = await self._client.get(f"/v1/nodes/{_enc(name)}")
+        return NodeRosterEntry.model_validate(result)
+
+    async def list_agents(self, name: str) -> list[NodeAgentBinding]:
+        result = await self._client.get(f"/v1/nodes/{_enc(name)}/agents")
+        return [NodeAgentBinding.model_validate(binding) for binding in result]
+
+    async def bind_agent(self, name: str, data: BindAgentToNodeRequest) -> NodeAgentBinding:
+        result = await self._client.post(f"/v1/nodes/{_enc(name)}/agents", data.model_dump(exclude_none=True))
+        return NodeAgentBinding.model_validate(result)
+
+    async def unbind_agent(self, name: str, agent_name: str) -> None:
+        await self._client.delete(f"/v1/nodes/{_enc(name)}/agents/{_enc(agent_name)}")
+
+
 class AsyncRelay:
     """Asynchronous Relay client.
 
@@ -434,6 +510,7 @@ class AsyncRelay:
         )
         self.workspace = _AsyncWorkspaceNamespace(self._client)
         self.agents = _AsyncAgentsNamespace(self._client)
+        self.nodes = _AsyncNodesNamespace(self._client)
 
 
     async def register_agent(

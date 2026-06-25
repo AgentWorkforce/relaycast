@@ -9,17 +9,8 @@ import * as workspaceEngine from '../engine/workspace.js';
 import * as activityEngine from '../engine/activity.js';
 import * as dmAllEngine from '../engine/dmAll.js';
 import * as tokenRotateEngine from '../engine/tokenRotate.js';
-import {
-  getWorkspaceStreamConfig,
-  setWorkspaceStreamOverride,
-} from '../lib/workspaceStream.js';
-import {
-  getFleetNodesConfig,
-  setFleetNodesOverride,
-} from '../lib/fleetNodes.js';
-import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse, asCodedError } from '../lib/httpError.js';
+import { errorResponse } from '../lib/httpError.js';
 import {
   jsonCreated,
   jsonError,
@@ -42,35 +33,12 @@ const updateWorkspaceSchema = z.object({
   system_prompt: z.string().nullable().optional(),
 });
 
-const featureOverrideSchema = z.union([
-  z.object({ enabled: z.boolean() }).strict(),
-  z.object({ mode: z.literal('inherit') }).strict(),
-]);
-
-const updateWorkspaceStreamSchema = featureOverrideSchema;
-
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
 });
 
-const updateFleetNodesSchema = featureOverrideSchema;
-
-const WORKSPACE_OVERRIDE_MESSAGE = 'Provide { enabled: boolean } or { mode: "inherit" }';
-
 function workspaceNotFound(c: Context<AppEnv>) {
   return jsonNotFound(c, 'workspace_not_found', 'Workspace not found');
-}
-
-function featureConfigData(config: { enabled: boolean; defaultEnabled: boolean; override: boolean | null }) {
-  return {
-    enabled: config.enabled,
-    default_enabled: config.defaultEnabled,
-    override: config.override,
-  };
-}
-
-function featureOverrideValue(body: z.infer<typeof featureOverrideSchema>) {
-  return 'mode' in body ? null : body.enabled;
 }
 
 const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
@@ -309,111 +277,5 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
     return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
-  }
-});
-
-// GET /workspace/stream - get workspace stream effective config
-workspaceRoutes.get('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = getRequestLogger(c, 'workspace.stream.get');
-  const workspaceId = c.get('workspace').id;
-  try {
-    const { kv, config: engineConfig } = c.get('engine');
-    const config = await getWorkspaceStreamConfig(kv, workspaceId, engineConfig.workspaceStreamEnabled ?? false);
-    return jsonOk(c, featureConfigData(config));
-  } catch (err: unknown) {
-    const error = asCodedError(err);
-    logger.error('Failed to get stream config', {
-      workspaceId,
-      code: error.code,
-      status: error.status,
-      ...toErrorDetails(error),
-    });
-    return errorResponse(c, error);
-  }
-});
-
-// PUT /workspace/stream - set workspace stream override
-workspaceRoutes.put('/workspace/stream', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = getRequestLogger(c, 'workspace.stream.put');
-  const workspaceId = c.get('workspace').id;
-  try {
-    const parsed = await parseJsonBody(c, updateWorkspaceStreamSchema, WORKSPACE_OVERRIDE_MESSAGE);
-    if (!parsed.ok) {
-      return parsed.response;
-    }
-    const body = parsed.data;
-
-    const override = featureOverrideValue(body);
-
-    const { kv, config: engineConfig } = c.get('engine');
-    await setWorkspaceStreamOverride(kv, workspaceId, override);
-    const config = await getWorkspaceStreamConfig(kv, workspaceId, engineConfig.workspaceStreamEnabled ?? false);
-    emitServerEvent(c, workspaceId, 'relaycast_server_workspace_stream_updated', {
-      stream_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
-    });
-
-    return jsonOk(c, featureConfigData(config));
-  } catch (err: unknown) {
-    const error = asCodedError(err);
-    logger.error('Failed to update stream config', {
-      workspaceId,
-      code: error.code,
-      status: error.status,
-      ...toErrorDetails(error),
-    });
-    return errorResponse(c, error);
-  }
-});
-
-// GET /workspace/fleet-nodes - effective fleet node control rollout flag (Phase 6)
-workspaceRoutes.get('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = getRequestLogger(c, 'workspace.fleet_nodes.get');
-  const workspaceId = c.get('workspace').id;
-  try {
-    const { kv, config: engineConfig } = c.get('engine');
-    const config = await getFleetNodesConfig(kv, workspaceId, engineConfig.fleetNodesEnabled ?? false);
-    return jsonOk(c, featureConfigData(config));
-  } catch (err: unknown) {
-    const error = asCodedError(err);
-    logger.error('Failed to get fleet nodes config', {
-      workspaceId,
-      code: error.code,
-      status: error.status,
-      ...toErrorDetails(error),
-    });
-    return errorResponse(c, error);
-  }
-});
-
-// PUT /workspace/fleet-nodes - set the per-workspace fleet node control override
-workspaceRoutes.put('/workspace/fleet-nodes', requireWorkspaceKey, rateLimit, async (c) => {
-  const logger = getRequestLogger(c, 'workspace.fleet_nodes.put');
-  const workspaceId = c.get('workspace').id;
-  try {
-    const parsed = await parseJsonBody(c, updateFleetNodesSchema, WORKSPACE_OVERRIDE_MESSAGE);
-    if (!parsed.ok) {
-      return parsed.response;
-    }
-    const body = parsed.data;
-
-    const override = featureOverrideValue(body);
-
-    const { kv, config: engineConfig } = c.get('engine');
-    await setFleetNodesOverride(kv, workspaceId, override);
-    const config = await getFleetNodesConfig(kv, workspaceId, engineConfig.fleetNodesEnabled ?? false);
-    emitServerEvent(c, workspaceId, 'relaycast_server_workspace_fleet_nodes_updated', {
-      fleet_nodes_mode: override === null ? 'inherit' : (override ? 'enabled' : 'disabled'),
-    });
-
-    return jsonOk(c, featureConfigData(config));
-  } catch (err: unknown) {
-    const error = asCodedError(err);
-    logger.error('Failed to update fleet nodes config', {
-      workspaceId,
-      code: error.code,
-      status: error.status,
-      ...toErrorDetails(error),
-    });
-    return errorResponse(c, error);
   }
 });

@@ -376,7 +376,6 @@ public final class RelayCast: @unchecked Sendable {
 
 public final class RelayWorkspaceService: @unchecked Sendable {
     private unowned let relay: RelayCast
-    public lazy var stream = RelayWorkspaceStreamService(relay: relay)
 
     init(relay: RelayCast) {
         self.relay = relay
@@ -396,26 +395,6 @@ public final class RelayWorkspaceService: @unchecked Sendable {
 
     public func delete() async throws {
         _ = try await relay.client.delete("/v1/workspace")
-    }
-}
-
-public final class RelayWorkspaceStreamService: @unchecked Sendable {
-    private unowned let relay: RelayCast
-
-    init(relay: RelayCast) {
-        self.relay = relay
-    }
-
-    public func get() async throws -> WorkspaceStreamConfig {
-        try await relay.client.get("/v1/workspace/stream")
-    }
-
-    public func set(enabled: Bool) async throws -> WorkspaceStreamConfig {
-        try await relay.client.put("/v1/workspace/stream", body: WorkspaceStreamSetRequest(enabled: enabled))
-    }
-
-    public func inherit() async throws -> WorkspaceStreamConfig {
-        try await relay.client.put("/v1/workspace/stream", body: WorkspaceStreamSetRequest(mode: "inherit"))
     }
 }
 
@@ -647,6 +626,10 @@ public final class RelayNodesService: @unchecked Sendable {
         self.relay = relay
     }
 
+    public func create(_ request: CreateNodeRequest) async throws -> CreateNodeResponse {
+        try await relay.client.post("/v1/nodes", body: request)
+    }
+
     public func list(_ query: NodeListQuery = NodeListQuery()) async throws -> [NodeRosterEntry] {
         var params: [String: String] = [:]
         if let capability = query.capability { params["capability"] = capability }
@@ -656,6 +639,18 @@ public final class RelayNodesService: @unchecked Sendable {
 
     public func get(_ name: String) async throws -> NodeRosterEntry {
         try await relay.client.get("/v1/nodes/\(percentEncodePathComponent(name))")
+    }
+
+    public func listAgents(_ name: String) async throws -> [NodeAgentBinding] {
+        try await relay.client.get("/v1/nodes/\(percentEncodePathComponent(name))/agents")
+    }
+
+    public func bindAgent(_ name: String, request: BindAgentToNodeRequest) async throws -> NodeAgentBinding {
+        try await relay.client.post("/v1/nodes/\(percentEncodePathComponent(name))/agents", body: request)
+    }
+
+    public func unbindAgent(_ name: String, agentName: String) async throws {
+        _ = try await relay.client.delete("/v1/nodes/\(percentEncodePathComponent(name))/agents/\(percentEncodePathComponent(agentName))")
     }
 }
 

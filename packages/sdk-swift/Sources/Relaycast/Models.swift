@@ -81,28 +81,6 @@ public struct SetSystemPromptRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct WorkspaceStreamConfig: Codable, Equatable, Sendable {
-    public let enabled: Bool
-    public let defaultEnabled: Bool
-    public let overrideValue: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case enabled
-        case defaultEnabled
-        case overrideValue = "override"
-    }
-}
-
-struct WorkspaceStreamSetRequest: Codable, Equatable, Sendable {
-    var enabled: Bool?
-    var mode: String?
-
-    init(enabled: Bool? = nil, mode: String? = nil) {
-        self.enabled = enabled
-        self.mode = mode
-    }
-}
-
 public struct WorkspaceStats: Codable, Equatable, Sendable {
     public let agents: JSONValue?
     public let messages: JSONValue?
@@ -791,6 +769,15 @@ public struct Delivery: Codable, Equatable, Sendable {
     public let channelId: String
     public let agentId: String
     public let status: DeliveryStatus
+    public let seq: Int?
+    public let locationType: String?
+    public let locationNodeId: String?
+    public let routeNodeId: String?
+    public let routeNodeKind: String?
+    public let deliveryAdapter: String?
+    public let dispatchAttempts: Int?
+    public let nextAttemptAt: String?
+    public let lastDispatchError: String?
     public let mode: String
     public let reason: String?
     public let priority: String?
@@ -798,6 +785,10 @@ public struct Delivery: Codable, Equatable, Sendable {
     public let error: String?
     public let availableAt: String?
     public let deadline: String?
+    public let expiresAt: String?
+    public let deliveredAt: String?
+    public let ackedAt: String?
+    public let deadLetteredAt: String?
     public let createdAt: String
     public let updatedAt: String?
 }
@@ -808,6 +799,15 @@ public struct DeliveryItem: Codable, Equatable, Sendable {
     public let channelId: String
     public let agentId: String
     public let status: DeliveryStatus
+    public let seq: Int?
+    public let locationType: String?
+    public let locationNodeId: String?
+    public let routeNodeId: String?
+    public let routeNodeKind: String?
+    public let deliveryAdapter: String?
+    public let dispatchAttempts: Int?
+    public let nextAttemptAt: String?
+    public let lastDispatchError: String?
     public let mode: String
     public let reason: String?
     public let priority: String?
@@ -815,6 +815,10 @@ public struct DeliveryItem: Codable, Equatable, Sendable {
     public let error: String?
     public let availableAt: String?
     public let deadline: String?
+    public let expiresAt: String?
+    public let deliveredAt: String?
+    public let ackedAt: String?
+    public let deadLetteredAt: String?
     public let createdAt: String
     public let updatedAt: String?
     public let message: DeliveryMessage?
@@ -1525,6 +1529,9 @@ public struct NodeCapability: Codable, Equatable, Sendable {
 public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
+    public let kind: String?
+    public let deliveryAdapter: String?
+    public let delivery: NodeDeliveryConfig?
     public let capabilities: [NodeCapability]
     public let tags: [String]
     public let version: String
@@ -1536,6 +1543,149 @@ public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let maxAgents: Int
     public let lastHeartbeatAt: String?
     public let createdAt: String
+}
+
+public struct NodeDeliveryAuth: Codable, Equatable, Sendable {
+    public let type: String
+    public let token: String?
+    public let headers: [String: String]?
+    public let secret: String?
+    public let signatureHeader: String?
+    public let timestampHeader: String?
+    public let signedPayload: String?
+    public let encoding: String?
+    public let prefix: String?
+
+    public init(type: String, token: String? = nil, headers: [String: String]? = nil, secret: String? = nil, signatureHeader: String? = nil, timestampHeader: String? = nil, signedPayload: String? = nil, encoding: String? = nil, prefix: String? = nil) {
+        self.type = type
+        self.token = token
+        self.headers = headers
+        self.secret = secret
+        self.signatureHeader = signatureHeader
+        self.timestampHeader = timestampHeader
+        self.signedPayload = signedPayload
+        self.encoding = encoding
+        self.prefix = prefix
+    }
+}
+
+public struct HttpPushNodeDelivery: Codable, Equatable, Sendable {
+    public let url: String
+    public let ackMode: String?
+    public let auth: NodeDeliveryAuth?
+
+    public init(url: String, ackMode: String? = nil, auth: NodeDeliveryAuth? = nil) {
+        self.url = url
+        self.ackMode = ackMode
+        self.auth = auth
+    }
+}
+
+public enum NodeDeliveryConfig: Codable, Equatable, Sendable {
+    case httpPush(HttpPushNodeDelivery)
+    case raw([String: JSONValue])
+
+    public init(httpPush delivery: HttpPushNodeDelivery) {
+        self = .httpPush(delivery)
+    }
+
+    public init(raw value: [String: JSONValue]) {
+        self = .raw(value)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let delivery = try? container.decode(HttpPushNodeDelivery.self) {
+            self = .httpPush(delivery)
+            return
+        }
+        self = .raw(try container.decode([String: JSONValue].self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .httpPush(let delivery):
+            try delivery.encode(to: encoder)
+        case .raw(let value):
+            try value.encode(to: encoder)
+        }
+    }
+}
+
+extension NodeDeliveryConfig: ExpressibleByDictionaryLiteral {
+    public init(dictionaryLiteral elements: (String, JSONValue)...) {
+        self = .raw(Dictionary(uniqueKeysWithValues: elements))
+    }
+}
+
+public struct CreateNodeRequest: Codable, Equatable, Sendable {
+    public let nodeId: String?
+    public let name: String
+    public let kind: String?
+    public let deliveryAdapter: String?
+    public let delivery: NodeDeliveryConfig?
+    public let capabilities: [String]?
+    public let maxAgents: Int?
+    public let tags: [String]?
+    public let version: String?
+
+    public init(nodeId: String? = nil, name: String, kind: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+        self.nodeId = nodeId
+        self.name = name
+        self.kind = kind
+        self.deliveryAdapter = deliveryAdapter
+        self.delivery = delivery
+        self.capabilities = capabilities
+        self.maxAgents = maxAgents
+        self.tags = tags
+        self.version = version
+    }
+}
+
+public struct CreateNodeResponse: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let kind: String?
+    public let deliveryAdapter: String?
+    public let delivery: NodeDeliveryConfig?
+    public let capabilities: [NodeCapability]
+    public let tags: [String]
+    public let version: String
+    public let status: String
+    public let live: Bool
+    public let handlersLive: Bool
+    public let load: Double
+    public let activeAgents: Int
+    public let maxAgents: Int
+    public let lastHeartbeatAt: String?
+    public let createdAt: String
+    public let token: String
+}
+
+public struct NodeAgentBinding: Codable, Equatable, Sendable {
+    public let id: String
+    public let agentId: String
+    public let agentName: String
+    public let nodeId: String
+    public let nodeName: String
+    public let nodeKind: String
+    public let status: String
+    public let sessionRef: String?
+    public let priority: Int
+    public let createdAt: String
+    public let updatedAt: String?
+}
+
+public struct BindAgentToNodeRequest: Codable, Equatable, Sendable {
+    public let agentName: String
+    public let sessionRef: String?
+    public let priority: Int?
+
+    public init(agentName: String, sessionRef: String? = nil, priority: Int? = nil) {
+        self.agentName = agentName
+        self.sessionRef = sessionRef
+        self.priority = priority
+    }
 }
 
 public struct NodeListQuery: Equatable, Sendable {

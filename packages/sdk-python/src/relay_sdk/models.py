@@ -380,6 +380,12 @@ class Delivery(BaseModel):
     seq: int
     location_type: str
     location_node_id: str | None = None
+    route_node_id: str | None = None
+    route_node_kind: str | None = None
+    delivery_adapter: str | None = None
+    dispatch_attempts: int = 0
+    next_attempt_at: str | None = None
+    last_dispatch_error: str | None = None
     mode: str
     reason: str | None = None
     priority: str
@@ -407,6 +413,92 @@ class FailDeliveryRequest(BaseModel):
 class DeferDeliveryRequest(BaseModel):
     available_at: str
     reason: str | None = None
+
+
+# ── Nodes ─────────────────────────────────────────────────────────
+
+NodeKind = Literal["fleet_ws", "http_push", "direct_ws", "poll"]
+NodeAckMode = Literal["manual", "on_2xx", "response"]
+NodeAuthType = Literal["none", "bearer", "static_headers", "hmac_sha256"]
+
+
+class NodeCapability(BaseModel):
+    name: str
+    kind: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class NodeDeliveryAuth(BaseModel):
+    type: NodeAuthType
+    token: str | None = None
+    headers: dict[str, str] | None = None
+    secret: str | None = None
+    signature_header: str | None = None
+    timestamp_header: str | None = None
+    signed_payload: Literal["body", "timestamp.body"] | None = None
+    encoding: Literal["hex"] | None = None
+    prefix: str | None = None
+
+
+class HttpPushNodeDelivery(BaseModel):
+    url: str
+    ack_mode: NodeAckMode | None = None
+    auth: NodeDeliveryAuth | None = None
+
+
+class NodeRosterEntry(BaseModel):
+    id: str
+    name: str
+    kind: str | None = None
+    delivery_adapter: str | None = None
+    delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
+    capabilities: list[NodeCapability] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    version: str
+    status: str
+    live: bool
+    handlers_live: bool
+    load: float
+    active_agents: int
+    max_agents: int
+    last_heartbeat_at: str | None = None
+    created_at: str
+
+
+class CreateNodeRequest(BaseModel):
+    node_id: str | None = None
+    name: str
+    kind: NodeKind | None = None
+    delivery_adapter: str | None = None
+    delivery: dict[str, Any] | HttpPushNodeDelivery | None = None
+    capabilities: list[str] | None = None
+    max_agents: int | None = None
+    tags: list[str] | None = None
+    version: str | None = None
+
+
+class CreateNodeResponse(NodeRosterEntry):
+    token: str
+
+
+class NodeAgentBinding(BaseModel):
+    id: str
+    agent_id: str
+    agent_name: str
+    node_id: str
+    node_name: str
+    node_kind: str
+    status: str
+    session_ref: str | None = None
+    priority: int
+    created_at: str
+    updated_at: str | None = None
+
+
+class BindAgentToNodeRequest(BaseModel):
+    agent_name: str
+    session_ref: str | None = None
+    priority: int | None = None
 
 
 # ── A2A, Directory, Routing, Skills ───────────────────────────────

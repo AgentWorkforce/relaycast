@@ -60,6 +60,10 @@ import type {
   SkillSearchResult,
   ActionDefinition,
   RegisterActionRequest,
+  BindAgentToNodeRequest,
+  CreateNodeRequest,
+  CreateNodeResponse,
+  NodeAgentBinding,
   NodeListQuery,
   NodeRosterEntry,
   Trigger,
@@ -140,18 +144,6 @@ export interface RelayCastOptions {
    * joined to Agent Relay CLI telemetry without sending user-identifying data.
    */
   agentRelayDistinctId?: string;
-}
-
-export interface WorkspaceStreamConfig {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  override: boolean | null;
-}
-
-export interface WorkspaceFleetNodesConfig {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  override: boolean | null;
 }
 
 export interface WorkspaceBootstrapOptions {
@@ -599,20 +591,6 @@ export class RelayCast {
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
     delete: (): Promise<void> => this.client.delete('/v1/workspace'),
-    stream: {
-      get: (): Promise<WorkspaceStreamConfig> => this.client.get('/v1/workspace/stream'),
-      set: (enabled: boolean): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { enabled }),
-      inherit: (): Promise<WorkspaceStreamConfig> =>
-        this.client.put('/v1/workspace/stream', { mode: 'inherit' }),
-    },
-    fleetNodes: {
-      get: (): Promise<WorkspaceFleetNodesConfig> => this.client.get('/v1/workspace/fleet-nodes'),
-      set: (enabled: boolean): Promise<WorkspaceFleetNodesConfig> =>
-        this.client.put('/v1/workspace/fleet-nodes', { enabled }),
-      inherit: (): Promise<WorkspaceFleetNodesConfig> =>
-        this.client.put('/v1/workspace/fleet-nodes', { mode: 'inherit' }),
-    },
   };
 
   systemPrompt = {
@@ -755,6 +733,9 @@ export class RelayCast {
   };
 
   nodes = {
+    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
+      this.client.post('/v1/nodes', data),
+
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};
       if (query?.capability) params.capability = query.capability;
@@ -764,6 +745,15 @@ export class RelayCast {
 
     get: (name: string): Promise<NodeRosterEntry> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+
+    listAgents: (name: string): Promise<NodeAgentBinding[]> =>
+      this.client.get(`/v1/nodes/${encodeURIComponent(name)}/agents`),
+
+    bindAgent: (name: string, data: BindAgentToNodeRequest): Promise<NodeAgentBinding> =>
+      this.client.post(`/v1/nodes/${encodeURIComponent(name)}/agents`, data),
+
+    unbindAgent: (name: string, agentName: string): Promise<void> =>
+      this.client.delete(`/v1/nodes/${encodeURIComponent(name)}/agents/${encodeURIComponent(agentName)}`),
   };
 
   triggers = {
