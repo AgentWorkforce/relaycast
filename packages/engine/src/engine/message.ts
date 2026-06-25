@@ -1,6 +1,6 @@
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, agents, reactions, readReceipts, messageAttachments, files } from '../db/schema.js';
+import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/schema.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import { buildMessageLogWrite } from './console.js';
@@ -11,42 +11,9 @@ import {
 } from './deliveryWrites.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
-import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
+import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 
 type Db = ReturnType<typeof getDb>;
-
-/**
- * Fetch attachment details straight from `files` by id, preserving the
- * caller's ordering. Used by the send path, which needs the details *before*
- * the `message_attachments` rows exist — the junction insert is part of the
- * atomic write batch, so it cannot be joined against mid-send.
- */
-async function fetchAttachmentDetails(db: Db, fileIds: string[]): Promise<AttachmentRow[]> {
-  if (fileIds.length === 0) return [];
-
-  const rows = await db
-    .select({
-      fileId: files.id,
-      filename: files.filename,
-      contentType: files.contentType,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(files)
-    .where(inArray(files.id, fileIds));
-
-  const byId = new Map(rows.map((row) => [row.fileId, row]));
-  return fileIds
-    .filter((id) => byId.has(id))
-    .map((id) => {
-      const row = byId.get(id)!;
-      return {
-        file_id: row.fileId,
-        filename: row.filename,
-        content_type: row.contentType,
-        size_bytes: row.sizeBytes,
-      };
-    });
-}
 
 export async function postMessage(
   db: Db,
@@ -73,7 +40,6 @@ export async function postMessage(
     mentionedHandles.add(match[1]);
   }
 
-  const hasAttachments = !!(data.attachments && data.attachments.length > 0);
   const metadata = sanitizeUserMessageMetadata(data.data);
 
   const mailbox = options.mailbox ?? {
@@ -82,9 +48,10 @@ export async function postMessage(
   };
 
   const [attachments, [agent]] = await Promise.all([
-    fetchAttachmentDetails(db, data.attachments ?? []),
+    resolveSendAttachments(db, workspaceId, data.attachments),
     db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
   ]);
+  const hasAttachments = attachments.length > 0;
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
   // stays in routes. Delivery recipients are derived by the delivery insert
@@ -106,10 +73,10 @@ export async function postMessage(
         .returning(),
     ];
 
-    if (data.attachments && data.attachments.length > 0) {
-      const attachmentValues = data.attachments.map((fileId, idx) => ({
+    if (attachments.length > 0) {
+      const attachmentValues = attachments.map((attachment, idx) => ({
         messageId,
-        fileId,
+        fileId: attachment.file_id,
         position: idx,
       }));
       writes.push(writeDb.insert(messageAttachments).values(attachmentValues));

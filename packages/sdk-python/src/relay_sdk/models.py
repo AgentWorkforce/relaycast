@@ -195,8 +195,8 @@ class InviteRequest(BaseModel):
 class FileAttachment(BaseModel):
     file_id: str
     filename: str
-    url: str
-    size: int
+    content_type: str
+    size_bytes: int
 
 
 class ReactionGroup(BaseModel):
