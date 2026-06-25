@@ -242,6 +242,9 @@ pub use types::{
     MessageReadEvent,
     MessageUpdatedEvent,
     MessageWithMeta,
+    ObserverScope,
+    ObserverToken,
+    ObserverTokenFilters,
     PostMessageRequest,
     // Reactions
     ReactionGroup,
@@ -263,6 +266,8 @@ pub use types::{
     TokenRotateResponse,
     UpdateAgentRequest,
     UpdateChannelRequest,
+    CreateObserverTokenRequest,
+    UpdateObserverTokenRequest,
     UpdateWorkspaceRequest,
     UploadRequest,
     UploadResponse,

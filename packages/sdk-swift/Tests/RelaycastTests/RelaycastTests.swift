@@ -417,6 +417,83 @@ final class RelaycastTests: XCTestCase {
         try await relay.nodes.unbindAgent("http-node", agentName: "billing-agent")
     }
 
+    func testObserverTokensCreateListUpdateRotateAndRevoke() async throws {
+        let session = makeMockSession()
+        let relay = try RelayCast(
+            options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+
+        MockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v1/observer-tokens"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["name"] as? String, "dashboard")
+                XCTAssertEqual(json["scopes"] as? [String], ["stream:read", "messages:read"])
+                let filters = try XCTUnwrap(json["filters"] as? [String: Any])
+                XCTAssertEqual(filters["channel_names"] as? [String], ["general"])
+                XCTAssertEqual(filters["include_dms"] as? Bool, false)
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: "ot_live_secret")
+                ], status: 201)
+            case ("GET", "/v1/observer-tokens"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": [observerTokenData(token: NSNull())]
+                ])
+            case ("GET", "/v1/observer-tokens/ot_1"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: NSNull())
+                ])
+            case ("PATCH", "/v1/observer-tokens/ot_1"):
+                let body = try XCTUnwrap(requestBodyData(request))
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["scopes"] as? [String], ["messages:read"])
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: NSNull())
+                ])
+            case ("POST", "/v1/observer-tokens/ot_1/rotate"):
+                return jsonResponse([
+                    "ok": true,
+                    "data": observerTokenData(token: "ot_live_rotated")
+                ])
+            case ("DELETE", "/v1/observer-tokens/ot_1"):
+                return (
+                    HTTPURLResponse(url: URL(string: "https://relay.test")!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            default:
+                return jsonResponse(["ok": false, "error": ["code": "not_found", "message": "Missing"]], status: 404)
+            }
+        }
+
+        let created = try await relay.observerTokens.create(CreateObserverTokenRequest(
+            name: "dashboard",
+            scopes: ["stream:read", "messages:read"],
+            filters: ObserverTokenFilters(channelNames: ["general"], includeDms: false)
+        ))
+        XCTAssertEqual(created.token, "ot_live_secret")
+        XCTAssertEqual(created.filters.channelNames, ["general"])
+
+        let listed = try await relay.observerTokens.list()
+        XCTAssertEqual(listed[0].id, "ot_1")
+
+        let fetched = try await relay.observerTokens.get("ot_1")
+        XCTAssertEqual(fetched.name, "dashboard")
+
+        let updated = try await relay.observerTokens.update("ot_1", data: UpdateObserverTokenRequest(scopes: ["messages:read"]))
+        XCTAssertEqual(updated.scopes, ["stream:read", "messages:read"])
+
+        let rotated = try await relay.observerTokens.rotate("ot_1")
+        XCTAssertEqual(rotated.token, "ot_live_rotated")
+
+        try await relay.observerTokens.revoke("ot_1")
+    }
+
     func testCreateNodeRequestEncodesRawDeliveryConfig() throws {
         let request = CreateNodeRequest(
             name: "custom-node",
@@ -653,6 +730,26 @@ private func requestBodyData(_ request: URLRequest) -> Data? {
         data.append(buffer, count: read)
     }
     return data
+}
+
+private func observerTokenData(token: Any) -> [String: Any] {
+    [
+        "id": "ot_1",
+        "name": "dashboard",
+        "description": NSNull(),
+        "scopes": ["stream:read", "messages:read"],
+        "filters": [
+            "channel_names": ["general"],
+            "include_dms": false
+        ],
+        "status": "active",
+        "expires_at": NSNull(),
+        "created_at": "2026-06-01T00:00:00Z",
+        "updated_at": NSNull(),
+        "revoked_at": NSNull(),
+        "last_used_at": NSNull(),
+        "token": token
+    ]
 }
 
 private func jsonResponse(_ object: [String: Any], status: Int = 200) -> (HTTPURLResponse, Data) {
