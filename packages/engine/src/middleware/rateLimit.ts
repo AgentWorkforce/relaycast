@@ -1,10 +1,14 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppEnv } from '../env.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { checkPlanLimit } from './planLimits.js';
+import { presenceRefresh } from './presenceRefresh.js';
+import { usageTracker } from './usageTracker.js';
 
 // Conservative per-minute ceiling applied when the entitlements lookup fails,
 // so an entitlements outage degrades to a safe default rather than no limit.
 const FALLBACK_RATE_PER_MIN = 300;
+const checkApiCallPlanLimit = checkPlanLimit('api_calls');
 
 // Per-route rate limit multipliers (fraction of the global per-minute limit).
 // POST endpoints get tighter limits, GET endpoints get looser.
@@ -33,6 +37,14 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   if (!workspace) {
     await next();
     return;
+  }
+
+  let planAllowed = false;
+  const planResponse = await checkApiCallPlanLimit(c, async () => {
+    planAllowed = true;
+  });
+  if (!planAllowed) {
+    return planResponse;
   }
 
   const { entitlements, rateLimiter } = c.get('engine');
@@ -68,5 +80,6 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
     // shouldn't 500 the request (the limit was still computed above).
   }
 
-  await next();
+  await presenceRefresh(c, async () => {});
+  return usageTracker(c, next);
 });

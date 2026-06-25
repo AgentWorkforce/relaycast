@@ -1,11 +1,13 @@
 import type { Workspace } from './auth.js';
 
-export type UsageMetric = 'messages' | 'agents' | 'file_bytes';
+export type UsageMetric = 'messages' | 'agents' | 'file_bytes' | 'api_calls';
 
 export interface PlanLimits {
   messages: number;
   agents: number;
   file_bytes: number;
+  /** Total authenticated API calls allowed for the current billing window. */
+  api_calls: number;
   /** Global requests-per-minute ceiling, fed into the rate limiter. */
   rate_per_min: number;
 }

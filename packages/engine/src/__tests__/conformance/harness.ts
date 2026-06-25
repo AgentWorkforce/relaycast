@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
-import type { EngineConfig } from '../../ports/index.js';
+import type { EngineConfig, EntitlementsProvider } from '../../ports/index.js';
 
 export interface TestStack {
   app: Hono<AppEnv>;
@@ -15,6 +15,7 @@ export function makeNodeStack(options?: {
   ttlMs?: number;
   mailbox?: EngineConfig['mailbox'];
   environment?: string;
+  entitlements?: EntitlementsProvider;
 }): TestStack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
@@ -24,6 +25,7 @@ export function makeNodeStack(options?: {
       environment: options?.environment ?? 'test',
       mailbox: options?.mailbox,
     },
+    entitlements: options?.entitlements,
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
     presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
   });

@@ -8,10 +8,10 @@ import type { KeyValueStore } from '../ports/kv.js';
  * tiered deployment if a workspace's `plan` column is set.
  */
 export const PLAN_LIMITS: Record<string, PlanLimits> = {
-  free: { messages: 10_000, agents: 5, file_bytes: 100 * 1024 * 1024, rate_per_min: 300 },
-  pro: { messages: 1_000_000, agents: 100, file_bytes: 50 * 1024 * 1024 * 1024, rate_per_min: 6000 },
-  enterprise: { messages: Infinity, agents: Infinity, file_bytes: 500 * 1024 * 1024 * 1024, rate_per_min: 30000 },
-  selfhost: { messages: Infinity, agents: Infinity, file_bytes: Infinity, rate_per_min: 30000 },
+  free: { messages: 10_000, agents: 5, file_bytes: 100 * 1024 * 1024, api_calls: 100_000, rate_per_min: 300 },
+  pro: { messages: 1_000_000, agents: 100, file_bytes: 50 * 1024 * 1024 * 1024, api_calls: 10_000_000, rate_per_min: 6000 },
+  enterprise: { messages: Infinity, agents: Infinity, file_bytes: 500 * 1024 * 1024 * 1024, api_calls: Infinity, rate_per_min: 30000 },
+  selfhost: { messages: Infinity, agents: Infinity, file_bytes: Infinity, api_calls: Infinity, rate_per_min: 30000 },
 };
 
 /**
