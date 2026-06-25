@@ -1,6 +1,6 @@
-import { and, eq, or, gt, isNull, inArray } from 'drizzle-orm';
+import { and, eq, or, gt, isNull, inArray, ne } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { channels, dmConversations, messages, observerTokens } from '../db/schema.js';
+import { channels, dmConversations, files as fileRows, messageAttachments, messages, observerTokens } from '../db/schema.js';
 import type { ObserverTokenFilters } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -8,6 +8,7 @@ import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
 export type ObserverToken = typeof observerTokens.$inferSelect;
+const LAST_USED_DEBOUNCE_MS = 30_000;
 
 export const OBSERVER_SCOPES = [
   'stream:read',
@@ -92,12 +93,17 @@ function normalizeScopes(scopes: string[]): ObserverScope[] {
   return unique as ObserverScope[];
 }
 
+function publicScopes(scopes: string[] | null | undefined): ObserverScope[] {
+  const unique = [...new Set(scopes ?? [])];
+  return unique.filter((scope): scope is ObserverScope => OBSERVER_SCOPE_SET.has(scope));
+}
+
 function publicObserverToken(row: ObserverToken, token?: string): PublicObserverToken {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    scopes: normalizeScopes(row.scopes ?? []),
+    scopes: publicScopes(row.scopes),
     filters: normalizeObserverFilters(row.filters),
     status: row.status,
     expires_at: row.expiresAt?.toISOString() ?? null,
@@ -148,6 +154,7 @@ export async function createObserverToken(
         scopes,
         filters,
         expiresAt,
+        createdBy: workspaceId,
         createdByType: 'workspace',
       })
       .returning();
@@ -256,17 +263,19 @@ export async function getActiveObserverTokenByHash(
     ));
   if (!row) return null;
 
-  void (async () => {
-    try {
-      await db
-        .update(observerTokens)
-        .set({ lastUsedAt: now })
-        .where(eq(observerTokens.id, row.id));
-    } catch {
-      // last_used_at is best-effort audit metadata; authentication should not fail
-      // solely because a read replica or adapter rejects this update.
-    }
-  })();
+  if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() > LAST_USED_DEBOUNCE_MS) {
+    void (async () => {
+      try {
+        await db
+          .update(observerTokens)
+          .set({ lastUsedAt: now })
+          .where(eq(observerTokens.id, row.id));
+      } catch {
+        // last_used_at is best-effort audit metadata; authentication should not fail
+        // solely because a read replica or adapter rejects this update.
+      }
+    })();
+  }
   return row;
 }
 
@@ -348,6 +357,39 @@ export function observerAllowsMessage(
     && observerAllowsCreatedAt(observer, message.created_at ?? message.createdAt);
 }
 
+export type FileObserverResource = {
+  id: string;
+  uploaded_by_id: string;
+  created_at: string;
+  attachments: Array<{
+    channel_id: string;
+    channel_name: string;
+    channel_type: number;
+    conversation_id: string | null;
+  }>;
+};
+
+export function observerAllowsFile(
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
+  file: FileObserverResource,
+): boolean {
+  if (!observer) return true;
+  if (!observerAllowsAgent(observer, file.uploaded_by_id)) return false;
+  if (!observerAllowsCreatedAt(observer, file.created_at)) return false;
+  if (file.attachments.length === 0) {
+    return observerAllowsChannel(observer, {});
+  }
+  return file.attachments.some((attachment) => (
+    attachment.conversation_id
+      ? observerAllowsConversation(observer, attachment.conversation_id)
+      : observerAllowsChannel(observer, {
+        id: attachment.channel_id,
+        name: attachment.channel_name,
+        channel_type: attachment.channel_type,
+      })
+  ));
+}
+
 function nestedRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -376,6 +418,19 @@ function eventCreatedAt(event: Record<string, unknown>): string | Date | null {
     ?? null;
 }
 
+function eventRequiredScopes(type: string): ObserverScope[] {
+  if (type === 'message.created' || type === 'message.updated' || type === 'message.read' || type === 'webhook.received') return ['messages:read'];
+  if (type === 'thread.reply') return ['threads:read'];
+  if (type === 'message.reacted') return ['reactions:read'];
+  if (type === 'dm.received' || type === 'group_dm.received') return ['dms:read'];
+  if (type === 'file.uploaded') return ['files:read'];
+  if (type.startsWith('agent.status.')) return ['agents:read'];
+  if (type.startsWith('member.') || type.startsWith('channel.')) return ['channels:read'];
+  if (type.startsWith('delivery.')) return ['deliveries:read'];
+  if (type.startsWith('node.')) return ['nodes:read'];
+  return ['activity:read'];
+}
+
 export function observerAllowsEvent(
   observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   event: Record<string, unknown>,
@@ -385,6 +440,10 @@ export function observerAllowsEvent(
   const type = typeof event.type === 'string' ? event.type : '';
 
   if (filters.event_types?.length && !filters.event_types.includes(type)) {
+    return false;
+  }
+
+  if (!hasAnyObserverScope(observer, eventRequiredScopes(type))) {
     return false;
   }
 
@@ -438,6 +497,66 @@ export async function getChannelObserverResource(
     .from(channels)
     .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
   return row ?? null;
+}
+
+export async function getFileObserverResource(
+  db: Db,
+  workspaceId: string,
+  fileId: string,
+): Promise<FileObserverResource | null> {
+  const [file] = await db
+    .select({
+      id: fileRows.id,
+      uploaded_by_id: fileRows.uploadedBy,
+      created_at: fileRows.createdAt,
+    })
+    .from(fileRows)
+    .where(and(
+      eq(fileRows.id, fileId),
+      eq(fileRows.workspaceId, workspaceId),
+      ne(fileRows.status, 'deleted'),
+    ));
+  if (!file) return null;
+
+  const attachments = await db
+    .select({
+      channel_id: channels.id,
+      channel_name: channels.name,
+      channel_type: channels.channelType,
+      conversation_id: dmConversations.id,
+    })
+    .from(messageAttachments)
+    .innerJoin(messages, eq(messageAttachments.messageId, messages.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
+    .where(and(
+      eq(messageAttachments.fileId, fileId),
+      eq(messages.workspaceId, workspaceId),
+    ));
+
+  return {
+    id: file.id,
+    uploaded_by_id: file.uploaded_by_id,
+    created_at: file.created_at.toISOString(),
+    attachments,
+  };
+}
+
+export async function filterObserverFileResults<T extends { id: string }>(
+  db: Db,
+  workspaceId: string,
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
+  results: T[],
+): Promise<T[]> {
+  if (!observer || results.length === 0) return results;
+  const visible: T[] = [];
+  for (const result of results) {
+    const resource = await getFileObserverResource(db, workspaceId, result.id);
+    if (resource && observerAllowsFile(observer, resource)) {
+      visible.push(result);
+    }
+  }
+  return visible;
 }
 
 export async function filterObserverSearchResults<T extends {

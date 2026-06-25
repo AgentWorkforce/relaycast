@@ -37,6 +37,26 @@ function dmChannelName(workspaceId: string, agentA: string, agentB: string): str
   return `dm-${pairKey}`;
 }
 
+async function uploadCompletedFile(stack: TestStack, token: string, filename: string) {
+  const upload = await stack.app.request('/v1/files/upload', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      filename,
+      content_type: 'text/plain',
+      size_bytes: 12,
+    }),
+  });
+  expect(upload.status).toBe(201);
+  const uploadBody = await upload.json() as { data: { id: string } };
+  const complete = await stack.app.request(`/v1/files/${uploadBody.data.id}/complete`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+  });
+  expect(complete.status).toBe(200);
+  return uploadBody.data.id;
+}
+
 describe('observer tokens', () => {
   let stack: TestStack;
 
@@ -64,6 +84,17 @@ describe('observer tokens', () => {
     expect(listed.data).toHaveLength(1);
     expect(listed.data[0].id).toBe(created.data.id);
     expect(listed.data[0].token).toBeUndefined();
+
+    await stack.runtime.deps.db
+      .update(observerTokens)
+      .set({ scopes: ['stream:read', 'retired:read'] })
+      .where(eq(observerTokens.id, created.data.id));
+    const legacyScope = await stack.app.request(`/v1/observer-tokens/${created.data.id}`, {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const legacyScopeBody = await legacyScope.json() as { data: { scopes: string[] } };
+    expect(legacyScope.status).toBe(200);
+    expect(legacyScopeBody.data.scopes).toEqual(['stream:read']);
 
     const rotate = await stack.app.request(`/v1/observer-tokens/${created.data.id}/rotate`, {
       method: 'POST',
@@ -272,6 +303,24 @@ describe('observer tokens', () => {
     expect(futureSearch.status).toBe(200);
     expect(futureSearchBody.data).toHaveLength(0);
 
+    const event = await stack.app.request('/v1/agents/alice/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ type: 'log', payload: { message: 'old event' } }),
+    });
+    expect(event.status).toBe(201);
+    const futureActivity = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'future-activity',
+      scopes: ['activity:read'],
+      filters: { agent_ids: [alice.agentId], created_after: '2999-01-01T00:00:00.000Z' },
+    });
+    const futureEvents = await stack.app.request('/v1/agents/alice/events', {
+      headers: { authorization: `Bearer ${futureActivity.data.token}` },
+    });
+    const futureEventsBody = await futureEvents.json() as { data: unknown[] };
+    expect(futureEvents.status).toBe(200);
+    expect(futureEventsBody.data).toHaveLength(0);
+
     const reactionsWithMessageScope = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -394,6 +443,93 @@ describe('observer tokens', () => {
     });
   });
 
+  it('filters file metadata by observer channel, agent, and time filters', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-file-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    const createTeam = await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'team-chat' }),
+    });
+    expect(createTeam.status).toBe(201);
+
+    const aliceGeneralFileId = await uploadCompletedFile(stack, alice.token, 'general.txt');
+    const bobTeamFileId = await uploadCompletedFile(stack, bob.token, 'team.txt');
+    const aliceLooseFileId = await uploadCompletedFile(stack, alice.token, 'loose.txt');
+
+    const generalMessage = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'general file', attachments: [aliceGeneralFileId] }),
+    });
+    expect(generalMessage.status).toBe(201);
+
+    const teamMessage = await stack.app.request('/v1/channels/team-chat/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ text: 'team file', attachments: [bobTeamFileId] }),
+    });
+    expect(teamMessage.status).toBe(201);
+
+    const generalAliceFiles = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'general-alice-files',
+      scopes: ['files:read'],
+      filters: { channel_names: ['general'], agent_ids: [alice.agentId] },
+    });
+    const visibleFiles = await stack.app.request('/v1/files', {
+      headers: { authorization: `Bearer ${generalAliceFiles.data.token}` },
+    });
+    const visibleFilesBody = await visibleFiles.json() as { data: Array<{ id: string }> };
+    expect(visibleFiles.status).toBe(200);
+    expect(visibleFilesBody.data.map((file) => file.id)).toEqual([aliceGeneralFileId]);
+
+    const visibleSingle = await stack.app.request(`/v1/files/${aliceGeneralFileId}`, {
+      headers: { authorization: `Bearer ${generalAliceFiles.data.token}` },
+    });
+    expect(visibleSingle.status).toBe(200);
+
+    const hiddenByChannel = await stack.app.request(`/v1/files/${bobTeamFileId}`, {
+      headers: { authorization: `Bearer ${generalAliceFiles.data.token}` },
+    });
+    expect(hiddenByChannel.status).toBe(404);
+
+    const hiddenUnattached = await stack.app.request(`/v1/files/${aliceLooseFileId}`, {
+      headers: { authorization: `Bearer ${generalAliceFiles.data.token}` },
+    });
+    expect(hiddenUnattached.status).toBe(404);
+
+    const aliceFiles = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'alice-files',
+      scopes: ['files:read'],
+      filters: { agent_ids: [alice.agentId] },
+    });
+    const aliceFileList = await stack.app.request('/v1/files', {
+      headers: { authorization: `Bearer ${aliceFiles.data.token}` },
+    });
+    const aliceFileListBody = await aliceFileList.json() as { data: Array<{ id: string }> };
+    expect(aliceFileList.status).toBe(200);
+    expect(aliceFileListBody.data.map((file) => file.id).sort()).toEqual([aliceLooseFileId, aliceGeneralFileId].sort());
+
+    const futureFiles = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'future-files',
+      scopes: ['files:read'],
+      filters: { created_after: '2999-01-01T00:00:00.000Z' },
+    });
+    const futureFileList = await stack.app.request('/v1/files', {
+      headers: { authorization: `Bearer ${futureFiles.data.token}` },
+    });
+    const futureFileListBody = await futureFileList.json() as { data: unknown[] };
+    expect(futureFileList.status).toBe(200);
+    expect(futureFileListBody.data).toHaveLength(0);
+
+    const futureSingle = await stack.app.request(`/v1/files/${aliceGeneralFileId}`, {
+      headers: { authorization: `Bearer ${futureFiles.data.token}` },
+    });
+    expect(futureSingle.status).toBe(404);
+  });
+
   it('requires stream-scoped observer tokens for workspace WebSockets and filters events per socket', async () => {
     const ws = await createWorkspace(stack.app, 'observer-stream-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -403,8 +539,14 @@ describe('observer tokens', () => {
       body: JSON.stringify({ name: 'team-chat' }),
     });
 
-    const observer = await createObserverToken(stack, ws.workspaceKey, {
-      name: 'stream-general',
+    const generalChannel = await stack.app.request('/v1/channels/general', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const generalChannelBody = await generalChannel.json() as { data: { id: string } };
+    expect(generalChannel.status).toBe(200);
+
+    const streamOnly = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-only',
       scopes: ['stream:read'],
       filters: { channel_names: ['general'] },
     });
@@ -413,9 +555,21 @@ describe('observer tokens', () => {
       ok: false,
       message: 'Observer token required for workspace stream',
     });
-    const accepted = await authenticateRealtimeWs(auth, observer.data.token!);
+    const accepted = await authenticateRealtimeWs(auth, streamOnly.data.token!);
     expect(accepted.ok).toBe(true);
 
+    const [streamOnlyRow] = await stack.runtime.deps.db
+      .select()
+      .from(observerTokens)
+      .where(eq(observerTokens.id, streamOnly.data.id));
+    const streamOnlySock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, streamOnlySock, streamOnlyRow);
+
+    const observer = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-general',
+      scopes: ['stream:read', 'messages:read'],
+      filters: { channel_names: ['general'] },
+    });
     const [row] = await stack.runtime.deps.db
       .select()
       .from(observerTokens)
@@ -423,22 +577,47 @@ describe('observer tokens', () => {
     const sock = new FakeSocket();
     stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, sock, row);
 
-    await stack.app.request('/v1/channels/general/messages', {
+    const readObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-general-id-reads',
+      scopes: ['stream:read', 'messages:read'],
+      filters: { channel_ids: [generalChannelBody.data.id], event_types: ['message.read'] },
+    });
+    const [readRow] = await stack.runtime.deps.db
+      .select()
+      .from(observerTokens)
+      .where(eq(observerTokens.id, readObserver.data.id));
+    const readSock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, readSock, readRow);
+
+    const generalMessage = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
       body: JSON.stringify({ text: 'stream visible' }),
     });
+    const generalMessageBody = await generalMessage.json() as { data: { id: string } };
     await stack.app.request('/v1/channels/team-chat/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
       body: JSON.stringify({ text: 'stream hidden' }),
     });
+    const read = await stack.app.request(`/v1/messages/${generalMessageBody.data.id}/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(read.status).toBe(200);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(streamOnlySock.ofType('message.created')).toHaveLength(0);
+    expect(streamOnlySock.ofType('message.read')).toHaveLength(0);
     expect(sock.ofType('message.created')).toHaveLength(1);
     expect(sock.ofType('message.created')[0]).toMatchObject({
       channel: 'general',
       message: { text: 'stream visible' },
+    });
+    expect(readSock.ofType('message.read')).toHaveLength(1);
+    expect(readSock.ofType('message.read')[0]).toMatchObject({
+      channel_id: generalChannelBody.data.id,
+      message_id: generalMessageBody.data.id,
     });
   });
 
@@ -480,7 +659,7 @@ describe('observer tokens', () => {
 
     const observer = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms',
-      scopes: ['stream:read', 'dms:read'],
+      scopes: ['stream:read', 'dms:read', 'reactions:read'],
       filters: { channel_names: ['general'], include_dms: true },
     });
 

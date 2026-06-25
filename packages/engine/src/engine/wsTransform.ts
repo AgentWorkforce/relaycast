@@ -219,6 +219,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         type: 'message.read',
         ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         message_id: d.message_id as string,
         ...(d.conversation_id ? { conversation_id: d.conversation_id as string } : {}),
         ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
@@ -230,6 +231,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         type: 'file.uploaded',
         ...withCreatedAt,
+        ...(d.agent_id ? { agent_id: d.agent_id as string } : {}),
         file: {
           file_id: (d.file_id as string) ?? (d.id as string),
           filename: d.filename as string,
@@ -241,6 +243,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
       return {
         type: 'webhook.received',
         ...withCreatedAt,
+        ...(event.channel_id ? { channel_id: event.channel_id } : {}),
         webhook_id: d.webhook_id as string,
         channel: d.channel as string,
         message: {

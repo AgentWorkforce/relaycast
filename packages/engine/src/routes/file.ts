@@ -15,6 +15,12 @@ import { LimitQuerySchema } from '../lib/httpQuery.js';
 import { requireWorkspaceRead, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as fileEngine from '../engine/file.js';
+import {
+  filterObserverFileResults,
+  getFileObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsFile,
+} from '../engine/observerToken.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
@@ -124,12 +130,20 @@ fileRoutes.get('/files/:id', requireWorkspaceRead('files:read'), rateLimit, asyn
     const db = c.get('db');
     const workspace = c.get('workspace');
     const storage = c.get('engine').files;
+    const fileId = c.req.param('id');
+    const observer = getObserverTokenFromContext(c);
+    if (observer) {
+      const resource = await getFileObserverResource(db, workspace.id, fileId);
+      if (!resource || !observerAllowsFile(observer, resource)) {
+        return jsonNotFound(c, 'file_not_found', 'File not found');
+      }
+    }
 
     const result = await fileEngine.getFile(
       db,
       storage,
       workspace.id,
-      c.req.param('id'),
+      fileId,
     );
     if (!result) {
       return jsonNotFound(c, 'file_not_found', 'File not found');
@@ -183,8 +197,14 @@ fileRoutes.get('/files', requireWorkspaceRead('files:read'), rateLimit, async (c
       uploaded_by,
       limit,
     });
+    const visible = await filterObserverFileResults(
+      db,
+      workspace.id,
+      getObserverTokenFromContext(c),
+      result,
+    );
 
-    return jsonOk(c, result);
+    return jsonOk(c, visible);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -12,6 +12,7 @@ import * as sessionEventEngine from '../engine/sessionEvent.js';
 import {
   getObserverTokenFromContext,
   observerAllowsAgent,
+  observerAllowsCreatedAt,
 } from '../engine/observerToken.js';
 import { fanoutToWorkspace } from './fanout.js';
 import { sendNodePresenceContext } from '../engine/nodeContext.js';
@@ -568,7 +569,8 @@ agentRoutes.get(
       if (!agent) {
         return agentNotFound(c, name);
       }
-      if (!observerAllowsAgent(getObserverTokenFromContext(c), agent.id)) {
+      const observer = getObserverTokenFromContext(c);
+      if (!observerAllowsAgent(observer, agent.id)) {
         return agentNotFound(c, name);
       }
 
@@ -577,7 +579,7 @@ agentRoutes.get(
         limit,
       });
 
-      return jsonOk(c, events);
+      return jsonOk(c, events.filter((event) => observerAllowsCreatedAt(observer, event.created_at)));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -176,10 +176,6 @@ threadRoutes.get(
       const replies = result.replies.filter((reply) => observerAllowsMessage(observer, reply));
       return jsonOk(c, {
         ...result,
-        parent: {
-          ...result.parent,
-          reply_count: replies.length,
-        },
         replies,
       });
     } catch (err: unknown) {
