@@ -47,11 +47,15 @@ export function eventToResourceUris(event: WsClientEvent): string[] {
     case 'member.joined':
     case 'member.left':
       return ['relay://channels'];
-    case 'webhook.received':
-    case 'command.invoked': {
+    case 'webhook.received': {
       const channel = getStringEventField(event, 'channel');
       return channel ? [`relay://channels/${channel}/messages`] : [];
     }
+    case 'action.invoked':
+    case 'action.completed':
+    case 'action.failed':
+    case 'action.denied':
+      return ['relay://inbox'];
     case 'message.read':
       return [];
     case 'file.uploaded':

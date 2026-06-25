@@ -234,17 +234,6 @@ export const WebhookReceivedEventSchema = z.object({
 });
 export type WebhookReceivedEvent = z.infer<typeof WebhookReceivedEventSchema>;
 
-export const CommandInvokedEventSchema = z.object({
-  type: z.literal('command.invoked'),
-  command: z.string(),
-  channel: z.string(),
-  invoked_by: z.string(),
-  handler_agent_id: z.string(),
-  args: z.string().nullable(),
-  parameters: z.record(z.string(), z.unknown()).nullable(),
-});
-export type CommandInvokedEvent = z.infer<typeof CommandInvokedEventSchema>;
-
 // Action (agent-to-agent RPC) events. Delivered to the handler agent on invoke,
 // and to the caller agent on completion/failure.
 export const ActionInvokedEventSchema = z.object({
@@ -381,7 +370,6 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,
@@ -430,7 +418,6 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   MessageReadEventSchema,
   FileUploadedEventSchema,
   WebhookReceivedEventSchema,
-  CommandInvokedEventSchema,
   ActionInvokedEventSchema,
   ActionCompletedEventSchema,
   ActionFailedEventSchema,

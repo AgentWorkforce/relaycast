@@ -128,10 +128,6 @@ export function buildMessageLogWrite(db: Db, input: LogMessageInput): AtomicWrit
     .onConflictDoNothing();
 }
 
-export async function logMessage(db: Db, input: LogMessageInput): Promise<void> {
-  await buildMessageLogWrite(db, input);
-}
-
 export async function listMessageLogs(
   db: Db,
   workspaceId: string,

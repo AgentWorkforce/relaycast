@@ -255,18 +255,6 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
         },
       };
 
-    case 'command.invoked':
-      return {
-        type: 'command.invoked',
-        ...withCreatedAt,
-        command: d.command as string,
-        channel: d.channel as string,
-        invoked_by: d.invoked_by as string,
-        handler_agent_id: d.handler_agent_id as string,
-        args: (d.args as string | null) ?? null,
-        parameters: (d.parameters as Record<string, unknown> | null) ?? null,
-      };
-
     default: {
       const { workspace_id: _workspace_id, channel_id: _channel_id, timestamp: _timestamp, data, ...rest } = event as WsEvent & Record<string, unknown>;
       return { ...rest, ...data, ...withCreatedAt };

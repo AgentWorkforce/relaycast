@@ -1,4 +1,4 @@
-import { useContext, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ClientContext, StoreContext } from '../context.js';
 import type { UseMessagesReturn, ChannelMessages } from '../types.js';
 import { sortMessagesChronologically } from '../adapters/messages.js';
@@ -8,17 +8,21 @@ const EMPTY: ChannelMessages = { messages: [], loading: true, error: null };
 export function useMessages(channel: string): UseMessagesReturn {
   const ctx = useContext(ClientContext);
   const store = useContext(StoreContext);
+  const requestSeq = useRef(0);
   if (!ctx || !store) throw new Error('useMessages must be used within <RelayProvider>');
 
   useEffect(() => {
+    const seq = ++requestSeq.current;
     store.updateChannelMessages(channel, (prev) => ({ ...prev, loading: true }));
 
     ctx.agent.messages(channel, { limit: 50 })
       .then((messages) => {
+        if (seq !== requestSeq.current) return;
         const sortedMessages = sortMessagesChronologically(messages);
         store.updateChannelMessages(channel, () => ({ messages: sortedMessages, loading: false, error: null }));
       })
       .catch((error: unknown) => {
+        if (seq !== requestSeq.current) return;
         store.updateChannelMessages(channel, (prev) => ({
           ...prev,
           loading: false,
@@ -28,6 +32,7 @@ export function useMessages(channel: string): UseMessagesReturn {
 
     ctx.ws.subscribe([channel]);
     return () => {
+      requestSeq.current += 1;
       ctx.ws.unsubscribe([channel]);
     };
   }, [channel, ctx.agent, ctx.ws, store]);
@@ -38,6 +43,7 @@ export function useMessages(channel: string): UseMessagesReturn {
   );
 
   const fetchMore = useCallback(async () => {
+    const seq = requestSeq.current;
     const current = store.getState().channelMessages[channel];
     if (!current || current.messages.length === 0) return 0;
 
@@ -45,6 +51,7 @@ export function useMessages(channel: string): UseMessagesReturn {
     if (!oldest) return 0;
 
     const older = await ctx.agent.messages(channel, { before: oldest.id, limit: 50 });
+    if (seq !== requestSeq.current) return 0;
     if (older.length === 0) return 0;
     const sortedOlder = sortMessagesChronologically(older);
 

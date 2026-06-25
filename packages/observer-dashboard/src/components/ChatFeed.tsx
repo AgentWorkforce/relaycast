@@ -216,13 +216,24 @@ function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { 
   const relay = useRelay();
   const [messages, setMessages] = useState<MessageWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     relay.dmMessages(conversationId, { limit: PAGE_SIZE })
-      .then((dms) => setMessages(dms.map(toMessageWithMeta)))
+      .then((dms) => {
+        if (seq !== requestSeq.current) return;
+        setMessages(dms.map(toMessageWithMeta));
+      })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setLoading(false);
+      });
+    return () => {
+      requestSeq.current += 1;
+    };
   }, [conversationId, relay]);
 
   const sorted = sortMessagesChronologically(messages);
@@ -230,7 +241,9 @@ function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { 
 
   const loadOlderPage = useCallback(async () => {
     if (!oldestId) return 0;
+    const seq = requestSeq.current;
     const older = await relay.dmMessages(conversationId, { before: oldestId, limit: PAGE_SIZE });
+    if (seq !== requestSeq.current) return 0;
     if (older.length > 0) {
       setMessages((prev) => [...older.map(toMessageWithMeta), ...prev]);
     }
