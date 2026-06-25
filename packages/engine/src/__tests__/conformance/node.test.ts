@@ -255,6 +255,7 @@ describe('node adapter conformance', () => {
         }),
       ]);
       expect(typeof delivered[0].seq).toBe('number');
+      expect(contextUpdatesOfType(bobSock, 'message.created')).toHaveLength(0);
     });
 
     it('does not create or push message deliveries for muted channel members', async () => {
@@ -444,6 +445,7 @@ describe('node adapter conformance', () => {
           }),
         }),
       ]);
+      expect(contextUpdatesOfType(bobSock, 'thread.reply')).toHaveLength(0);
 
       bobSock.received.length = 0;
       const emailReplyRes = await stack.app.request(`/v1/messages/${parent.data.id}/replies`, {

@@ -8,6 +8,8 @@ import { sendNodeContextForChannel } from '../engine/nodeContext.js';
 
 type HonoContext = Context<AppEnv>;
 
+const NODE_DELIVERY_EVENT_TYPES = new Set(['message.created', 'thread.reply']);
+
 function buildEvent(
   type: string,
   workspaceId: string,
@@ -82,29 +84,31 @@ export async function fanoutToChannel(
 
   const tasks: Promise<unknown>[] = [];
   tasks.push(publishToWorkspaceStream(c, ws, payload));
-  tasks.push(
-    sendNodeContextForChannel(
-      {
-        db: c.get('db'),
-        nodeConnections: c.get('engine').nodeConnections,
-        realtime: c.get('engine').realtime,
-        workspaceId: ws,
-      },
-      {
-        channelId,
-        topic: type.startsWith('thread.') ? 'thread' : 'channel',
-        event: type,
-        data,
-      },
-    ).catch((err) => {
-      logger.error(`node context error for channel ${channelId}, event ${type}`, {
-        workspace_id: ws,
-        channel_id: channelId,
-        event_type: type,
-        ...toErrorDetails(err),
-      });
-    }),
-  );
+  if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
+    tasks.push(
+      sendNodeContextForChannel(
+        {
+          db: c.get('db'),
+          nodeConnections: c.get('engine').nodeConnections,
+          realtime: c.get('engine').realtime,
+          workspaceId: ws,
+        },
+        {
+          channelId,
+          topic: type.startsWith('thread.') ? 'thread' : 'channel',
+          event: type,
+          data,
+        },
+      ).catch((err) => {
+        logger.error(`node context error for channel ${channelId}, event ${type}`, {
+          workspace_id: ws,
+          channel_id: channelId,
+          event_type: type,
+          ...toErrorDetails(err),
+        });
+      }),
+    );
+  }
 
   await Promise.allSettled(tasks);
 }
