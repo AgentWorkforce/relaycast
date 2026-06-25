@@ -404,7 +404,11 @@ components:
         route_node_kind:
           type: string
           nullable: true
-          description: Delivery node kind used for this dispatch, such as `fleet_ws` or `http_push`.
+          description: Delivery node transport used for this dispatch, such as `ws` or `http_push`.
+        route_node_role:
+          type: string
+          nullable: true
+          description: Delivery node role used for this dispatch, such as `direct` or `broker`.
         delivery_adapter:
           type: string
           nullable: true
@@ -595,7 +599,10 @@ components:
           type: string
         kind:
           type: string
-          enum: [fleet_ws, http_push, direct_ws, poll]
+          enum: [ws, http_push, poll]
+        role:
+          type: string
+          enum: [direct, broker]
         delivery_adapter:
           type: string
         delivery:
@@ -664,6 +671,8 @@ components:
         node_name:
           type: string
         node_kind:
+          type: string
+        node_role:
           type: string
         status:
           type: string
@@ -3036,17 +3045,23 @@ paths:
                   type: string
                 kind:
                   type: string
-                  enum: [fleet_ws, http_push, direct_ws, poll]
-                  default: fleet_ws
+                  enum: [ws, http_push, poll]
+                  default: ws
+                  description: Node transport kind. WebSocket nodes use `ws` whether they host one direct agent or many brokered agents.
+                role:
+                  type: string
+                  enum: [direct, broker]
+                  default: broker
+                  description: Node ownership/capability role. `direct` nodes bind one agent; `broker` nodes may host multiple agents and use node control frames.
                 delivery_adapter:
                   type: string
-                  description: Optional adapter identifier. Defaults from node kind and delivery auth.
+                  description: Optional adapter identifier. WebSocket nodes default to `ws.node.v1`; HTTP push nodes default from delivery auth.
                 delivery:
                   nullable: true
                   oneOf:
                     - $ref: '#/components/schemas/HttpPushNodeDelivery'
                     - type: object
-                  description: Required for `http_push`; ignored for broker-controlled fleet WebSocket registrations.
+                  description: Required for `http_push`; ignored for broker-controlled WebSocket registrations.
                 capabilities:
                   type: array
                   items:

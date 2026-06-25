@@ -774,6 +774,7 @@ public struct Delivery: Codable, Equatable, Sendable {
     public let locationNodeId: String?
     public let routeNodeId: String?
     public let routeNodeKind: String?
+    public let routeNodeRole: String?
     public let deliveryAdapter: String?
     public let dispatchAttempts: Int?
     public let nextAttemptAt: String?
@@ -804,6 +805,7 @@ public struct DeliveryItem: Codable, Equatable, Sendable {
     public let locationNodeId: String?
     public let routeNodeId: String?
     public let routeNodeKind: String?
+    public let routeNodeRole: String?
     public let deliveryAdapter: String?
     public let dispatchAttempts: Int?
     public let nextAttemptAt: String?
@@ -1530,6 +1532,7 @@ public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [NodeCapability]
@@ -1622,6 +1625,7 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let nodeId: String?
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [String]?
@@ -1629,10 +1633,11 @@ public struct CreateNodeRequest: Codable, Equatable, Sendable {
     public let tags: [String]?
     public let version: String?
 
-    public init(nodeId: String? = nil, name: String, kind: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
+    public init(nodeId: String? = nil, name: String, kind: String? = nil, role: String? = nil, deliveryAdapter: String? = nil, delivery: NodeDeliveryConfig? = nil, capabilities: [String]? = nil, maxAgents: Int? = nil, tags: [String]? = nil, version: String? = nil) {
         self.nodeId = nodeId
         self.name = name
         self.kind = kind
+        self.role = role
         self.deliveryAdapter = deliveryAdapter
         self.delivery = delivery
         self.capabilities = capabilities
@@ -1646,6 +1651,7 @@ public struct CreateNodeResponse: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let kind: String?
+    public let role: String?
     public let deliveryAdapter: String?
     public let delivery: NodeDeliveryConfig?
     public let capabilities: [NodeCapability]
@@ -1669,6 +1675,7 @@ public struct NodeAgentBinding: Codable, Equatable, Sendable {
     public let nodeId: String
     public let nodeName: String
     public let nodeKind: String
+    public let nodeRole: String
     public let status: String
     public let sessionRef: String?
     public let priority: Int

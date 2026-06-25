@@ -82,6 +82,8 @@ export function buildGroupDmReceivedEventData(
 }
 
 export function buildDeliverFrame(input: {
+  delivery_id: string;
+  agent_id: string;
   agent: string;
   msg_id: string;
   seq: number;
@@ -91,6 +93,8 @@ export function buildDeliverFrame(input: {
   return {
     v: 1 as const,
     type: 'deliver' as const,
+    delivery_id: input.delivery_id,
+    agent_id: input.agent_id,
     agent: input.agent,
     msg_id: input.msg_id,
     seq: input.seq,

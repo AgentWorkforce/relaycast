@@ -1,6 +1,8 @@
 {
   "v": 1,
   "type": "deliver",
+  "delivery_id": "del_01J7FLEET000000000000301",
+  "agent_id": "agt_01J7FLEET000000000000101",
   "agent": "codex-builder-1",
   "msg_id": "msg_01J7FLEET000000000000201",
   "seq": 43,

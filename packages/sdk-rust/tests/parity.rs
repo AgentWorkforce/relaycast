@@ -2200,6 +2200,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "id": "node_http",
             "name": "http-node",
             "kind": "http_push",
+            "role": "direct",
             "delivery_adapter": "http.hmac.v1",
             "delivery": {
                 "url": "https://receiver.example.test/relaycast",
@@ -2227,6 +2228,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             node_id: None,
             name: "http-node".to_string(),
             kind: Some("http_push".to_string()),
+            role: None,
             delivery_adapter: None,
             delivery: Some(NodeDeliveryConfig::from(HttpPushNodeDelivery {
                 url: "https://receiver.example.test/relaycast".to_string(),
@@ -2251,6 +2253,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .await
         .expect("create_node failed");
     assert_eq!(created.node.kind.as_deref(), Some("http_push"));
+    assert_eq!(created.node.role.as_deref(), Some("direct"));
     assert_eq!(created.token, "nt_live_test");
 
     Mock::given(method("GET"))
@@ -2259,8 +2262,9 @@ async fn nodes_and_triggers_use_expected_endpoints() {
         .respond_with(ok(json!([{
             "id": "node_1",
             "name": "worker-node",
-            "kind": "fleet_ws",
-            "delivery_adapter": "fleet.ws.v1",
+            "kind": "ws",
+            "role": "broker",
+            "delivery_adapter": "ws.node.v1",
             "delivery": null,
             "capabilities": [{ "name": "gpu", "kind": "hardware" }],
             "tags": ["fast"],
@@ -2287,7 +2291,8 @@ async fn nodes_and_triggers_use_expected_endpoints() {
     assert_eq!(nodes[0].name, "worker-node");
     assert_eq!(nodes[0].capabilities[0].name, "gpu");
     assert_eq!(nodes[0].capabilities[0].kind.as_deref(), Some("hardware"));
-    assert_eq!(nodes[0].kind.as_deref(), Some("fleet_ws"));
+    assert_eq!(nodes[0].kind.as_deref(), Some("ws"));
+    assert_eq!(nodes[0].role.as_deref(), Some("broker"));
 
     Mock::given(method("GET"))
         .and(path("/v1/nodes/http-node/agents"))
@@ -2298,6 +2303,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "node_id": "node_http",
             "node_name": "http-node",
             "node_kind": "http_push",
+            "node_role": "direct",
             "status": "active",
             "session_ref": null,
             "priority": 0,
@@ -2326,6 +2332,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             "node_id": "node_http",
             "node_name": "http-node",
             "node_kind": "http_push",
+            "node_role": "direct",
             "status": "active",
             "session_ref": null,
             "priority": 5,

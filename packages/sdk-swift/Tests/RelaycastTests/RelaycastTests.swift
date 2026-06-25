@@ -256,8 +256,9 @@ final class RelaycastTests: XCTestCase {
                 "data": [[
                     "id": "node_1",
                     "name": "alpha",
-                    "kind": "fleet_ws",
-                    "delivery_adapter": "fleet.ws.v1",
+                    "kind": "ws",
+                    "role": "broker",
+                    "delivery_adapter": "ws.node.v1",
                     "delivery": NSNull(),
                     "capabilities": [["name": "code", "kind": "executor", "metadata": ["region": "us"]]],
                     "tags": ["primary"],
@@ -281,7 +282,8 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(nodes[0].capabilities.first?.kind, "executor")
         XCTAssertEqual(nodes[0].activeAgents, 2)
         XCTAssertTrue(nodes[0].handlersLive)
-        XCTAssertEqual(nodes[0].kind, "fleet_ws")
+        XCTAssertEqual(nodes[0].kind, "ws")
+        XCTAssertEqual(nodes[0].role, "broker")
     }
 
     func testNodesCreateAndBindings() async throws {
@@ -307,6 +309,7 @@ final class RelaycastTests: XCTestCase {
                         "id": "node_1",
                         "name": "http-node",
                         "kind": "http_push",
+                        "role": "direct",
                         "delivery_adapter": "http.hmac.v1",
                         "delivery": [
                             "url": "https://receiver.example.test/relaycast",
@@ -341,6 +344,7 @@ final class RelaycastTests: XCTestCase {
                         "node_id": "node_1",
                         "node_name": "http-node",
                         "node_kind": "http_push",
+                        "node_role": "direct",
                         "status": "active",
                         "session_ref": NSNull(),
                         "priority": 0,
@@ -361,6 +365,7 @@ final class RelaycastTests: XCTestCase {
                         "node_id": "node_1",
                         "node_name": "http-node",
                         "node_kind": "http_push",
+                        "node_role": "direct",
                         "status": "active",
                         "session_ref": NSNull(),
                         "priority": 5,

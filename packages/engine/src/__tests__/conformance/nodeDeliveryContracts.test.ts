@@ -5,6 +5,7 @@ import {
   makeNodeStack,
   createWorkspace,
   registerAgent,
+  FakeSocket,
   type TestStack,
 } from './harness.js';
 import { agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
@@ -59,6 +60,7 @@ describe('node delivery contracts', () => {
       data: {
         name: string;
         kind: string;
+        role: string;
         delivery_adapter: string;
         delivery: { url: string; auth: { secret: string } };
         max_agents: number;
@@ -108,6 +110,7 @@ describe('node delivery contracts', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
     const node = await createHttpNode(ws.workspaceKey);
+    expect(node.data.role).toBe('direct');
     expect(node.data.delivery.auth.secret).toBe('[redacted]');
     expect(node.data.max_agents).toBe(1);
     expect(
@@ -349,12 +352,14 @@ describe('node delivery contracts', () => {
     const body = (await rotate.json()) as {
       data: {
         kind: string;
+        role: string;
         delivery_adapter: string;
         delivery: { url: string; auth: { secret: string } };
         max_agents: number;
       };
     };
     expect(body.data.kind).toBe('http_push');
+    expect(body.data.role).toBe('direct');
     expect(body.data.delivery_adapter).toBe('http.hmac.v1');
     expect(body.data.delivery.url).toBe(
       'https://receiver.example.test/relaycast',
@@ -660,6 +665,8 @@ describe('node delivery contracts', () => {
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
     const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const carolSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, carol.agentId, carolSock);
     const node = await createHttpNode(ws.workspaceKey, {
       name: 'slow-http-node',
     });
@@ -679,6 +686,13 @@ describe('node delivery contracts', () => {
 
     await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitForAssertion(async () => {
+      expect(carolSock.ofType('deliver')).toEqual([
+        expect.objectContaining({
+          agent_id: carol.agentId,
+          agent: 'carol',
+          payload: expect.objectContaining({ type: 'message.created' }),
+        }),
+      ]);
       const carolQueue = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${carol.token}` },
       });

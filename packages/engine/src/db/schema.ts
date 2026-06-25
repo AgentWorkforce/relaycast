@@ -73,7 +73,7 @@ export const agents = sqliteTable(
 );
 
 // ============================================
-// Fleet Nodes
+// Nodes
 // ============================================
 export const nodes = sqliteTable(
   'nodes',
@@ -84,8 +84,9 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
-    kind: text('kind').notNull().default('fleet_ws'),
-    deliveryAdapter: text('delivery_adapter').notNull().default('fleet.ws.v1'),
+    kind: text('kind').notNull().default('ws'),
+    role: text('role').notNull().default('broker'),
+    deliveryAdapter: text('delivery_adapter').notNull().default('ws.node.v1'),
     deliveryConfig: text('delivery_config', { mode: 'json' }).$type<Record<string, unknown>>(),
     capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
     maxAgents: integer('max_agents').notNull().default(0),
@@ -813,6 +814,7 @@ export const deliveries = sqliteTable(
     locationNodeId: text('location_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
     routeNodeId: text('route_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
     routeNodeKind: text('route_node_kind'),
+    routeNodeRole: text('route_node_role'),
     deliveryAdapter: text('delivery_adapter'),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
     nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp' }),

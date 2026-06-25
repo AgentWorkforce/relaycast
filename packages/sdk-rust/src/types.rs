@@ -657,6 +657,8 @@ pub struct Delivery {
     #[serde(default)]
     pub route_node_kind: Option<String>,
     #[serde(default)]
+    pub route_node_role: Option<String>,
+    #[serde(default)]
     pub delivery_adapter: Option<String>,
     #[serde(default)]
     pub dispatch_attempts: Option<i64>,
@@ -1810,6 +1812,8 @@ pub struct NodeRosterEntry {
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
     pub delivery_adapter: Option<String>,
     #[serde(default)]
     pub delivery: Option<NodeDeliveryConfig>,
@@ -1892,6 +1896,8 @@ pub struct CreateNodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_adapter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<NodeDeliveryConfig>,
@@ -1922,6 +1928,7 @@ pub struct NodeAgentBinding {
     pub node_id: String,
     pub node_name: String,
     pub node_kind: String,
+    pub node_role: String,
     pub status: String,
     pub session_ref: Option<String>,
     pub priority: i64,

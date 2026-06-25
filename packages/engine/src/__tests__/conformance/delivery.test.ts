@@ -724,11 +724,16 @@ describe('durable delivery api', () => {
     const replyId = ((await reply.json()) as { data: { id: string } }).data.id;
 
     await waitForAssertion(() => {
-      expect(bobSock.ofType('thread.reply')).toEqual([
+      expect(bobSock.ofType('deliver')).toEqual([
         expect.objectContaining({
-          message: expect.objectContaining({
-            id: replyId,
-            text: 'dm thread reply',
+          agent_id: bob.agentId,
+          agent: 'bob',
+          payload: expect.objectContaining({
+            type: 'thread.reply',
+            data: expect.objectContaining({
+              id: replyId,
+              text: 'dm thread reply',
+            }),
           }),
         }),
       ]);

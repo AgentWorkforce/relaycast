@@ -19,14 +19,15 @@ type ScopedNodeRow = {
   nodeId: string;
   agentId: string;
   nodeKind: string;
+  nodeRole: string;
 };
 
 const DELIVERY_ROUTED_EVENTS = new Set(['message.created', 'thread.reply', 'dm.received', 'group_dm.received']);
 
-function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; agentIds: string[] }> {
-  const grouped = new Map<string, { nodeKind: string; agentIds: string[] }>();
+function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }> {
+  const grouped = new Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }>();
   for (const row of rows) {
-    const existing = grouped.get(row.nodeId) ?? { nodeKind: row.nodeKind, agentIds: [] };
+    const existing = grouped.get(row.nodeId) ?? { nodeKind: row.nodeKind, nodeRole: row.nodeRole, agentIds: [] };
     existing.agentIds.push(row.agentId);
     grouped.set(row.nodeId, existing);
   }
@@ -48,7 +49,7 @@ async function sendContextToRows(
   const tasks: Promise<unknown>[] = [];
   for (const [nodeId, group] of grouped.entries()) {
     const agentIds = [...new Set(group.agentIds)];
-    if (group.nodeKind === 'fleet_ws') {
+    if ((group.nodeKind === 'ws' && group.nodeRole === 'broker') || group.nodeKind === 'fleet_ws') {
       tasks.push(
         deps.nodeConnections.sendToNode(deps.workspaceId, nodeId, {
           v: 1,
@@ -62,7 +63,7 @@ async function sendContextToRows(
       );
       continue;
     }
-    if (group.nodeKind === 'direct_ws') {
+    if ((group.nodeKind === 'ws' && group.nodeRole === 'direct') || group.nodeKind === 'direct_ws') {
       if (!DELIVERY_ROUTED_EVENTS.has(message.event)) {
         directAgentIds.push(...agentIds);
       }
@@ -72,6 +73,7 @@ async function sendContextToRows(
       workspace_id: deps.workspaceId,
       node_id: nodeId,
       node_kind: group.nodeKind,
+      node_role: group.nodeRole,
       agent_ids: agentIds,
       topic: message.topic,
       event: message.event,
@@ -109,6 +111,7 @@ export async function sendNodeContextForChannel(
       nodeId: agentNodeBindings.nodeId,
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
+      nodeRole: nodes.role,
     })
     .from(channelMembers)
     .innerJoin(agentNodeBindings, and(
@@ -128,7 +131,7 @@ export async function sendNodeContextForChannel(
     ))
     .where(and(
       eq(channelMembers.channelId, args.channelId),
-      inArray(nodes.kind, ['fleet_ws', 'direct_ws']),
+      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
     ));
 
   await sendContextToRows(deps, rows, {
@@ -154,6 +157,7 @@ export async function sendNodePresenceContext(
       nodeId: agentNodeBindings.nodeId,
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
+      nodeRole: nodes.role,
     })
     .from(subjectMemberships)
     .innerJoin(peerMemberships, eq(peerMemberships.channelId, subjectMemberships.channelId))
@@ -174,7 +178,7 @@ export async function sendNodePresenceContext(
     ))
     .where(and(
       eq(subjectMemberships.agentId, args.subjectAgentId),
-      inArray(nodes.kind, ['fleet_ws', 'direct_ws']),
+      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
     ));
 
   await sendContextToRows(deps, rows, {

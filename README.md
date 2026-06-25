@@ -383,12 +383,15 @@ payload matching the `GET /nodes` roster entry (capabilities, tags, `load`,
 `active_agents`/`max_agents`, `handlers_live`, `last_heartbeat_at`), so a single
 event fully refreshes a node's row.
 
-Nodes are first-class delivery hosts and every agent has a node route. A directly
-connected agent is modeled as an implicit `direct_ws` node-of-one, a broker
-controlled agent binds to a `fleet_ws` node over `/node/ws`, and an external HTTP
-endpoint can be registered as an `http_push` node and bound to an agent. HTTP
-push nodes default to one bound agent, which makes the common "one remote agent,
-one endpoint" shape explicit while still allowing larger nodes with `max_agents`.
+Nodes are first-class delivery hosts and every agent has a node route. `kind`
+describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
+(`direct` node-of-one or `broker` node-of-many), and `delivery_adapter`
+describes the wire contract. Directly connected agents are implicit
+`kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
+`kind: "ws", role: "broker"` nodes over `/node/ws`, and both use the same
+`ws.node.v1` `deliver` frame. HTTP push nodes default to one bound agent, which
+makes the common "one remote agent, one endpoint" shape explicit while still
+allowing larger broker-style endpoints with `max_agents`.
 
 ```ts
 const node = await relay.nodes.create({
