@@ -3726,7 +3726,8 @@ paths:
       description: >
         Upgrade to the node-control realtime stream. Direct nodes and broker
         nodes connect here with an `nt_live_*` node token to receive deliver
-        frames, action placement, and scoped context, and to report status.
+        frames, best-effort targeted context.update events, action placement,
+        and scoped context, and to report status.
       tags:
         - Nodes
       parameters:

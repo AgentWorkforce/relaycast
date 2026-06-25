@@ -13,6 +13,7 @@ import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
+import { sendNodeContextToAgents } from '../engine/nodeContext.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -72,6 +73,19 @@ async function fanoutToAgentsForContext(
   const tasks: Promise<unknown>[] = [
     ctx.engine.realtime.deliverToAgents({ workspaceId: ctx.workspaceId, agentIds: unique, event: payload }),
     ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }),
+    sendNodeContextToAgents(
+      {
+        db: ctx.db,
+        nodeConnections: ctx.engine.nodeConnections,
+        realtime: ctx.engine.realtime,
+        workspaceId: ctx.workspaceId,
+      },
+      {
+        agentIds: unique,
+        event: type,
+        data,
+      },
+    ),
   ];
   await Promise.allSettled(tasks);
 }

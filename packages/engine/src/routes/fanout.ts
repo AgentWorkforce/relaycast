@@ -4,7 +4,7 @@ import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { dmConversations, dmParticipants } from '../db/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
-import { sendNodeContextForChannel } from '../engine/nodeContext.js';
+import { sendNodeContextForChannel, sendNodeContextToAgents } from '../engine/nodeContext.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -129,10 +129,26 @@ export async function fanoutToAgents(
   const payload = transformForClient(event);
 
   const unique = [...new Set(agentIds)];
-  await Promise.allSettled([
+  const tasks: Promise<unknown>[] = [
     c.get('engine').realtime.deliverToAgents({ workspaceId, agentIds: unique, event: payload }),
     publishToWorkspaceStream(c, workspaceId, payload),
-  ]);
+  ];
+  if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
+    tasks.push(sendNodeContextToAgents(
+      {
+        db: c.get('db'),
+        nodeConnections: c.get('engine').nodeConnections,
+        realtime: c.get('engine').realtime,
+        workspaceId,
+      },
+      {
+        agentIds: unique,
+        event: type,
+        data,
+      },
+    ));
+  }
+  await Promise.allSettled(tasks);
 }
 
 export async function fanoutToWorkspace(

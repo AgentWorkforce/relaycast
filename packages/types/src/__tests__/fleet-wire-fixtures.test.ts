@@ -135,6 +135,38 @@ describe('fleet wire fixtures', () => {
     });
   });
 
+  it('accepts agent-scoped context updates for node fanout events', () => {
+    expect(
+      parseFleetRelaycastToBrokerMessage({
+        v: 1,
+        type: 'context.update',
+        topic: 'agent',
+        event: 'delivery.failed',
+        channel_id: null,
+        agent_ids: ['agt_sender'],
+        data: {
+          delivery_id: null,
+          message_id: 'msg_1',
+          reason: 'depth_cap',
+          retryable: false,
+        },
+      }),
+    ).toEqual({
+      v: 1,
+      type: 'context.update',
+      topic: 'agent',
+      event: 'delivery.failed',
+      channel_id: null,
+      agent_ids: ['agt_sender'],
+      data: {
+        delivery_id: null,
+        message_id: 'msg_1',
+        reason: 'depth_cap',
+        retryable: false,
+      },
+    });
+  });
+
   it('models action.result as a type-level XOR', () => {
     expectTypeOf<{
       v: 1;

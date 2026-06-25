@@ -304,7 +304,7 @@ export type DeliveryDeferredEvent = z.infer<typeof DeliveryDeferredEventSchema>;
 
 export const DeliveryFailedEventSchema = z.object({
   type: z.literal('delivery.failed'),
-  delivery_id: z.string(),
+  delivery_id: z.string().nullable(),
   message_id: z.string(),
   error: z.string().nullable().optional(),
   retryable: z.boolean().nullable().optional(),

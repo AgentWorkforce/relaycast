@@ -345,7 +345,7 @@ Realtime transport:
 
 - `/v1/ws` is the workspace observer stream and requires an observer token with `stream:read`.
 - `/v1/node/ws` is the node control/delivery stream and requires a node token.
-- Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive realtime events as node `deliver` frames.
+- Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
@@ -405,7 +405,8 @@ describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
 describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
 `kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
-`ws.node.v1` `deliver` frame. HTTP push nodes default to one bound agent, which
+`ws.node.v1` `deliver` frame. Agent-targeted receipt/failure notifications are
+best-effort `context.update` frames on the same node stream. HTTP push nodes default to one bound agent, which
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.
 

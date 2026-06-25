@@ -254,6 +254,38 @@ describe('AgentClient WebSocket integration', () => {
     );
   });
 
+  it('on.deliveryFailed fires from node context.update frames', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.deliveryFailed(handler);
+
+    ws.simulateMessage({
+      v: 1,
+      type: 'context.update',
+      topic: 'agent',
+      event: 'delivery.failed',
+      agent_ids: ['agent_1'],
+      data: {
+        delivery_id: null,
+        message_id: 'm_1',
+        reason: 'depth_cap',
+        retryable: false,
+      },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'delivery.failed',
+      deliveryId: null,
+      messageId: 'm_1',
+      retryable: false,
+    }));
+  });
+
   it('on.dmReceived fires with dm.received event', async () => {
     const agent = createAgent();
     agent.connect();

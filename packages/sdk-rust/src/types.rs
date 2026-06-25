@@ -1459,7 +1459,8 @@ pub struct DeliveryDeferredEvent {
 /// `delivery.failed` — emitted when a delivery handler reports failure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveryFailedEvent {
-    pub delivery_id: String,
+    #[serde(default)]
+    pub delivery_id: Option<String>,
     pub message_id: String,
     #[serde(default)]
     pub error: Option<String>,

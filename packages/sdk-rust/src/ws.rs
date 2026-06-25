@@ -683,7 +683,9 @@ fn normalize_node_deliver(value: serde_json::Value) -> Option<serde_json::Value>
 }
 
 fn normalize_node_message(value: serde_json::Value) -> Option<serde_json::Value> {
-    normalize_node_deliver(value.clone()).or_else(|| normalize_node_action_invoke(value))
+    normalize_node_deliver(value.clone())
+        .or_else(|| normalize_node_context_update(value.clone()))
+        .or_else(|| normalize_node_action_invoke(value))
 }
 
 fn normalize_node_action_invoke(value: serde_json::Value) -> Option<serde_json::Value> {
@@ -701,6 +703,20 @@ fn normalize_node_action_invoke(value: serde_json::Value) -> Option<serde_json::
     }))
 }
 
+fn normalize_node_context_update(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("type")?.as_str()? != "context.update" {
+        return None;
+    }
+    let event_type = value.get("event")?.as_str()?;
+    let data = value.get("data")?.as_object()?;
+    let mut event = data.clone();
+    event.insert(
+        "type".to_string(),
+        serde_json::Value::String(event_type.to_string()),
+    );
+    Some(serde_json::Value::Object(event))
+}
+
 fn truncate_str(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => &s[..idx],
@@ -710,7 +726,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_str;
+    use super::{normalize_node_message, truncate_str};
+    use crate::types::WsEvent;
+    use serde_json::json;
 
     #[test]
     fn truncate_str_respects_utf8_boundaries() {
@@ -724,5 +742,29 @@ mod tests {
     #[test]
     fn truncate_str_returns_short_strings_unchanged() {
         assert_eq!(truncate_str("hello", 200), "hello");
+    }
+
+    #[test]
+    fn normalizes_node_context_update_frames() {
+        let normalized = normalize_node_message(json!({
+            "v": 1,
+            "type": "context.update",
+            "topic": "agent",
+            "event": "delivery.failed",
+            "agent_ids": ["agt_sender"],
+            "data": {
+                "delivery_id": null,
+                "message_id": "msg_1",
+                "reason": "depth_cap",
+                "retryable": false
+            }
+        }))
+        .expect("context.update should normalize");
+
+        assert_eq!(normalized["type"], "delivery.failed");
+        assert_eq!(normalized["delivery_id"], serde_json::Value::Null);
+        let event: WsEvent = serde_json::from_value(normalized)
+            .expect("normalized context update should deserialize as a websocket event");
+        assert!(matches!(event, WsEvent::DeliveryFailed(_)));
     }
 }

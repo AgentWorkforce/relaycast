@@ -377,6 +377,7 @@ describe('Type definitions', () => {
       { type: 'delivery.delivered', delivery_id: 'del_1', message_id: 'm_1' },
       { type: 'delivery.deferred', delivery_id: 'del_1', message_id: 'm_1', available_at: '2026-06-01T00:01:00.000Z' },
       { type: 'delivery.failed', delivery_id: 'del_1', message_id: 'm_1', error: 'boom', retryable: true },
+      { type: 'delivery.failed', delivery_id: null, message_id: 'm_1', reason: 'depth_cap', retryable: false },
     ]) {
       expect(ServerEventSchema.safeParse(event).success).toBe(true);
     }

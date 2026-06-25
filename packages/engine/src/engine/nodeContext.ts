@@ -4,7 +4,7 @@ import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
 import { toFleetWireJson } from './deliveryWire.js';
 
-type NodeContextTopic = 'presence' | 'channel' | 'thread';
+type NodeContextTopic = 'presence' | 'channel' | 'thread' | 'agent';
 
 type NodeContextDeps = {
   db: EngineDb;
@@ -18,12 +18,25 @@ type ScopedNodeRow = {
   agentId: string;
   nodeKind: string;
   nodeRole: string;
+  deliveryAdapter: string | null;
 };
 
-function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }> {
-  const grouped = new Map<string, { nodeKind: string; nodeRole: string; agentIds: string[] }>();
+function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
+  if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
+  if (adapter) return adapter;
+  if (nodeKind === 'ws' || nodeKind === 'fleet_ws' || nodeKind === 'direct_ws') return 'ws.node.v1';
+  return null;
+}
+
+function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; nodeRole: string; deliveryAdapter: string | null; agentIds: string[] }> {
+  const grouped = new Map<string, { nodeKind: string; nodeRole: string; deliveryAdapter: string | null; agentIds: string[] }>();
   for (const row of rows) {
-    const existing = grouped.get(row.nodeId) ?? { nodeKind: row.nodeKind, nodeRole: row.nodeRole, agentIds: [] };
+    const existing = grouped.get(row.nodeId) ?? {
+      nodeKind: row.nodeKind,
+      nodeRole: row.nodeRole,
+      deliveryAdapter: row.deliveryAdapter,
+      agentIds: [],
+    };
     existing.agentIds.push(row.agentId);
     grouped.set(row.nodeId, existing);
   }
@@ -44,7 +57,7 @@ async function sendContextToRows(
   const tasks: Promise<unknown>[] = [];
   for (const [nodeId, group] of grouped.entries()) {
     const agentIds = [...new Set(group.agentIds)];
-    if (group.nodeKind === 'ws' || group.nodeKind === 'fleet_ws' || group.nodeKind === 'direct_ws') {
+    if (normalizeDeliveryAdapter(group.deliveryAdapter, group.nodeKind) === 'ws.node.v1') {
       tasks.push(
         deps.nodeConnections.sendToNode(deps.workspaceId, nodeId, {
           v: 1,
@@ -63,6 +76,7 @@ async function sendContextToRows(
       node_id: nodeId,
       node_kind: group.nodeKind,
       node_role: group.nodeRole,
+      delivery_adapter: group.deliveryAdapter,
       agent_ids: agentIds,
       topic: message.topic,
       event: message.event,
@@ -86,6 +100,7 @@ export async function sendNodeContextForChannel(
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
+      deliveryAdapter: nodes.deliveryAdapter,
     })
     .from(channelMembers)
     .innerJoin(agentNodeBindings, and(
@@ -130,6 +145,7 @@ export async function sendNodePresenceContext(
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
+      deliveryAdapter: nodes.deliveryAdapter,
     })
     .from(agentNodeBindings)
     .innerJoin(agents, and(
@@ -150,6 +166,50 @@ export async function sendNodePresenceContext(
 
   await sendContextToRows(deps, rows, {
     topic: 'presence',
+    event: args.event,
+    data: args.data,
+  });
+}
+
+export async function sendNodeContextToAgents(
+  deps: NodeContextDeps,
+  args: {
+    agentIds: string[];
+    event: string;
+    data: Record<string, unknown>;
+  },
+): Promise<void> {
+  const uniqueAgentIds = [...new Set(args.agentIds)].filter((id) => id.length > 0);
+  if (uniqueAgentIds.length === 0) return;
+
+  const rows = await deps.db
+    .select({
+      nodeId: agentNodeBindings.nodeId,
+      agentId: agentNodeBindings.agentId,
+      nodeKind: nodes.kind,
+      nodeRole: nodes.role,
+      deliveryAdapter: nodes.deliveryAdapter,
+    })
+    .from(agentNodeBindings)
+    .innerJoin(agents, and(
+      eq(agents.workspaceId, deps.workspaceId),
+      eq(agents.id, agentNodeBindings.agentId),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, agentNodeBindings.nodeId),
+    ))
+    .innerJoin(nodes, and(
+      eq(nodes.workspaceId, deps.workspaceId),
+      eq(nodes.id, agentNodeBindings.nodeId),
+    ))
+    .where(and(
+      eq(agentNodeBindings.workspaceId, deps.workspaceId),
+      eq(agentNodeBindings.status, 'active'),
+      inArray(agentNodeBindings.agentId, uniqueAgentIds),
+      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
+    ));
+
+  await sendContextToRows(deps, rows, {
+    topic: 'agent',
     event: args.event,
     data: args.data,
   });
