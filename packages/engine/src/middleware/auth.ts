@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
+import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { jsonError } from '../lib/httpResponse.js';
 import {
   hasAnyObserverScope,
@@ -76,7 +77,7 @@ export function requireWorkspaceRead(
     }
 
     const db = c.get('db');
-    const require: AuthRequire = token.startsWith('ot_live_')
+    const require: AuthRequire = getAuthTokenKind(token) === 'observer'
       ? 'observer'
       : allowAgent || allowNode
         ? 'any'

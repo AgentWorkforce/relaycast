@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
+import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { randomUuid, sha256Hex } from '../lib/crypto.js';
 import { createRequestLogger } from '../lib/logger.js';
 import { deriveClientName, extractOriginActor, extractOriginInfo } from '../lib/origin.js';
@@ -37,8 +38,8 @@ function parseBearerToken(authorization: string | undefined): string | undefined
 }
 
 function tokenType(token: string): 'agent' | 'workspace' | 'unknown' {
-  if (token.startsWith('at_live_')) return 'agent';
-  if (token.startsWith('rk_live_')) return 'workspace';
+  const tokenKind = getAuthTokenKind(token);
+  if (tokenKind === 'agent' || tokenKind === 'workspace') return tokenKind;
   return 'unknown';
 }
 
