@@ -1848,8 +1848,14 @@ pub struct NodeListQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum NodeDeliveryConfig {
-    HttpPush(HttpPushNodeDelivery),
+    HttpPush(Box<HttpPushNodeDelivery>),
     Raw(serde_json::Value),
+}
+
+impl From<HttpPushNodeDelivery> for NodeDeliveryConfig {
+    fn from(delivery: HttpPushNodeDelivery) -> Self {
+        Self::HttpPush(Box::new(delivery))
+    }
 }
 
 /// HTTP push delivery settings for a node.

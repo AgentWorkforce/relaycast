@@ -20,6 +20,8 @@ type DeliveryTarget = {
   deliveryConfig: Record<string, unknown> | null;
 };
 
+const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
+
 function wireMode(mode: string): 'wait' | 'steer' {
   return mode === 'next-tool-call' ? 'steer' : 'wait';
 }
@@ -112,7 +114,18 @@ async function dispatchHttpPush(args: {
 }): Promise<'delivered' | 'acked' | 'failed'> {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
-  if (!url) return 'failed';
+  if (!url) {
+    await args.c.get('db')
+      .update(deliveryRows)
+      .set({
+        dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
+        lastDispatchError: 'invalid http_push delivery config: missing url',
+        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+        updatedAt: new Date(),
+      })
+      .where(eq(deliveryRows.id, args.delivery.id));
+    return 'failed';
+  }
 
   const ackMode = config.ack_mode === 'on_2xx' || config.ack_mode === 'response'
     ? config.ack_mode
@@ -176,7 +189,7 @@ async function dispatchHttpPush(args: {
         .update(deliveryRows)
         .set({
           lastDispatchError: `HTTP ${response.status}`,
-          nextAttemptAt: new Date(Date.now() + 30_000),
+          nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
           updatedAt: new Date(),
         })
         .where(eq(deliveryRows.id, args.delivery.id));
@@ -227,7 +240,7 @@ async function dispatchHttpPush(args: {
       .update(deliveryRows)
       .set({
         lastDispatchError: err instanceof Error ? err.message : 'HTTP delivery failed',
-        nextAttemptAt: new Date(Date.now() + 30_000),
+        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
       .where(eq(deliveryRows.id, args.delivery.id));

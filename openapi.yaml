@@ -528,8 +528,14 @@ components:
               enum: [static_headers]
             headers:
               type: object
+              description: >
+                Static headers to send with HTTP push deliveries. Header names must match
+                RFC token syntax (`^[!#$%&'*+.^_`|~0-9A-Za-z-]+$`) and values must not
+                contain carriage returns or line feeds.
               additionalProperties:
                 type: string
+                description: Header value; must not contain carriage returns or line feeds.
+                pattern: "^[^\\r\\n]*$"
         - type: object
           required: [type, secret]
           properties:
@@ -540,9 +546,13 @@ components:
               type: string
             signature_header:
               type: string
+              pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+              description: Header name that receives the HMAC signature.
               default: X-Relaycast-Signature
             timestamp_header:
               type: string
+              pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+              description: Header name that receives the signing timestamp.
               default: X-Relaycast-Timestamp
             signed_payload:
               type: string

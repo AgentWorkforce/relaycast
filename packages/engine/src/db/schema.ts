@@ -6,6 +6,7 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  foreignKey,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
@@ -65,6 +66,7 @@ export const agents = sqliteTable(
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
   ],
@@ -99,6 +101,7 @@ export const nodes = sqliteTable(
   },
   (table) => [
     uniqueIndex('nodes_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('nodes_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
@@ -129,6 +132,16 @@ export const agentNodeBindings = sqliteTable(
   },
   (table) => [
     uniqueIndex('agent_node_bindings_agent_node_unique').on(table.agentId, table.nodeId),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_node_bindings_agent_workspace_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.workspaceId, table.nodeId],
+      foreignColumns: [nodes.workspaceId, nodes.id],
+      name: 'agent_node_bindings_node_workspace_fk',
+    }).onDelete('cascade'),
     index('idx_agent_node_bindings_workspace').on(table.workspaceId, table.status),
     index('idx_agent_node_bindings_agent').on(table.workspaceId, table.agentId, table.status),
     index('idx_agent_node_bindings_node').on(table.workspaceId, table.nodeId, table.status),

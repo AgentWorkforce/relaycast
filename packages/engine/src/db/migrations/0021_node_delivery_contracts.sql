@@ -4,6 +4,12 @@ ALTER TABLE nodes ADD COLUMN kind TEXT NOT NULL DEFAULT 'fleet_ws';
 ALTER TABLE nodes ADD COLUMN delivery_adapter TEXT NOT NULL DEFAULT 'fleet.ws.v1';
 ALTER TABLE nodes ADD COLUMN delivery_config TEXT DEFAULT NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS agents_workspace_id_unique
+  ON agents(workspace_id, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS nodes_workspace_id_unique
+  ON nodes(workspace_id, id);
+
 CREATE TABLE IF NOT EXISTS agent_node_bindings (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -14,6 +20,8 @@ CREATE TABLE IF NOT EXISTS agent_node_bindings (
   priority INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER,
+  FOREIGN KEY(workspace_id, agent_id) REFERENCES agents(workspace_id, id) ON DELETE CASCADE,
+  FOREIGN KEY(workspace_id, node_id) REFERENCES nodes(workspace_id, id) ON DELETE CASCADE,
   UNIQUE(agent_id, node_id)
 );
 

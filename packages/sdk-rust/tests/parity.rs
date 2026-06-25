@@ -2291,7 +2291,7 @@ async fn nodes_and_triggers_use_expected_endpoints() {
             name: "http-node".to_string(),
             kind: Some("http_push".to_string()),
             delivery_adapter: None,
-            delivery: Some(NodeDeliveryConfig::HttpPush(HttpPushNodeDelivery {
+            delivery: Some(NodeDeliveryConfig::from(HttpPushNodeDelivery {
                 url: "https://receiver.example.test/relaycast".to_string(),
                 ack_mode: Some("manual".to_string()),
                 auth: Some(NodeDeliveryAuth {

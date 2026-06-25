@@ -38,7 +38,7 @@ const deliveryAuthSchema = z.discriminatedUnion('type', [
 ]);
 
 const httpDeliverySchema = z.object({
-  url: z.string().url(),
+  url: z.url(),
   ack_mode: deliveryAckModeSchema.default('manual'),
   auth: deliveryAuthSchema.default({ type: 'none' }),
 });
@@ -82,8 +82,12 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, requireFleetNodes, rateLimit, asy
     if (!parsed.ok) {
       return parsed.response;
     }
-    const kind = parsed.data.kind ?? 'fleet_ws';
-    const delivery = normalizeDelivery(kind, parsed.data.delivery);
+    const existing = await nodeEngine.getNodeByName(c.get('db'), c.get('workspace').id, parsed.data.name);
+    const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'fleet_ws';
+    const deliveryInput = parsed.data.delivery === undefined
+      ? existing?.deliveryConfig ?? null
+      : parsed.data.delivery;
+    const delivery = normalizeDelivery(kind, deliveryInput);
     if (delivery && 'success' in delivery && !delivery.success) {
       return jsonError(c, 'invalid_node_delivery', 'invalid node delivery body', 400);
     }
@@ -100,7 +104,6 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, requireFleetNodes, rateLimit, asy
       ...parsed.data,
       kind,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-      max_agents: parsed.data.max_agents ?? (kind === 'http_push' ? 1 : undefined),
     });
     return jsonCreated(c, result);
   } catch (err: unknown) {

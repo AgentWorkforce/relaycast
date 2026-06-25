@@ -150,7 +150,10 @@ export function buildChannelDeliveryWrite(
           eq(agents.locationType, 'via_node'),
           eq(agents.locationNodeId, agentNodeBindings.nodeId),
         ))
-        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
         .where(
           and(
             eq(channelMembers.channelId, input.channelId),
@@ -217,7 +220,10 @@ export function buildGroupDmDeliveryWrite(
           eq(agents.locationType, 'via_node'),
           eq(agents.locationNodeId, agentNodeBindings.nodeId),
         ))
-        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
         .where(
           and(
             eq(dmParticipants.conversationId, input.conversationId),
@@ -285,7 +291,10 @@ export function buildDirectDeliveryWrite(
           eq(agents.locationType, 'via_node'),
           eq(agents.locationNodeId, agentNodeBindings.nodeId),
         ))
-        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
+        .leftJoin(nodes, and(
+          eq(nodes.workspaceId, input.workspaceId),
+          eq(nodes.id, sql`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`),
+        ))
         .where(and(
           eq(agents.id, input.agentId),
           belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),

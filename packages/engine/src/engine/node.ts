@@ -149,7 +149,9 @@ export async function createNodeToken(
   const now = new Date();
   const kind = data.kind ?? (existing?.kind as NodeKind | undefined) ?? 'fleet_ws';
   const deliveryConfig = data.delivery === undefined ? existing?.deliveryConfig ?? null : data.delivery;
-  const deliveryAdapter = data.delivery_adapter ?? defaultAdapter(kind, deliveryConfig);
+  const deliveryAdapter = data.delivery_adapter
+    ?? (data.delivery === undefined ? existing?.deliveryAdapter : undefined)
+    ?? defaultAdapter(kind, deliveryConfig);
   const maxAgents = data.max_agents ?? existing?.maxAgents ?? (kind === 'http_push' ? 1 : 0);
 
   if (existing) {
