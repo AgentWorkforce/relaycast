@@ -48,8 +48,13 @@ async function visibleMessageLogsForObserver(
   );
 }
 
-function consoleMessageLogEventTypes(log: { conversation_id?: string | null }): string[] {
-  return log.conversation_id ? ['dm.received', 'group_dm.received'] : ['message.created'];
+function consoleMessageLogEventTypes(
+  log: { conversation_id?: string | null; channel_type?: number | null },
+): string[] {
+  if (!log.conversation_id) return ['message.created'];
+  // channel_type 2 = group DM, 1 = 1:1 DM. Classify by the log's real type so an
+  // observer filtering on only one DM event type does not see the other.
+  return log.channel_type === 2 ? ['group_dm.received'] : ['dm.received'];
 }
 
 consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), rateLimit, async (c) => {

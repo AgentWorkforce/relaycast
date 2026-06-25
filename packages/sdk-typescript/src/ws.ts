@@ -463,6 +463,17 @@ export class WsClient {
 
   private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): void {
     const transformed = this.transformServerLikeEvent(eventType, data);
+    // Node delivery is at-least-once, so redelivered frames must be deduped
+    // the same way the standard onmessage flow dedupes server events.
+    if (
+      typeof transformed.id === 'string' &&
+      transformed.id.length > 0 &&
+      typeof transformed.type === 'string'
+    ) {
+      const dedupeKey = `${transformed.type}:${transformed.id}`;
+      if (this.seenEventIds.has(dedupeKey)) return;
+      this.rememberEventId(dedupeKey);
+    }
     const result = ServerEventSchema.safeParse(transformed);
     if (result.success) {
       this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);

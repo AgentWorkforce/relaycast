@@ -88,7 +88,7 @@ export function ChatFeed({
 function usePaginatedFeed(
   scrollRef: RefObject<HTMLDivElement>,
   sorted: MessageWithMeta[],
-  loadOlderPage: () => Promise<number>,
+  loadOlderPage: () => Promise<number | null>,
 ) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
@@ -122,6 +122,12 @@ function usePaginatedFeed(
     prependHeightRef.current = scrollRef.current?.scrollHeight ?? 0;
     try {
       const added = await loadOlderPage();
+      // A null result means the request was stale (conversation switched);
+      // bail without marking the current conversation as exhausted.
+      if (added === null) {
+        prependHeightRef.current = null;
+        return;
+      }
       if (added < PAGE_SIZE) setHasMore(false);
       if (added === 0) prependHeightRef.current = null;
     } catch {
@@ -221,6 +227,7 @@ function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { 
   useEffect(() => {
     const seq = ++requestSeq.current;
     setLoading(true);
+    setMessages([]);
     relay.dmMessages(conversationId, { limit: PAGE_SIZE })
       .then((dms) => {
         if (seq !== requestSeq.current) return;
@@ -239,11 +246,11 @@ function DmMessages({ conversationId, scrollRef, mentionNames, onOpenAgent }: { 
   const sorted = sortMessagesChronologically(messages);
   const oldestId = sorted[0]?.id;
 
-  const loadOlderPage = useCallback(async () => {
-    if (!oldestId) return 0;
+  const loadOlderPage = useCallback(async (): Promise<number | null> => {
+    if (!oldestId) return null;
     const seq = requestSeq.current;
     const older = await relay.dmMessages(conversationId, { before: oldestId, limit: PAGE_SIZE });
-    if (seq !== requestSeq.current) return 0;
+    if (seq !== requestSeq.current) return null;
     if (older.length > 0) {
       setMessages((prev) => [...older.map(toMessageWithMeta), ...prev]);
     }

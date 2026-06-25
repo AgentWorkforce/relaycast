@@ -24,7 +24,7 @@ const searchQuerySchema = PaginationQuerySchema.extend({
 // GET /v1/search?q=...&channel=...&from=...&limit=...&before=...&after=...
 searchRoutes.get(
   '/search',
-  requireWorkspaceRead('search:read'),
+  requireWorkspaceRead('search:read', { allowNode: false }),
   rateLimit,
   async (c) => {
     try {

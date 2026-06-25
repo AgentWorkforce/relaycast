@@ -68,6 +68,7 @@ export const WorkspaceDmConversationSchema = z.object({
   participants: z.array(z.string()),
   last_message: z.object({
     text: z.string(),
+    agent_id: z.string(),
     agent_name: z.string(),
     created_at: z.string(),
   }).nullable(),

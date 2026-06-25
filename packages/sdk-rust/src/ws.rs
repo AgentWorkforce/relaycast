@@ -403,7 +403,10 @@ impl WsClient {
                                             let _ = raw_event_tx.send(event_value.clone());
                                             if node_registration.is_some() {
                                                 if let Some(ack) = node_delivery_ack(&value) {
-                                                    let _ = write.send(Message::Text(ack.to_string())).await;
+                                                    if let Err(err) = write.send(Message::Text(ack.to_string())).await {
+                                                        let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));
+                                                        break;
+                                                    }
                                                 }
                                             }
                                             match serde_json::from_value::<WsEvent>(event_value) {

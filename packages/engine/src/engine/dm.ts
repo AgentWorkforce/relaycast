@@ -180,8 +180,10 @@ export async function sendDm(
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
 
-  const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
+  // Resolve attachments first so invalid attachments fail before any DM
+  // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
+  const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
   const a2aTarget = options.skipA2aIntercept
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);

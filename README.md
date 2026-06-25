@@ -404,7 +404,7 @@ describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
 (`direct` node-of-one or `broker` node-of-many), and `delivery_adapter`
 describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
-`kind: "ws", role: "broker"` nodes over `/node/ws`, and both use the same
+`kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
 `ws.node.v1` `deliver` frame. HTTP push nodes default to one bound agent, which
 makes the common "one remote agent, one endpoint" shape explicit while still
 allowing larger broker-style endpoints with `max_agents`.

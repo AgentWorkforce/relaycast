@@ -64,14 +64,12 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     }
 
     if (token.startsWith('nt_live_')) {
-      if (require === 'workspace') {
-        return unauthorized('Workspace key required (rk_live_...)');
-      }
-      if (require === 'agent') {
-        return unauthorized('Agent token required (at_live_...)');
-      }
-      if (require === 'observer') {
-        return unauthorized('Observer token required (ot_live_...)');
+      // Node tokens are infrastructure transport credentials and must only
+      // authenticate node-only endpoints (`requireNodeToken`). Generic
+      // user/workspace routes (`requireAuth` / `requireWorkspaceRead`) resolve
+      // to `require === 'any'`, which must NOT grant node tokens access.
+      if (require !== 'node') {
+        return unauthorized('Node token cannot perform this operation', 'node_token_forbidden');
       }
       const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
       if (!node) return unauthorized('Invalid node token', 'node_token_invalid');

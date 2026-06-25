@@ -59,6 +59,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
         channelId: messages.channelId,
         body: messages.body,
         createdAt: messages.createdAt,
+        agentId: messages.agentId,
         agentName: agents.name,
       })
       .from(messages)
@@ -90,6 +91,7 @@ export async function listAllDmConversations(db: Db, workspaceId: string): Promi
       last_message: lastMsg
         ? {
           text: lastMsg.body,
+          agent_id: lastMsg.agentId,
           agent_name: lastMsg.agentName,
           created_at: lastMsg.createdAt.toISOString(),
         }

@@ -8,7 +8,12 @@ import { sendNodeContextForChannel } from '../engine/nodeContext.js';
 
 type HonoContext = Context<AppEnv>;
 
-const NODE_DELIVERY_EVENT_TYPES = new Set(['message.created', 'thread.reply']);
+const NODE_DELIVERY_EVENT_TYPES = new Set([
+  'message.created',
+  'thread.reply',
+  'message.read',
+  'message.reacted',
+]);
 
 function buildEvent(
   type: string,

@@ -227,7 +227,7 @@ class WsClient:
                 "input": data.get("input") if isinstance(data.get("input"), dict) else {},
             })
             return True
-        return data.get("type") in {"reply", "error", "pong", "resync_ack"}
+        return False
 
     def on(self, event: str, handler: EventHandler) -> Callable[[], None]:
         """Register an event handler. Returns an unsubscribe callable."""

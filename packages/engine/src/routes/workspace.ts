@@ -12,7 +12,6 @@ import * as tokenRotateEngine from '../engine/tokenRotate.js';
 import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
-  observerAllowsCreatedAt,
   observerAllowsConversation,
   observerAllowsMessage,
 } from '../engine/observerToken.js';
@@ -256,7 +255,7 @@ workspaceRoutes.get('/dm/conversations/all', requireWorkspaceRead('dms:read', { 
     const conversations = (await dmAllEngine.listAllDmConversations(db, workspace.id))
       .filter((conversation) =>
         observerAllowsConversation(observer, conversation.id)
-        && (!conversation.last_message || observerAllowsCreatedAt(observer, conversation.last_message.created_at)));
+        && (!conversation.last_message || observerAllowsMessage(observer, conversation.last_message)));
     return jsonOk(c, conversations);
   } catch (err: unknown) {
     return errorResponse(c, err);

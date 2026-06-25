@@ -12,6 +12,7 @@ import { errorResponse } from '../lib/httpError.js';
 import {
   getChannelObserverResource,
   getObserverTokenFromContext,
+  observerAllowsAgent,
   observerAllowsChannel,
   type ObserverToken,
 } from '../engine/observerToken.js';
@@ -149,6 +150,10 @@ channelRoutes.get(
       }
       const channel = await channelEngine.getChannel(db, workspace.id, name);
       if (!channel) return channelNotFound(c, name);
+      if (observer) {
+        const visibleMembers = channel.members.filter((m) => observerAllowsAgent(observer, m.agent_id));
+        return jsonOk(c, { ...channel, members: visibleMembers, member_count: visibleMembers.length });
+      }
       return jsonOk(c, channel);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -416,7 +421,10 @@ channelRoutes.get(
         workspace.id,
         name,
       );
-      return jsonOk(c, members);
+      const visibleMembers = observer
+        ? members.filter((m) => observerAllowsAgent(observer, m.agent_id))
+        : members;
+      return jsonOk(c, visibleMembers);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

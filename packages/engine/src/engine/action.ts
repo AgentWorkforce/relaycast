@@ -574,7 +574,10 @@ async function applyReleaseCompletionEffect(
     ));
   if (!agent) return;
 
-  await db
+  // Only proceed if an active binding actually flipped to inactive. This guards
+  // against a second release (e.g. a retry) double-decrementing activeAgents for
+  // an agent that was already released from this node.
+  const [deactivatedBinding] = await db
     .update(agentNodeBindings)
     .set({ status: 'inactive', updatedAt: new Date() })
     .where(and(
@@ -582,7 +585,9 @@ async function applyReleaseCompletionEffect(
       eq(agentNodeBindings.nodeId, nodeId),
       eq(agentNodeBindings.agentId, agent.id),
       eq(agentNodeBindings.status, 'active'),
-    ));
+    ))
+    .returning({ id: agentNodeBindings.id });
+  if (!deactivatedBinding) return;
 
   await db
     .update(nodes)
@@ -602,6 +607,10 @@ async function applyReleaseCompletionEffect(
     .update(agents)
     .set({
       status: 'offline',
+      // Clear the node location so the agent is no longer routable to the released
+      // node and a repeat release can't re-decrement the node's active count.
+      locationType: 'self_connected',
+      locationNodeId: null,
       lastSeen: new Date(),
       metadata: {
         ...restMetadata,
@@ -781,6 +790,12 @@ export async function rescheduleNodeInvocation(
       retryAfterAt: opts.retryAfterAt ?? null,
     });
     return dispatched.accepted;
+  }
+  // Release invocations carry no actionId, so targetAgentForInvocation() returns
+  // null. They must never fall through to generic node placement, which could
+  // route a release to an unrelated node that doesn't own the agent.
+  if (isReleaseInvocation(invocation.actionName)) {
+    return false;
   }
   const attempted = attemptedNodeSet(invocation);
   const current = invocation.dispatchedNodeId ? [invocation.dispatchedNodeId] : [];

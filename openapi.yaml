@@ -4174,7 +4174,7 @@ paths:
   /ws:
     get:
       summary: Workspace observer WebSocket stream
-      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token. Prefer Authorization headers when a WebSocket client supports them; query-param tokens can appear in access logs. `file.uploaded` is emitted at upload completion before channel or DM attachment exists; channel and DM visibility are enforced on file REST reads and message attachment reads.
+      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token. The token is supplied via the `token` query parameter; this endpoint does not read an Authorization header. Query-param tokens can appear in access logs. `file.uploaded` is emitted at upload completion before channel or DM attachment exists; channel and DM visibility are enforced on file REST reads and message attachment reads.
       tags:
         - System
       security:
@@ -4182,10 +4182,10 @@ paths:
       parameters:
         - name: token
           in: query
-          required: false
+          required: true
           schema:
             type: string
-          description: Observer token (`ot_live_*`) with `stream:read`; use this only when the client cannot send an Authorization header.
+          description: Observer token (`ot_live_*`) with `stream:read`. This is the only accepted credential for this endpoint; the upgrade reads it from the query string and ignores any Authorization header.
       responses:
         '101':
           description: Switching Protocols (WebSocket)

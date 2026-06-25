@@ -188,17 +188,25 @@ export async function createNodeToken(
   const tokenHash = await sha256Hex(token);
   const existing = await getNodeByName(db, workspaceId, data.name);
   const now = new Date();
+  const existingShape = existing ? normalizeLegacyNodeShape(existing.kind, existing.role) : null;
   const normalized = normalizeLegacyNodeShape(
     data.kind ?? existing?.kind ?? 'ws',
     data.role ?? existing?.role ?? (data.max_agents !== undefined && data.max_agents > 1 ? 'broker' : undefined),
   );
   const kind = normalized.kind;
   const role = normalized.role;
+  // When the node shape (transport or role) changes on update, recompute the
+  // delivery adapter and capacity instead of reusing the stale values: rotating
+  // an http_push node to ws must not keep an http.* adapter, and switching a
+  // broker to direct must not retain a capacity > 1.
+  const shapeChanged = !!existingShape && (existingShape.kind !== kind || existingShape.role !== role);
   const deliveryConfig = data.delivery === undefined ? existing?.deliveryConfig ?? null : data.delivery;
   const deliveryAdapter = data.delivery_adapter
-    ?? (data.delivery === undefined ? normalizeLegacyAdapter(existing?.deliveryAdapter) : undefined)
+    ?? (!shapeChanged && data.delivery === undefined ? normalizeLegacyAdapter(existing?.deliveryAdapter) : undefined)
     ?? defaultAdapter(kind, deliveryConfig);
-  const maxAgents = data.max_agents ?? existing?.maxAgents ?? (role === 'direct' ? 1 : 0);
+  const maxAgents = role === 'direct'
+    ? (data.max_agents ?? 1)
+    : (data.max_agents ?? existing?.maxAgents ?? 0);
   if (role === 'direct' && maxAgents !== 1) {
     throw codedError('Direct nodes can bind at most one agent', 'direct_node_capacity_exceeded', 400);
   }
@@ -1232,7 +1240,10 @@ export async function handleNodeControlMessage(args: {
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        // The success reply was already sent above; keep the pending flush
+        // best-effort so a delivery error cannot trigger a second error reply
+        // for the same request id from the outer catch.
+        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId).catch(() => {});
         return;
       }
       case 'node.heartbeat':

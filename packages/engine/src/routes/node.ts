@@ -181,7 +181,15 @@ nodeRoutes.get('/nodes/:name/agents', requireWorkspaceRead('nodes:read'), rateLi
     if (!result) {
       return jsonNotFound(c, 'node_not_found', 'Node not found');
     }
-    return jsonOk(c, filterNodeAgentsForObserver(getObserverTokenFromContext(c), result));
+    const observer = getObserverTokenFromContext(c);
+    const visibleBindings = filterNodeAgentsForObserver(observer, result);
+    // Mirror the single-node endpoint: an observer scoped to specific agents
+    // must not be able to probe node existence, so hide nodes with no visible
+    // bindings behind the same not-found response.
+    if (observerHasAgentFilter(observer) && visibleBindings.length === 0) {
+      return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    return jsonOk(c, visibleBindings);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

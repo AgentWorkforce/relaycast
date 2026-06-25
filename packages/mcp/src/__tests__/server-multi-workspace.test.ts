@@ -47,7 +47,7 @@ vi.mock('@relaycast/sdk/internal', () => {
         actionName: 'release',
         handlerAgentId: null,
         handlerNodeId: 'node_broker',
-        input: { agent_name: 'test' },
+        input: { name: 'test' },
         status: 'dispatched',
         createdAt: '2026-06-25T00:00:00.000Z',
         dispatchedNodeId: 'node_broker',

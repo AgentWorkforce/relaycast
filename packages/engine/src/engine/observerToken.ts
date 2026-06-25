@@ -456,6 +456,26 @@ function eventCreatedAt(event: Record<string, unknown>): string | Date | null {
     ?? null;
 }
 
+/**
+ * Event types that are intrinsically scoped to a single channel. These must
+ * carry channel metadata to be visible to a channel-filtered observer; if the
+ * metadata is missing they are rejected (fail closed). Workspace-wide events
+ * (e.g. `agent.status.*`, `delivery.*`, `node.*`) are not channel-bound, so the
+ * channel filter only applies to them when they actually reference a channel.
+ */
+function isChannelScopedEventType(type: string): boolean {
+  return (
+    type === 'message.created'
+    || type === 'message.updated'
+    || type === 'message.read'
+    || type === 'message.reacted'
+    || type === 'thread.reply'
+    || type === 'webhook.received'
+    || type.startsWith('member.')
+    || type.startsWith('channel.')
+  );
+}
+
 function eventRequiredScopes(type: string): ObserverScope[] {
   if (type === 'message.created' || type === 'message.updated' || type === 'message.read' || type === 'webhook.received') return ['messages:read'];
   if (type === 'thread.reply') return ['threads:read'];
@@ -505,11 +525,20 @@ export function observerAllowsEvent(
     if (!observerAllowsConversation(observer, conversationId)) {
       return false;
     }
-  } else if (!observerAllowsChannel(observer, {
-    id: typeof event.channel_id === 'string' ? event.channel_id : null,
-    name: eventChannelName(event),
-  })) {
-    return false;
+  } else {
+    const channelId = typeof event.channel_id === 'string' ? event.channel_id : null;
+    const channelName = eventChannelName(event);
+    const hasChannelContext = Boolean(channelId || channelName);
+    // Only apply the channel filter when the event carries channel context, or
+    // when its type is intrinsically channel-scoped (so missing metadata fails
+    // closed). Workspace-wide events with no channel context skip this check so
+    // agent_id matching can still apply.
+    if (
+      (hasChannelContext || isChannelScopedEventType(type))
+      && !observerAllowsChannel(observer, { id: channelId, name: channelName })
+    ) {
+      return false;
+    }
   }
 
   return observerAllowsAgent(observer, eventAgentId(event));
