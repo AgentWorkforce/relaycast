@@ -15,9 +15,8 @@ import {
   getChannelObserverResource,
   getMessageObserverResource,
   getObserverTokenFromContext,
-  hasObserverScope,
   observerAllowsChannel,
-  observerAllowsConversation,
+  observerAllowsMessageResource,
   observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
@@ -248,17 +247,7 @@ messageRoutes.get(
         if (!resource) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
-        if (!observerAllowsMessage(observer, resource)) {
-          return jsonNotFound(c, 'message_not_found', 'Message not found');
-        }
-        if (resource.conversation_id) {
-          if (!hasObserverScope(observer, 'dms:read') || !observerAllowsConversation(observer, resource.conversation_id)) {
-            return jsonNotFound(c, 'message_not_found', 'Message not found');
-          }
-        } else if (!hasObserverScope(observer, 'messages:read') || !observerAllowsChannel(observer, {
-          id: resource.channel_id,
-          name: resource.channel_name,
-        })) {
+        if (!observerAllowsMessageResource(observer, resource, { normalScope: 'messages:read' })) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
       }

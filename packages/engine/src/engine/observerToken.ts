@@ -66,6 +66,9 @@ function parseExpiresAt(value: string | null | undefined): Date | null {
   if (Number.isNaN(date.getTime())) {
     throw codedError('expires_at must be an ISO-8601 timestamp', 'invalid_request', 400);
   }
+  if (date.getTime() <= Date.now()) {
+    throw codedError('expires_at must be in the future', 'invalid_request', 400);
+  }
   return date;
 }
 
@@ -303,6 +306,15 @@ function filterList(values: string[] | undefined): Set<string> | null {
   return values && values.length > 0 ? new Set(values) : null;
 }
 
+function hasChannelOrDmFilter(filters: ObserverTokenFilters): boolean {
+  return Boolean(
+    filters.channel_ids?.length
+    || filters.channel_names?.length
+    || filters.dm_conversation_ids?.length
+    || filters.include_dms,
+  );
+}
+
 export function observerAllowsChannel(
   observer: Pick<ObserverToken, 'filters'> | undefined,
   channel: { id?: string | null; name?: string | null; channel_type?: number | null; channelType?: number | null },
@@ -369,6 +381,33 @@ export function observerAllowsMessage(
     && observerAllowsCreatedAt(observer, message.created_at ?? message.createdAt);
 }
 
+export type MessageObserverResource = {
+  channel_id: string;
+  channel_name: string;
+  channel_type: number;
+  conversation_id: string | null;
+  agent_id: string;
+  created_at: string;
+};
+
+export function observerAllowsMessageResource(
+  observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
+  resource: MessageObserverResource,
+  options: { normalScope?: ObserverScope } = {},
+): boolean {
+  if (!observer) return true;
+  if (!observerAllowsMessage(observer, resource)) return false;
+  if (resource.channel_type !== 0) {
+    return observerAllowsConversation(observer, resource.conversation_id);
+  }
+  if (options.normalScope && !hasObserverScope(observer, options.normalScope)) return false;
+  return observerAllowsChannel(observer, {
+    id: resource.channel_id,
+    name: resource.channel_name,
+    channel_type: resource.channel_type,
+  });
+}
+
 export type FileObserverResource = {
   id: string;
   uploaded_by_id: string;
@@ -389,7 +428,7 @@ export function observerAllowsFile(
   if (!observerAllowsAgent(observer, file.uploaded_by_id)) return false;
   if (!observerAllowsCreatedAt(observer, file.created_at)) return false;
   if (file.attachments.length === 0) {
-    return observerAllowsChannel(observer, {});
+    return !hasChannelOrDmFilter(normalizeObserverFilters(observer.filters));
   }
   return file.attachments.some((attachment) => (
     attachment.conversation_id
@@ -443,6 +482,16 @@ function eventRequiredScopes(type: string): ObserverScope[] {
   return ['activity:read'];
 }
 
+export function observerAllowsAnyEventType(
+  observer: Pick<ObserverToken, 'filters'> | undefined,
+  eventTypes: string[],
+): boolean {
+  if (!observer) return true;
+  const filters = normalizeObserverFilters(observer.filters);
+  if (!filters.event_types?.length) return true;
+  return eventTypes.some((type) => filters.event_types?.includes(type));
+}
+
 export function observerAllowsEvent(
   observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   event: Record<string, unknown>,
@@ -483,11 +532,12 @@ export async function getMessageObserverResource(
   db: Db,
   workspaceId: string,
   messageId: string,
-): Promise<{ channel_id: string; channel_name: string; conversation_id: string | null; agent_id: string; created_at: string } | null> {
+): Promise<MessageObserverResource | null> {
   const [row] = await db
     .select({
       channel_id: channels.id,
       channel_name: channels.name,
+      channel_type: channels.channelType,
       conversation_id: dmConversations.id,
       agent_id: messages.agentId,
       created_at: messages.createdAt,
@@ -608,6 +658,7 @@ export async function filterObserverSearchResults<T extends {
   workspaceId: string,
   observer: Pick<ObserverToken, 'filters' | 'scopes'> | undefined,
   results: T[],
+  opts: { eventTypes?: (result: T) => string[] } = {},
 ): Promise<T[]> {
   if (!observer || results.length === 0) return results;
 
@@ -624,6 +675,7 @@ export async function filterObserverSearchResults<T extends {
   }
 
   return results.filter((result) => {
+    if (opts.eventTypes && !observerAllowsAnyEventType(observer, opts.eventTypes(result))) return false;
     if (!observerAllowsMessage(observer, result)) return false;
     if (result.conversation_id) {
       return observerAllowsConversation(observer, result.conversation_id);

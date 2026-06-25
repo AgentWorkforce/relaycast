@@ -44,7 +44,12 @@ async function visibleMessageLogsForObserver(
     workspaceId,
     observer,
     logs,
+    { eventTypes: consoleMessageLogEventTypes },
   );
+}
+
+function consoleMessageLogEventTypes(log: { conversation_id?: string | null }): string[] {
+  return log.conversation_id ? ['dm.received', 'group_dm.received'] : ['message.created'];
 }
 
 consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), rateLimit, async (c) => {
@@ -73,6 +78,7 @@ consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), ra
         ...item,
         channel_name: item.channel_name ?? undefined,
       })),
+      { eventTypes: consoleMessageLogEventTypes },
     );
 
     const response = visible.map(({ channel_type: _channelType, ...item }) => item);

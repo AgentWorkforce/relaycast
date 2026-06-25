@@ -90,6 +90,7 @@ public struct WorkspaceStats: Codable, Equatable, Sendable {
 public struct ActivityItem: Codable, Equatable, Sendable {
     public let type: String
     public let id: String
+    public let channelId: String?
     public let channelName: String?
     public let conversationId: String?
     public let agentName: String
@@ -153,16 +154,31 @@ public struct ObserverTokenFilters: Codable, Equatable, Sendable {
     }
 }
 
+public enum ObserverScope: String, Codable, Equatable, Sendable {
+    case streamRead = "stream:read"
+    case messagesRead = "messages:read"
+    case threadsRead = "threads:read"
+    case dmsRead = "dms:read"
+    case channelsRead = "channels:read"
+    case searchRead = "search:read"
+    case agentsRead = "agents:read"
+    case nodesRead = "nodes:read"
+    case deliveriesRead = "deliveries:read"
+    case activityRead = "activity:read"
+    case filesRead = "files:read"
+    case reactionsRead = "reactions:read"
+}
+
 public struct CreateObserverTokenRequest: Codable, Equatable, Sendable {
     public var name: String
-    public var scopes: [String]
+    public var scopes: [ObserverScope]
     public var description: String?
     public var filters: ObserverTokenFilters?
     public var expiresAt: String?
 
     public init(
         name: String,
-        scopes: [String],
+        scopes: [ObserverScope],
         description: String? = nil,
         filters: ObserverTokenFilters? = nil,
         expiresAt: String? = nil
@@ -177,14 +193,14 @@ public struct CreateObserverTokenRequest: Codable, Equatable, Sendable {
 
 public struct UpdateObserverTokenRequest: Codable, Equatable, Sendable {
     public var name: String?
-    public var scopes: [String]?
+    public var scopes: [ObserverScope]?
     public var description: String?
     public var filters: ObserverTokenFilters?
     public var expiresAt: String?
 
     public init(
         name: String? = nil,
-        scopes: [String]? = nil,
+        scopes: [ObserverScope]? = nil,
         description: String? = nil,
         filters: ObserverTokenFilters? = nil,
         expiresAt: String? = nil
@@ -201,7 +217,7 @@ public struct ObserverToken: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let description: String?
-    public let scopes: [String]
+    public let scopes: [ObserverScope]
     public let filters: ObserverTokenFilters
     public let status: String
     public let expiresAt: String?
@@ -210,6 +226,37 @@ public struct ObserverToken: Codable, Equatable, Sendable {
     public let revokedAt: String?
     public let lastUsedAt: String?
     public let token: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case scopes
+        case filters
+        case status
+        case expiresAt
+        case createdAt
+        case updatedAt
+        case revokedAt
+        case lastUsedAt
+        case token
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        scopes = try container.decode([ObserverScope].self, forKey: .scopes)
+        filters = try container.decodeIfPresent(ObserverTokenFilters.self, forKey: .filters) ?? ObserverTokenFilters()
+        status = try container.decode(String.self, forKey: .status)
+        expiresAt = try container.decodeIfPresent(String.self, forKey: .expiresAt)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        revokedAt = try container.decodeIfPresent(String.self, forKey: .revokedAt)
+        lastUsedAt = try container.decodeIfPresent(String.self, forKey: .lastUsedAt)
+        token = try container.decodeIfPresent(String.self, forKey: .token)
+    }
 }
 
 // MARK: - Agents

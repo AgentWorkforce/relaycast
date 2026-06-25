@@ -8,7 +8,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { messageLogs, observerTokens } from '../../db/schema.js';
+import { channels, messageLogs, messages, observerTokens } from '../../db/schema.js';
 import { authenticateRealtimeWs } from '../../engine/wsAuth.js';
 
 async function createObserverToken(
@@ -147,6 +147,21 @@ describe('observer tokens', () => {
       ok: false,
       error: { code: 'invalid_request' },
     });
+
+    const expired = await stack.app.request('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: 'already-expired',
+        scopes: ['messages:read'],
+        expires_at: '2000-01-01T00:00:00.000Z',
+      }),
+    });
+    expect(expired.status).toBe(400);
+    await expect(expired.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request' },
+    });
   });
 
   it('returns a conflict for duplicate observer token names in one workspace', async () => {
@@ -280,6 +295,22 @@ describe('observer tokens', () => {
     expect(consoleStatsBody.data.total_messages).toBe(1);
     expect(consoleStatsBody.data.channel_messages).toBe(1);
 
+    const consoleDmOnly = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'console-general-dm-event-only',
+      scopes: ['activity:read'],
+      filters: { channel_names: ['general'], event_types: ['dm.received'] },
+    });
+    const consoleDmOnlyStats = await stack.app.request('/v1/console/stats', {
+      headers: { authorization: `Bearer ${consoleDmOnly.data.token}` },
+    });
+    const consoleDmOnlyStatsBody = await consoleDmOnlyStats.json() as { data: { total_messages: number; channel_messages: number; dm_messages: number } };
+    expect(consoleDmOnlyStats.status).toBe(200);
+    expect(consoleDmOnlyStatsBody.data).toMatchObject({
+      total_messages: 0,
+      channel_messages: 0,
+      dm_messages: 0,
+    });
+
     const consoleAgents = await stack.app.request('/v1/console/agents', {
       headers: { authorization: `Bearer ${consoleObserver.data.token}` },
     });
@@ -360,6 +391,18 @@ describe('observer tokens', () => {
     expect(activityBody.data.map((item) => item.text)).toContain('hidden bob message');
     expect(activityBody.data.map((item) => item.text)).not.toContain('hidden team message');
     expect(activityBody.data.every((item) => item.channel_id === generalChannelBody.data.id)).toBe(true);
+
+    const dmEventActivity = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'activity-dm-event-only',
+      scopes: ['activity:read'],
+      filters: { channel_ids: [generalChannelBody.data.id], event_types: ['dm.received'] },
+    });
+    const dmEventOnlyActivity = await stack.app.request('/v1/activity', {
+      headers: { authorization: `Bearer ${dmEventActivity.data.token}` },
+    });
+    const dmEventOnlyActivityBody = await dmEventOnlyActivity.json() as { data: unknown[] };
+    expect(dmEventOnlyActivity.status).toBe(200);
+    expect(dmEventOnlyActivityBody.data).toHaveLength(0);
 
     const reactionsWithMessageScope = await stack.app.request(`/v1/messages/${generalBody.data.id}/reactions`, {
       headers: { authorization: `Bearer ${token}` },
@@ -469,6 +512,46 @@ describe('observer tokens', () => {
     expect(visibleSearch.status).toBe(200);
     expect(visibleSearchBody.data.map((result) => result.text)).toContain('private note');
 
+    await stack.runtime.deps.db.insert(channels).values({
+      id: 'orphan_private_channel',
+      workspaceId: ws.workspaceId,
+      name: 'orphan-private-channel',
+      channelType: 1,
+    });
+    await stack.runtime.deps.db.insert(messages).values({
+      id: 'orphan_private_message',
+      workspaceId: ws.workspaceId,
+      channelId: 'orphan_private_channel',
+      agentId: alice.agentId,
+      body: 'orphan private body',
+    });
+    const orphanMessageObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'orphan-message-reader',
+      scopes: ['messages:read'],
+    });
+    const orphanMessage = await stack.app.request('/v1/messages/orphan_private_message', {
+      headers: { authorization: `Bearer ${orphanMessageObserver.data.token}` },
+    });
+    expect(orphanMessage.status).toBe(404);
+
+    const orphanReactionObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'orphan-reaction-reader',
+      scopes: ['reactions:read'],
+    });
+    const orphanReactions = await stack.app.request('/v1/messages/orphan_private_message/reactions', {
+      headers: { authorization: `Bearer ${orphanReactionObserver.data.token}` },
+    });
+    expect(orphanReactions.status).toBe(404);
+
+    const orphanThreadObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'orphan-thread-reader',
+      scopes: ['threads:read'],
+    });
+    const orphanThread = await stack.app.request('/v1/messages/orphan_private_message/replies', {
+      headers: { authorization: `Bearer ${orphanThreadObserver.data.token}` },
+    });
+    expect(orphanThread.status).toBe(404);
+
     const underScoped = await createObserverToken(stack, ws.workspaceKey, {
       name: 'channels-only',
       scopes: ['channels:read'],
@@ -551,6 +634,18 @@ describe('observer tokens', () => {
     const aliceFileListBody = await aliceFileList.json() as { data: Array<{ id: string }> };
     expect(aliceFileList.status).toBe(200);
     expect(aliceFileListBody.data.map((file) => file.id).sort()).toEqual([aliceLooseFileId, aliceGeneralFileId].sort());
+
+    const dmScopedFiles = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'dm-scoped-files',
+      scopes: ['files:read'],
+      filters: { include_dms: true },
+    });
+    const dmScopedFileList = await stack.app.request('/v1/files', {
+      headers: { authorization: `Bearer ${dmScopedFiles.data.token}` },
+    });
+    const dmScopedFileListBody = await dmScopedFileList.json() as { data: Array<{ id: string }> };
+    expect(dmScopedFileList.status).toBe(200);
+    expect(dmScopedFileListBody.data.map((file) => file.id)).not.toContain(aliceLooseFileId);
 
     const futureFiles = await createObserverToken(stack, ws.workspaceKey, {
       name: 'future-files',

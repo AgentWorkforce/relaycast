@@ -1082,6 +1082,12 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/ObserverToken'
+        '409':
+          description: Observer token name already exists in this workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List observer tokens
       description: List observer token metadata. Raw token material is not returned.
@@ -1182,6 +1188,12 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/ObserverToken'
+        '409':
+          description: Observer token name already exists in this workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: Revoke observer token
       tags:
@@ -1224,6 +1236,12 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/ObserverToken'
+        '404':
+          description: Observer token not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /agent:
     get:

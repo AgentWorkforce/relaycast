@@ -95,6 +95,7 @@ pub struct ActivityItem {
     #[serde(rename = "type")]
     pub item_type: String,
     pub id: String,
+    pub channel_id: Option<String>,
     pub channel_name: Option<String>,
     pub conversation_id: Option<String>,
     pub agent_name: String,
@@ -136,7 +137,33 @@ pub struct TokenRotateResponse {
 
 // === Observer tokens ===
 
-pub type ObserverScope = String;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ObserverScope {
+    #[serde(rename = "stream:read")]
+    StreamRead,
+    #[serde(rename = "messages:read")]
+    MessagesRead,
+    #[serde(rename = "threads:read")]
+    ThreadsRead,
+    #[serde(rename = "dms:read")]
+    DmsRead,
+    #[serde(rename = "channels:read")]
+    ChannelsRead,
+    #[serde(rename = "search:read")]
+    SearchRead,
+    #[serde(rename = "agents:read")]
+    AgentsRead,
+    #[serde(rename = "nodes:read")]
+    NodesRead,
+    #[serde(rename = "deliveries:read")]
+    DeliveriesRead,
+    #[serde(rename = "activity:read")]
+    ActivityRead,
+    #[serde(rename = "files:read")]
+    FilesRead,
+    #[serde(rename = "reactions:read")]
+    ReactionsRead,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObserverTokenFilters {

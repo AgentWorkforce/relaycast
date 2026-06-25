@@ -12,8 +12,7 @@ import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,
-  observerAllowsChannel,
-  observerAllowsConversation,
+  observerAllowsMessageResource,
   observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
@@ -159,10 +158,7 @@ threadRoutes.get(
         if (!resource) {
           return jsonError(c, 'message_not_found', 'Parent message not found', 404);
         }
-        const allowed = observerAllowsMessage(observer, resource) && (resource.conversation_id
-          ? observerAllowsConversation(observer, resource.conversation_id)
-          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name }));
-        if (!allowed) {
+        if (!observerAllowsMessageResource(observer, resource)) {
           return jsonError(c, 'message_not_found', 'Parent message not found', 404);
         }
       }

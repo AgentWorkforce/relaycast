@@ -234,6 +234,11 @@ workspaceRoutes.get('/activity', requireWorkspaceRead('activity:read', { allowAg
       workspace.id,
       getObserverTokenFromContext(c),
       items,
+      {
+        eventTypes: (item) => (item.conversation_id
+          ? ['dm.received', 'group_dm.received']
+          : ['message.created']),
+      },
     );
     const responseItems = visibleItems.map(({ channel_type: _channelType, ...item }) => item);
     return jsonOk(c, responseItems);

@@ -6,7 +6,7 @@ use relaycast::{
     EmitSessionEventRequest, FailDeliveryRequest, HttpClient, HttpPushNodeDelivery,
     ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
     MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
-    ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest,
+    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions, RegisterActionRequest,
     RelayCast, RelayCastOptions, ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery,
     SpawnAgentRequest, SubmitCertificationRequest, UpdateObserverTokenRequest,
     UpdateRoutingConfigRequest, WebhookTriggerRequest, WsClient, WsClientOptions, WsEvent,
@@ -2178,7 +2178,7 @@ async fn observer_tokens_use_expected_endpoints() {
     let created = relay
         .create_observer_token(CreateObserverTokenRequest {
             name: "dashboard".to_string(),
-            scopes: vec!["stream:read".to_string(), "messages:read".to_string()],
+            scopes: vec![ObserverScope::StreamRead, ObserverScope::MessagesRead],
             description: None,
             filters: Some(ObserverTokenFilters {
                 channel_names: vec!["general".to_string()],
@@ -2226,7 +2226,7 @@ async fn observer_tokens_use_expected_endpoints() {
         .update_observer_token(
             "ot_1",
             UpdateObserverTokenRequest {
-                scopes: Some(vec!["messages:read".to_string()]),
+                scopes: Some(vec![ObserverScope::MessagesRead]),
                 ..Default::default()
             },
         )

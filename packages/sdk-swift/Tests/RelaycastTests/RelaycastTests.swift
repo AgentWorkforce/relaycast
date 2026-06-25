@@ -444,9 +444,11 @@ final class RelaycastTests: XCTestCase {
                     "data": [observerTokenData(token: NSNull())]
                 ])
             case ("GET", "/v1/observer-tokens/ot_1"):
+                var data = observerTokenData(token: NSNull())
+                data.removeValue(forKey: "filters")
                 return jsonResponse([
                     "ok": true,
-                    "data": observerTokenData(token: NSNull())
+                    "data": data
                 ])
             case ("PATCH", "/v1/observer-tokens/ot_1"):
                 let body = try XCTUnwrap(requestBodyData(request))
@@ -473,7 +475,7 @@ final class RelaycastTests: XCTestCase {
 
         let created = try await relay.observerTokens.create(CreateObserverTokenRequest(
             name: "dashboard",
-            scopes: ["stream:read", "messages:read"],
+            scopes: [.streamRead, .messagesRead],
             filters: ObserverTokenFilters(channelNames: ["general"], includeDms: false)
         ))
         XCTAssertEqual(created.token, "ot_live_secret")
@@ -484,9 +486,10 @@ final class RelaycastTests: XCTestCase {
 
         let fetched = try await relay.observerTokens.get("ot_1")
         XCTAssertEqual(fetched.name, "dashboard")
+        XCTAssertNil(fetched.filters.channelNames)
 
-        let updated = try await relay.observerTokens.update("ot_1", data: UpdateObserverTokenRequest(scopes: ["messages:read"]))
-        XCTAssertEqual(updated.scopes, ["stream:read", "messages:read"])
+        let updated = try await relay.observerTokens.update("ot_1", data: UpdateObserverTokenRequest(scopes: [.messagesRead]))
+        XCTAssertEqual(updated.scopes, [.streamRead, .messagesRead])
 
         let rotated = try await relay.observerTokens.rotate("ot_1")
         XCTAssertEqual(rotated.token, "ot_live_rotated")

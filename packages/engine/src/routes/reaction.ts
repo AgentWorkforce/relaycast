@@ -9,9 +9,7 @@ import { channels, dmConversations, messages } from '../db/schema.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,
-  observerAllowsChannel,
-  observerAllowsConversation,
-  observerAllowsMessage,
+  observerAllowsMessageResource,
 } from '../engine/observerToken.js';
 import { fanoutToChannel, fanoutToAgents, getDmParticipantAgentIds } from './fanout.js';
 import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
@@ -235,10 +233,7 @@ reactionRoutes.get(
         if (!resource) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
-        const allowed = observerAllowsMessage(observer, resource) && (resource.conversation_id
-          ? observerAllowsConversation(observer, resource.conversation_id)
-          : observerAllowsChannel(observer, { id: resource.channel_id, name: resource.channel_name }));
-        if (!allowed) {
+        if (!observerAllowsMessageResource(observer, resource)) {
           return jsonNotFound(c, 'message_not_found', 'Message not found');
         }
       }
