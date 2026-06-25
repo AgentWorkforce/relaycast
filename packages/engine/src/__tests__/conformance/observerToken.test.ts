@@ -110,6 +110,19 @@ describe('observer tokens', () => {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
     expect(revoke.status).toBe(204);
+
+    const rotateRevoked = await stack.app.request(`/v1/observer-tokens/${created.data.id}/rotate`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(rotateRevoked.status).toBe(404);
+
+    const updateRevoked = await stack.app.request(`/v1/observer-tokens/${created.data.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ description: 'should not update revoked tokens' }),
+    });
+    expect(updateRevoked.status).toBe(404);
   });
 
   it('rejects non-ISO observer token timestamps', async () => {
@@ -624,7 +637,7 @@ describe('observer tokens', () => {
   it('allows DM stream events when channel filters are present and include_dms is enabled', async () => {
     const ws = await createWorkspace(stack.app, 'observer-stream-dm-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
-    await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
 
     const withoutDmScope = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms-without-scope',
@@ -637,6 +650,18 @@ describe('observer tokens', () => {
       .where(eq(observerTokens.id, withoutDmScope.data.id));
     const withoutDmScopeSock = new FakeSocket();
     stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, withoutDmScopeSock, withoutDmScopeRow);
+
+    const threadWithoutDmScope = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-dm-threads-without-scope',
+      scopes: ['stream:read', 'threads:read'],
+      filters: { channel_names: ['general'], include_dms: true },
+    });
+    const [threadWithoutDmScopeRow] = await stack.runtime.deps.db
+      .select()
+      .from(observerTokens)
+      .where(eq(observerTokens.id, threadWithoutDmScope.data.id));
+    const threadWithoutDmScopeSock = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, threadWithoutDmScopeSock, threadWithoutDmScopeRow);
 
     const hiddenDm = await stack.app.request('/v1/dm', {
       method: 'POST',
@@ -653,13 +678,22 @@ describe('observer tokens', () => {
     });
     expect(hiddenDmReaction.status).toBe(201);
 
+    const hiddenDmReply = await stack.app.request(`/v1/messages/${hiddenDmBody.data.id}/replies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ text: 'dm thread reply hidden without dms:read' }),
+    });
+    expect(hiddenDmReply.status).toBe(201);
+
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
+    expect(threadWithoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
 
     const observer = await createObserverToken(stack, ws.workspaceKey, {
       name: 'stream-dms',
-      scopes: ['stream:read', 'dms:read', 'reactions:read'],
+      scopes: ['stream:read', 'dms:read', 'reactions:read', 'threads:read'],
       filters: { channel_names: ['general'], include_dms: true },
     });
 
@@ -685,6 +719,13 @@ describe('observer tokens', () => {
     });
     expect(visibleDmReaction.status).toBe(201);
 
+    const visibleDmReply = await stack.app.request(`/v1/messages/${dmBody.data.id}/replies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ text: 'dm thread reply visible with dms:read' }),
+    });
+    expect(visibleDmReply.status).toBe(201);
+
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sock.ofType('dm.received')).toHaveLength(1);
     expect(sock.ofType('dm.received')[0]).toMatchObject({
@@ -696,7 +737,15 @@ describe('observer tokens', () => {
       message_id: dmBody.data.id,
       emoji: 'thumbsup',
     });
+    expect(sock.ofType('thread.reply')).toHaveLength(1);
+    expect(sock.ofType('thread.reply')[0]).toMatchObject({
+      conversation_id: expect.any(String),
+      parent_id: dmBody.data.id,
+      message: { text: 'dm thread reply visible with dms:read' },
+    });
     expect(withoutDmScopeSock.ofType('dm.received')).toHaveLength(0);
     expect(withoutDmScopeSock.ofType('message.reacted')).toHaveLength(0);
+    expect(withoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
+    expect(threadWithoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
   });
 });

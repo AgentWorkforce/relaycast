@@ -347,6 +347,7 @@ Realtime transport:
 - `/v1/node/ws` is the node control/delivery stream and requires a node token.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive realtime events as node `deliver` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
+- `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
 Core endpoints:
 

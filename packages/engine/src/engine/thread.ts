@@ -122,6 +122,7 @@ export async function postReply(
     id: reply.id,
     channel_id: reply.channelId,
     channel_name: ch?.name,
+    ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
     thread_id: reply.threadId,

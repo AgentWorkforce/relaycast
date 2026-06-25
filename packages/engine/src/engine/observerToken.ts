@@ -209,7 +209,11 @@ export async function updateObserverToken(
     [row] = await db
       .update(observerTokens)
       .set(update)
-      .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+      .where(and(
+        eq(observerTokens.workspaceId, workspaceId),
+        eq(observerTokens.id, id),
+        eq(observerTokens.status, 'active'),
+      ))
       .returning();
   } catch (err: unknown) {
     if (isObserverTokenNameConflict(err)) observerTokenNameConflict();
@@ -229,7 +233,11 @@ export async function rotateObserverToken(
   const [row] = await db
     .update(observerTokens)
     .set({ tokenHash, updatedAt: new Date(), lastUsedAt: null })
-    .where(and(eq(observerTokens.workspaceId, workspaceId), eq(observerTokens.id, id)))
+    .where(and(
+      eq(observerTokens.workspaceId, workspaceId),
+      eq(observerTokens.id, id),
+      eq(observerTokens.status, 'active'),
+    ))
     .returning();
   return row ? publicObserverToken(row, token) : null;
 }
@@ -280,7 +288,7 @@ export async function getActiveObserverTokenByHash(
 }
 
 export function hasObserverScope(observer: Pick<ObserverToken, 'scopes'>, scope: ObserverScope): boolean {
-  return (observer.scopes ?? []).includes(scope);
+  return publicScopes(observer.scopes).includes(scope);
 }
 
 export function hasAnyObserverScope(observer: Pick<ObserverToken, 'scopes'>, scopes: ObserverScope[]): boolean {
@@ -504,7 +512,19 @@ export async function getFileObserverResource(
   workspaceId: string,
   fileId: string,
 ): Promise<FileObserverResource | null> {
-  const [file] = await db
+  return (await getFileObserverResources(db, workspaceId, [fileId])).get(fileId) ?? null;
+}
+
+export async function getFileObserverResources(
+  db: Db,
+  workspaceId: string,
+  fileIds: string[],
+): Promise<Map<string, FileObserverResource>> {
+  const ids = [...new Set(fileIds)].filter((id) => id.length > 0);
+  const resources = new Map<string, FileObserverResource>();
+  if (ids.length === 0) return resources;
+
+  const files = await db
     .select({
       id: fileRows.id,
       uploaded_by_id: fileRows.uploadedBy,
@@ -512,14 +532,23 @@ export async function getFileObserverResource(
     })
     .from(fileRows)
     .where(and(
-      eq(fileRows.id, fileId),
       eq(fileRows.workspaceId, workspaceId),
       ne(fileRows.status, 'deleted'),
+      inArray(fileRows.id, ids),
     ));
-  if (!file) return null;
+  for (const file of files) {
+    resources.set(file.id, {
+      id: file.id,
+      uploaded_by_id: file.uploaded_by_id,
+      created_at: file.created_at.toISOString(),
+      attachments: [],
+    });
+  }
+  if (resources.size === 0) return resources;
 
   const attachments = await db
     .select({
+      file_id: messageAttachments.fileId,
       channel_id: channels.id,
       channel_name: channels.name,
       channel_type: channels.channelType,
@@ -530,16 +559,22 @@ export async function getFileObserverResource(
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, channels.id))
     .where(and(
-      eq(messageAttachments.fileId, fileId),
       eq(messages.workspaceId, workspaceId),
+      inArray(messageAttachments.fileId, [...resources.keys()]),
     ));
 
-  return {
-    id: file.id,
-    uploaded_by_id: file.uploaded_by_id,
-    created_at: file.created_at.toISOString(),
-    attachments,
-  };
+  for (const attachment of attachments) {
+    const resource = resources.get(attachment.file_id);
+    if (!resource) continue;
+    resource.attachments.push({
+      channel_id: attachment.channel_id,
+      channel_name: attachment.channel_name,
+      channel_type: attachment.channel_type,
+      conversation_id: attachment.conversation_id,
+    });
+  }
+
+  return resources;
 }
 
 export async function filterObserverFileResults<T extends { id: string }>(
@@ -549,14 +584,11 @@ export async function filterObserverFileResults<T extends { id: string }>(
   results: T[],
 ): Promise<T[]> {
   if (!observer || results.length === 0) return results;
-  const visible: T[] = [];
-  for (const result of results) {
-    const resource = await getFileObserverResource(db, workspaceId, result.id);
-    if (resource && observerAllowsFile(observer, resource)) {
-      visible.push(result);
-    }
-  }
-  return visible;
+  const resources = await getFileObserverResources(db, workspaceId, results.map((result) => result.id));
+  return results.filter((result) => {
+    const resource = resources.get(result.id);
+    return Boolean(resource && observerAllowsFile(observer, resource));
+  });
 }
 
 export async function filterObserverSearchResults<T extends {

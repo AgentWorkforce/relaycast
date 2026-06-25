@@ -807,7 +807,7 @@ components:
             created_after:
               type: string
               format: date-time
-          description: Filters narrow the resources visible to a scoped observer token. Channel filters apply to channel-scoped resources; workspace-wide presence/status events have no channel and are matched by `agent_ids` when present.
+          description: Filters narrow the resources visible to a scoped observer token. Channel filters apply to channel-scoped resources; workspace-wide presence/status events have no channel and are matched by `agent_ids` when present. `file.uploaded` stream events are upload-time events emitted before message attachment, so channel and DM filters are enforced on later file REST reads and message attachment reads instead.
         status:
           type: string
           enum: [active, revoked]
@@ -4004,7 +4004,7 @@ paths:
   /ws:
     get:
       summary: Workspace observer WebSocket stream
-      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token. Prefer Authorization headers when a WebSocket client supports them; query-param tokens can appear in access logs.
+      description: Upgrade to the workspace observer realtime stream with an `ot_live_*` token that has `stream:read`. Workspace, agent, and node tokens cannot open this stream; agent SDK realtime uses `/v1/node/ws` with a direct node token. Prefer Authorization headers when a WebSocket client supports them; query-param tokens can appear in access logs. `file.uploaded` is emitted at upload completion before channel or DM attachment exists; channel and DM visibility are enforced on file REST reads and message attachment reads.
       tags:
         - System
       security:
