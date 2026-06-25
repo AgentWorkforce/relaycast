@@ -612,6 +612,7 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
     routeNodeId: row.delivery.routeNodeId,
     routeNodeKind: row.delivery.routeNodeKind,
     deliveryAdapter: row.delivery.deliveryAdapter,
+    nextAttemptAt: row.delivery.nextAttemptAt,
   };
 }
 

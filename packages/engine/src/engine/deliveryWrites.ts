@@ -28,6 +28,7 @@ export interface DeliveryFanoutRecord {
   routeNodeId: string | null;
   routeNodeKind: string | null;
   deliveryAdapter: string | null;
+  nextAttemptAt?: Date | null;
 }
 
 export interface DeliveryRejectionRecord {
@@ -157,6 +158,7 @@ export function buildChannelDeliveryWrite(
         .where(
           and(
             eq(channelMembers.channelId, input.channelId),
+            eq(channelMembers.isMuted, false),
             ne(channelMembers.agentId, input.senderAgentId),
             belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
@@ -322,6 +324,7 @@ export async function fetchDeliveryFanoutRecords(
       routeNodeId: deliveries.routeNodeId,
       routeNodeKind: deliveries.routeNodeKind,
       deliveryAdapter: deliveries.deliveryAdapter,
+      nextAttemptAt: deliveries.nextAttemptAt,
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -341,6 +344,7 @@ export async function fetchDeliveryFanoutRecords(
     routeNodeId: row.routeNodeId,
     routeNodeKind: row.routeNodeKind,
     deliveryAdapter: row.deliveryAdapter,
+    nextAttemptAt: row.nextAttemptAt,
   }));
 }
 
@@ -381,6 +385,7 @@ export async function fetchChannelDeliveryOutcomes(
       .innerJoin(agents, eq(channelMembers.agentId, agents.id))
       .where(and(
         eq(channelMembers.channelId, input.channelId),
+        eq(channelMembers.isMuted, false),
         ne(channelMembers.agentId, input.senderAgentId),
       )),
   ]);

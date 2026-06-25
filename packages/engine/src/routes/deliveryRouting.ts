@@ -245,6 +245,15 @@ async function dispatchHttpPush(args: {
   }
 
   try {
+    const claimConditions = [
+      eq(deliveryRows.workspaceId, args.ctx.workspaceId),
+      eq(deliveryRows.id, args.delivery.id),
+      eq(deliveryRows.status, 'queued'),
+    ];
+    if (args.delivery.nextAttemptAt) {
+      claimConditions.push(eq(deliveryRows.nextAttemptAt, args.delivery.nextAttemptAt));
+    }
+
     const started = await args.ctx.db
       .update(deliveryRows)
       .set({
@@ -253,11 +262,7 @@ async function dispatchHttpPush(args: {
         nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
-      .where(and(
-        eq(deliveryRows.workspaceId, args.ctx.workspaceId),
-        eq(deliveryRows.id, args.delivery.id),
-        eq(deliveryRows.status, 'queued'),
-      ))
+      .where(and(...claimConditions))
       .returning({ id: deliveryRows.id });
     if (started.length === 0) return 'failed';
 

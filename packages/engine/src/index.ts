@@ -49,6 +49,12 @@ export * as schema from './db/schema.js';
 export { deliverEvent } from './engine/eventDelivery.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
 
+// HTTP push delivery redrive: queue/cron-backed deployments call this from a
+// scheduled handler to retry queued `http_push` deliveries whose
+// `next_attempt_at` is due. The Node adapter wires the same helper to its local
+// maintenance interval for self-hosted runtimes.
+export { sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
+
 // `pending_events` outbox primitives for queue-backed deployments: the queue
 // consumer settles rows (`completeEvent` / `failEvent` / `rescheduleEvent`)
 // and a scheduled sweep re-enqueues lost ones (`sweepPendingEvents`) and

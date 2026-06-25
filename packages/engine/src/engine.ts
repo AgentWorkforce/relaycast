@@ -120,7 +120,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     if (authResult.scope === 'agent') {
       await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
-        force: true,
         online: true,
       });
       // Register the agent online (fire-and-forget)

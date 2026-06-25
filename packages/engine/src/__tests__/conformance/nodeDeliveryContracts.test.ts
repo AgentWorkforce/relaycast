@@ -1,13 +1,13 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { nodes } from '../../db/schema.js';
+import { agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
 import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
 
 describe('node delivery contracts', () => {
@@ -363,6 +363,48 @@ describe('node delivery contracts', () => {
     expect(body.data.max_agents).toBe(1);
   });
 
+  it('does not clobber an explicit http_push binding when the agent opens /ws', async () => {
+    const ws = await createWorkspace(stack.app, 'http-node-direct-ws');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'persistent-http-node',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const [httpNode] = await stack.runtime.deps.db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(and(
+        eq(nodes.workspaceId, ws.workspaceId),
+        eq(nodes.name, node.data.name),
+      ));
+    expect(httpNode?.id).toBeTruthy();
+
+    const wsAttempt = await stack.app.request(`/v1/ws?token=${encodeURIComponent(bob.token)}`);
+    expect(wsAttempt.status).toBe(426);
+
+    const [agentRow] = await stack.runtime.deps.db
+      .select({ locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(and(
+        eq(agents.workspaceId, ws.workspaceId),
+        eq(agents.id, bob.agentId),
+      ));
+    const activeBindings = await stack.runtime.deps.db
+      .select({ nodeId: agentNodeBindings.nodeId })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, bob.agentId),
+        eq(agentNodeBindings.status, 'active'),
+      ));
+
+    expect(agentRow?.locationNodeId).toBe(httpNode.id);
+    expect(activeBindings.map((binding) => binding.nodeId)).toEqual([httpNode.id]);
+  });
+
   it('records retry diagnostics when an http_push config is invalid at dispatch time', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
@@ -548,6 +590,57 @@ describe('node delivery contracts', () => {
         }),
       ]);
     });
+  });
+
+  it('claims a due http_push delivery only once across overlapping redrive sweeps', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('', { status: 503 }));
+    const ws = await createWorkspace(stack.app, 'http-node-redrive-claim');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'redrive-claim-http-node',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'retry once' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ nextAttemptAt: new Date(0) })
+      .where(and(
+        eq(deliveries.workspaceId, ws.workspaceId),
+        eq(deliveries.agentId, bob.agentId),
+      ));
+
+    let releaseFetch: ((response: Response) => void) | undefined;
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
+      releaseFetch = resolve;
+    }));
+
+    const sweep1 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+    const sweep2 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+
+    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    releaseFetch?.(new Response('', { status: 202 }));
+    await Promise.all([sweep1, sweep2]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not let a slow http_push receiver block self-connected recipients', async () => {

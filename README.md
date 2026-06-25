@@ -415,6 +415,9 @@ on any 2xx HTTP response, and `response` acks when the response body declares an
 Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
 token, so pure webhook endpoints should use `on_2xx` or `response` unless they can
 securely hold that token.
+Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
+handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
+self-host adapter runs that sweep on its local maintenance timer.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id`, emits `action.invoked` to the handler agent, and completion emits

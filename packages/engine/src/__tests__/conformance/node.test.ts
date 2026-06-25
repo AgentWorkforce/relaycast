@@ -7,7 +7,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, agents, deliveries, nodes } from '../../db/schema.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
@@ -211,6 +211,56 @@ describe('node adapter conformance', () => {
       const delivered = bobSock.ofType('message.created');
       expect(delivered).toHaveLength(1);
       expect(typeof delivered[0].agent_seq).toBe('number');
+    });
+
+    it('does not create or push message deliveries for muted channel members', async () => {
+      const ws = await createWorkspace(stack.app, 'muted-delivery-ws');
+      const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+      const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+      const createRes = await stack.app.request('/v1/channels', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ name: 'team-chat' }),
+      });
+      expect(createRes.status).toBeLessThan(300);
+      for (const token of [alice.token, bob.token]) {
+        const joinRes = await stack.app.request('/v1/channels/team-chat/join', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(joinRes.status).toBeLessThan(300);
+      }
+
+      const muteRes = await stack.app.request('/v1/channels/team-chat/mute', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(muteRes.status).toBeLessThan(300);
+
+      const bobSock = new FakeSocket();
+      stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+      bobSock.received.length = 0;
+
+      const postRes = await stack.app.request('/v1/channels/team-chat/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'muted hello' }),
+      });
+      expect(postRes.status).toBeLessThan(300);
+      const posted = await postRes.json() as { data: { id: string } };
+
+      const rows = await stack.runtime.deps.db
+        .select({ id: deliveries.id })
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.messageId, posted.data.id),
+          eq(deliveries.agentId, bob.agentId),
+        ));
+
+      expect(rows).toHaveLength(0);
+      expect(bobSock.ofType('message.created')).toHaveLength(0);
     });
   });
 

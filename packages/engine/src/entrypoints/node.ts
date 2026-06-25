@@ -148,7 +148,6 @@ export function startServer(options: StartServerOptions): RunningServer {
 
         if (authResult.scope === 'agent') {
           await ensureDirectNodeForAgent(db, authResult.workspace.id, authResult.agent, {
-            force: true,
             online: true,
           });
           wss.handleUpgrade(req, socket, head, (ws) => {

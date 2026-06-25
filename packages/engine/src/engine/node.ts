@@ -499,7 +499,8 @@ async function ensureDirectNodeForAgentInTx(
   const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, agent.id);
   const nodeId = directNodeIdForAgent(agent.id);
   const alreadyDirect = activeNodeIds.includes(nodeId);
-  if (!opts.force && activeNodeIds.length > 0 && !alreadyDirect) {
+  const explicitNodeIds = activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId);
+  if (!opts.force && explicitNodeIds.length > 0) {
     return null;
   }
 
@@ -508,6 +509,42 @@ async function ensureDirectNodeForAgentInTx(
     .select()
     .from(nodes)
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+
+  if (!opts.force && alreadyDirect && existingDirect && agent.locationNodeId === nodeId) {
+    const update: Partial<typeof nodes.$inferInsert> = {
+      name: directNodeNameForAgent(agent.id),
+      kind: 'direct_ws',
+      deliveryAdapter: 'direct.ws.v1',
+      deliveryConfig: {
+        implicit: true,
+        agent_id: agent.id,
+        agent_name: agent.name,
+      },
+      capabilities: [],
+      maxAgents: 1,
+      activeAgents: 1,
+      tags: ['implicit', 'direct_ws'],
+      version: 'implicit',
+      handlersLive: false,
+      load: 0,
+    };
+    if (opts.online) {
+      update.status = 'online';
+      update.lastHeartbeatAt = now;
+    }
+    const [updatedDirect] = await db
+      .update(nodes)
+      .set(update)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+      .returning();
+    return publicNode(updatedDirect ?? {
+      ...existingDirect,
+      ...update,
+      activeAgents: 1,
+      status: opts.online ? 'online' : existingDirect.status,
+      lastHeartbeatAt: opts.online ? now : existingDirect.lastHeartbeatAt,
+    });
+  }
 
   let directNode = existingDirect;
   if (!directNode) {
@@ -570,7 +607,7 @@ async function ensureDirectNodeForAgentInTx(
     sessionRef: opts.sessionRef ?? null,
     deactivateExisting: true,
   });
-  await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+  await releaseNodeAgentSlots(db, workspaceId, explicitNodeIds);
   await db
     .update(nodes)
     .set({
