@@ -49,7 +49,10 @@ function channelNotFound(c: Parameters<typeof jsonNotFound>[0], name: string) {
   return jsonNotFound(c, 'channel_not_found', `Channel "${name}" not found`);
 }
 
-function observerChannelAllowed(observer: ObserverToken | undefined, channel: { id?: string | null; name?: string | null }) {
+function observerChannelAllowed(
+  observer: ObserverToken | undefined,
+  channel: { id?: string | null; name?: string | null; channel_type?: number | null; channelType?: number | null },
+) {
   return observerAllowsChannel(observer, channel);
 }
 
@@ -137,13 +140,15 @@ channelRoutes.get(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getChannelObserverResource(db, workspace.id, name);
+        if (!resource || !observerChannelAllowed(observer, resource)) {
+          return channelNotFound(c, name);
+        }
+      }
       const channel = await channelEngine.getChannel(db, workspace.id, name);
-      if (!channel) {
-        return channelNotFound(c, name);
-      }
-      if (!observerChannelAllowed(getObserverTokenFromContext(c), channel)) {
-        return channelNotFound(c, name);
-      }
+      if (!channel) return channelNotFound(c, name);
       return jsonOk(c, channel);
     } catch (err: unknown) {
       return errorResponse(c, err);

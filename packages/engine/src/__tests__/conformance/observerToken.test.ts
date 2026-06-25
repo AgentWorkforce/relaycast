@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
@@ -25,6 +26,15 @@ async function createObserverToken(
     error?: { code: string; message: string };
   };
   return { res, data: json.data!, body: json };
+}
+
+function dmChannelName(workspaceId: string, agentA: string, agentB: string): string {
+  const [first, second] = [agentA, agentB].sort();
+  const pairKey = createHash('sha256')
+    .update(`${workspaceId}:${first}:${second}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `dm-${pairKey}`;
 }
 
 describe('observer tokens', () => {
@@ -293,7 +303,7 @@ describe('observer tokens', () => {
   it('requires the right read scopes and enforces DM opt-in filters', async () => {
     const ws = await createWorkspace(stack.app, 'observer-dm-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
-    await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
 
     const dm = await stack.app.request('/v1/dm', {
       method: 'POST',
@@ -325,6 +335,26 @@ describe('observer tokens', () => {
     const visibleBody = await visible.json() as { data: Array<{ id: string }> };
     expect(visible.status).toBe(200);
     expect(visibleBody.data).toHaveLength(1);
+
+    const derivedDmChannelName = dmChannelName(ws.workspaceId, alice.agentId, bob.agentId);
+    const channelPathObserver = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'channel-path-dm-bypass',
+      scopes: ['messages:read', 'channels:read'],
+    });
+    const channelPathMessages = await stack.app.request(`/v1/channels/${derivedDmChannelName}/messages`, {
+      headers: { authorization: `Bearer ${channelPathObserver.data.token}` },
+    });
+    expect(channelPathMessages.status).toBe(404);
+
+    const channelPathDetails = await stack.app.request(`/v1/channels/${derivedDmChannelName}`, {
+      headers: { authorization: `Bearer ${channelPathObserver.data.token}` },
+    });
+    expect(channelPathDetails.status).toBe(404);
+
+    const channelPathMembers = await stack.app.request(`/v1/channels/${derivedDmChannelName}/members`, {
+      headers: { authorization: `Bearer ${channelPathObserver.data.token}` },
+    });
+    expect(channelPathMembers.status).toBe(404);
 
     const dmSearchWithoutScope = await createObserverToken(stack, ws.workspaceKey, {
       name: 'dm-search-without-scope',

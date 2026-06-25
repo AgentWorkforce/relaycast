@@ -12,6 +12,7 @@ import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
 import {
+  getChannelObserverResource,
   getMessageObserverResource,
   getObserverTokenFromContext,
   hasObserverScope,
@@ -200,12 +201,15 @@ messageRoutes.get(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const channelName = c.req.param('name');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getChannelObserverResource(db, workspace.id, channelName);
+        if (!resource || !observerAllowsChannel(observer, resource)) {
+          return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
+        }
+      }
       const channel = await channelEngine.getChannel(db, workspace.id, channelName);
       if (!channel) {
-        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
-      }
-      const observer = getObserverTokenFromContext(c);
-      if (!observerAllowsChannel(observer, channel)) {
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 

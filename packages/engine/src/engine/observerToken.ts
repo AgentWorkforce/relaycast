@@ -284,9 +284,11 @@ function filterList(values: string[] | undefined): Set<string> | null {
 
 export function observerAllowsChannel(
   observer: Pick<ObserverToken, 'filters'> | undefined,
-  channel: { id?: string | null; name?: string | null },
+  channel: { id?: string | null; name?: string | null; channel_type?: number | null; channelType?: number | null },
 ): boolean {
   if (!observer) return true;
+  const channelType = channel.channel_type ?? channel.channelType;
+  if (channelType != null && channelType !== 0) return false;
   const filters = normalizeObserverFilters(observer.filters);
   const ids = filterList(filters.channel_ids);
   const names = filterList(filters.channel_names);
@@ -430,9 +432,9 @@ export async function getChannelObserverResource(
   db: Db,
   workspaceId: string,
   name: string,
-): Promise<{ id: string; name: string } | null> {
+): Promise<{ id: string; name: string; channel_type: number } | null> {
   const [row] = await db
-    .select({ id: channels.id, name: channels.name })
+    .select({ id: channels.id, name: channels.name, channel_type: channels.channelType })
     .from(channels)
     .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, name)));
   return row ?? null;
