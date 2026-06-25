@@ -800,6 +800,12 @@ export async function registerAgentViaNode(
   message: FleetAgentRegisterMessage,
 ): Promise<AgentRegisterReplyData> {
   return runAtomic(db, async (tx) => {
+    const [node] = await tx
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
@@ -852,11 +858,24 @@ export async function registerAgentViaNode(
 
     await autoJoinGeneral(tx, workspaceId, result.id);
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, result.id);
-    await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
-      sessionRef: message.session_ref ?? null,
-      deactivateExisting: true,
-    });
-    await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+    const targetWasActive = activeNodeIds.includes(nodeId);
+    let reservedTargetSlot = false;
+    try {
+      if (!targetWasActive) {
+        await reserveNodeAgentSlot(tx, workspaceId, node);
+        reservedTargetSlot = true;
+      }
+      await upsertAgentNodeBinding(tx, workspaceId, result, nodeId, {
+        sessionRef: message.session_ref ?? null,
+        deactivateExisting: true,
+      });
+      await releaseNodeAgentSlots(tx, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+    } catch (err) {
+      if (reservedTargetSlot) {
+        await releaseNodeAgentSlots(tx, workspaceId, [nodeId]);
+      }
+      throw err;
+    }
     return {
       agent_id: result.id,
       name: result.name,
@@ -925,6 +944,11 @@ export async function reconcileInventory(
     agent.invocation_id ? [agent.invocation_id] : []
   )));
   let completedInvocations = 0;
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
 
   // Pre-validate every item against the current state BEFORE mutating anything,
   // so a conflict on a later item can't leave earlier items partially
@@ -965,22 +989,35 @@ export async function reconcileInventory(
     const existing = existingByName.get(item.name);
     if (existing) {
       const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
-      await db
-        .update(agents)
-        .set({
-          status: 'active',
-          lastSeen: new Date(),
-          locationType: 'via_node',
-          locationNodeId: nodeId,
-          originNodeId: existing.originNodeId ?? nodeId,
+      const targetWasActive = activeNodeIds.includes(nodeId);
+      let reservedTargetSlot = false;
+      try {
+        if (!targetWasActive) {
+          await reserveNodeAgentSlot(db, workspaceId, node);
+          reservedTargetSlot = true;
+        }
+        await db
+          .update(agents)
+          .set({
+            status: 'active',
+            lastSeen: new Date(),
+            locationType: 'via_node',
+            locationNodeId: nodeId,
+            originNodeId: existing.originNodeId ?? nodeId,
+            sessionRef: item.session_ref ?? existing.sessionRef,
+          })
+          .where(eq(agents.id, existing.id));
+        await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
           sessionRef: item.session_ref ?? existing.sessionRef,
-        })
-        .where(eq(agents.id, existing.id));
-      await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
-        sessionRef: item.session_ref ?? existing.sessionRef,
-        deactivateExisting: true,
-      });
-      await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+          deactivateExisting: true,
+        });
+        await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+      } catch (err) {
+        if (reservedTargetSlot) {
+          await releaseNodeAgentSlots(db, workspaceId, [nodeId]);
+        }
+        throw err;
+      }
     }
 
     if (!item.invocation_id) continue;

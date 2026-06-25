@@ -571,6 +571,12 @@ describe('node delivery contracts', () => {
       expect(items[0]?.next_attempt_at).toBeTruthy();
     });
 
+    const unbind = await stack.app.request(`/v1/nodes/${node.data.name}/agents/bob`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(unbind.status).toBe(204);
+
     const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, {
       now: new Date(Date.now() + 31_000),
     });

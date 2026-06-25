@@ -99,9 +99,11 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
 
   const telemetry = options.telemetry ?? new NoopTelemetrySink();
   const realtime = new InProcessRealtime(db);
+  const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
   const presence = new InProcessPresence(realtime, {
     ...options.presence,
     onPresenceEvent: async (workspaceId, event) => {
+      await upstreamOnPresenceEvent?.(workspaceId, event);
       const subjectAgentId = typeof event.subject_agent_id === 'string' ? event.subject_agent_id : null;
       const eventType = typeof event.type === 'string' ? event.type : null;
       if (!subjectAgentId || !eventType) return;

@@ -337,6 +337,46 @@ describe('node adapter conformance', () => {
       return { sock, handle };
     }
 
+    it('enforces node capacity for agents registered over node control', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-agent-register-capacity');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_capacity_one',
+        name: 'capacity-one',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 1,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-1',
+        type: 'agent.register',
+        name: 'worker-one',
+        session_ref: 'pty://alpha/worker-one',
+      }));
+      expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+        id: 'agent-register-1',
+        ok: true,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-2',
+        type: 'agent.register',
+        name: 'worker-two',
+        session_ref: 'pty://alpha/worker-two',
+      }));
+      expect(alpha.sock.ofType('error').at(-1)).toMatchObject({
+        id: 'agent-register-2',
+        code: 'node_capacity_exceeded',
+      });
+
+      const [node] = await stack.runtime.handle.db
+        .select({ activeAgents: nodes.activeAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_capacity_one')));
+      expect(node?.activeAgents).toBe(1);
+    });
+
     it('registers a node, dispatches spawn, completes from action.result, fires triggers, and reschedules on node death', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-node-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

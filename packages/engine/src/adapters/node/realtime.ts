@@ -320,6 +320,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           if (this.presence) {
             await this.presence.disconnect(workspaceId, agentId).catch(() => {});
           }
+          if (conn.sockets.size !== 0) return;
           await markDirectNodeOfflineForAgent(this.db, workspaceId, agentId).catch(() => {});
         }
       },

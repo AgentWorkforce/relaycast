@@ -1595,6 +1595,10 @@ public enum NodeDeliveryConfig: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
+        if let delivery = try? container.decode(HttpPushNodeDelivery.self) {
+            self = .httpPush(delivery)
+            return
+        }
         self = .raw(try container.decode([String: JSONValue].self))
     }
 

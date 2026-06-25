@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { transformForClient } from './wsTransform.js';
 import type { EngineDb } from '../ports/database.js';
@@ -20,6 +20,8 @@ type ScopedNodeRow = {
   agentId: string;
   nodeKind: string;
 };
+
+const DELIVERY_ROUTED_EVENTS = new Set(['message.created', 'thread.reply', 'dm.received', 'group_dm.received']);
 
 function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; agentIds: string[] }> {
   const grouped = new Map<string, { nodeKind: string; agentIds: string[] }>();
@@ -61,8 +63,19 @@ async function sendContextToRows(
       continue;
     }
     if (group.nodeKind === 'direct_ws') {
-      directAgentIds.push(...agentIds);
+      if (!DELIVERY_ROUTED_EVENTS.has(message.event)) {
+        directAgentIds.push(...agentIds);
+      }
+      continue;
     }
+    console.warn('[node.context] unsupported node kind for context update', {
+      workspace_id: deps.workspaceId,
+      node_id: nodeId,
+      node_kind: group.nodeKind,
+      agent_ids: agentIds,
+      topic: message.topic,
+      event: message.event,
+    });
   }
   if (directAgentIds.length > 0) {
     tasks.push(
@@ -113,7 +126,10 @@ export async function sendNodeContextForChannel(
       eq(nodes.workspaceId, deps.workspaceId),
       eq(nodes.id, agentNodeBindings.nodeId),
     ))
-    .where(eq(channelMembers.channelId, args.channelId));
+    .where(and(
+      eq(channelMembers.channelId, args.channelId),
+      inArray(nodes.kind, ['fleet_ws', 'direct_ws']),
+    ));
 
   await sendContextToRows(deps, rows, {
     topic: args.topic ?? 'channel',
@@ -156,7 +172,10 @@ export async function sendNodePresenceContext(
       eq(nodes.workspaceId, deps.workspaceId),
       eq(nodes.id, agentNodeBindings.nodeId),
     ))
-    .where(eq(subjectMemberships.agentId, args.subjectAgentId));
+    .where(and(
+      eq(subjectMemberships.agentId, args.subjectAgentId),
+      inArray(nodes.kind, ['fleet_ws', 'direct_ws']),
+    ));
 
   await sendContextToRows(deps, rows, {
     topic: 'presence',

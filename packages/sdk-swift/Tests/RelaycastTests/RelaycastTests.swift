@@ -311,7 +311,11 @@ final class RelaycastTests: XCTestCase {
                         "delivery": [
                             "url": "https://receiver.example.test/relaycast",
                             "ack_mode": "manual",
-                            "auth": ["type": "hmac_sha256", "secret": "[redacted]"]
+                            "auth": [
+                                "type": "hmac_sha256",
+                                "secret": "[redacted]",
+                                "signature_header": "X-Custom-Signature"
+                            ]
                         ],
                         "capabilities": [],
                         "tags": [],
@@ -392,6 +396,12 @@ final class RelaycastTests: XCTestCase {
         ))
         XCTAssertEqual(created.token, "nt_live_test")
         XCTAssertEqual(created.deliveryAdapter, "http.hmac.v1")
+        guard case .httpPush(let createdDelivery) = created.delivery else {
+            return XCTFail("expected typed http_push delivery")
+        }
+        XCTAssertEqual(createdDelivery.url, "https://receiver.example.test/relaycast")
+        XCTAssertEqual(createdDelivery.ackMode, "manual")
+        XCTAssertEqual(createdDelivery.auth?.signatureHeader, "X-Custom-Signature")
 
         let bindings = try await relay.nodes.listAgents("http-node")
         XCTAssertEqual(bindings[0].agentName, "billing-agent")

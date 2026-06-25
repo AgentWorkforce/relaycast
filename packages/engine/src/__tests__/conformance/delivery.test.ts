@@ -61,6 +61,24 @@ describe('durable delivery api', () => {
     return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
   }
 
+  async function waitForAssertion(
+    assertion: () => void | Promise<void>,
+    timeoutMs = 1_000,
+  ) {
+    const started = Date.now();
+    let lastError: unknown;
+    while (Date.now() - started < timeoutMs) {
+      try {
+        await assertion();
+        return;
+      } catch (err) {
+        lastError = err;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    throw lastError;
+  }
+
   async function enrollAndAttachNode(
     ws: { workspaceKey: string; workspaceId: string },
     opts: { id?: string; name?: string } = {},
@@ -511,7 +529,7 @@ describe('durable delivery api', () => {
     }).data.unread_channels).toHaveLength(0);
   });
 
-  it('re-resolves a recipient location before fanout so a transport switch does not drop the delivery', async () => {
+  it('honors recorded route metadata when live binding changes before fanout', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-reroute');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const node = await enrollAndAttachNode(ws);
@@ -579,9 +597,9 @@ describe('durable delivery api', () => {
       injection_mode: 'wait',
     });
 
-    expect(node.sock.ofType('deliver')).toHaveLength(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(1);
     expect(bobSock.ofType('delivery.accepted')).toHaveLength(0);
-    expect(bobSock.ofType('message.created')).toHaveLength(1);
+    expect(bobSock.ofType('message.created')).toHaveLength(0);
     expect(await listDeliveries(bob.token)).toHaveLength(1);
     expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });
@@ -679,6 +697,42 @@ describe('durable delivery api', () => {
     const replayed = latestDeliverOfType(reconnected.sock, 'dm.received');
     expect(replayed).toMatchObject({ msg_id: messageId });
     expect(replayed.payload).toEqual(live.payload);
+  });
+
+  it('delivers thread replies on DM conversations to participants', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-dm-thread-reply');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const bobSock = new FakeSocket();
+    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+
+    const root = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ to: 'bob', text: 'dm root' }),
+    });
+    expect(root.status).toBe(201);
+    const rootId = ((await root.json()) as { data: { id: string } }).data.id;
+    bobSock.received.length = 0;
+
+    const reply = await stack.app.request(`/v1/messages/${rootId}/replies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'dm thread reply' }),
+    });
+    expect(reply.status).toBe(201);
+    const replyId = ((await reply.json()) as { data: { id: string } }).data.id;
+
+    await waitForAssertion(() => {
+      expect(bobSock.ofType('thread.reply')).toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            id: replyId,
+            text: 'dm thread reply',
+          }),
+        }),
+      ]);
+    });
   });
 
   it('redelivers a group DM with the same deliver payload after broker death/reconnect', async () => {

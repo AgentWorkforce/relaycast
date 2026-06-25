@@ -46,6 +46,10 @@ export async function publishWorkspaceEvent(
   channelId?: string,
 ): Promise<void> {
   const workspaceId = c.get('workspace').id;
+  if (channelId) {
+    await fanoutToChannel(c, channelId, type, data, undefined, workspaceId);
+    return;
+  }
   const event = buildEvent(type, workspaceId, data, channelId);
   await publishToWorkspaceStream(c, workspaceId, transformForClient(event));
 }

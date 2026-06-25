@@ -157,6 +157,42 @@ async function resolveLiveLocations(
   return byAgent;
 }
 
+async function resolveRecordedTargets(
+  ctx: RoutingContext,
+  deliveries: DeliveryFanoutRecord[],
+): Promise<Map<string, DeliveryTarget>> {
+  const routeNodeIds = [...new Set(deliveries.flatMap((delivery) => (
+    delivery.routeNodeId ? [delivery.routeNodeId] : []
+  )))];
+  const nodesById = new Map<string, typeof nodes.$inferSelect>();
+  if (routeNodeIds.length > 0) {
+    const rows = await ctx.db
+      .select()
+      .from(nodes)
+      .where(and(
+        eq(nodes.workspaceId, ctx.workspaceId),
+        inArray(nodes.id, routeNodeIds),
+      ));
+    for (const row of rows) {
+      nodesById.set(row.id, row);
+    }
+  }
+
+  const byDelivery = new Map<string, DeliveryTarget>();
+  for (const delivery of deliveries) {
+    if (!delivery.routeNodeId) continue;
+    const node = nodesById.get(delivery.routeNodeId);
+    byDelivery.set(delivery.id, {
+      locationType: 'via_node',
+      locationNodeId: delivery.routeNodeId,
+      nodeKind: delivery.routeNodeKind ?? node?.kind ?? null,
+      deliveryAdapter: delivery.deliveryAdapter ?? node?.deliveryAdapter ?? null,
+      deliveryConfig: (node?.deliveryConfig as Record<string, unknown> | null | undefined) ?? null,
+    });
+  }
+  return byDelivery;
+}
+
 function publicHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
   if (!headers) return {};
   const result: Record<string, string> = {};
@@ -327,14 +363,17 @@ async function dispatchHttpPush(args: {
 async function routeOneDeliveryOutcome(
   ctx: RoutingContext,
   liveLocations: Map<string, DeliveryTarget>,
+  recordedTargets: Map<string, DeliveryTarget>,
   delivery: DeliveryFanoutRecord,
   eventType: string,
   eventData: Record<string, unknown>,
 ): Promise<void> {
+  const recordedTarget = recordedTargets.get(delivery.id);
   const liveLocation = liveLocations.get(delivery.agentId);
-  const locationType = liveLocation?.locationType ?? delivery.locationType;
-  const locationNodeId = liveLocation?.locationNodeId ?? delivery.locationNodeId;
-  const nodeKind = liveLocation?.nodeKind ?? (locationNodeId ? 'fleet_ws' : null);
+  const target = recordedTarget ?? liveLocation;
+  const locationType = target?.locationType ?? delivery.locationType;
+  const locationNodeId = target?.locationNodeId ?? delivery.locationNodeId;
+  const nodeKind = target?.nodeKind ?? (locationNodeId ? 'fleet_ws' : null);
 
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'fleet_ws') {
     const sent = await ctx.engine.nodeConnections.sendToNode(ctx.workspaceId, locationNodeId, buildDeliverFrame({
@@ -350,8 +389,8 @@ async function routeOneDeliveryOutcome(
     return;
   }
 
-  if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && liveLocation) {
-    const result = await dispatchHttpPush({ ctx, delivery, target: liveLocation, eventType, eventData });
+  if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
+    const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
       await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
     }
@@ -377,8 +416,9 @@ async function routeDeliveryOutcomesForContext(
   if (deliveries.length === 0) return;
 
   const liveLocations = await resolveLiveLocations(ctx, deliveries);
+  const recordedTargets = await resolveRecordedTargets(ctx, deliveries);
   await Promise.allSettled(deliveries.map((delivery) => (
-    routeOneDeliveryOutcome(ctx, liveLocations, delivery, eventType, eventData)
+    routeOneDeliveryOutcome(ctx, liveLocations, recordedTargets, delivery, eventType, eventData)
   )));
 }
 
