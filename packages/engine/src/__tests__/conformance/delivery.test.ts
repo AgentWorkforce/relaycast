@@ -15,6 +15,7 @@ import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
+import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 
 /**
  * Durable delivery API conformance: listing the queued inbox, and the
@@ -673,6 +674,45 @@ describe('durable delivery api', () => {
     const replayed = latestDeliverOfType(reconnected.sock, 'message.created');
     expect(replayed).toMatchObject({ msg_id: messageId });
     expect(replayed.payload).toEqual(live.payload);
+  });
+
+  it('exports node reconnect delivery replay for adapters that own node.register', async () => {
+    expect(deliverPendingToNode).toBeTypeOf('function');
+
+    const ws = await createWorkspace(stack.app, 'mailbox-node-exported-reconnect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'external reconnect replay' }),
+    });
+    expect(post.status).toBe(201);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+    });
+
+    await node.handle.handleClose();
+
+    const replaySock = new FakeSocket();
+    stack.runtime.realtime.attachNodeSocket(ws.workspaceId, node.id, replaySock);
+    const replayedCount = await handleNodeReconnect(
+      stack.runtime.deps.db,
+      stack.runtime.deps.nodeConnections,
+      ws.workspaceId,
+      node.id,
+    );
+
+    expect(replayedCount).toBe(1);
+    expect(deliverFramesOfType(replaySock, 'message.created')).toEqual([
+      expect.objectContaining({
+        agent: bob.name,
+        msg_id: messageId,
+      }),
+    ]);
   });
 
   it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {

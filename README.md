@@ -442,6 +442,9 @@ securely hold that token.
 Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
 handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
 self-host adapter runs that sweep on its local maintenance timer.
+Adapters that terminate `/v1/node/ws` outside the engine request handler should call
+`handleNodeReconnect(db, nodeConnections, workspaceId, nodeId)` from `@relaycast/engine`
+after `node.register` succeeds so queued node deliveries replay on reconnect.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id` and dispatches an `action.invoke` frame to the handler's node. Agent
