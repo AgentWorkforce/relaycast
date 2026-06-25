@@ -60,6 +60,10 @@ import type {
   SkillSearchResult,
   ActionDefinition,
   RegisterActionRequest,
+  BindAgentToNodeRequest,
+  CreateNodeRequest,
+  CreateNodeResponse,
+  NodeAgentBinding,
   NodeListQuery,
   NodeRosterEntry,
   Trigger,
@@ -755,6 +759,9 @@ export class RelayCast {
   };
 
   nodes = {
+    create: (data: CreateNodeRequest): Promise<CreateNodeResponse> =>
+      this.client.post('/v1/nodes', data),
+
     list: (query?: NodeListQuery): Promise<NodeRosterEntry[]> => {
       const params: Record<string, string> = {};
       if (query?.capability) params.capability = query.capability;
@@ -764,6 +771,15 @@ export class RelayCast {
 
     get: (name: string): Promise<NodeRosterEntry> =>
       this.client.get(`/v1/nodes/${encodeURIComponent(name)}`),
+
+    listAgents: (name: string): Promise<NodeAgentBinding[]> =>
+      this.client.get(`/v1/nodes/${encodeURIComponent(name)}/agents`),
+
+    bindAgent: (name: string, data: BindAgentToNodeRequest): Promise<NodeAgentBinding> =>
+      this.client.post(`/v1/nodes/${encodeURIComponent(name)}/agents`, data),
+
+    unbindAgent: (name: string, agentName: string): Promise<void> =>
+      this.client.delete(`/v1/nodes/${encodeURIComponent(name)}/agents/${encodeURIComponent(agentName)}`),
   };
 
   triggers = {

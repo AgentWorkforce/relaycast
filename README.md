@@ -386,6 +386,39 @@ Enable the fleet-node control surface per workspace with
 `await relay.workspace.fleetNodes.set(true)`; call
 `relay.workspace.fleetNodes.inherit()` to return to the deployment default.
 
+Nodes are first-class delivery hosts. A broker-controlled fleet node registers over
+`/node/ws`; an external HTTP endpoint can also be registered as an `http_push` node and
+bound to an agent. HTTP push nodes default to one bound agent, which makes the common
+"one remote agent, one endpoint" shape explicit while still allowing larger nodes with
+`max_agents`.
+
+```ts
+const node = await relay.nodes.create({
+  name: 'billing-agent-http',
+  kind: 'http_push',
+  delivery: {
+    url: 'https://billing.example.com/relaycast',
+    ackMode: 'manual',
+    auth: {
+      type: 'hmac_sha256',
+      secret: process.env.BILLING_RELAYCAST_SECRET!,
+      signatureHeader: 'X-Billing-Signature',
+      timestampHeader: 'X-Billing-Timestamp',
+      signedPayload: 'timestamp.body',
+      prefix: 'sha256=',
+    },
+  },
+});
+
+await relay.nodes.bindAgent(node.name, { agentName: 'billing-agent' });
+```
+
+The node delivery contract controls how Relaycast sends future deliveries for bound
+agents. Built-in HTTP push auth modes are `none`, `bearer`, `static_headers`, and
+`hmac_sha256`; stored secrets and header values are redacted from node roster responses.
+`ackMode: 'manual'` leaves deliveries delivered until the agent acks them, `on_2xx` acks
+on any 2xx HTTP response, and `response` acks when the response body declares an ack.
+
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id`, emits `action.invoked` to the handler agent, and completion emits
 `action.completed` or `action.failed` to listeners and subscriptions. Action discovery

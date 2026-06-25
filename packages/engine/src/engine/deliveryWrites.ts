@@ -1,10 +1,12 @@
 import { and, eq, isNull, ne, sql, inArray } from 'drizzle-orm';
 import type { SQLiteInsertSelectQueryBuilder } from 'drizzle-orm/sqlite-core';
 import {
+  agentNodeBindings,
   agents,
   channelMembers,
   deliveries,
   dmParticipants,
+  nodes,
 } from '../db/schema.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
 
@@ -23,6 +25,9 @@ export interface DeliveryFanoutRecord {
   status: string;
   locationType: string;
   locationNodeId: string | null;
+  routeNodeId: string | null;
+  routeNodeKind: string | null;
+  deliveryAdapter: string | null;
 }
 
 export interface DeliveryRejectionRecord {
@@ -117,8 +122,14 @@ export function buildChannelDeliveryWrite(
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
           seq: nextSeqSql(input.workspaceId, channelMembers.agentId),
-          locationType: agents.locationType,
-          locationNodeId: agents.locationNodeId,
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
           expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
@@ -132,6 +143,14 @@ export function buildChannelDeliveryWrite(
         })
         .from(channelMembers)
         .innerJoin(agents, eq(channelMembers.agentId, agents.id))
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, channelMembers.agentId),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
         .where(
           and(
             eq(channelMembers.channelId, input.channelId),
@@ -170,8 +189,14 @@ export function buildGroupDmDeliveryWrite(
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
           seq: nextSeqSql(input.workspaceId, dmParticipants.agentId),
-          locationType: agents.locationType,
-          locationNodeId: agents.locationNodeId,
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
           expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
@@ -185,6 +210,14 @@ export function buildGroupDmDeliveryWrite(
         })
         .from(dmParticipants)
         .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, dmParticipants.agentId),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
         .where(
           and(
             eq(dmParticipants.conversationId, input.conversationId),
@@ -225,8 +258,14 @@ export function buildDirectDeliveryWrite(
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
           seq: nextSeqSql(input.workspaceId, agents.id),
-          locationType: agents.locationType,
-          locationNodeId: agents.locationNodeId,
+          locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
+          locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
+          routeNodeKind: nodes.kind,
+          deliveryAdapter: nodes.deliveryAdapter,
+          dispatchAttempts: sql<number>`0`,
+          nextAttemptAt: sql<null>`null`,
+          lastDispatchError: sql<null>`null`,
           expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
@@ -239,6 +278,14 @@ export function buildDirectDeliveryWrite(
           updatedAt: sql<null>`null`,
         })
         .from(agents)
+        .leftJoin(agentNodeBindings, and(
+          eq(agentNodeBindings.workspaceId, input.workspaceId),
+          eq(agentNodeBindings.agentId, agents.id),
+          eq(agentNodeBindings.status, 'active'),
+          eq(agents.locationType, 'via_node'),
+          eq(agents.locationNodeId, agentNodeBindings.nodeId),
+        ))
+        .leftJoin(nodes, eq(agentNodeBindings.nodeId, nodes.id))
         .where(and(
           eq(agents.id, input.agentId),
           belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
@@ -263,6 +310,9 @@ export async function fetchDeliveryFanoutRecords(
       status: deliveries.status,
       locationType: deliveries.locationType,
       locationNodeId: deliveries.locationNodeId,
+      routeNodeId: deliveries.routeNodeId,
+      routeNodeKind: deliveries.routeNodeKind,
+      deliveryAdapter: deliveries.deliveryAdapter,
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -279,6 +329,9 @@ export async function fetchDeliveryFanoutRecords(
     status: row.status,
     locationType: row.locationType,
     locationNodeId: row.locationNodeId,
+    routeNodeId: row.routeNodeId,
+    routeNodeKind: row.routeNodeKind,
+    deliveryAdapter: row.deliveryAdapter,
   }));
 }
 

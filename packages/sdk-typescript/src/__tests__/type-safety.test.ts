@@ -5,12 +5,14 @@ import { RelayCast } from '../relay.js';
 import type {
   ActionInvocation,
   CompleteInvocationRequest,
+  CreateNodeResponse,
   InvokeActionResult,
   DirectoryAgent,
   DirectorySearchResult,
   DmConversation,
   JsonValue,
   MessageWithMeta,
+  NodeAgentBinding,
   NodeCapability,
   NodeRosterEntry,
   RouteResult,
@@ -45,6 +47,12 @@ describe('AgentClient return types', () => {
       .toEqualTypeOf<Promise<RoutingConfig>>();
     expectTypeOf<ReturnType<RelayCast['updateRoutingConfig']>>()
       .toEqualTypeOf<Promise<RoutingConfig>>();
+    expectTypeOf<ReturnType<RelayCast['nodes']['create']>>()
+      .toEqualTypeOf<Promise<CreateNodeResponse>>();
+    expectTypeOf<ReturnType<RelayCast['nodes']['listAgents']>>()
+      .toEqualTypeOf<Promise<NodeAgentBinding[]>>();
+    expectTypeOf<ReturnType<RelayCast['nodes']['bindAgent']>>()
+      .toEqualTypeOf<Promise<NodeAgentBinding>>();
   });
 
   it('keeps fleet node + action types aligned with the runtime wire contract', () => {

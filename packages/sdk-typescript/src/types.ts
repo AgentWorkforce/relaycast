@@ -298,9 +298,35 @@ export interface ActionInvocation {
 
 // === Fleet nodes / triggers ===
 
+export type NodeKind = 'fleet_ws' | 'http_push' | 'direct_ws' | 'poll';
+export type NodeAckMode = 'manual' | 'on_2xx' | 'response';
+
+export type NodeDeliveryAuth =
+  | { type: 'none' }
+  | { type: 'bearer'; token: string }
+  | { type: 'static_headers'; headers: Record<string, string> }
+  | {
+    type: 'hmac_sha256';
+    secret: string;
+    signatureHeader?: string;
+    timestampHeader?: string;
+    signedPayload?: 'body' | 'timestamp.body';
+    encoding?: 'hex';
+    prefix?: string;
+  };
+
+export interface HttpPushNodeDelivery {
+  url: string;
+  ackMode?: NodeAckMode;
+  auth?: NodeDeliveryAuth;
+}
+
 export interface NodeRosterEntry {
   id: string;
   name: string;
+  kind: NodeKind | string;
+  deliveryAdapter: string;
+  delivery: Record<string, unknown> | null;
   capabilities: NodeCapability[];
   tags: string[];
   version: string;
@@ -312,6 +338,42 @@ export interface NodeRosterEntry {
   maxAgents: number;
   lastHeartbeatAt: string | null;
   createdAt: string;
+}
+
+export interface CreateNodeRequest {
+  nodeId?: string;
+  name: string;
+  kind?: NodeKind;
+  deliveryAdapter?: string;
+  delivery?: HttpPushNodeDelivery | Record<string, unknown> | null;
+  capabilities?: string[];
+  maxAgents?: number;
+  tags?: string[];
+  version?: string;
+}
+
+export interface CreateNodeResponse extends NodeRosterEntry {
+  token: string;
+}
+
+export interface NodeAgentBinding {
+  id: string;
+  agentId: string;
+  agentName: string;
+  nodeId: string;
+  nodeName: string;
+  nodeKind: NodeKind | string;
+  status: string;
+  sessionRef: string | null;
+  priority: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface BindAgentToNodeRequest {
+  agentName: string;
+  sessionRef?: string | null;
+  priority?: number;
 }
 
 export interface NodeListQuery {
