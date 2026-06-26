@@ -38,6 +38,8 @@ Cargo.lock
 
 # Relaycast local runtime generated state
 .agent-relay/
+# agent-relay broker workspace state (churns on every broker run)
+**/.relay/
 
 # Staged local binary artifacts for npm packaging
 packages/sdk-typescript/bin/*
