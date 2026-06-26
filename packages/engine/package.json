@@ -39,6 +39,10 @@
       "types": "./dist/agent-disconnect.d.ts",
       "import": "./dist/agent-disconnect.js"
     },
+    "./node-invocations": {
+      "types": "./dist/node-invocations.d.ts",
+      "import": "./dist/node-invocations.js"
+    },
     "./node-control": {
       "types": "./dist/node-control.d.ts",
       "import": "./dist/node-control.js"

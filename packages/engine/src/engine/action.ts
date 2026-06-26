@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
@@ -18,6 +18,11 @@ type RetryableInvocationRow = Pick<
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
+const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
+
+export interface SweepTimedOutInvocationsOptions {
+  timeoutMs?: number;
+}
 
 function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
   if (typeof capability === 'string') return capability;
@@ -33,6 +38,14 @@ function isReleaseInvocation(actionName: string): boolean {
   return actionName === 'release';
 }
 
+function dispatchActionNameForInvocation(actionName: string, input: Record<string, unknown>): string {
+  if (!isSpawnInvocation(actionName)) return actionName;
+  const raw = input.capability ?? input.cli;
+  if (typeof raw !== 'string' || raw.trim().length === 0) return actionName;
+  const value = raw.trim();
+  return value.startsWith('spawn:') ? value : actionName === 'spawn' ? `spawn:${value}` : value;
+}
+
 function normalizeAttemptedNodeIds(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
@@ -45,9 +58,9 @@ function nextRetryAfter(attempts: number): Date {
 /**
  * Field set that moves an invocation into the live `dispatched` state once its
  * `action.invoke` frame has actually been delivered to the node. Shared by the
- * live dispatch path (`dispatchNodeAttempt`) and the offline-queue drain path
- * (`markDrainedInvocationDispatched`) so the dispatch-timeout sweep — which keys
- * off `dispatchedAt` — and the reschedule path cover drained invocations too.
+ * live dispatch path (`dispatchNodeAttempt`) and exported offline-queue drain
+ * path (`drainNodeInvocations`) so the dispatch-timeout sweep — which keys off
+ * `dispatchedAt` — and the reschedule path cover drained invocations too.
  */
 function dispatchedStateFields(opts: { retryAfterAt?: Date | null } = {}): {
   status: 'dispatched';
@@ -767,6 +780,90 @@ async function targetAgentForInvocation(
   return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId };
 }
 
+export async function drainNodeInvocations(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+): Promise<number> {
+  const rows = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionName: actionInvocations.actionName,
+      input: actionInvocations.input,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      handlerNodeId: actions.handlerNodeId,
+      handlerAgentId: agents.id,
+      handlerAgentName: agents.name,
+      handlerAgentLocationType: agents.locationType,
+      handlerAgentNodeId: agents.locationNodeId,
+    })
+    .from(actionInvocations)
+    .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .leftJoin(agents, eq(actions.handlerAgentId, agents.id))
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.status, 'pending'),
+      or(
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        eq(actions.handlerNodeId, nodeId),
+        and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+      ),
+    ))
+    .orderBy(asc(actionInvocations.createdAt));
+
+  let drained = 0;
+  for (const row of rows) {
+    const targetAgent = row.handlerAgentId
+      && row.handlerAgentName
+      && row.handlerAgentLocationType === 'via_node'
+      && row.handlerAgentNodeId
+      ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
+      : null;
+    const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
+    if (targetNodeId !== nodeId) continue;
+
+    try {
+      const input = recordInput(row.input);
+      let reservationHeld = isSpawnInvocation(row.actionName) && !!row.spawnReservedAt;
+      if (isSpawnInvocation(row.actionName) && !reservationHeld) {
+        const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
+        if (!reserved) {
+          await db
+            .update(actionInvocations)
+            .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
+            .where(and(
+              eq(actionInvocations.workspaceId, workspaceId),
+              eq(actionInvocations.id, row.id),
+              eq(actionInvocations.status, 'pending'),
+            ));
+          continue;
+        }
+        reservationHeld = true;
+      }
+
+      const dispatched = await dispatchNodeInvocation({
+        db,
+        registry,
+        workspaceId,
+        invocationId: row.id,
+        nodeId,
+        action: dispatchActionNameForInvocation(row.actionName, input),
+        input,
+        agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
+        retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
+        reservationHeld,
+      });
+      if (dispatched.accepted) drained++;
+    } catch {
+      // Leave the invocation pending; a later drain or timeout sweep can retry.
+    }
+  }
+  return drained;
+}
+
 export async function rescheduleNodeInvocation(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -800,7 +897,7 @@ export async function rescheduleNodeInvocation(
   const attempted = attemptedNodeSet(invocation);
   const current = invocation.dispatchedNodeId ? [invocation.dispatchedNodeId] : [];
   const input = recordInput(invocation.input);
-  const actionToSend = isSpawnInvocation(invocation.actionName) ? 'spawn' : invocation.actionName;
+  const actionToSend = dispatchActionNameForInvocation(invocation.actionName, input);
   const baseExclude = Array.from(new Set([...attempted, ...current]));
   const candidates = opts.allowAttemptedFallback ? [baseExclude, []] : [baseExclude];
 
@@ -1044,8 +1141,9 @@ export async function completeNodeInvocation(
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
-  timeoutMs = ACTION_DISPATCH_TIMEOUT_MS,
+  opts: SweepTimedOutInvocationsOptions | number = {},
 ) {
+  const timeoutMs = typeof opts === 'number' ? opts : opts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

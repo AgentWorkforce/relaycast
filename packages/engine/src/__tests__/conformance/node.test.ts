@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
+import { drainNodeInvocations, sweepTimedOutInvocations } from '../../index.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -10,8 +11,7 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
-import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
@@ -1129,9 +1129,88 @@ describe('node adapter conformance', () => {
       // With the invocation now in dispatched state, the dispatch-timeout sweep
       // (timeout 0 ⇒ already overdue) reschedules it onto the live fallback node.
       beta.sock.received.length = 0;
-      const rescheduled = await sweepTimedOutInvocations(db, stack.runtime.realtime, 0);
+      const rescheduled = await sweepTimedOutInvocations(db, stack.runtime.realtime, { timeoutMs: 0 });
       expect(rescheduled).toBeGreaterThanOrEqual(1);
       expect(beta.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId, action: 'echo' });
+    });
+
+    it('exported drain helper dispatches pending handler-agent invocations with v5 agent fields', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-agent-drain-helper-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [],
+        load: 0,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-drain-helper',
+        type: 'agent.register',
+        name: 'handler',
+        session_ref: 'pty://alpha/handler',
+      }));
+      const agentReply = alpha.sock.ofType('reply').find((frame) => frame.id === 'agent-register-drain-helper') as {
+        data?: { agent_id?: string };
+      };
+      const handlerAgentId = agentReply.data?.agent_id ?? '';
+      expect(handlerAgentId.length).toBeGreaterThan(0);
+
+      const register = await stack.app.request('/v1/actions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          name: 'agent-echo',
+          description: 'handler-agent drain test',
+          handler_agent: 'handler',
+        }),
+      });
+      expect(register.status).toBe(201);
+
+      const db = stack.runtime.handle.db;
+      const action = await db
+        .select({ id: actions.id })
+        .from(actions)
+        .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.name, 'agent-echo')))
+        .then((rows) => rows[0]);
+      expect(action?.id).toBeTruthy();
+
+      const invocationId = 'inv_agent_drain_helper';
+      await db.insert(actionInvocations).values({
+        id: invocationId,
+        workspaceId: ws.workspaceId,
+        actionId: action!.id,
+        actionName: 'agent-echo',
+        callerId: caller.agentId,
+        callerName: caller.name,
+        input: { value: 'from-db' },
+        status: 'pending',
+      });
+
+      alpha.sock.received.length = 0;
+      const drained = await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
+      expect(drained).toBe(1);
+      expect(alpha.sock.ofType('action.invoke').at(-1)).toMatchObject({
+        invocation_id: invocationId,
+        action: 'agent-echo',
+        agent_id: handlerAgentId,
+        agent_name: 'handler',
+        input: { value: 'from-db' },
+      });
+
+      const updated = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId))
+        .then((rows) => rows[0]);
+      expect(updated).toMatchObject({
+        status: 'dispatched',
+        dispatchedNodeId: 'node_alpha',
+        dispatchAttempts: 1,
+      });
+      expect(updated.dispatchedAt).toBeInstanceOf(Date);
+      expect(updated.attemptedNodeIds).toEqual(['node_alpha']);
     });
 
     it('drains a queued spawn only once the node is back online, arming a retry backstop meanwhile', async () => {
