@@ -1,11 +1,11 @@
-import { and, asc, eq, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -41,9 +41,11 @@ function isReleaseInvocation(actionName: string): boolean {
 function dispatchActionNameForInvocation(actionName: string, input: Record<string, unknown>): string {
   if (!isSpawnInvocation(actionName)) return actionName;
   const raw = input.capability ?? input.cli;
-  if (typeof raw !== 'string' || raw.trim().length === 0) return actionName;
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    return actionName.startsWith('spawn:') ? actionName : 'spawn';
+  }
   const value = raw.trim();
-  return value.startsWith('spawn:') ? value : actionName === 'spawn' ? `spawn:${value}` : value;
+  return value.startsWith('spawn:') ? value : `spawn:${value}`;
 }
 
 function normalizeAttemptedNodeIds(value: unknown): string[] {
@@ -802,6 +804,7 @@ export async function drainNodeInvocations(
   workspaceId: string,
   nodeId: string,
 ): Promise<number> {
+  const now = new Date();
   const rows = await db
     .select({
       id: actionInvocations.id,
@@ -822,6 +825,7 @@ export async function drainNodeInvocations(
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.status, 'pending'),
+      or(isNull(actionInvocations.retryAfterAt), lte(actionInvocations.retryAfterAt, now)),
       or(
         eq(actionInvocations.dispatchedNodeId, nodeId),
         eq(actions.handlerNodeId, nodeId),
@@ -841,23 +845,35 @@ export async function drainNodeInvocations(
     const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
     if (targetNodeId !== nodeId) continue;
 
+    let reservedForDrain = false;
     try {
       const input = recordInput(row.input);
       let reservationHeld = isSpawnInvocation(row.actionName) && !!row.spawnReservedAt;
       if (isSpawnInvocation(row.actionName) && !reservationHeld) {
         const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
         if (!reserved) {
-          await db
-            .update(actionInvocations)
-            .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
-            .where(and(
-              eq(actionInvocations.workspaceId, workspaceId),
-              eq(actionInvocations.id, row.id),
-              eq(actionInvocations.status, 'pending'),
-            ));
+          const [node] = await db
+            .select({
+              status: nodes.status,
+              handlersLive: nodes.handlersLive,
+              lastHeartbeatAt: nodes.lastHeartbeatAt,
+            })
+            .from(nodes)
+            .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+          if (node && isNodeLive(node) && node.handlersLive) {
+            await db
+              .update(actionInvocations)
+              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
+              .where(and(
+                eq(actionInvocations.workspaceId, workspaceId),
+                eq(actionInvocations.id, row.id),
+                eq(actionInvocations.status, 'pending'),
+              ));
+          }
           continue;
         }
         reservationHeld = true;
+        reservedForDrain = true;
       }
 
       const dispatched = await dispatchNodeInvocation({
@@ -873,8 +889,15 @@ export async function drainNodeInvocations(
         reservationHeld,
         skipIncrementAttempts: row.dispatchedNodeId === nodeId,
       });
-      if (dispatched.accepted) drained++;
+      if (dispatched.accepted) {
+        drained++;
+      } else if (reservedForDrain) {
+        await releaseNodeCapacity(db, workspaceId, nodeId);
+      }
     } catch {
+      if (reservedForDrain) {
+        await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
+      }
       // Leave the invocation pending; a later drain or timeout sweep can retry.
     }
   }

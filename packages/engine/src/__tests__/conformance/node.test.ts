@@ -13,6 +13,7 @@ import {
 } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
 import { handleNodeControlMessage } from '../../node-control.js';
+import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -1217,7 +1218,134 @@ describe('node adapter conformance', () => {
       expect(updated.attemptedNodeIds).toEqual(['node_alpha']);
     });
 
-    it('drains a queued spawn only once the node is back online, arming a retry backstop meanwhile', async () => {
+    it('exported drain helper preserves spawn-prefixed actions and skips retry-delayed invocations', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-prefix-drain-helper-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:python', 'spawn', { agent: 'python' })],
+        load: 0,
+      });
+
+      const db = stack.runtime.handle.db;
+      const retryLater = new Date(Date.now() + 60_000);
+      await db.insert(actionInvocations).values([
+        {
+          id: 'inv_spawn_prefixed_drain',
+          workspaceId: ws.workspaceId,
+          actionName: 'spawn:python',
+          callerId: caller.agentId,
+          callerName: caller.name,
+          input: { cli: 'python', name: 'worker-prefix', task: 'hi' },
+          status: 'pending',
+          dispatchedNodeId: 'node_alpha',
+          attemptedNodeIds: ['node_alpha'],
+          dispatchAttempts: 1,
+        },
+        {
+          id: 'inv_spawn_future_retry',
+          workspaceId: ws.workspaceId,
+          actionName: 'spawn:python',
+          callerId: caller.agentId,
+          callerName: caller.name,
+          input: { cli: 'python', name: 'worker-later', task: 'wait' },
+          status: 'pending',
+          dispatchedNodeId: 'node_alpha',
+          attemptedNodeIds: ['node_alpha'],
+          dispatchAttempts: 1,
+          retryAfterAt: retryLater,
+        },
+      ]);
+
+      alpha.sock.received.length = 0;
+      const drained = await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');
+      expect(drained).toBe(1);
+      expect(alpha.sock.ofType('action.invoke')).toEqual([
+        expect.objectContaining({
+          invocation_id: 'inv_spawn_prefixed_drain',
+          action: 'spawn:python',
+          input: expect.objectContaining({ cli: 'python' }),
+        }),
+      ]);
+
+      const prefixed = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, 'inv_spawn_prefixed_drain'))
+        .then((rows) => rows[0]);
+      expect(prefixed.status).toBe('dispatched');
+      expect(prefixed.dispatchAttempts).toBe(1);
+      expect(prefixed.attemptedNodeIds).toEqual(['node_alpha']);
+
+      const delayed = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, 'inv_spawn_future_retry'))
+        .then((rows) => rows[0]);
+      expect(delayed.status).toBe('pending');
+      expect(delayed.dispatchedAt).toBeNull();
+      expect(delayed.spawnReservedAt).toBeNull();
+      expect(delayed.retryAfterAt).toBeInstanceOf(Date);
+      expect(delayed.retryAfterAt!.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('exported drain helper releases spawn capacity when redispatch is rejected', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-drain-reject-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:python', 'spawn', { agent: 'python' })],
+        load: 0,
+        maxAgents: 1,
+      });
+
+      const db = stack.runtime.handle.db;
+      await db.insert(actionInvocations).values({
+        id: 'inv_spawn_rejected_drain',
+        workspaceId: ws.workspaceId,
+        actionName: 'spawn:python',
+        callerId: caller.agentId,
+        callerName: caller.name,
+        input: { cli: 'python', name: 'worker-rejected', task: 'hi' },
+        status: 'pending',
+        dispatchedNodeId: 'node_alpha',
+        attemptedNodeIds: ['node_alpha'],
+        dispatchAttempts: 1,
+      });
+
+      const rejectingRegistry: NodeConnectionRegistry = {
+        upgradeNode: async () => new Response(null, { status: 501 }),
+        sendToNode: async () => false,
+        isNodeConnected: () => true,
+        disconnectNode: async () => {},
+        drainNode: async () => {},
+      };
+
+      const drained = await drainNodeInvocations(db, rejectingRegistry, ws.workspaceId, 'node_alpha');
+      expect(drained).toBe(0);
+
+      const node = await db
+        .select({ reservedAgents: nodes.reservedAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')))
+        .then((rows) => rows[0]);
+      expect(node.reservedAgents ?? 0).toBe(0);
+
+      const invocation = await db
+        .select()
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, 'inv_spawn_rejected_drain'))
+        .then((rows) => rows[0]);
+      expect(invocation.status).toBe('pending');
+      expect(invocation.spawnReservedAt).toBeNull();
+      expect(invocation.dispatchedAt).toBeNull();
+      expect(invocation.dispatchAttempts).toBe(1);
+      expect(invocation.attemptedNodeIds).toEqual(['node_alpha']);
+    });
+
+    it('drains a queued spawn once the node registers without delaying the register-time drain', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-spawn-drain-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
 
@@ -1250,19 +1378,19 @@ describe('node adapter conformance', () => {
 
       // Reconnect the socket but DO NOT register yet: the node is still offline,
       // so the drain can't reserve spawn capacity. It must keep the frame queued
-      // and arm a retry_after_at backstop rather than delivering or dropping it.
+      // without arming retry_after_at so node.register can drain immediately.
       const alphaSock = new FakeSocket();
       const alphaHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_alpha', alphaSock);
       await new Promise((r) => setTimeout(r, 25));
       expect(alphaSock.ofType('action.invoke')).toHaveLength(0);
-      const armed = await db
+      const stillQueued = await db
         .select()
         .from(actionInvocations)
         .where(eq(actionInvocations.id, invocationId))
         .then((rows) => rows[0]);
-      expect(armed.status).toBe('pending');
-      expect(armed.spawnReservedAt).toBeNull();
-      expect(armed.retryAfterAt).toBeInstanceOf(Date); // sweeper backstop armed
+      expect(stillQueued.status).toBe('pending');
+      expect(stillQueued.spawnReservedAt).toBeNull();
+      expect(stillQueued.retryAfterAt).toBeNull();
 
       // Register → node is marked online and the post-register drain reserves
       // capacity and dispatches the queued spawn with the same invocation id.
