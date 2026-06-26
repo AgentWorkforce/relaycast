@@ -260,6 +260,40 @@ class TestWsClientOriginParams:
 
 class TestWsClientNodeTransport:
     @pytest.mark.asyncio
+    async def test_node_context_update_emits_delivery_failed(self):
+        ws = WsClient(token="nt_xxx")
+        handler = MagicMock()
+        ws.on("delivery.failed", handler)
+
+        handled = await ws._handle_node_frame(
+            {
+                "v": 1,
+                "type": "context.update",
+                "topic": "agent",
+                "event": "delivery.failed",
+                "agent_ids": ["agent_1"],
+                "data": {
+                    "delivery_id": None,
+                    "message_id": "m_1",
+                    "reason": "depth_cap",
+                    "retryable": False,
+                },
+            },
+            False,
+        )
+
+        assert handled is True
+        handler.assert_called_once_with(
+            {
+                "type": "delivery.failed",
+                "delivery_id": None,
+                "message_id": "m_1",
+                "reason": "depth_cap",
+                "retryable": False,
+            }
+        )
+
+    @pytest.mark.asyncio
     @respx.mock
     async def test_agent_token_uses_direct_node_transport_and_acks_deliveries(self):
         respx.post(f"{BASE}/v1/agent/node-token").mock(
