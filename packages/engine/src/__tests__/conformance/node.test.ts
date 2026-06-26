@@ -969,6 +969,108 @@ describe('node adapter conformance', () => {
       });
     });
 
+    it('REST disconnect deregisters a node-hosted agent without a node socket', async () => {
+      const ws = await createWorkspace(stack.app, 'agent-disconnect-helper-ws');
+      const db = stack.runtime.handle.db;
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_disconnect_alpha',
+        name: 'disconnect-alpha',
+        capabilities: [],
+        maxAgents: 1,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-disconnect',
+        type: 'agent.register',
+        name: 'disconnect-worker',
+        session_ref: 'pty://disconnect/worker',
+      }));
+      const reply = alpha.sock.ofType('reply').find((frame) => frame.id === 'agent-register-disconnect') as {
+        data?: { agent_id?: string; token?: string };
+      };
+      const agentId = reply.data?.agent_id ?? '';
+      expect(agentId.length).toBeGreaterThan(0);
+
+      const beforeNode = await db
+        .select({ activeAgents: nodes.activeAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_disconnect_alpha')))
+        .then((rows) => rows[0]);
+      expect(beforeNode?.activeAgents).toBe(1);
+
+      const disconnect = await stack.app.request('/v1/agents/disconnect', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${reply.data?.token ?? ''}` },
+      });
+      expect(disconnect.status).toBe(200);
+
+      const worker = await db
+        .select({
+          status: agents.status,
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+        })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, agentId)))
+        .then((rows) => rows[0]);
+      const directNodeId = `node_direct_${agentId}`;
+      expect(worker).toMatchObject({
+        status: 'offline',
+        locationType: 'via_node',
+        locationNodeId: directNodeId,
+      });
+
+      const activeBindings = await db
+        .select({ nodeId: agentNodeBindings.nodeId })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, agentId),
+          eq(agentNodeBindings.status, 'active'),
+        ));
+      expect(activeBindings).toEqual([{ nodeId: directNodeId }]);
+
+      const inactiveAlphaBindings = await db
+        .select({ id: agentNodeBindings.id })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, agentId),
+          eq(agentNodeBindings.nodeId, 'node_disconnect_alpha'),
+          eq(agentNodeBindings.status, 'inactive'),
+        ));
+      expect(inactiveAlphaBindings).toHaveLength(1);
+
+      const alphaNode = await db
+        .select({
+          id: nodes.id,
+          activeAgents: nodes.activeAgents,
+        })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_disconnect_alpha')))
+        .then((rows) => rows[0]);
+      expect(alphaNode).toMatchObject({
+        id: 'node_disconnect_alpha',
+        activeAgents: 0,
+      });
+
+      const directNode = await db
+        .select({
+          id: nodes.id,
+          status: nodes.status,
+          activeAgents: nodes.activeAgents,
+        })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, directNodeId)))
+        .then((rows) => rows[0]);
+      expect(directNode).toMatchObject({
+        id: directNodeId,
+        status: 'offline',
+        activeAgents: 1,
+      });
+    });
+
     it('drains an offline-queued invoke into dispatched state so the timeout sweep reschedules it', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-drain-ws');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');

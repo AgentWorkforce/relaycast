@@ -2679,7 +2679,7 @@ paths:
   /agents/disconnect:
     post:
       summary: Mark agent disconnected
-      description: Explicitly mark the authenticated agent offline
+      description: Explicitly mark the authenticated agent offline and release any node-hosted binding
       tags:
         - Presence
       security:

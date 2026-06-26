@@ -35,6 +35,10 @@
       "types": "./dist/node-reconnect.d.ts",
       "import": "./dist/node-reconnect.js"
     },
+    "./agent-disconnect": {
+      "types": "./dist/agent-disconnect.d.ts",
+      "import": "./dist/agent-disconnect.js"
+    },
     "./node-control": {
       "types": "./dist/node-control.d.ts",
       "import": "./dist/node-control.js"

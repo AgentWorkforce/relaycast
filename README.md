@@ -451,7 +451,10 @@ not read Hono context. Pass `completionDeps` (`db`, `realtime`, `webhookQueue`, 
 without it, the invocation state is still completed in the database. The handler already
 drains queued node invocations and replays pending node deliveries after
 `node.register`, `agent.register`, and `inventory.sync`, so adapters using it should not
-also call `handleNodeReconnect` for those same frames.
+also call `handleNodeReconnect` for those same frames. If an adapter owns
+`POST /v1/agents/disconnect` outside the engine router, call `handleAgentDisconnect`
+from `@relaycast/engine/agent-disconnect` before presence cleanup so node-hosted
+agents follow the same deregistration path as an `agent.deregister` frame.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id` and dispatches an `action.invoke` frame to the handler's node. Agent
