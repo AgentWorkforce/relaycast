@@ -641,19 +641,29 @@ async function dispatchNodeAttempt(
   workspaceId: string,
   invocationId: string,
   nodeId: string,
-  opts: { pending?: boolean; retryAfterAt?: Date | null; reservationHeld?: boolean } = {},
+  opts: {
+    pending?: boolean;
+    retryAfterAt?: Date | null;
+    reservationHeld?: boolean;
+    skipIncrementAttempts?: boolean;
+  } = {},
 ) {
   const stateFields = opts.pending
     ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: opts.retryAfterAt ?? null }
     : dispatchedStateFields({ retryAfterAt: opts.retryAfterAt });
+  const attemptFields = opts.skipIncrementAttempts
+    ? {}
+    : {
+      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+    };
   const [updated] = await db
     .update(actionInvocations)
     .set({
       ...stateFields,
       dispatchedNodeId: nodeId,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
-      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+      ...attemptFields,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -705,6 +715,7 @@ async function dispatchNodeInvocation(args: {
   pending?: boolean;
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
+  skipIncrementAttempts?: boolean;
 }): Promise<{ accepted: boolean; pending: boolean }> {
   const connectedBefore = args.registry.isNodeConnected(args.workspaceId, args.nodeId);
   const sent = await args.registry.sendToNode(args.workspaceId, args.nodeId, {
@@ -724,7 +735,12 @@ async function dispatchNodeInvocation(args: {
     args.workspaceId,
     args.invocationId,
     args.nodeId,
-    { pending, retryAfterAt: args.retryAfterAt, reservationHeld: args.reservationHeld },
+    {
+      pending,
+      retryAfterAt: args.retryAfterAt,
+      reservationHeld: args.reservationHeld,
+      skipIncrementAttempts: args.skipIncrementAttempts,
+    },
   );
   return { accepted, pending };
 }
@@ -855,6 +871,7 @@ export async function drainNodeInvocations(
         agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
         retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
         reservationHeld,
+        skipIncrementAttempts: row.dispatchedNodeId === nodeId,
       });
       if (dispatched.accepted) drained++;
     } catch {
@@ -1141,9 +1158,9 @@ export async function completeNodeInvocation(
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
-  opts: SweepTimedOutInvocationsOptions | number = {},
+  opts: SweepTimedOutInvocationsOptions | number | null = {},
 ) {
-  const timeoutMs = typeof opts === 'number' ? opts : opts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
+  const timeoutMs = typeof opts === 'number' ? opts : opts?.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

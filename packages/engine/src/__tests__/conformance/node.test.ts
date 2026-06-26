@@ -1109,6 +1109,8 @@ describe('node adapter conformance', () => {
       // Queued for the offline node: pending, no dispatch timestamp yet.
       expect(queued).toMatchObject({ status: 'pending', dispatchedNodeId: 'node_alpha' });
       expect(queued.dispatchedAt).toBeNull();
+      expect(queued.dispatchAttempts).toBe(1);
+      expect(queued.attemptedNodeIds).toEqual(['node_alpha']);
 
       // alpha reconnects → the queued frame drains and the invocation moves to
       // dispatched via the shared transition (dispatched_at + retry_after_at set).
@@ -1125,6 +1127,8 @@ describe('node adapter conformance', () => {
       expect(drained.status).toBe('dispatched');
       expect(drained.dispatchedAt).toBeInstanceOf(Date);
       expect(drained.retryAfterAt).toBeInstanceOf(Date);
+      expect(drained.dispatchAttempts).toBe(1);
+      expect(drained.attemptedNodeIds).toEqual(['node_alpha']);
 
       // With the invocation now in dispatched state, the dispatch-timeout sweep
       // (timeout 0 ⇒ already overdue) reschedules it onto the live fallback node.
