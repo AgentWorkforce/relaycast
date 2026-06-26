@@ -12,6 +12,10 @@ from relay_sdk.models import (
     ChannelCreatedEvent,
     CreateAgentRequest,
     CreateAgentResponse,
+    DeliveryAcceptedEvent,
+    DeliveryDeferredEvent,
+    DeliveryDeliveredEvent,
+    DeliveryFailedEvent,
     DmConversationSummary,
     DmReceivedEvent,
     FileAttachment,
@@ -439,6 +443,50 @@ def test_ws_message_read_event_model():
     )
     assert ev.type == "message.read"
     assert ev.read_at.endswith("Z")
+
+
+def test_ws_delivery_event_models():
+    accepted = DeliveryAcceptedEvent.model_validate(
+        {
+            "type": "delivery.accepted",
+            "delivery_id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "reason": "queued",
+        }
+    )
+    assert accepted.delivery_id == "del_1"
+    assert accepted.channel_id == "ch_1"
+    assert accepted.reason == "queued"
+
+    delivered = DeliveryDeliveredEvent.model_validate(
+        {"type": "delivery.delivered", "delivery_id": "del_1", "message_id": "m_1"}
+    )
+    assert delivered.delivery_id == "del_1"
+
+    deferred = DeliveryDeferredEvent.model_validate(
+        {
+            "type": "delivery.deferred",
+            "delivery_id": "del_1",
+            "message_id": "m_1",
+            "available_at": "2026-02-08T00:00:00Z",
+            "reason": "busy",
+        }
+    )
+    assert deferred.reason == "busy"
+
+    failed = DeliveryFailedEvent.model_validate(
+        {
+            "type": "delivery.failed",
+            "delivery_id": None,
+            "message_id": "m_1",
+            "reason": "depth_cap",
+            "retryable": False,
+        }
+    )
+    assert failed.delivery_id is None
+    assert failed.reason == "depth_cap"
+    assert failed.retryable is False
 
 
 def test_ws_file_uploaded_event_model():
