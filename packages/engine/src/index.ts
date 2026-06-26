@@ -14,7 +14,6 @@ export type {
   EngineEvent,
   RealtimeBus,
   ConnectionRegistry,
-  BroadcastToChannelArgs,
   UpgradeArgs,
   PresenceTracker,
   RateLimiter,
@@ -54,6 +53,8 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 // `next_attempt_at` is due. The Node adapter wires the same helper to its local
 // maintenance interval for self-hosted runtimes.
 export { sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
+export { deliverPendingToNode } from './engine/delivery.js';
+export { handleNodeReconnect } from './node-reconnect.js';
 
 // `pending_events` outbox primitives for queue-backed deployments: the queue
 // consumer settles rows (`completeEvent` / `failEvent` / `rescheduleEvent`)

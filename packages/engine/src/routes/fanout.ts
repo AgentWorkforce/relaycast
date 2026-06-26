@@ -4,7 +4,7 @@ import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { dmConversations, dmParticipants } from '../db/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
-import { sendNodeContextForChannel } from '../engine/nodeContext.js';
+import { sendNodeContextForChannel, sendNodeContextToAgents } from '../engine/nodeContext.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -54,7 +54,7 @@ export async function publishWorkspaceEvent(
 ): Promise<void> {
   const workspaceId = c.get('workspace').id;
   if (channelId) {
-    await fanoutToChannel(c, channelId, type, data, undefined, workspaceId);
+    await fanoutToChannel(c, channelId, type, data, workspaceId);
     return;
   }
   const event = buildEvent(type, workspaceId, data, channelId);
@@ -66,7 +66,6 @@ export async function fanoutToChannel(
   channelId: string,
   type: string,
   data: Record<string, unknown>,
-  _members?: string[], // Optional: provide members for member-cache initialization
   workspaceIdOverride?: string,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.channel');
@@ -129,10 +128,25 @@ export async function fanoutToAgents(
   const payload = transformForClient(event);
 
   const unique = [...new Set(agentIds)];
-  await Promise.allSettled([
-    c.get('engine').realtime.deliverToAgents({ workspaceId, agentIds: unique, event: payload }),
+  const tasks: Promise<unknown>[] = [
     publishToWorkspaceStream(c, workspaceId, payload),
-  ]);
+  ];
+  if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
+    tasks.push(sendNodeContextToAgents(
+      {
+        db: c.get('db'),
+        nodeConnections: c.get('engine').nodeConnections,
+        realtime: c.get('engine').realtime,
+        workspaceId,
+      },
+      {
+        agentIds: unique,
+        event: type,
+        data,
+      },
+    ));
+  }
+  await Promise.allSettled(tasks);
 }
 
 export async function fanoutToWorkspace(
@@ -182,43 +196,5 @@ export async function getDmParticipantAgentIds(
       ...toErrorDetails(err),
     });
     return null;
-  }
-}
-
-export async function updateChannelMuted(
-  c: HonoContext,
-  channelId: string,
-  mutedIds: string[],
-): Promise<void> {
-  const logger = getRequestLogger(c, 'fanout.update_channel_muted');
-  const workspaceId = c.get('workspace').id;
-  try {
-    await c.get('engine').realtime.setChannelMuted(workspaceId, channelId, mutedIds);
-  } catch (err) {
-    logger.error(`setChannelMuted error for channel ${channelId}`, {
-      workspace_id: workspaceId,
-      channel_id: channelId,
-      ...toErrorDetails(err),
-    });
-    throw err;
-  }
-}
-
-export async function updateChannelMembers(
-  c: HonoContext,
-  channelId: string,
-  memberIds: string[],
-): Promise<void> {
-  const logger = getRequestLogger(c, 'fanout.update_channel_members');
-  const workspaceId = c.get('workspace').id;
-  try {
-    await c.get('engine').realtime.setChannelMembers(workspaceId, channelId, memberIds);
-  } catch (err) {
-    logger.error(`setChannelMembers error for channel ${channelId}`, {
-      workspace_id: workspaceId,
-      channel_id: channelId,
-      ...toErrorDetails(err),
-    });
-    throw err;
   }
 }

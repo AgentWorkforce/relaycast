@@ -252,7 +252,7 @@ export const FleetContextUpdateMessageSchema = z
   .object({
     ...FleetWireEnvelopeFields,
     type: z.literal('context.update'),
-    topic: z.enum(['presence', 'channel', 'thread']),
+    topic: z.enum(['presence', 'channel', 'thread', 'agent']),
     event: z.string(),
     channel_id: z.string().nullable().optional(),
     agent_ids: z.array(z.string()).optional(),

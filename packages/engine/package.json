@@ -30,6 +30,10 @@
     "./node": {
       "types": "./dist/entrypoints/node.d.ts",
       "import": "./dist/entrypoints/node.js"
+    },
+    "./node-reconnect": {
+      "types": "./dist/node-reconnect.d.ts",
+      "import": "./dist/node-reconnect.js"
     }
   },
   "files": [

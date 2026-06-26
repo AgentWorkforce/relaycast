@@ -7,6 +7,7 @@ import {
   FakeSocket,
   attachDirectNodeSocket,
   deliverFramesOfType,
+  contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
 import { agents, deliveries } from '../../db/schema.js';
@@ -14,6 +15,7 @@ import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
+import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 
 /**
  * Durable delivery API conformance: listing the queued inbox, and the
@@ -395,8 +397,7 @@ describe('durable delivery api', () => {
     const { ws, bob } = await seed();
     const [item] = await listDeliveries(bob.token);
 
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
     const ackOnce = () => stack.app.request(`/v1/deliveries/${item.id}/ack`, {
       method: 'POST',
@@ -406,8 +407,9 @@ describe('durable delivery api', () => {
     expect((await ackOnce()).status).toBe(200);
     // A second ack is a no-op and must not re-emit the event.
     expect((await ackOnce()).status).toBe(200);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(bobSock.ofType('delivery.delivered')).toHaveLength(1);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.delivered')).toHaveLength(1);
+    });
   });
 
   it('does not re-emit delivery.deferred when re-deferred to the same time', async () => {
@@ -415,8 +417,7 @@ describe('durable delivery api', () => {
     const [item] = await listDeliveries(bob.token);
     const availableAt = new Date(Date.now() + 60_000).toISOString();
 
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
     const deferOnce = () => stack.app.request(`/v1/deliveries/${item.id}/defer`, {
       method: 'POST',
@@ -427,13 +428,15 @@ describe('durable delivery api', () => {
     expect((await deferOnce()).status).toBe(200);
     // Re-deferring to the identical available_at is a no-op — no second event.
     expect((await deferOnce()).status).toBe(200);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(bobSock.ofType('delivery.deferred')).toHaveLength(1);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.deferred')).toHaveLength(1);
+    });
   });
 
   it('preserves failure metadata across repeated fail calls (idempotent)', async () => {
-    const { bob } = await seed();
+    const { ws, bob } = await seed();
     const [item] = await listDeliveries(bob.token);
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
 
     const first = await stack.app.request(`/v1/deliveries/${item.id}/fail`, {
       method: 'POST',
@@ -454,6 +457,9 @@ describe('durable delivery api', () => {
     expect(data.status).toBe('failed');
     expect(data.error).toBe('boom');
     expect(data.retryable).toBe(true);
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(bobSock, 'delivery.failed')).toHaveLength(1);
+    });
   });
 
   it('clears a queued delivery from the replay queue when the message is read', async () => {
@@ -569,8 +575,6 @@ describe('durable delivery api', () => {
       locationNodeId: node.id,
     });
 
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
     await ensureDirectNodeForAgent(
       stack.runtime.deps.db,
       ws.workspaceId,
@@ -600,8 +604,6 @@ describe('durable delivery api', () => {
     });
 
     expect(node.sock.ofType('deliver')).toHaveLength(1);
-    expect(bobSock.ofType('delivery.accepted')).toHaveLength(0);
-    expect(bobSock.ofType('message.created')).toHaveLength(0);
     expect(await listDeliveries(bob.token)).toHaveLength(1);
     expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });
@@ -668,6 +670,45 @@ describe('durable delivery api', () => {
     const replayed = latestDeliverOfType(reconnected.sock, 'message.created');
     expect(replayed).toMatchObject({ msg_id: messageId });
     expect(replayed.payload).toEqual(live.payload);
+  });
+
+  it('exports node reconnect delivery replay for adapters that own node.register', async () => {
+    expect(deliverPendingToNode).toBeTypeOf('function');
+
+    const ws = await createWorkspace(stack.app, 'mailbox-node-exported-reconnect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'external reconnect replay' }),
+    });
+    expect(post.status).toBe(201);
+    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(node.sock, 'message.created')).toHaveLength(1);
+    });
+
+    await node.handle.handleClose();
+
+    const replaySock = new FakeSocket();
+    stack.runtime.realtime.attachNodeSocket(ws.workspaceId, node.id, replaySock);
+    const replayedCount = await handleNodeReconnect(
+      stack.runtime.deps.db,
+      stack.runtime.deps.nodeConnections,
+      ws.workspaceId,
+      node.id,
+    );
+
+    expect(replayedCount).toBe(1);
+    expect(deliverFramesOfType(replaySock, 'message.created')).toEqual([
+      expect.objectContaining({
+        agent: bob.name,
+        msg_id: messageId,
+      }),
+    ]);
   });
 
   it('redelivers a DM with the same deliver payload after broker death/reconnect', async () => {
@@ -900,8 +941,7 @@ describe('durable delivery api', () => {
     const ws = await createWorkspace(stack.app, 'mailbox-depthcap-expiry');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
-    const aliceSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, alice.agentId, aliceSock);
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
 
     const createRes = await stack.app.request('/v1/channels', {
       method: 'POST',
@@ -942,7 +982,10 @@ describe('durable delivery api', () => {
     expect(second.status).toBe(201);
     await new Promise((r) => setTimeout(r, 75));
 
-    expect(aliceSock.ofType('delivery.failed').filter((event) => event.reason === 'depth_cap')).toHaveLength(0);
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed').filter((event) => {
+      const data = event.data as Record<string, unknown> | undefined;
+      return data?.reason === 'depth_cap';
+    })).toHaveLength(0);
     const bobQueued = await listDeliveries(bob.token);
     expect(bobQueued.some((item) => (item.message as { text?: string }).text === 'fresh')).toBe(true);
   });
@@ -951,8 +994,7 @@ describe('durable delivery api', () => {
     stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1, depthCap: 1000 };
 
     const { ws, alice, bob } = await seed();
-    const aliceSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, alice.agentId, aliceSock);
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
     const [item] = await listDeliveries(bob.token);
 
     await new Promise((r) => setTimeout(r, 5));
@@ -964,31 +1006,31 @@ describe('durable delivery api', () => {
     const expiredRows = await deliveryEngine.expireDueDeliveries(stack.runtime.deps.db, ws.workspaceId);
     expect(expiredRows).toHaveLength(0);
     expect(await listDeliveries(bob.token, '?status=acked')).toHaveLength(1);
-    expect(aliceSock.ofType('delivery.failed')).toHaveLength(0);
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')).toHaveLength(0);
   });
 
   it('expires TTL deliveries to dead-letter and notifies the sender', async () => {
     stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 1000, depthCap: 1000 };
 
     const { ws, alice, bob } = await seed();
-    const aliceSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, alice.agentId, aliceSock);
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
 
     await new Promise((r) => setTimeout(r, 1100));
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 50));
-    expect(aliceSock.ofType('delivery.failed')).toEqual(expect.arrayContaining([
-      expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
-    ]));
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(aliceSock, 'delivery.failed').map((event) => event.data)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
+      ]));
+    });
   });
 
   it('rejects new deliveries over the depth cap and sends feedback to the sender', async () => {
     stack.runtime.deps.config!.mailbox = { deliveryTtlMs: 60_000, depthCap: 1 };
 
     const { ws, alice, bob } = await seed();
-    const aliceSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, alice.agentId, aliceSock);
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
 
     const second = await stack.app.request('/v1/channels/team-chat/messages', {
       method: 'POST',
@@ -996,16 +1038,20 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'overflow' }),
     });
     expect(second.status).toBe(201);
+    const secondMessageId = ((await second.json()) as { data: { id: string } }).data.id;
     await new Promise((r) => setTimeout(r, 75));
 
     expect(await listDeliveries(bob.token)).toHaveLength(1);
-    expect(aliceSock.ofType('delivery.failed')).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        message_id: ((await second.json()) as { data: { id: string } }).data.id,
-        target_agent_name: 'bob',
-        reason: 'depth_cap',
-        retryable: false,
-      }),
-    ]));
+    await waitForAssertion(() => {
+      expect(contextUpdatesOfType(aliceSock, 'delivery.failed').map((event) => event.data)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          delivery_id: null,
+          message_id: secondMessageId,
+          target_agent_name: 'bob',
+          reason: 'depth_cap',
+          retryable: false,
+        }),
+      ]));
+    });
   });
 });

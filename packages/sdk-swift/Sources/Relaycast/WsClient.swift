@@ -322,6 +322,10 @@ public final class WsClient: @unchecked Sendable {
                 emit(Self.event(from: action))
                 return
             }
+            if let context = try? decoder.decode(NodeContextUpdateFrame.self, from: data), context.type == "context.update" {
+                emit(Self.event(from: context))
+                return
+            }
             let event = try decoder.decode(WsEvent.self, from: data)
             emit(event)
         } catch {
@@ -565,6 +569,12 @@ private struct NodeActionInvokeFrame: Codable {
     let input: JSONValue?
 }
 
+private struct NodeContextUpdateFrame: Codable {
+    let type: String
+    let event: String
+    let data: [String: JSONValue]
+}
+
 private extension WsClient {
     static func event(from deliver: NodeDeliverFrame) -> WsEvent {
         let type = deliver.payload.type
@@ -607,6 +617,10 @@ private extension WsClient {
             "handler_agent_name": action.agentName.map(JSONValue.string) ?? .null,
             "input": action.input ?? .object([:])
         ])
+    }
+
+    static func event(from context: NodeContextUpdateFrame) -> WsEvent {
+        WsEvent(type: context.event, payload: context.data)
     }
 
     static func stringValue(_ value: JSONValue?) -> String? {

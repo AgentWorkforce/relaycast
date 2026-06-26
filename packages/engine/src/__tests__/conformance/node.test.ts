@@ -19,97 +19,13 @@ function capability(name: string, kind?: string, metadata?: Record<string, unkno
 
 /**
  * Conformance suite for the in-process Node adapter. These assert the
- * parity-critical realtime invariants the Cloudflare DOs guarantee — sequence
- * monotonicity, mute filtering, resync (ring + DB gap-fill), presence sweep,
- * rate limiting, and force-disconnect — so the same suite
- * can later run against the DO adapter to prove cross-runtime parity.
+ * parity-critical realtime invariants for node transport, presence fanout,
+ * workspace observer streams, rate limiting, and queued action drain.
  */
 describe('node adapter conformance', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 1_000 }); });
   afterEach(() => stack.close());
-
-  describe('sequence monotonicity', () => {
-    it('stamps strictly-increasing agent_seq under 100 concurrent pushes', async () => {
-      const rt = stack.runtime.realtime;
-      const results = await Promise.all(
-        Array.from({ length: 100 }, (_, i) =>
-          rt.pushToAgent('w1', 'a1', { type: 'message', n: i }),
-        ),
-      );
-      const seqs = results.map((r) => r.agentSeq).sort((a, b) => a - b);
-      expect(seqs).toEqual(Array.from({ length: 100 }, (_, i) => i + 1));
-      expect(new Set(seqs).size).toBe(100); // no duplicates
-    });
-
-    it('stamps strictly-increasing channel_seq under concurrent broadcasts', async () => {
-      const rt = stack.runtime.realtime;
-      await rt.setChannelMembers('w1', 'c1', []); // no members → just sequence
-      const results = await Promise.all(
-        Array.from({ length: 50 }, (_, i) =>
-          rt.broadcastToChannel({ workspaceId: 'w1', channelId: 'c1', event: { type: 'message', n: i } }),
-        ),
-      );
-      const seqs = results.map((r) => r.channelSeq).sort((a, b) => a - b);
-      expect(seqs).toEqual(Array.from({ length: 50 }, (_, i) => i + 1));
-    });
-  });
-
-  describe('mute filtering', () => {
-    it('suppresses message events for muted members but delivers control events', async () => {
-      const rt = stack.runtime.realtime;
-      const aSock = new FakeSocket();
-      const bSock = new FakeSocket();
-      rt.attachAgentSocket('w1', 'a', aSock);
-      rt.attachAgentSocket('w1', 'b', bSock);
-      await rt.setChannelMembers('w1', 'c1', ['a', 'b']);
-      await rt.setChannelMuted('w1', 'c1', ['b']);
-
-      await rt.broadcastToChannel({ workspaceId: 'w1', channelId: 'c1', event: { type: 'message.created', text: 'hi' } });
-      await rt.broadcastToChannel({ workspaceId: 'w1', channelId: 'c1', event: { type: 'channel.updated', topic: 't' } });
-
-      // a (unmuted) gets both; b (muted) gets only the control event.
-      expect(aSock.ofType('message.created')).toHaveLength(1);
-      expect(aSock.ofType('channel.updated')).toHaveLength(1);
-      expect(bSock.ofType('message.created')).toHaveLength(0);
-      expect(bSock.ofType('channel.updated')).toHaveLength(1);
-    });
-  });
-
-  describe('resync', () => {
-    it('replays buffered events after last_seen_seq with no gap', async () => {
-      const rt = stack.runtime.realtime;
-      const sock = new FakeSocket();
-      const handle = rt.attachAgentSocket('w1', 'a', sock);
-      for (let i = 0; i < 5; i++) {
-        await rt.pushToAgent('w1', 'a', { type: 'message', n: i });
-      }
-      sock.received.length = 0; // clear live deliveries
-
-      await handle.handleMessage(JSON.stringify({ type: 'resync', last_seen_seq: 2 }));
-
-      const replayed = sock.received.filter((e) => typeof e.agent_seq === 'number');
-      expect(replayed.map((e) => e.agent_seq)).toEqual([3, 4, 5]);
-      const ack = sock.received.find((e) => e.type === 'resync_ack');
-      expect(ack).toMatchObject({ last_seen_seq: 2, current_seq: 5, gap_detected: false });
-    });
-
-    it('detects a gap beyond the 500-event ring and falls back to the DB', async () => {
-      const rt = stack.runtime.realtime;
-      const sock = new FakeSocket();
-      const handle = rt.attachAgentSocket('w1', 'a', sock);
-      // Overflow the ring so seq=1 is evicted.
-      for (let i = 0; i < 600; i++) {
-        await rt.pushToAgent('w1', 'a', { type: 'message', n: i });
-      }
-      sock.received.length = 0;
-
-      await handle.handleMessage(JSON.stringify({ type: 'resync', last_seen_seq: 1, since: new Date(0).toISOString() }));
-
-      const ack = sock.received.find((e) => e.type === 'resync_ack');
-      expect(ack).toMatchObject({ gap_detected: true, current_seq: 600 });
-    });
-  });
 
   describe('presence', () => {
     it('emits agent.status.active on connect and agent.status.offline on sweep', async () => {
@@ -163,16 +79,6 @@ describe('node adapter conformance', () => {
       expect([r1.allowed, r2.allowed, r3.allowed]).toEqual([true, true, true]);
       expect(r4.allowed).toBe(false);
       expect(r4.remaining).toBe(0);
-    });
-  });
-
-  describe('force-disconnect', () => {
-    it('closes an agent\'s sockets', async () => {
-      const rt = stack.runtime.realtime;
-      const sock = new FakeSocket();
-      rt.attachAgentSocket('w1', 'a', sock);
-      await rt.disconnectAgent('w1', 'a');
-      expect(sock.closed).toBe(true);
     });
   });
 
