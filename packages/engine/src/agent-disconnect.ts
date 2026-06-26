@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import type { EngineDb, NodeConnectionRegistry } from './ports/index.js';
+import type { EngineDb } from './ports/index.js';
 import { agents } from './db/schema.js';
 import { deregisterAgentViaNode, directNodeIdForAgent } from './engine/node.js';
 
@@ -9,7 +9,6 @@ import { deregisterAgentViaNode, directNodeIdForAgent } from './engine/node.js';
  */
 export async function handleAgentDisconnect(
   db: EngineDb,
-  _registry: NodeConnectionRegistry,
   workspaceId: string,
   agentId: string,
 ): Promise<boolean> {
