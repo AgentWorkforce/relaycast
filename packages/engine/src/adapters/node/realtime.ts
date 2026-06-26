@@ -9,10 +9,9 @@ import type {
 import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
-import { actionInvocations, observerTokens } from '../../db/schema.js';
+import { observerTokens } from '../../db/schema.js';
 import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
-import { reserveNodeCapacity } from '../../engine/placement.js';
-import { markDrainedInvocationDispatched } from '../../engine/action.js';
+import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
@@ -57,9 +56,6 @@ interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
 }
-
-/** Backstop delay armed on a queued spawn whose capacity reservation deferred. */
-const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
 /**
  * Single-process, in-memory implementation of the workspace observer stream and
@@ -287,62 +283,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     const key = this.nodeKey(workspaceId, nodeId);
     const conn = this.nodeSockets.get(key)?.socket;
     if (!conn) return;
-    const queued = this.nodeQueues.get(key);
-    if (!queued || queued.length === 0) return;
-
-    const remaining: QueuedNodeMessage[] = [];
-    for (const item of queued) {
-      try {
-        const [row] = await this.db
-          .select({
-            dispatchedNodeId: actionInvocations.dispatchedNodeId,
-            status: actionInvocations.status,
-            spawnReservedAt: actionInvocations.spawnReservedAt,
-          })
-          .from(actionInvocations)
-          .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
-        if (!row) continue;
-        if (row.dispatchedNodeId !== nodeId || (row.status !== 'dispatched' && row.status !== 'pending')) continue;
-        const isSpawnAction = item.message.action === 'spawn' || item.message.action.startsWith('spawn:');
-        if (isSpawnAction && !row.spawnReservedAt) {
-          const reserved = await reserveNodeCapacity(this.db, workspaceId, nodeId);
-          if (!reserved) {
-            // Node not yet online (drain ran before register) or genuinely at
-            // capacity: keep the frame queued, but arm retry_after_at so the
-            // dispatch sweeper reschedules this pending spawn as a backstop if
-            // no later drain trigger (register/heartbeat) delivers it first.
-            await this.db
-              .update(actionInvocations)
-              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
-              .where(and(
-                eq(actionInvocations.workspaceId, workspaceId),
-                eq(actionInvocations.id, item.message.invocation_id),
-                eq(actionInvocations.status, 'pending'),
-              ));
-            remaining.push(item);
-            continue;
-          }
-          await this.db
-            .update(actionInvocations)
-            .set({ spawnReservedAt: new Date() })
-            .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, item.message.invocation_id)));
-        }
-        conn.send(JSON.stringify(item.message));
-        // The frame is now actually on the wire: move the invocation out of the
-        // queued `pending` state into `dispatched` via the shared transition so
-        // the dispatch-timeout sweep/reschedule covers it like a live dispatch.
-        await markDrainedInvocationDispatched(this.db, workspaceId, item.message.invocation_id, nodeId);
-      } catch {
-        remaining.push(item);
-        remaining.push(...queued.slice(queued.indexOf(item) + 1));
-        break;
-      }
-    }
-    if (remaining.length > 0) {
-      this.nodeQueues.set(key, remaining);
-    } else {
-      this.nodeQueues.delete(key);
-    }
+    await drainNodeInvocations(this.db, this, workspaceId, nodeId);
+    this.nodeQueues.delete(key);
   }
 
   private async onWorkspaceMessage(socket: EngineSocket, raw: string): Promise<void> {

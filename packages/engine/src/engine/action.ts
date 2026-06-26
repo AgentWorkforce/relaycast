@@ -1,11 +1,11 @@
-import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -18,6 +18,11 @@ type RetryableInvocationRow = Pick<
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
+const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
+
+export interface SweepTimedOutInvocationsOptions {
+  timeoutMs?: number;
+}
 
 function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
   if (typeof capability === 'string') return capability;
@@ -33,6 +38,16 @@ function isReleaseInvocation(actionName: string): boolean {
   return actionName === 'release';
 }
 
+function dispatchActionNameForInvocation(actionName: string, input: Record<string, unknown>): string {
+  if (!isSpawnInvocation(actionName)) return actionName;
+  const raw = input.capability ?? input.cli;
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    return actionName.startsWith('spawn:') ? actionName : 'spawn';
+  }
+  const value = raw.trim();
+  return value.startsWith('spawn:') ? value : `spawn:${value}`;
+}
+
 function normalizeAttemptedNodeIds(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
@@ -45,9 +60,9 @@ function nextRetryAfter(attempts: number): Date {
 /**
  * Field set that moves an invocation into the live `dispatched` state once its
  * `action.invoke` frame has actually been delivered to the node. Shared by the
- * live dispatch path (`dispatchNodeAttempt`) and the offline-queue drain path
- * (`markDrainedInvocationDispatched`) so the dispatch-timeout sweep — which keys
- * off `dispatchedAt` — and the reschedule path cover drained invocations too.
+ * live dispatch path (`dispatchNodeAttempt`) and exported offline-queue drain
+ * path (`drainNodeInvocations`) so the dispatch-timeout sweep — which keys off
+ * `dispatchedAt` — and the reschedule path cover drained invocations too.
  */
 function dispatchedStateFields(opts: { retryAfterAt?: Date | null } = {}): {
   status: 'dispatched';
@@ -628,19 +643,29 @@ async function dispatchNodeAttempt(
   workspaceId: string,
   invocationId: string,
   nodeId: string,
-  opts: { pending?: boolean; retryAfterAt?: Date | null; reservationHeld?: boolean } = {},
+  opts: {
+    pending?: boolean;
+    retryAfterAt?: Date | null;
+    reservationHeld?: boolean;
+    skipIncrementAttempts?: boolean;
+  } = {},
 ) {
   const stateFields = opts.pending
     ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: opts.retryAfterAt ?? null }
     : dispatchedStateFields({ retryAfterAt: opts.retryAfterAt });
+  const attemptFields = opts.skipIncrementAttempts
+    ? {}
+    : {
+      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+    };
   const [updated] = await db
     .update(actionInvocations)
     .set({
       ...stateFields,
       dispatchedNodeId: nodeId,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
-      dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
+      ...attemptFields,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -692,6 +717,7 @@ async function dispatchNodeInvocation(args: {
   pending?: boolean;
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
+  skipIncrementAttempts?: boolean;
 }): Promise<{ accepted: boolean; pending: boolean }> {
   const connectedBefore = args.registry.isNodeConnected(args.workspaceId, args.nodeId);
   const sent = await args.registry.sendToNode(args.workspaceId, args.nodeId, {
@@ -711,7 +737,12 @@ async function dispatchNodeInvocation(args: {
     args.workspaceId,
     args.invocationId,
     args.nodeId,
-    { pending, retryAfterAt: args.retryAfterAt, reservationHeld: args.reservationHeld },
+    {
+      pending,
+      retryAfterAt: args.retryAfterAt,
+      reservationHeld: args.reservationHeld,
+      skipIncrementAttempts: args.skipIncrementAttempts,
+    },
   );
   return { accepted, pending };
 }
@@ -767,6 +798,112 @@ async function targetAgentForInvocation(
   return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId };
 }
 
+export async function drainNodeInvocations(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+): Promise<number> {
+  const now = new Date();
+  const rows = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionName: actionInvocations.actionName,
+      input: actionInvocations.input,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      handlerNodeId: actions.handlerNodeId,
+      handlerAgentId: agents.id,
+      handlerAgentName: agents.name,
+      handlerAgentLocationType: agents.locationType,
+      handlerAgentNodeId: agents.locationNodeId,
+    })
+    .from(actionInvocations)
+    .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .leftJoin(agents, eq(actions.handlerAgentId, agents.id))
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.status, 'pending'),
+      or(isNull(actionInvocations.retryAfterAt), lte(actionInvocations.retryAfterAt, now)),
+      or(
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        eq(actions.handlerNodeId, nodeId),
+        and(eq(agents.locationType, 'via_node'), eq(agents.locationNodeId, nodeId)),
+      ),
+    ))
+    .orderBy(asc(actionInvocations.createdAt));
+
+  let drained = 0;
+  for (const row of rows) {
+    const targetAgent = row.handlerAgentId
+      && row.handlerAgentName
+      && row.handlerAgentLocationType === 'via_node'
+      && row.handlerAgentNodeId
+      ? { id: row.handlerAgentId, name: row.handlerAgentName, nodeId: row.handlerAgentNodeId }
+      : null;
+    const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
+    if (targetNodeId !== nodeId) continue;
+
+    let reservedForDrain = false;
+    try {
+      const input = recordInput(row.input);
+      let reservationHeld = isSpawnInvocation(row.actionName) && !!row.spawnReservedAt;
+      if (isSpawnInvocation(row.actionName) && !reservationHeld) {
+        const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
+        if (!reserved) {
+          const [node] = await db
+            .select({
+              status: nodes.status,
+              handlersLive: nodes.handlersLive,
+              lastHeartbeatAt: nodes.lastHeartbeatAt,
+            })
+            .from(nodes)
+            .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+          if (node && isNodeLive(node) && node.handlersLive) {
+            await db
+              .update(actionInvocations)
+              .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })
+              .where(and(
+                eq(actionInvocations.workspaceId, workspaceId),
+                eq(actionInvocations.id, row.id),
+                eq(actionInvocations.status, 'pending'),
+              ));
+          }
+          continue;
+        }
+        reservationHeld = true;
+        reservedForDrain = true;
+      }
+
+      const dispatched = await dispatchNodeInvocation({
+        db,
+        registry,
+        workspaceId,
+        invocationId: row.id,
+        nodeId,
+        action: dispatchActionNameForInvocation(row.actionName, input),
+        input,
+        agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
+        retryAfterAt: new Date(Date.now() + ACTION_DISPATCH_TIMEOUT_MS),
+        reservationHeld,
+        skipIncrementAttempts: row.dispatchedNodeId === nodeId,
+      });
+      if (dispatched.accepted) {
+        drained++;
+      } else if (reservedForDrain) {
+        await releaseNodeCapacity(db, workspaceId, nodeId);
+      }
+    } catch {
+      if (reservedForDrain) {
+        await releaseNodeCapacity(db, workspaceId, nodeId).catch(() => {});
+      }
+      // Leave the invocation pending; a later drain or timeout sweep can retry.
+    }
+  }
+  return drained;
+}
+
 export async function rescheduleNodeInvocation(
   db: Db,
   registry: NodeConnectionRegistry,
@@ -800,7 +937,7 @@ export async function rescheduleNodeInvocation(
   const attempted = attemptedNodeSet(invocation);
   const current = invocation.dispatchedNodeId ? [invocation.dispatchedNodeId] : [];
   const input = recordInput(invocation.input);
-  const actionToSend = isSpawnInvocation(invocation.actionName) ? 'spawn' : invocation.actionName;
+  const actionToSend = dispatchActionNameForInvocation(invocation.actionName, input);
   const baseExclude = Array.from(new Set([...attempted, ...current]));
   const candidates = opts.allowAttemptedFallback ? [baseExclude, []] : [baseExclude];
 
@@ -1044,8 +1181,9 @@ export async function completeNodeInvocation(
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
-  timeoutMs = ACTION_DISPATCH_TIMEOUT_MS,
+  opts: SweepTimedOutInvocationsOptions | number | null = {},
 ) {
+  const timeoutMs = typeof opts === 'number' ? opts : opts?.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

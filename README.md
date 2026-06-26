@@ -455,6 +455,9 @@ also call `handleNodeReconnect` for those same frames. If an adapter owns
 `POST /v1/agents/disconnect` outside the engine router, call `handleAgentDisconnect`
 from `@relaycast/engine/agent-disconnect` before presence cleanup so node-hosted
 agents follow the same deregistration path as an `agent.deregister` frame.
+Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
+`drainNodeInvocations` after node reconnect/register/heartbeat and
+`sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id` and dispatches an `action.invoke` frame to the handler's node. Agent
