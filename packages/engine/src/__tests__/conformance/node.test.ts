@@ -10,8 +10,9 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, agents, deliveries, nodes } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { handleNodeControlMessage } from '../../node-control.js';
 
 function capability(name: string, kind?: string, metadata?: Record<string, unknown>) {
   return { name, ...(kind ? { kind } : {}), ...(metadata ? { metadata } : {}) };
@@ -501,6 +502,195 @@ describe('node adapter conformance', () => {
       }));
       return { sock, handle };
     }
+
+    it('drives node control directly without the websocket route wrapper', async () => {
+      const ws = await createWorkspace(stack.app, 'node-control-direct-dispatch');
+      const db = stack.runtime.handle.db;
+
+      const createBroker = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          node_id: 'node_control_broker',
+          name: 'control-broker',
+          role: 'broker',
+          capabilities: [],
+          max_agents: 4,
+          tags: ['control'],
+          version: 'control-v0',
+        }),
+      });
+      expect(createBroker.status).toBe(201);
+
+      const brokerSock = new FakeSocket();
+      const sendBroker = (frame: Record<string, unknown>) => handleNodeControlMessage({
+        db,
+        registry: stack.runtime.realtime,
+        completionDeps: stack.runtime.deps,
+        workspaceId: ws.workspaceId,
+        nodeId: 'node_control_broker',
+        socket: brokerSock,
+        raw: JSON.stringify(frame),
+      });
+
+      await sendBroker({
+        v: 1,
+        id: 'control-broker-register',
+        type: 'node.register',
+        name: 'control-broker',
+        node_id: 'node_control_broker',
+        capabilities: [capability('echo', 'tool')],
+        max_agents: 4,
+        tags: ['control'],
+        version: 'control-v1',
+        resume_cursor: null,
+      });
+      expect(brokerSock.ofType('reply').at(-1)).toMatchObject({
+        id: 'control-broker-register',
+        ok: true,
+      });
+
+      await sendBroker({
+        v: 1,
+        id: 'control-agent-register',
+        type: 'agent.register',
+        name: 'control-worker',
+        session_ref: 'pty://control/worker',
+        resumable: true,
+      });
+      const agentReply = brokerSock.ofType('reply').at(-1) as { data?: { agent_id?: string } };
+      const controlAgentId = agentReply.data?.agent_id ?? '';
+      expect(controlAgentId.length).toBeGreaterThan(0);
+
+      const [activeBinding] = await db
+        .select({
+          nodeId: agentNodeBindings.nodeId,
+          status: agentNodeBindings.status,
+          sessionRef: agentNodeBindings.sessionRef,
+        })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, controlAgentId),
+          eq(agentNodeBindings.status, 'active'),
+        ));
+      expect(activeBinding).toMatchObject({
+        nodeId: 'node_control_broker',
+        status: 'active',
+        sessionRef: 'pty://control/worker',
+      });
+
+      await sendBroker({
+        v: 1,
+        id: 'control-broker-heartbeat',
+        type: 'node.heartbeat',
+        load: 0.25,
+        active_agents: 1,
+        handlers_live: true,
+        node_id: 'node_control_broker',
+        name: 'control-broker-renamed',
+        capabilities: [capability('echo', 'tool'), capability('spawn:claude', 'spawn')],
+        max_agents: 6,
+        version: 'control-v2',
+      });
+      const [brokerNode] = await db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_control_broker')));
+      expect(brokerNode).toMatchObject({
+        name: 'control-broker-renamed',
+        maxAgents: 6,
+        activeAgents: 1,
+        handlersLive: true,
+        version: 'control-v2',
+      });
+      expect(brokerNode.capabilities.map((cap) => cap.name).sort()).toEqual(['echo', 'spawn:claude']);
+
+      await sendBroker({
+        v: 1,
+        id: 'control-agent-deregister',
+        type: 'agent.deregister',
+        agent_id: controlAgentId,
+      });
+      const activeBindingsAfterDeregister = await db
+        .select({ id: agentNodeBindings.id })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, controlAgentId),
+          eq(agentNodeBindings.nodeId, 'node_control_broker'),
+          eq(agentNodeBindings.status, 'active'),
+        ));
+      expect(activeBindingsAfterDeregister).toHaveLength(0);
+
+      const createDirect = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          node_id: 'node_control_direct',
+          name: 'control-direct',
+          role: 'direct',
+          capabilities: ['echo'],
+          max_agents: 1,
+          tags: ['direct'],
+          version: 'direct-v0',
+        }),
+      });
+      expect(createDirect.status).toBe(201);
+
+      const directSock = new FakeSocket();
+      const sendDirect = (frame: Record<string, unknown>) => handleNodeControlMessage({
+        db,
+        registry: stack.runtime.realtime,
+        workspaceId: ws.workspaceId,
+        nodeId: 'node_control_direct',
+        socket: directSock,
+        raw: JSON.stringify(frame),
+      });
+
+      await sendDirect({
+        v: 1,
+        id: 'control-direct-register',
+        type: 'node.register',
+        name: 'control-direct-live',
+        node_id: 'node_control_direct',
+        capabilities: [capability('echo', 'tool'), capability('spawn:claude', 'spawn')],
+        max_agents: 99,
+        tags: ['attempted-broker'],
+        version: 'direct-v1',
+        resume_cursor: null,
+      });
+      expect(directSock.ofType('reply').at(-1)).toMatchObject({
+        id: 'control-direct-register',
+        ok: true,
+      });
+
+      await sendDirect({
+        v: 1,
+        id: 'control-direct-heartbeat',
+        type: 'node.heartbeat',
+        load: 0.5,
+        active_agents: 7,
+        handlers_live: true,
+        node_id: 'node_control_direct',
+        name: 'control-direct-live',
+        capabilities: [capability('echo', 'tool')],
+        max_agents: 99,
+        version: 'direct-v2',
+      });
+      const [directNode] = await db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_control_direct')));
+      expect(directNode).toMatchObject({
+        role: 'direct',
+        maxAgents: 1,
+        activeAgents: 1,
+        handlersLive: false,
+        version: 'direct-v2',
+      });
+      expect(directNode.capabilities).toEqual([]);
+    });
 
     it('enforces node capacity for agents registered over node control', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-agent-register-capacity');

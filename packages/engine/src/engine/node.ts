@@ -14,6 +14,7 @@ import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, 
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
+import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
@@ -28,8 +29,19 @@ type AgentRow = typeof agents.$inferSelect;
 type NodeKind = 'ws' | 'http_push' | 'poll';
 type NodeRole = 'direct' | 'broker';
 
-interface NodeSocketLike {
+/** Minimal socket surface used by node-control dispatchers to send reply frames. */
+export interface NodeSocketLike {
   send(data: string): void;
+}
+
+export interface HandleNodeControlMessageArgs {
+  db: EngineDb;
+  registry: NodeConnectionRegistry;
+  completionDeps?: InvocationCompletionDeps;
+  workspaceId: string;
+  nodeId: string;
+  socket?: NodeSocketLike;
+  raw: string;
 }
 
 type CapabilityLike = string | FleetCapability;
@@ -345,23 +357,20 @@ export async function heartbeatNode(
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
   }
 
+  const [nodeState] = await db
+    .select({ role: nodes.role })
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const role: NodeRole = nodeState?.role === 'direct' ? 'direct' : 'broker';
   const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
   if (message.name !== undefined) rosterUpdate.name = message.name;
   if (message.capabilities !== undefined) {
-    const [node] = await db
-      .select({ role: nodes.role })
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    if (node?.role !== 'direct') {
+    if (role !== 'direct') {
       rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
     }
   }
   if (message.max_agents !== undefined) {
-    const [node] = await db
-      .select({ role: nodes.role })
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    rosterUpdate.maxAgents = node?.role === 'direct' ? 1 : message.max_agents;
+    rosterUpdate.maxAgents = role === 'direct' ? 1 : message.max_agents;
   }
   if (message.version !== undefined) rosterUpdate.version = message.version;
 
@@ -371,8 +380,8 @@ export async function heartbeatNode(
       ...rosterUpdate,
       status: 'online',
       load: message.load,
-      activeAgents: message.active_agents,
-      handlersLive: message.handlers_live,
+      activeAgents: role === 'direct' ? 1 : message.active_agents,
+      handlersLive: role !== 'direct' && message.handlers_live,
       lastHeartbeatAt: new Date(),
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
@@ -1202,15 +1211,7 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
   }
 }
 
-export async function handleNodeControlMessage(args: {
-  db: Db;
-  registry: NodeConnectionRegistry;
-  completionDeps?: InvocationCompletionDeps;
-  workspaceId: string;
-  nodeId: string;
-  socket?: NodeSocketLike;
-  raw: string;
-}) {
+export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
     message = parseFleetBrokerToRelaycastMessage(JSON.parse(args.raw));
