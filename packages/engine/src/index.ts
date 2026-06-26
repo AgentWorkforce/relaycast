@@ -55,6 +55,8 @@ export { runA2aHealthChecks } from './engine/a2a-health.js';
 export { sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
+export { handleNodeControlMessage } from './engine/node.js';
+export type { HandleNodeControlMessageArgs, NodeSocketLike } from './engine/node.js';
 
 // `pending_events` outbox primitives for queue-backed deployments: the queue
 // consumer settles rows (`completeEvent` / `failEvent` / `rescheduleEvent`)

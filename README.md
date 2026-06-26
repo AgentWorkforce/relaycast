@@ -442,9 +442,16 @@ securely hold that token.
 Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
 handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
 self-host adapter runs that sweep on its local maintenance timer.
-Adapters that terminate `/v1/node/ws` outside the engine request handler should call
-`handleNodeReconnect(db, nodeConnections, workspaceId, nodeId)` from `@relaycast/engine`
-after `node.register` succeeds so queued node deliveries replay on reconnect.
+Adapters that terminate `/v1/node/ws` outside the engine request handler should delegate
+node control frames to `handleNodeControlMessage` from `@relaycast/engine/node-control`:
+the handler only needs `{ db, registry, workspaceId, nodeId, socket, raw }`, where
+`socket` is any object with `send(data: string): void`. It is self-contained and does
+not read Hono context. Pass `completionDeps` (`db`, `realtime`, `webhookQueue`, and
+`nodeConnections`) if `action.result` should emit completion fan-out and webhook effects;
+without it, the invocation state is still completed in the database. The handler already
+drains queued node invocations and replays pending node deliveries after
+`node.register`, `agent.register`, and `inventory.sync`, so adapters using it should not
+also call `handleNodeReconnect` for those same frames.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id` and dispatches an `action.invoke` frame to the handler's node. Agent

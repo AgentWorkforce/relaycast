@@ -34,6 +34,10 @@
     "./node-reconnect": {
       "types": "./dist/node-reconnect.d.ts",
       "import": "./dist/node-reconnect.js"
+    },
+    "./node-control": {
+      "types": "./dist/node-control.d.ts",
+      "import": "./dist/node-control.js"
     }
   },
   "files": [
