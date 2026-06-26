@@ -3,6 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireWorkspaceRead, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as presenceEngine from '../engine/presence.js';
+import { handleAgentDisconnect } from '../agent-disconnect.js';
 import {
   getObserverTokenFromContext,
   observerAllowsAgent,
@@ -45,10 +46,12 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
 // POST /agents/disconnect — explicitly mark agent offline.
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {
+    const db = c.get('db');
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
-    const { presence } = c.get('engine');
+    const { nodeConnections, presence } = c.get('engine');
 
+    await handleAgentDisconnect(db, nodeConnections, workspace.id, agent.id);
     await presence.disconnect(workspace.id, agent.id, agent.name);
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {
