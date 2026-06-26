@@ -898,6 +898,14 @@ class MessageReadEvent(BaseModel):
     read_at: str
 
 
+class DeliveryAcceptedEvent(BaseModel):
+    type: Literal["delivery.accepted"]
+    delivery_id: str
+    message_id: str
+    channel_id: str | None = None
+    reason: str | None = None
+
+
 class DeliveryDeliveredEvent(BaseModel):
     type: Literal["delivery.delivered"]
     delivery_id: str
@@ -941,6 +949,7 @@ ServerEvent = (
     | ChannelCreatedEvent
     | ChannelArchivedEvent
     | MessageReadEvent
+    | DeliveryAcceptedEvent
     | DeliveryDeliveredEvent
     | DeliveryDeferredEvent
     | DeliveryFailedEvent
@@ -964,6 +973,7 @@ ServerEventType = Literal[
     "channel.created",
     "channel.archived",
     "message.read",
+    "delivery.accepted",
     "delivery.delivered",
     "delivery.deferred",
     "delivery.failed",

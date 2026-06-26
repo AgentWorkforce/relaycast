@@ -12,6 +12,7 @@ from relay_sdk.models import (
     ChannelCreatedEvent,
     CreateAgentRequest,
     CreateAgentResponse,
+    DeliveryAcceptedEvent,
     DeliveryDeferredEvent,
     DeliveryDeliveredEvent,
     DeliveryFailedEvent,
@@ -445,6 +446,19 @@ def test_ws_message_read_event_model():
 
 
 def test_ws_delivery_event_models():
+    accepted = DeliveryAcceptedEvent.model_validate(
+        {
+            "type": "delivery.accepted",
+            "delivery_id": "del_1",
+            "message_id": "m_1",
+            "channel_id": "ch_1",
+            "reason": "queued",
+        }
+    )
+    assert accepted.delivery_id == "del_1"
+    assert accepted.channel_id == "ch_1"
+    assert accepted.reason == "queued"
+
     delivered = DeliveryDeliveredEvent.model_validate(
         {"type": "delivery.delivered", "delivery_id": "del_1", "message_id": "m_1"}
     )
