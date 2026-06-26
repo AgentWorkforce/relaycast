@@ -898,6 +898,29 @@ class MessageReadEvent(BaseModel):
     read_at: str
 
 
+class DeliveryDeliveredEvent(BaseModel):
+    type: Literal["delivery.delivered"]
+    delivery_id: str
+    message_id: str
+
+
+class DeliveryDeferredEvent(BaseModel):
+    type: Literal["delivery.deferred"]
+    delivery_id: str
+    message_id: str
+    available_at: str | None
+    reason: str | None = None
+
+
+class DeliveryFailedEvent(BaseModel):
+    type: Literal["delivery.failed"]
+    delivery_id: str | None
+    message_id: str
+    error: str | None = None
+    reason: str | None = None
+    retryable: bool | None = None
+
+
 class FileUploadedEvent(BaseModel):
     type: Literal["file.uploaded"]
     file: FileEventPayload
@@ -918,6 +941,9 @@ ServerEvent = (
     | ChannelCreatedEvent
     | ChannelArchivedEvent
     | MessageReadEvent
+    | DeliveryDeliveredEvent
+    | DeliveryDeferredEvent
+    | DeliveryFailedEvent
     | FileUploadedEvent
     | PongEvent
 )
@@ -938,6 +964,9 @@ ServerEventType = Literal[
     "channel.created",
     "channel.archived",
     "message.read",
+    "delivery.delivered",
+    "delivery.deferred",
+    "delivery.failed",
     "file.uploaded",
     "pong",
 ]
