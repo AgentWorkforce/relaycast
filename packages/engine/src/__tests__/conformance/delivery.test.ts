@@ -575,8 +575,6 @@ describe('durable delivery api', () => {
       locationNodeId: node.id,
     });
 
-    const bobSock = new FakeSocket();
-    stack.runtime.realtime.attachAgentSocket(ws.workspaceId, bob.agentId, bobSock);
     await ensureDirectNodeForAgent(
       stack.runtime.deps.db,
       ws.workspaceId,
@@ -606,8 +604,6 @@ describe('durable delivery api', () => {
     });
 
     expect(node.sock.ofType('deliver')).toHaveLength(1);
-    expect(bobSock.ofType('delivery.accepted')).toHaveLength(0);
-    expect(bobSock.ofType('message.created')).toHaveLength(0);
     expect(await listDeliveries(bob.token)).toHaveLength(1);
     expect(await listDeliveries(bob.token, '?status=delivered')).toHaveLength(1);
   });

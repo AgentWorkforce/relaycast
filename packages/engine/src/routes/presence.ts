@@ -42,21 +42,13 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
   }
 });
 
-// POST /agents/disconnect — explicitly mark agent offline
-// Force-disconnects the agent's live sockets, then sends an authoritative
-// disconnect to the presence tracker so a stale in-flight heartbeat can't
-// re-create the agent's presence entry afterwards.
+// POST /agents/disconnect — explicitly mark agent offline.
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
-    const { connections, presence } = c.get('engine');
+    const { presence } = c.get('engine');
 
-    // Close the agent's sockets first (serializes the authoritative disconnect
-    // after any in-flight ping heartbeat in the connection layer).
-    await connections.disconnectAgent(workspace.id, agent.id).catch(() => {});
-
-    // Then mark offline directly as a safety net.
     await presence.disconnect(workspace.id, agent.id, agent.name);
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {

@@ -14,7 +14,6 @@ export type {
   EngineEvent,
   RealtimeBus,
   ConnectionRegistry,
-  BroadcastToChannelArgs,
   UpgradeArgs,
   PresenceTracker,
   RateLimiter,

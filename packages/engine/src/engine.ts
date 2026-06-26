@@ -120,7 +120,6 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
     const response = await connections.upgrade({
       request: c.req.raw,
-      scope: 'workspace',
       workspaceId: authResult.workspace.id,
       origin,
       originActor,

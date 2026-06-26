@@ -71,7 +71,6 @@ async function fanoutToAgentsForContext(
   const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
   const unique = [...new Set(agentIds)];
   const tasks: Promise<unknown>[] = [
-    ctx.engine.realtime.deliverToAgents({ workspaceId: ctx.workspaceId, agentIds: unique, event: payload }),
     ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }),
     sendNodeContextToAgents(
       {

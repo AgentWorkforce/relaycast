@@ -4,7 +4,7 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
-import { fanoutToChannel, fanoutToWorkspace, updateChannelMembers, updateChannelMuted } from './fanout.js';
+import { fanoutToChannel, fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -83,13 +83,6 @@ channelRoutes.post(
       // Workspace-wide fanout so all online agents learn about the new channel.
       const eventData = { ...result, channel_name: result.name };
       runInBackground(c, fanoutToWorkspace(c, 'channel.created', eventData), 'fanout channel.created');
-      // Update ChannelDO member cache (creator auto-joined)
-      try {
-        const members = await channelEngine.getMembers(db, workspace.id, result.name);
-        runInBackground(c, updateChannelMembers(c, result.id, members.map((m) => m.agent_id)), 'update-members channel.created');
-      } catch {
-        // Ignore cache update failures
-      }
 
       await sendWebhookEvent(c, {
         type: 'channel.created',
@@ -309,12 +302,9 @@ channelRoutes.post(
         agent!.id,
       );
 
-      // Update member cache before fanout so new member receives event
       try {
-        const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.joined');
           const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.joined');
         }
@@ -366,20 +356,6 @@ channelRoutes.post(
         }
       } catch {
         // Ignore fanout failures
-      }
-
-      // Update member + muted caches after leave
-      try {
-        const members = await channelEngine.getMembers(db, workspace.id, name);
-        const channel = await channelEngine.getChannel(db, workspace.id, name);
-        if (channel) {
-          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.left');
-          // Clear mute state so a rejoin starts unmuted
-          const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
-          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.left');
-        }
-      } catch {
-        // Ignore cache update failures
       }
 
       await sendWebhookEvent(c, {
@@ -462,12 +438,10 @@ channelRoutes.post(
         agentName,
       );
 
-      // Update member cache and fanout
       try {
         const members = await channelEngine.getMembers(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          runInBackground(c, updateChannelMembers(c, channel.id, members.map((m) => m.agent_id)), 'update-members member.invited');
           const invitedMember = members.find((member) => member.agent_name === agentName);
           const eventData = { channel_name: name, agent_id: invitedMember?.agent_id, agent_name: agentName };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.joined', eventData), 'fanout member.invited');
@@ -511,12 +485,9 @@ channelRoutes.post(
         agent!.id,
       );
 
-      // Update ChannelDO muted set
       try {
-        const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_muted');
           const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_muted', eventData), 'fanout member.channel_muted');
         }
@@ -559,12 +530,9 @@ channelRoutes.post(
         agent!.id,
       );
 
-      // Update ChannelDO muted set
       try {
-        const mutedIds = await channelEngine.getMutedMemberIds(db, workspace.id, name);
         const channel = await channelEngine.getChannel(db, workspace.id, name);
         if (channel) {
-          runInBackground(c, updateChannelMuted(c, channel.id, mutedIds), 'update-muted member.channel_unmuted');
           const eventData = { channel_name: name, agent_id: agent!.id, agent_name: agent!.name };
           runInBackground(c, fanoutToChannel(c, channel.id, 'member.channel_unmuted', eventData), 'fanout member.channel_unmuted');
         }

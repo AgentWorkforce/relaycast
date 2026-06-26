@@ -25,7 +25,6 @@ export type {
   RealtimeBus,
   ConnectionRegistry,
   NodeConnectionRegistry,
-  BroadcastToChannelArgs,
   UpgradeArgs,
   NodeUpgradeArgs,
 } from './realtime.js';
