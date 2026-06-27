@@ -193,6 +193,14 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       invocation_id: result.invocation_id,
       caller_agent_id: agent.id,
     });
+    // Surface the invocation on the workspace observer stream so dashboards see
+    // actions happening (spawns, callbacks) and not just their completions.
+    // The completion side already publishes action.completed / action.failed.
+    runInBackground(
+      c,
+      fanoutToWorkspace(c, 'action.invoked', eventData),
+      'fanout action.invoked',
+    );
 
     return jsonCreated(c, result);
   } catch (err: unknown) {
@@ -228,6 +236,11 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         workspaceId: workspace.id,
         data: eventData,
       });
+      runInBackground(
+        c,
+        fanoutToWorkspace(c, 'action.denied', eventData),
+        'fanout action.denied',
+      );
     }
     return errorResponse(c, error);
   }

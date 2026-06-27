@@ -1594,5 +1594,41 @@ describe('node adapter conformance', () => {
       expect(stillNode.version).toBe('test-node-v2');
       expect(stillNode.capabilities.map((cap) => cap.name).sort()).toEqual(['echo', 'spawn:claude']);
     });
+
+    it('publishes action.invoked to the workspace observer stream', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-action-invoked-observer-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      await enrollAndAttachNode(ws, {
+        id: 'node_alpha',
+        name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0,
+      });
+
+      // Observer dashboards watch the workspace stream; they should see the
+      // invocation as it happens, not just its eventual completion.
+      const observerSock = new FakeSocket();
+      stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, observerSock);
+
+      const spawn = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'claude', name: 'observed-worker', task: 'hi', target_node: 'alpha' } }),
+      });
+      expect(spawn.status).toBe(201);
+      const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+      // Fanout to the workspace stream runs in the request background lifecycle.
+      await new Promise((r) => setTimeout(r, 25));
+
+      const invoked = observerSock.ofType('action.invoked');
+      expect(invoked).toHaveLength(1);
+      expect(invoked[0]).toMatchObject({
+        type: 'action.invoked',
+        invocation_id: invocationId,
+        action_name: 'spawn',
+        caller_name: 'caller',
+      });
+    });
   });
 });
