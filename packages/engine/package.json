@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/engine",
-  "version": "5.0.6",
+  "version": "5.0.7",
   "type": "module",
   "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
   "bin": {

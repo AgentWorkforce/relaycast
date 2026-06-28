@@ -151,6 +151,26 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
       workspaceId: workspace_id,
       data: eventData,
     });
+    // Also emit message.created so writeback subscriptions (which filter on
+    // message.created + channel) fire and can cache the relayfile VFS path for
+    // later thread-reply routing. The metadata carries the relayfile path that
+    // the forwarder embedded in the webhook payload.
+    if (Object.keys(result.metadata).length > 0) {
+      await sendWebhookEvent(c, {
+        type: 'message.created',
+        workspaceId: workspace_id,
+        data: {
+          id: result.message_id,
+          channel: result.channel,
+          channel_name: result.channel,
+          channel_id,
+          text: result.text,
+          created_at: result.created_at,
+          from_name: result.author,
+          metadata: result.metadata,
+        },
+      });
+    }
     emitServerEvent(c, workspace_id, 'relaycast_server_inbound_webhook_triggered', {
       webhook_id: result.webhook_id,
       message_id: result.message_id,
