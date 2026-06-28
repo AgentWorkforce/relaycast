@@ -1618,10 +1618,13 @@ describe('node adapter conformance', () => {
       expect(spawn.status).toBe(201);
       const invocationId = (await spawn.json() as { data: { invocation_id: string } }).data.invocation_id;
 
-      // Fanout to the workspace stream runs in the request background lifecycle.
-      await new Promise((r) => setTimeout(r, 25));
-
-      const invoked = observerSock.ofType('action.invoked');
+      // Fanout to the workspace stream runs in the request background
+      // lifecycle (best-effort in tests), so poll rather than fixed-sleep.
+      let invoked = observerSock.ofType('action.invoked');
+      for (let i = 0; i < 20 && invoked.length === 0; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+        invoked = observerSock.ofType('action.invoked');
+      }
       expect(invoked).toHaveLength(1);
       expect(invoked[0]).toMatchObject({
         type: 'action.invoked',

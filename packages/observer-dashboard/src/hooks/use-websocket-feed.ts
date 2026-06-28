@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent, useWebSocket } from '@relaycast/react';
 import type { WsClientEvent } from '@relaycast/sdk';
 import type { WebSocketFeedCategory, WebSocketFeedEvent } from '../types/dashboard';
+import { WS_EVENTS_STORAGE_KEY } from '../lib/activity-store';
 
 const MAX_WS_EVENTS = 300;
-const STORAGE_KEY = 'relaycast-observer-ws-events';
 
 function getString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -37,7 +37,7 @@ function categorizeEvent(type: string): WebSocketFeedCategory {
 function loadStoredEvents(): WebSocketFeedEvent[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(WS_EVENTS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -47,7 +47,9 @@ function loadStoredEvents(): WebSocketFeedEvent[] {
           !!item &&
           typeof item === 'object' &&
           typeof (item as WebSocketFeedEvent).id === 'string' &&
-          typeof (item as WebSocketFeedEvent).summary === 'string',
+          typeof (item as WebSocketFeedEvent).eventType === 'string' &&
+          typeof (item as WebSocketFeedEvent).summary === 'string' &&
+          typeof (item as WebSocketFeedEvent).timestamp === 'string',
       )
       .map((item) => ({ ...item, category: item.category ?? categorizeEvent(item.eventType) }))
       .slice(-MAX_WS_EVENTS);
@@ -192,7 +194,7 @@ export function useWebSocketFeed() {
   const clearEvents = useCallback(() => {
     setEvents([]);
     try {
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(WS_EVENTS_STORAGE_KEY);
     } catch {
       // Ignore storage failures (private mode / quota); state is still cleared.
     }
@@ -201,7 +203,7 @@ export function useWebSocketFeed() {
   // Persist the rolling window so a refresh restores recent activity.
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+      window.localStorage.setItem(WS_EVENTS_STORAGE_KEY, JSON.stringify(events));
     } catch {
       // Ignore storage failures (private mode / quota).
     }
