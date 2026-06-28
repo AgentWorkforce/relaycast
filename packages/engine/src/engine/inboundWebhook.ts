@@ -223,5 +223,6 @@ export async function triggerWebhook(
     source: data.source || null,
     author,
     created_at: message.createdAt.toISOString(),
+    metadata: sanitizeUserMessageMetadata(data.payload),
   };
 }
