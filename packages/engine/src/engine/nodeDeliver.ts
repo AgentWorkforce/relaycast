@@ -3,11 +3,14 @@ import { agents, agentNodeBindings, channelMembers, dmConversations, dmParticipa
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload } from './deliveryWire.js';
+import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch } from './httpPushDispatch.js';
 
 type NodeDeliverDeps = {
   db: EngineDb;
   nodeConnections: NodeConnectionRegistry;
   workspaceId: string;
+  /** Defaults to strict SSRF hardening when omitted (production-safe). */
+  environment?: string;
 };
 
 type NodeDeliverRecipient = {
@@ -15,9 +18,13 @@ type NodeDeliverRecipient = {
   agentName: string;
   nodeId: string;
   nodeKind: string;
+  deliveryConfig: Record<string, unknown> | null;
 };
 
 const WS_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws'] as const;
+// Node kinds eligible for ephemeral event delivery: WebSocket nodes receive a
+// pushed frame; http_push nodes receive a best-effort POST to their receiver.
+const EVENTED_NODE_KINDS = [...WS_NODE_KINDS, 'http_push'] as const;
 
 function eventDeliveryId(event: string, eventKey: string, agentId: string): string {
   const normalizedEvent = event.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'event';
@@ -38,6 +45,7 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
         agentName: agents.name,
         nodeId: agentNodeBindings.nodeId,
         nodeKind: nodes.kind,
+        deliveryConfig: nodes.deliveryConfig,
       })
       .from(dmParticipants)
       .innerJoin(agents, and(
@@ -58,7 +66,7 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
         isNull(dmParticipants.leftAt),
         eq(agents.locationType, 'via_node'),
         eq(agents.locationNodeId, agentNodeBindings.nodeId),
-        inArray(nodes.kind, WS_NODE_KINDS),
+        inArray(nodes.kind, EVENTED_NODE_KINDS),
       ));
   }
 
@@ -68,6 +76,7 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
       agentName: agents.name,
       nodeId: agentNodeBindings.nodeId,
       nodeKind: nodes.kind,
+      deliveryConfig: nodes.deliveryConfig,
     })
     .from(channelMembers)
     .innerJoin(agents, and(
@@ -87,8 +96,42 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
       eq(channelMembers.channelId, channelId),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, agentNodeBindings.nodeId),
-      inArray(nodes.kind, WS_NODE_KINDS),
+      inArray(nodes.kind, EVENTED_NODE_KINDS),
     ));
+}
+
+// Deliver one ephemeral event to a node recipient: WebSocket nodes get a pushed
+// `deliver` frame, http_push nodes get a best-effort POST to their receiver.
+function deliverEventToRecipient(
+  deps: NodeDeliverDeps,
+  recipient: NodeDeliverRecipient,
+  args: { event: string; eventKey: string; data: Record<string, unknown>; messageId: string },
+): Promise<unknown> {
+  if (recipient.nodeKind === 'http_push') {
+    return postEphemeralEventToHttpPushNode({
+      deliveryConfig: recipient.deliveryConfig,
+      strict: strictHttpPushDispatch(deps.environment),
+      event: {
+        workspaceId: deps.workspaceId,
+        eventType: args.event,
+        eventData: args.data,
+        extra: {
+          message_id: args.messageId,
+          agent_id: recipient.agentId,
+          agent_name: recipient.agentName,
+        },
+      },
+    });
+  }
+  return deps.nodeConnections.sendToNode(deps.workspaceId, recipient.nodeId, buildDeliverFrame({
+    delivery_id: eventDeliveryId(args.event, args.eventKey, recipient.agentId),
+    agent_id: recipient.agentId,
+    agent: recipient.agentName,
+    msg_id: args.messageId,
+    seq: 0,
+    mode: 'wait',
+    payload: buildDeliverPayload(args.event, args.data),
+  }));
 }
 
 export async function sendNodeDeliveriesForChannel(
@@ -103,15 +146,12 @@ export async function sendNodeDeliveriesForChannel(
 ): Promise<void> {
   const recipients = await channelRecipients(deps, args.channelId);
   const tasks = recipients.map((recipient) =>
-    deps.nodeConnections.sendToNode(deps.workspaceId, recipient.nodeId, buildDeliverFrame({
-      delivery_id: eventDeliveryId(args.event, args.eventKey, recipient.agentId),
-      agent_id: recipient.agentId,
-      agent: recipient.agentName,
-      msg_id: args.messageId,
-      seq: 0,
-      mode: 'wait',
-      payload: buildDeliverPayload(args.event, args.data),
-    })),
+    deliverEventToRecipient(deps, recipient, {
+      event: args.event,
+      eventKey: args.eventKey,
+      data: args.data,
+      messageId: args.messageId,
+    }),
   );
   await Promise.allSettled(tasks);
 }
@@ -135,6 +175,7 @@ export async function sendNodeDeliveriesToAgents(
       agentName: agents.name,
       nodeId: agentNodeBindings.nodeId,
       nodeKind: nodes.kind,
+      deliveryConfig: nodes.deliveryConfig,
     })
     .from(agents)
     .innerJoin(agentNodeBindings, and(
@@ -151,19 +192,16 @@ export async function sendNodeDeliveriesToAgents(
       inArray(agents.id, unique),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, agentNodeBindings.nodeId),
-      inArray(nodes.kind, WS_NODE_KINDS),
+      inArray(nodes.kind, EVENTED_NODE_KINDS),
     ));
 
   const tasks = recipients.map((recipient) =>
-    deps.nodeConnections.sendToNode(deps.workspaceId, recipient.nodeId, buildDeliverFrame({
-      delivery_id: eventDeliveryId(args.event, args.eventKey, recipient.agentId),
-      agent_id: recipient.agentId,
-      agent: recipient.agentName,
-      msg_id: args.messageId ?? args.eventKey,
-      seq: 0,
-      mode: 'wait',
-      payload: buildDeliverPayload(args.event, args.data),
-    })),
+    deliverEventToRecipient(deps, recipient, {
+      event: args.event,
+      eventKey: args.eventKey,
+      data: args.data,
+      messageId: args.messageId ?? args.eventKey,
+    }),
   );
   await Promise.allSettled(tasks);
 }

@@ -3,6 +3,7 @@ import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
 import { toFleetWireJson } from './deliveryWire.js';
+import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch } from './httpPushDispatch.js';
 
 type NodeContextTopic = 'presence' | 'channel' | 'thread' | 'agent';
 
@@ -11,6 +12,8 @@ type NodeContextDeps = {
   nodeConnections: NodeConnectionRegistry;
   realtime: RealtimeBus;
   workspaceId: string;
+  /** Defaults to strict SSRF hardening when omitted (production-safe). */
+  environment?: string;
 };
 
 type ScopedNodeRow = {
@@ -19,7 +22,12 @@ type ScopedNodeRow = {
   nodeKind: string;
   nodeRole: string;
   deliveryAdapter: string | null;
+  deliveryConfig: Record<string, unknown> | null;
 };
+
+// Node kinds eligible for context updates: WebSocket nodes receive a pushed
+// `context.update` frame; http_push nodes receive a best-effort POST.
+const CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws', 'http_push'] as const;
 
 function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: string | null | undefined): string | null {
   if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
@@ -28,13 +36,22 @@ function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: 
   return null;
 }
 
-function groupByNode(rows: ScopedNodeRow[]): Map<string, { nodeKind: string; nodeRole: string; deliveryAdapter: string | null; agentIds: string[] }> {
-  const grouped = new Map<string, { nodeKind: string; nodeRole: string; deliveryAdapter: string | null; agentIds: string[] }>();
+type GroupedNode = {
+  nodeKind: string;
+  nodeRole: string;
+  deliveryAdapter: string | null;
+  deliveryConfig: Record<string, unknown> | null;
+  agentIds: string[];
+};
+
+function groupByNode(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
+  const grouped = new Map<string, GroupedNode>();
   for (const row of rows) {
     const existing = grouped.get(row.nodeId) ?? {
       nodeKind: row.nodeKind,
       nodeRole: row.nodeRole,
       deliveryAdapter: row.deliveryAdapter,
+      deliveryConfig: row.deliveryConfig,
       agentIds: [],
     };
     existing.agentIds.push(row.agentId);
@@ -71,6 +88,25 @@ async function sendContextToRows(
       );
       continue;
     }
+    if (group.nodeKind === 'http_push') {
+      tasks.push(
+        postEphemeralEventToHttpPushNode({
+          deliveryConfig: group.deliveryConfig,
+          strict: strictHttpPushDispatch(deps.environment),
+          event: {
+            workspaceId: deps.workspaceId,
+            eventType: message.event,
+            eventData: message.data,
+            extra: {
+              topic: message.topic,
+              channel_id: message.channelId ?? null,
+              agent_ids: agentIds,
+            },
+          },
+        }),
+      );
+      continue;
+    }
     console.warn('[node.context] unsupported node kind for context update', {
       workspace_id: deps.workspaceId,
       node_id: nodeId,
@@ -101,6 +137,7 @@ export async function sendNodeContextForChannel(
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
+      deliveryConfig: nodes.deliveryConfig,
     })
     .from(channelMembers)
     .innerJoin(agentNodeBindings, and(
@@ -120,7 +157,7 @@ export async function sendNodeContextForChannel(
     ))
     .where(and(
       eq(channelMembers.channelId, args.channelId),
-      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
+      inArray(nodes.kind, CONTEXT_NODE_KINDS),
     ));
 
   await sendContextToRows(deps, rows, {
@@ -146,6 +183,7 @@ export async function sendNodePresenceContext(
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
+      deliveryConfig: nodes.deliveryConfig,
     })
     .from(agentNodeBindings)
     .innerJoin(agents, and(
@@ -161,7 +199,7 @@ export async function sendNodePresenceContext(
     .where(and(
       eq(agentNodeBindings.workspaceId, deps.workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
+      inArray(nodes.kind, CONTEXT_NODE_KINDS),
     ));
 
   await sendContextToRows(deps, rows, {
@@ -189,6 +227,7 @@ export async function sendNodeContextToAgents(
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
+      deliveryConfig: nodes.deliveryConfig,
     })
     .from(agentNodeBindings)
     .innerJoin(agents, and(
@@ -205,7 +244,7 @@ export async function sendNodeContextToAgents(
       eq(agentNodeBindings.workspaceId, deps.workspaceId),
       eq(agentNodeBindings.status, 'active'),
       inArray(agentNodeBindings.agentId, uniqueAgentIds),
-      inArray(nodes.kind, ['ws', 'fleet_ws', 'direct_ws']),
+      inArray(nodes.kind, CONTEXT_NODE_KINDS),
     ));
 
   await sendContextToRows(deps, rows, {

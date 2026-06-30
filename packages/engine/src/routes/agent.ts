@@ -117,6 +117,7 @@ async function fanoutAgentStatus(c: Parameters<typeof runInBackground>[0], agent
       {
         db: c.get('db'),
         nodeConnections: c.get('engine').nodeConnections,
+        environment: c.get('engine').config?.environment,
         realtime: c.get('engine').realtime,
         workspaceId: c.get('workspace').id,
       },
@@ -517,6 +518,7 @@ agentRoutes.post(
             {
               db,
               nodeConnections: c.get('engine').nodeConnections,
+              environment: c.get('engine').config?.environment,
               realtime: c.get('engine').realtime,
               workspaceId: workspace.id,
             },

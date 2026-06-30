@@ -104,6 +104,35 @@ describe('node delivery contracts', () => {
     throw lastError;
   }
 
+  // http_push nodes also receive ephemeral events (presence/status, reactions,
+  // receipts) as POSTs. Durable-message contract tests care only about the
+  // message-delivery POSTs, so filter by the event header to ignore that noise.
+  function deliveryPosts(
+    fetchMock: ReturnType<typeof vi.spyOn>,
+    eventType = 'message.created',
+  ): Array<[string, RequestInit]> {
+    return fetchMock.mock.calls.filter((call) => {
+      const headers = (call[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined;
+      return headers?.['X-Relaycast-Event'] === eventType;
+    }) as Array<[string, RequestInit]>;
+  }
+
+  // Type-aware fetch mock: message-delivery POSTs consume `messageResponses` in
+  // order (last entry repeats); every other POST (presence/reaction/receipt)
+  // resolves 202 so ephemeral noise never steals a scripted message response.
+  function mockMessageDeliveryFetch(messageResponses: Array<() => Response>) {
+    let index = 0;
+    return vi.spyOn(globalThis, 'fetch').mockImplementation((async (_url: unknown, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.['X-Relaycast-Event'] === 'message.created') {
+        const make = messageResponses[Math.min(index, messageResponses.length - 1)];
+        index += 1;
+        return make();
+      }
+      return new Response('', { status: 202 });
+    }) as typeof globalThis.fetch);
+  }
+
   it('dispatches to an http_push node with custom HMAC headers and manual ack semantics', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
@@ -129,8 +158,8 @@ describe('node delivery contracts', () => {
     });
     expect(post.status).toBe(201);
     const messageId = ((await post.json()) as { data: { id: string } }).data.id;
-    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+    const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
     expect(init.redirect).toBe('error');
     const headers = init.headers as Record<string, string>;
@@ -263,20 +292,16 @@ describe('node delivery contracts', () => {
   });
 
   it('keeps response-mode http_push deliveries queued when 2xx omits an ack signal', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ack: true }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-      );
+    const fetchMock = mockMessageDeliveryFetch([
+      () => new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+      () => new Response(JSON.stringify({ ack: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ]);
     const ws = await createWorkspace(stack.app, 'http-node-response-no-ack');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -299,7 +324,7 @@ describe('node delivery contracts', () => {
     expect(post.status).toBe(201);
 
     await waitForAssertion(async () => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(deliveryPosts(fetchMock)).toHaveLength(1);
       const queued = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${bob.token}` },
       });
@@ -328,7 +353,7 @@ describe('node delivery contracts', () => {
     expect(swept).toBe(1);
 
     await waitForAssertion(async () => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(deliveryPosts(fetchMock)).toHaveLength(2);
       const acked = await stack.app.request('/v1/deliveries?status=acked', {
         headers: { authorization: `Bearer ${bob.token}` },
       });
@@ -637,10 +662,10 @@ describe('node delivery contracts', () => {
   });
 
   it('redrives failed http_push deliveries when their retry time is due', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('', { status: 503 }))
-      .mockResolvedValueOnce(new Response('', { status: 202 }));
+    const fetchMock = mockMessageDeliveryFetch([
+      () => new Response('', { status: 503 }),
+      () => new Response('', { status: 202 }),
+    ]);
     const ws = await createWorkspace(stack.app, 'http-node-redrive');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -662,7 +687,7 @@ describe('node delivery contracts', () => {
     expect(post.status).toBe(201);
 
     await waitForAssertion(async () => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(deliveryPosts(fetchMock)).toHaveLength(1);
       const queued = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${bob.token}` },
       });
@@ -698,7 +723,7 @@ describe('node delivery contracts', () => {
     expect(swept).toBe(1);
 
     await waitForAssertion(async () => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(deliveryPosts(fetchMock)).toHaveLength(2);
       const queued = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${bob.token}` },
       });
@@ -714,9 +739,9 @@ describe('node delivery contracts', () => {
   });
 
   it('claims a due http_push delivery only once across overlapping redrive sweeps', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('', { status: 503 }));
+    const fetchMock = mockMessageDeliveryFetch([
+      () => new Response('', { status: 503 }),
+    ]);
     const ws = await createWorkspace(stack.app, 'http-node-redrive-claim');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -736,7 +761,7 @@ describe('node delivery contracts', () => {
       body: JSON.stringify({ text: 'retry once' }),
     });
     expect(post.status).toBe(201);
-    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
 
     await stack.runtime.deps.db
       .update(deliveries)
@@ -746,6 +771,8 @@ describe('node delivery contracts', () => {
         eq(deliveries.agentId, bob.agentId),
       ));
 
+    // The redrive sweep only POSTs the durable message; no agent activity fires
+    // ephemeral events here, so a plain hang-all mock isolates the claim check.
     let releaseFetch: ((response: Response) => void) | undefined;
     fetchMock.mockReset();
     fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
@@ -765,12 +792,18 @@ describe('node delivery contracts', () => {
   });
 
   it('does not let a slow http_push receiver block self-connected recipients', async () => {
+    // Only the durable message POST hangs; ephemeral event POSTs (presence)
+    // resolve immediately so the single hung message delivery stays isolated.
     let releaseFetch: ((response: Response) => void) | undefined;
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockImplementation(() => new Promise<Response>((resolve) => {
-        releaseFetch = resolve;
-      }));
+      .mockImplementation((async (_url: unknown, init?: RequestInit) => {
+        const headers = init?.headers as Record<string, string> | undefined;
+        if (headers?.['X-Relaycast-Event'] === 'message.created') {
+          return new Promise<Response>((resolve) => { releaseFetch = resolve; });
+        }
+        return new Response('', { status: 202 });
+      }) as typeof globalThis.fetch);
     const ws = await createWorkspace(stack.app, 'http-node-slow-isolation');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -793,7 +826,7 @@ describe('node delivery contracts', () => {
     });
     expect(post.status).toBe(201);
 
-    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     await waitForAssertion(async () => {
       expect(deliverFramesOfType(carolSock, 'message.created')).toEqual([
         expect.objectContaining({

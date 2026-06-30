@@ -94,6 +94,7 @@ export async function fanoutToChannel(
         {
           db: c.get('db'),
           nodeConnections: c.get('engine').nodeConnections,
+          environment: c.get('engine').config?.environment,
           realtime: c.get('engine').realtime,
           workspaceId: ws,
         },
@@ -136,6 +137,7 @@ export async function fanoutToAgents(
       {
         db: c.get('db'),
         nodeConnections: c.get('engine').nodeConnections,
+        environment: c.get('engine').config?.environment,
         realtime: c.get('engine').realtime,
         workspaceId,
       },

@@ -108,7 +108,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       const eventType = typeof event.type === 'string' ? event.type : null;
       if (!subjectAgentId || !eventType) return;
       await sendNodePresenceContext(
-        { db, nodeConnections: realtime, realtime, workspaceId },
+        { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment },
         {
           subjectAgentId,
           event: eventType,

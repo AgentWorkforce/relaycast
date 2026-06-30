@@ -439,6 +439,11 @@ on any 2xx HTTP response, and `response` acks when the response body declares an
 Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
 token, so pure webhook endpoints should use `on_2xx` or `response` unless they can
 securely hold that token.
+HTTP push nodes also receive the ephemeral channel/workspace events a WebSocket node
+gets — reactions (`message.reacted`), read receipts (`message.read`), and presence /
+status updates — as best-effort POSTs to the same delivery URL (same auth/signing,
+no delivery row or ack). Each carries a `type` plus the event `data`; receivers that
+only want durable messages can filter on the `X-Relaycast-Event` header.
 Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
 handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
 self-host adapter runs that sweep on its local maintenance timer.
