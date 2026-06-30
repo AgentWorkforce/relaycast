@@ -54,6 +54,7 @@ receiptRoutes.post(
               {
                 db,
                 nodeConnections: c.get('engine').nodeConnections,
+                environment: c.get('engine').config?.environment,
                 workspaceId: workspace.id,
               },
               {

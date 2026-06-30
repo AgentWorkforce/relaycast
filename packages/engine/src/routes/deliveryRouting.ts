@@ -8,7 +8,7 @@ import type {
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
-import { hmacSha256Hex } from '../lib/crypto.js';
+import { buildHttpPushHeaders } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
@@ -78,6 +78,7 @@ async function fanoutToAgentsForContext(
         nodeConnections: ctx.engine.nodeConnections,
         realtime: ctx.engine.realtime,
         workspaceId: ctx.workspaceId,
+        environment: ctx.engine.config?.environment,
       },
       {
         agentIds: unique,
@@ -206,15 +207,6 @@ function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: 
   return null;
 }
 
-function publicHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
-  if (!headers) return {};
-  const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (typeof value === 'string') result[name] = value;
-  }
-  return result;
-}
-
 async function recordHttpPushRetry(
   ctx: RoutingContext,
   deliveryId: string,
@@ -271,28 +263,6 @@ async function dispatchHttpPush(args: {
     data: args.eventData,
   });
 
-  const auth = config.auth && typeof config.auth === 'object' && !Array.isArray(config.auth)
-    ? config.auth as Record<string, unknown>
-    : { type: 'none' };
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Relaycast-Event': args.eventType,
-    'X-Relaycast-Delivery': args.delivery.id,
-  };
-  if (auth.type === 'bearer' && typeof auth.token === 'string') {
-    headers.Authorization = `Bearer ${auth.token}`;
-  } else if (auth.type === 'static_headers') {
-    Object.assign(headers, publicHeaders(auth.headers as Record<string, unknown> | undefined));
-  } else if (auth.type === 'hmac_sha256' && typeof auth.secret === 'string') {
-    const timestampHeader = typeof auth.timestamp_header === 'string' ? auth.timestamp_header : 'X-Relaycast-Timestamp';
-    const signatureHeader = typeof auth.signature_header === 'string' ? auth.signature_header : 'X-Relaycast-Signature';
-    const prefix = typeof auth.prefix === 'string' ? auth.prefix : 'sha256=';
-    const signedPayload = auth.signed_payload === 'body' ? body : `${timestamp}.${body}`;
-    headers[timestampHeader] = timestamp;
-    headers[signatureHeader] = `${prefix}${await hmacSha256Hex(signedPayload, auth.secret)}`;
-  }
-
   try {
     const claimConditions = [
       eq(deliveryRows.workspaceId, args.ctx.workspaceId),
@@ -315,6 +285,9 @@ async function dispatchHttpPush(args: {
       .returning({ id: deliveryRows.id });
     if (started.length === 0) return 'failed';
 
+    // Build headers inside the claim/retry boundary so a signing failure is
+    // recorded as a retryable dispatch error rather than rejecting uncaught.
+    const headers = await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp);
     const response = await globalThis.fetch(url, {
       method: 'POST',
       headers,

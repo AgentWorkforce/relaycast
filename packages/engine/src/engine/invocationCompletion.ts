@@ -3,7 +3,7 @@ import { enqueueEvent } from './eventQueue.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
 
-export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections'>;
+export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
 type CompletionResult = {
   invocation_id: string;
@@ -46,6 +46,7 @@ export async function emitInvocationCompletionEffects(
         db: deps.db,
         nodeConnections: deps.nodeConnections,
         workspaceId,
+        environment: deps.config?.environment,
       }, {
         agentIds: [result.caller_id],
         event: eventType,

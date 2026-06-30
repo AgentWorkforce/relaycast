@@ -94,6 +94,7 @@ reactionRoutes.post(
             {
               db,
               nodeConnections: c.get('engine').nodeConnections,
+              environment: c.get('engine').config?.environment,
               workspaceId: workspace.id,
             },
             {
@@ -184,6 +185,7 @@ reactionRoutes.delete(
               {
                 db,
                 nodeConnections: c.get('engine').nodeConnections,
+                environment: c.get('engine').config?.environment,
                 workspaceId: workspace.id,
               },
               {
