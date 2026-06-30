@@ -442,8 +442,11 @@ securely hold that token.
 HTTP push nodes also receive the ephemeral channel/workspace events a WebSocket node
 gets — reactions (`message.reacted`), read receipts (`message.read`), and presence /
 status updates — as best-effort POSTs to the same delivery URL (same auth/signing,
-no delivery row or ack). Each carries a `type` plus the event `data`; receivers that
-only want durable messages can filter on the `X-Relaycast-Event` header.
+no delivery row or ack). Each body is snake_case with `type`, `workspace_id`,
+`timestamp`, and the event `data`, plus event-specific identifiers: `message_id` /
+`agent_id` / `agent_name` for reactions and receipts, or `topic` / `channel_id` /
+`agent_ids` for presence and context updates. Receivers that only want durable
+messages can filter on the `X-Relaycast-Event` header.
 Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
 handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
 self-host adapter runs that sweep on its local maintenance timer.

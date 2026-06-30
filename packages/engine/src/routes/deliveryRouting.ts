@@ -263,8 +263,6 @@ async function dispatchHttpPush(args: {
     data: args.eventData,
   });
 
-  const headers = await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp);
-
   try {
     const claimConditions = [
       eq(deliveryRows.workspaceId, args.ctx.workspaceId),
@@ -287,6 +285,9 @@ async function dispatchHttpPush(args: {
       .returning({ id: deliveryRows.id });
     if (started.length === 0) return 'failed';
 
+    // Build headers inside the claim/retry boundary so a signing failure is
+    // recorded as a retryable dispatch error rather than rejecting uncaught.
+    const headers = await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp);
     const response = await globalThis.fetch(url, {
       method: 'POST',
       headers,

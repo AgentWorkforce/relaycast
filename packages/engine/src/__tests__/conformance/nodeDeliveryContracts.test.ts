@@ -247,12 +247,14 @@ describe('node delivery contracts', () => {
   });
 
   it('acks an http_push delivery when the node contract uses response body ack', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ack: true }), {
+    // A fresh Response per call: the message dispatch reads the JSON body while
+    // ephemeral presence POSTs cancel theirs, so they must not share one object.
+    mockMessageDeliveryFetch([
+      () => new Response(JSON.stringify({ ack: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
-    );
+    ]);
     const ws = await createWorkspace(stack.app, 'http-node-response-ack');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');

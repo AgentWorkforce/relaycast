@@ -107,7 +107,10 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       const subjectAgentId = typeof event.subject_agent_id === 'string' ? event.subject_agent_id : null;
       const eventType = typeof event.type === 'string' ? event.type : null;
       if (!subjectAgentId || !eventType) return;
-      await sendNodePresenceContext(
+      // Fire-and-forget: presence broadcasts/offline sweeps await this handler,
+      // so a slow or black-holed http_push receiver must not stall them. WS
+      // context sends are in-memory; the http_push POST runs detached.
+      void sendNodePresenceContext(
         { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment },
         {
           subjectAgentId,
@@ -118,7 +121,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
             status: event.status,
           },
         },
-      );
+      ).catch(() => {});
     },
   });
   const rateLimiter = new InProcessRateLimiter();
