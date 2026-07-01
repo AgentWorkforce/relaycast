@@ -1,4 +1,4 @@
-import { eq, and, not, asc, isNull, isNotNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
+import { eq, and, or, not, asc, isNull, inArray, notInArray, lte, gt, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryStatus } from '@relaycast/types';
@@ -628,8 +628,15 @@ export async function fetchDueHttpPushDeliveryEvents(
   const conditions = [
     eq(deliveries.status, 'queued'),
     eq(deliveries.routeNodeKind, 'http_push'),
-    isNotNull(deliveries.nextAttemptAt),
-    lte(deliveries.nextAttemptAt, now),
+    // Match deliveries that are EITHER never-attempted (nextAttemptAt IS NULL —
+    // e.g. the inline send-time push never ran or its waitUntil was lost) OR due
+    // for retry (nextAttemptAt <= now). Without the NULL branch the cron could
+    // only ever *retry* deliveries that already had an inline attempt (the inline
+    // dispatch is what first stamps nextAttemptAt); a fresh http_push delivery
+    // whose inline push never fired would sit queued forever and never reach the
+    // webhook — an http_push agent never "comes online" to pull it, so the cron
+    // is its only guaranteed delivery path.
+    or(isNull(deliveries.nextAttemptAt), lte(deliveries.nextAttemptAt, now)),
     sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
   ];
   if (opts.workspaceId) {

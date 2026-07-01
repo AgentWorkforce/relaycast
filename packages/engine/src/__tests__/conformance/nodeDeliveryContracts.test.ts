@@ -370,6 +370,60 @@ describe('node delivery contracts', () => {
     });
   });
 
+  it('sweeps never-attempted http_push deliveries (nextAttemptAt IS NULL)', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 202 }));
+    const ws = await createWorkspace(stack.app, 'http-node-null-next');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'null-next-node',
+      ackMode: 'on_2xx',
+    });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'null next attempt' }),
+    });
+    expect(post.status).toBe(201);
+    // Let the inline send-time dispatch settle first so its async POST can't
+    // bleed into the post-reset sweep count below.
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // Reproduce the failure mode where the inline send-time push never ran: the
+    // delivery exists and is queued, but nextAttemptAt was never stamped (only an
+    // inline dispatch attempt sets it). Before the fix the cron sweep skipped
+    // these forever — it required nextAttemptAt IS NOT NULL — so an http_push
+    // agent that never connects would never receive the message.
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, ackedAt: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    fetchMock.mockClear();
+
+    const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+
+    await waitForAssertion(async () => {
+      // Filter out ephemeral (presence/receipt) POSTs — count only the
+      // message-delivery POST the sweep drove to the webhook.
+      expect(deliveryPosts(fetchMock)).toHaveLength(1);
+      const acked = await stack.app.request('/v1/deliveries?status=acked', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await acked.json()) as { data: Array<{ status: string }> }).data,
+      ).toEqual([expect.objectContaining({ status: 'acked' })]);
+    });
+  });
+
   it('defaults http_push nodes to one active agent binding', async () => {
     const ws = await createWorkspace(stack.app, 'http-node-capacity');
     await registerAgent(stack.app, ws.workspaceKey, 'bob');
