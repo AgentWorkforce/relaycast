@@ -5,6 +5,9 @@ import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
+import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -224,5 +227,100 @@ export async function triggerWebhook(
     author,
     created_at: message.createdAt.toISOString(),
     metadata: sanitizeUserMessageMetadata(data.payload),
+  };
+}
+
+export async function triggerIntegrationMessage(
+  db: Db,
+  workspaceId: string,
+  channelId: string,
+  data: {
+    text: string;
+    source: string;
+    author: string;
+    payload?: Record<string, unknown>;
+    webhookId?: string;
+    webhookName?: string;
+    mode?: 'wait' | 'steer';
+  },
+  options: { mailbox?: MailboxConfig } = {},
+) {
+  const postingAgentId = await ensureWebhookAgent(db, workspaceId);
+  const messageId = generateId();
+  const webhookId = data.webhookId ?? `relayfile:${data.source}`;
+  const webhookName = data.webhookName ?? data.source;
+  const metadata = {
+    ...inboundWebhookMessageMetadata({
+      webhookId,
+      webhookName,
+      source: data.source,
+      author: data.author,
+    }),
+    ...sanitizeUserMessageMetadata(data.payload),
+  };
+
+  const mailbox = options.mailbox ?? {
+    ttlMs: DEFAULT_MAILBOX_TTL_MS,
+    depthCap: DEFAULT_MAILBOX_DEPTH_CAP,
+  };
+
+  // Insert the message AND compute channel deliveries in one atomic unit — the
+  // delivery rows are what `routeDeliveryOutcomes` dispatches to node-connected
+  // agents. A bare insert (the previous behavior) produced no deliveries, so
+  // broker/node agents never received inbound integration messages.
+  const results = await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [
+      writeDb
+        .insert(messages)
+        .values({
+          id: messageId,
+          workspaceId,
+          channelId,
+          agentId: postingAgentId,
+          body: data.text,
+          metadata,
+        })
+        .returning(),
+    ];
+
+    writes.push(
+      buildChannelDeliveryWrite(writeDb, {
+        workspaceId,
+        messageId,
+        channelId,
+        senderAgentId: postingAgentId,
+        mode: data.mode === 'steer' ? 'next-tool-call' : 'immediate',
+        ttlMs: mailbox.ttlMs,
+        depthCap: mailbox.depthCap,
+      }),
+    );
+
+    return writes;
+  });
+  const [message] = results[0] as (typeof messages.$inferSelect)[];
+
+  const [channel] = await db
+    .select({ name: channels.name })
+    .from(channels)
+    .where(eq(channels.id, channelId));
+
+  const outcomes = await fetchChannelDeliveryOutcomes(db, {
+    messageId,
+    channelId,
+    senderAgentId: postingAgentId,
+  });
+
+  return {
+    message_id: message.id,
+    workspace_id: workspaceId,
+    channel_id: channelId,
+    channel: channel?.name || '',
+    text: message.body,
+    source: data.source,
+    author: data.author,
+    created_at: message.createdAt.toISOString(),
+    metadata: sanitizeUserMessageMetadata(data.payload),
+    _deliveries: outcomes.deliveries,
+    _delivery_rejections: outcomes.rejections,
   };
 }

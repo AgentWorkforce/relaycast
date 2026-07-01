@@ -37,6 +37,7 @@ import { fileRoutes } from './routes/file.js';
 import { presenceRoutes } from './routes/presence.js';
 import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
+import { relayfileInboundRoutes } from './routes/relayfileInbound.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { actionRoutes } from './routes/action.js';
 import { nodeRoutes } from './routes/node.js';
@@ -198,6 +199,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', deliveryRoutes);
   v1.route('/', fileRoutes);
   v1.route('/', inboundWebhookRoutes);
+  v1.route('/', relayfileInboundRoutes);
   v1.route('/', eventSubscriptionRoutes);
   v1.route('/', actionRoutes);
   v1.route('/', nodeRoutes);
