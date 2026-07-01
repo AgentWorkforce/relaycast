@@ -14,6 +14,7 @@ import {
   getObserverTokenFromContext,
   observerAllowsConversation,
   observerAllowsMessage,
+  OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -163,19 +164,30 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
   }
 });
 
-// GET /workspace - get current workspace
-workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
-  try {
-    const db = c.get('db');
-    const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
-    if (!workspace) {
-      return workspaceNotFound(c);
+// GET /workspace - get current workspace metadata (id/name/plan/system_prompt/
+// created_at/metadata only, nothing sensitive) — accepts an observer token
+// (any scope; this endpoint predates per-scope enforcement and there's no
+// narrower scope that fits "read workspace metadata") in addition to a
+// workspace key, so `selectEngineForKey`-style credential probes succeed for
+// observer-token logins, not just full workspace keys. Agent/node tokens are
+// still rejected, matching prior behavior.
+workspaceRoutes.get(
+  '/workspace',
+  requireWorkspaceRead([...OBSERVER_SCOPES], { allowAgent: false, allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
+      if (!workspace) {
+        return workspaceNotFound(c);
+      }
+      return jsonOk(c, workspace);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
     }
-    return jsonOk(c, workspace);
-  } catch (err: unknown) {
-    return errorResponse(c, err);
-  }
-});
+  },
+);
 
 // PATCH /workspace - update workspace
 workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
