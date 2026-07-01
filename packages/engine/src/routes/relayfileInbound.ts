@@ -119,6 +119,15 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   }
   const deliveryEventId = c.req.header('X-Relay-Event-Id')?.trim() || event.eventId;
 
+  // Without a stable dedupe key we cannot make delivery idempotent, so a
+  // relayfile-cloud retry/redelivery would inject the message twice. Skip
+  // cleanly (2xx) rather than inject un-deduplicated. relayfile-cloud always
+  // sends X-Relay-Event-Id, so this only trips on malformed deliveries.
+  if (!deliveryEventId) {
+    logger.warn('relayfile inbound missing event id', { workspace_id: workspaceId, channel_id: channelId });
+    return jsonOk(c, { ok: true, skipped: 'missing_event_id' });
+  }
+
   if (!event.path || !event.type) {
     return jsonOk(c, { ok: true, skipped: 'missing_event_fields' });
   }
@@ -242,7 +251,11 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       provider,
       error: err instanceof Error ? err.message : String(err),
     });
-    return jsonOk(c, { ok: true, skipped: 'delivery_failed' });
+    // Unknown failures here mean the message insert / delivery-row write itself
+    // failed — most likely transient (DB/infra), not a poison payload. Return 5xx
+    // so relayfile-cloud's queue consumer retries (and eventually DLQs) instead of
+    // recording the drop as a successful 2xx and silently losing the message.
+    return jsonError(c, 'delivery_failed', 'inbound delivery failed', 500);
   }
 });
 
