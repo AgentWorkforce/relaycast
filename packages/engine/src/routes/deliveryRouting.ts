@@ -8,7 +8,7 @@ import type {
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
-import { buildHttpPushHeaders } from '../engine/httpPushDispatch.js';
+import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
@@ -79,6 +79,7 @@ async function fanoutToAgentsForContext(
         realtime: ctx.engine.realtime,
         workspaceId: ctx.workspaceId,
         environment: ctx.engine.config?.environment,
+        httpPushProxy: ctx.engine.config?.httpPushProxy,
       },
       {
         agentIds: unique,
@@ -246,6 +247,20 @@ async function dispatchHttpPush(args: {
     return 'failed';
   }
 
+  // Optional egress proxy: when the node opts in with `use_proxy`, route the POST
+  // through the deployment-configured forwarder instead of the destination
+  // directly (real target rides in X-Forward-To). Used to reach receivers that
+  // block the engine's own network origin (e.g. a webhook behind Cloudflare bot
+  // rules that reject Cloudflare Workers). The real `url` is still SSRF-checked
+  // above; the proxy requires both a url and a secret.
+  const proxied = resolveHttpPushProxy(url, config, args.ctx.engine.config?.httpPushProxy);
+  if (!proxied.ok) {
+    await recordHttpPushRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
+    return 'failed';
+  }
+  const requestUrl = proxied.requestUrl;
+  const proxyHeaders = proxied.proxyHeaders;
+
   const ackMode = config.ack_mode === 'on_2xx' || config.ack_mode === 'response'
     ? config.ack_mode
     : 'manual';
@@ -296,8 +311,8 @@ async function dispatchHttpPush(args: {
 
     // Build headers inside the claim/retry boundary so a signing failure is
     // recorded as a retryable dispatch error rather than rejecting uncaught.
-    const headers = await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp);
-    const response = await globalThis.fetch(url, {
+    const headers = { ...(await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp)), ...proxyHeaders };
+    const response = await globalThis.fetch(requestUrl, {
       method: 'POST',
       headers,
       body,

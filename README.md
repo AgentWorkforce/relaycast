@@ -439,6 +439,12 @@ on any 2xx HTTP response, and `response` acks when the response body declares an
 Manual HTTP receivers ack by calling `/v1/deliveries/:id/ack` with the bound agent's
 token, so pure webhook endpoints should use `on_2xx` or `response` unless they can
 securely hold that token.
+Set `useProxy: true` (wire field `use_proxy`) to route this node's webhook POST through
+the deployment's configured egress proxy instead of hitting `url` directly — the real
+target is forwarded in `X-Forward-To`. Use it for receivers that block the server's
+network origin (e.g. a webhook behind Cloudflare bot protection that rejects requests
+from Cloudflare Workers). If the deployment has no proxy configured, `use_proxy`
+deliveries fail with a clear error rather than silently going direct.
 HTTP push nodes also receive the ephemeral channel/workspace events a WebSocket node
 gets — reactions (`message.reacted`), read receipts (`message.read`), and presence /
 status updates — as best-effort POSTs to the same delivery URL (same auth/signing,

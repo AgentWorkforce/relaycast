@@ -47,6 +47,7 @@ export async function emitInvocationCompletionEffects(
         nodeConnections: deps.nodeConnections,
         workspaceId,
         environment: deps.config?.environment,
+        httpPushProxy: deps.config?.httpPushProxy,
       }, {
         agentIds: [result.caller_id],
         event: eventType,

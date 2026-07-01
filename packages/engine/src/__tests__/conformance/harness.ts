@@ -15,6 +15,7 @@ export function makeNodeStack(options?: {
   ttlMs?: number;
   mailbox?: EngineConfig['mailbox'];
   environment?: string;
+  httpPushProxy?: EngineConfig['httpPushProxy'];
   entitlements?: EntitlementsProvider;
 }): TestStack {
   const runtime = createNodeRuntime({
@@ -24,6 +25,7 @@ export function makeNodeStack(options?: {
     config: {
       environment: options?.environment ?? 'test',
       mailbox: options?.mailbox,
+      httpPushProxy: options?.httpPushProxy,
     },
     entitlements: options?.entitlements,
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.

@@ -647,6 +647,14 @@ components:
             HTTP push receivers must authenticate that ack with the bound agent token. `on_2xx`
             acks on any 2xx HTTP response; `response` acks when the response body declares an ack,
             for example `{ "ack": true }`.
+        use_proxy:
+          type: boolean
+          description: >
+            When `true`, the deployment routes this node's webhook POST through its
+            configured egress proxy instead of hitting `url` directly (the real target
+            is passed to the proxy in `X-Forward-To`). Use for receivers that block the
+            server's network origin (e.g. a webhook behind Cloudflare bot rules). If the
+            deployment has no proxy configured, deliveries fail rather than going direct.
         auth:
           $ref: '#/components/schemas/NodeDeliveryAuth'
 

@@ -7,6 +7,11 @@ const RELAYCAST_CONTROLLED_HEADERS = new Set([
   'content-type',
   'x-relaycast-event',
   'x-relaycast-delivery',
+  // Egress-proxy control headers: never let operator-supplied static_headers set
+  // these (case-insensitively), or a node could inject `x-forward-to` to point
+  // the proxy at an internal address and bypass the SSRF check on the real url.
+  'x-forward-to',
+  'x-proxy-auth',
 ]);
 
 function publicHeaders(
@@ -67,6 +72,36 @@ export function strictHttpPushDispatch(environment: string | undefined): boolean
   return environment !== 'test';
 }
 
+export interface HttpPushProxyConfig {
+  url?: string;
+  secret?: string;
+}
+
+/**
+ * Resolve the effective request target for an http_push POST. When the node opts
+ * in with `delivery.use_proxy`, the POST is routed through the deployment's
+ * configured forwarder (`proxy`) instead of the destination directly — the real
+ * target rides in `X-Forward-To`, authenticated with `X-Proxy-Auth`. Used to
+ * reach receivers that block the engine's own network origin. Shared by durable
+ * message dispatch and ephemeral node-event dispatch so both honor `use_proxy`.
+ * The real `realUrl` must already be SSRF-checked by the caller.
+ */
+export function resolveHttpPushProxy(
+  realUrl: string,
+  config: Record<string, unknown>,
+  proxy: HttpPushProxyConfig | undefined,
+): { ok: true; requestUrl: string; proxyHeaders: Record<string, string> } | { ok: false; reason: string } {
+  if (config.use_proxy !== true) return { ok: true, requestUrl: realUrl, proxyHeaders: {} };
+  if (!proxy?.url || !proxy.secret) {
+    return { ok: false, reason: 'use_proxy set but no http_push proxy configured' };
+  }
+  return {
+    ok: true,
+    requestUrl: proxy.url,
+    proxyHeaders: { 'X-Forward-To': realUrl, 'X-Proxy-Auth': proxy.secret },
+  };
+}
+
 export interface EphemeralNodeEvent {
   workspaceId: string;
   eventType: string;
@@ -86,11 +121,20 @@ export async function postEphemeralEventToHttpPushNode(args: {
   deliveryConfig: Record<string, unknown> | null | undefined;
   strict: boolean;
   event: EphemeralNodeEvent;
+  /** Egress proxy for `use_proxy` nodes; omit to always POST direct. */
+  proxy?: HttpPushProxyConfig;
 }): Promise<boolean> {
   const config = args.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) return false;
   if (!isSafeExternalUrl(url, { strict: args.strict })) return false;
+
+  // Honor `use_proxy` here too, so a proxied node's ephemeral events reach the
+  // receiver in the same environment durable messages do. Best-effort: if the
+  // node opts in but no proxy is configured, drop the event rather than leaking
+  // a direct request that would just be blocked.
+  const resolved = resolveHttpPushProxy(url, config, args.proxy);
+  if (!resolved.ok) return false;
 
   const timestamp = new Date().toISOString();
   // Spread `extra` first so the canonical event fields always win.
@@ -103,12 +147,14 @@ export async function postEphemeralEventToHttpPushNode(args: {
   });
 
   try {
-    const headers = await buildHttpPushHeaders(config, args.event.eventType, null, body, timestamp);
-    const response = await globalThis.fetch(url, {
+    const headers = { ...(await buildHttpPushHeaders(config, args.event.eventType, null, body, timestamp)), ...resolved.proxyHeaders };
+    const response = await globalThis.fetch(resolved.requestUrl, {
       method: 'POST',
       headers,
       body,
-      redirect: 'error',
+      // Cloudflare Workers reject redirect:'error'; use 'manual' and treat any
+      // 3xx as non-ok below (response.ok is false for 3xx).
+      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });
     // We only inspect status; release the connection instead of leaking the body.

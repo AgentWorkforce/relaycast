@@ -111,7 +111,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       // so a slow or black-holed http_push receiver must not stall them. WS
       // context sends are in-memory; the http_push POST runs detached.
       void sendNodePresenceContext(
-        { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment },
+        { db, nodeConnections: realtime, realtime, workspaceId, environment: options.config?.environment, httpPushProxy: options.config?.httpPushProxy },
         {
           subjectAgentId,
           event: eventType,
