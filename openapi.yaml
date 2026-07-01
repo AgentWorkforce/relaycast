@@ -649,6 +649,13 @@ components:
             for example `{ "ack": true }`.
         auth:
           $ref: '#/components/schemas/NodeDeliveryAuth'
+        use_proxy:
+          type: boolean
+          description: >
+            Route this node's webhook delivery through the deployment-configured egress
+            proxy instead of POSTing to `url` directly. `url` stays the real destination;
+            the engine forwards through the proxy at dispatch time. If the deployment has no
+            proxy configured, the delivery is not sent and stays queued with an error.
 
     NodeRosterEntry:
       type: object
