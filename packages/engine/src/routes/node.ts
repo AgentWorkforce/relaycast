@@ -46,6 +46,10 @@ const httpDeliverySchema = z.object({
   url: z.url(),
   ack_mode: deliveryAckModeSchema.default('manual'),
   auth: deliveryAuthSchema.default({ type: 'none' }),
+  // Opt this node's webhook delivery into the deployment-configured egress proxy
+  // (EngineConfig.httpPushProxy). `url` stays the real destination; the engine
+  // forwards through the proxy at dispatch time. See dispatchHttpPush.
+  use_proxy: z.boolean().optional(),
 });
 
 const createNodeSchema = z.object({

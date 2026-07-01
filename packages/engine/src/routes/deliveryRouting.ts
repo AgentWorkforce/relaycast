@@ -246,6 +246,25 @@ async function dispatchHttpPush(args: {
     return 'failed';
   }
 
+  // Optional egress proxy: when the node opts in with `use_proxy`, POST to the
+  // deployment-configured forwarder instead of the destination directly, passing
+  // the real target via X-Forward-To. Used to reach receivers that block the
+  // engine's own network origin (e.g. a webhook behind Cloudflare bot rules that
+  // reject Cloudflare Workers). The real `url` is still SSRF-checked above; the
+  // proxy URL is operator-configured and trusted.
+  let requestUrl = url;
+  const proxyHeaders: Record<string, string> = {};
+  if (config.use_proxy === true) {
+    const proxyCfg = args.ctx.engine.config?.httpPushProxy;
+    if (!proxyCfg?.url) {
+      await recordHttpPushRetry(args.ctx, args.delivery.id, 'use_proxy set but no http_push proxy configured', { incrementAttempts: true });
+      return 'failed';
+    }
+    requestUrl = proxyCfg.url;
+    proxyHeaders['X-Forward-To'] = url;
+    if (proxyCfg.secret) proxyHeaders['X-Proxy-Auth'] = proxyCfg.secret;
+  }
+
   const ackMode = config.ack_mode === 'on_2xx' || config.ack_mode === 'response'
     ? config.ack_mode
     : 'manual';
@@ -296,8 +315,8 @@ async function dispatchHttpPush(args: {
 
     // Build headers inside the claim/retry boundary so a signing failure is
     // recorded as a retryable dispatch error rather than rejecting uncaught.
-    const headers = await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp);
-    const response = await globalThis.fetch(url, {
+    const headers = { ...(await buildHttpPushHeaders(config, args.eventType, args.delivery.id, body, timestamp)), ...proxyHeaders };
+    const response = await globalThis.fetch(requestUrl, {
       method: 'POST',
       headers,
       body,

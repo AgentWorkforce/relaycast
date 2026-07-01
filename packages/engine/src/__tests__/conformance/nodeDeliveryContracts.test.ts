@@ -407,6 +407,65 @@ describe('node delivery contracts', () => {
     });
   });
 
+  it('routes http_push through the configured egress proxy when use_proxy is set', async () => {
+    const proxyStack = makeNodeStack({ ttlMs: 60_000, httpPushProxy: { url: 'https://proxy.example.test/fwd', secret: 'proxy-secret' } });
+    try {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 202 }));
+      const ws = await createWorkspace(proxyStack.app, 'http-node-use-proxy');
+      const alice = await registerAgent(proxyStack.app, ws.workspaceKey, 'alice');
+      await registerAgent(proxyStack.app, ws.workspaceKey, 'bob');
+      const authed = (path, key, body) => proxyStack.app.request(path, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify(body),
+      });
+      expect((await authed('/v1/nodes', ws.workspaceKey, {
+        name: 'proxied-node', kind: 'http_push',
+        delivery: { url: 'https://receiver.example.test/relaycast', use_proxy: true, ack_mode: 'on_2xx',
+          auth: { type: 'static_headers', headers: { 'X-Webhook-Secret': 'shh' } } },
+      })).status).toBe(201);
+      expect((await authed('/v1/nodes/proxied-node/agents', ws.workspaceKey, { agent_name: 'bob' })).status).toBe(201);
+      expect((await authed('/v1/channels/general/messages', alice.token, { text: 'via proxy' })).status).toBe(201);
+
+      const deliveryCall = () => fetchMock.mock.calls.find((c) => (c[1]?.headers)?.['X-Relaycast-Event'] === 'message.created');
+      await waitForAssertion(() => expect(deliveryCall()).toBeTruthy());
+      const [reqUrl, init] = deliveryCall();
+      // The POST goes to the PROXY, with the real target + auth in control headers,
+      // and the node's own webhook auth header preserved for the proxy to forward.
+      expect(reqUrl).toBe('https://proxy.example.test/fwd');
+      const h = init.headers;
+      expect(h['X-Forward-To']).toBe('https://receiver.example.test/relaycast');
+      expect(h['X-Proxy-Auth']).toBe('proxy-secret');
+      expect(h['X-Webhook-Secret']).toBe('shh');
+    } finally {
+      proxyStack.close();
+    }
+  });
+
+  it('fails an http_push use_proxy delivery when no proxy is configured', async () => {
+    // Default `stack` has no httpPushProxy configured.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 202 }));
+    const ws = await createWorkspace(stack.app, 'http-node-proxy-missing');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const authed = (path, key, body) => stack.app.request(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify(body),
+    });
+    expect((await authed('/v1/nodes', ws.workspaceKey, {
+      name: 'proxy-missing-node', kind: 'http_push',
+      delivery: { url: 'https://receiver.example.test/relaycast', use_proxy: true, ack_mode: 'on_2xx', auth: { type: 'none' } },
+    })).status).toBe(201);
+    expect((await authed('/v1/nodes/proxy-missing-node/agents', ws.workspaceKey, { agent_name: 'bob' })).status).toBe(201);
+    expect((await authed('/v1/channels/general/messages', alice.token, { text: 'no proxy' })).status).toBe(201);
+
+    await waitForAssertion(async () => {
+      // No webhook POST should ever fire; the delivery stays queued with an error.
+      expect(deliveryPosts(fetchMock)).toHaveLength(0);
+      const queued = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${bob.token}` } });
+      const [item] = ((await queued.json()) as { data: Array<{ status: string; last_dispatch_error: string | null }> }).data;
+      expect(item).toMatchObject({ status: 'queued' });
+      expect(item.last_dispatch_error).toMatch(/no http_push proxy configured/);
+    });
+  });
+
   it('sweeps never-attempted http_push deliveries (nextAttemptAt IS NULL)', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

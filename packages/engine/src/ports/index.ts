@@ -94,6 +94,19 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * Optional egress proxy for http_push node delivery. When set, nodes that
+   * register with `delivery.use_proxy: true` have their webhook POST routed
+   * through this forwarder instead of hitting the destination directly — the
+   * real target is passed via the `X-Forward-To` header and authenticated with
+   * `secret` (sent as `X-Proxy-Auth`). Used to reach receivers that block the
+   * engine's own network origin (e.g. a webhook behind Cloudflare bot rules that
+   * rejects Cloudflare Workers). Hosted adapters wire this from their secrets.
+   */
+  httpPushProxy?: {
+    url?: string;
+    secret?: string;
+  };
+  /**
    * When set, the structured logger exports prod logs to a PostHog OTLP endpoint
    * via plain fetch (no posthog-node dependency). Self-host leaves this unset and
    * logs to the console only; cloud wires it from its secrets.
