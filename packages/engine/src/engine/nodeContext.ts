@@ -3,7 +3,7 @@ import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
 import { toFleetWireJson } from './deliveryWire.js';
-import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch } from './httpPushDispatch.js';
+import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch, type HttpPushProxyConfig } from './httpPushDispatch.js';
 
 type NodeContextTopic = 'presence' | 'channel' | 'thread' | 'agent';
 
@@ -14,6 +14,8 @@ type NodeContextDeps = {
   workspaceId: string;
   /** Defaults to strict SSRF hardening when omitted (production-safe). */
   environment?: string;
+  /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
+  httpPushProxy?: HttpPushProxyConfig;
 };
 
 type ScopedNodeRow = {
@@ -93,6 +95,7 @@ async function sendContextToRows(
         postEphemeralEventToHttpPushNode({
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
+          proxy: deps.httpPushProxy,
           event: {
             workspaceId: deps.workspaceId,
             eventType: message.event,

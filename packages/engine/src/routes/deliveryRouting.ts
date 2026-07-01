@@ -8,7 +8,7 @@ import type {
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
 import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
-import { buildHttpPushHeaders } from '../engine/httpPushDispatch.js';
+import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
@@ -79,6 +79,7 @@ async function fanoutToAgentsForContext(
         realtime: ctx.engine.realtime,
         workspaceId: ctx.workspaceId,
         environment: ctx.engine.config?.environment,
+        httpPushProxy: ctx.engine.config?.httpPushProxy,
       },
       {
         agentIds: unique,
@@ -246,24 +247,19 @@ async function dispatchHttpPush(args: {
     return 'failed';
   }
 
-  // Optional egress proxy: when the node opts in with `use_proxy`, POST to the
-  // deployment-configured forwarder instead of the destination directly, passing
-  // the real target via X-Forward-To. Used to reach receivers that block the
-  // engine's own network origin (e.g. a webhook behind Cloudflare bot rules that
-  // reject Cloudflare Workers). The real `url` is still SSRF-checked above; the
-  // proxy URL is operator-configured and trusted.
-  let requestUrl = url;
-  const proxyHeaders: Record<string, string> = {};
-  if (config.use_proxy === true) {
-    const proxyCfg = args.ctx.engine.config?.httpPushProxy;
-    if (!proxyCfg?.url) {
-      await recordHttpPushRetry(args.ctx, args.delivery.id, 'use_proxy set but no http_push proxy configured', { incrementAttempts: true });
-      return 'failed';
-    }
-    requestUrl = proxyCfg.url;
-    proxyHeaders['X-Forward-To'] = url;
-    if (proxyCfg.secret) proxyHeaders['X-Proxy-Auth'] = proxyCfg.secret;
+  // Optional egress proxy: when the node opts in with `use_proxy`, route the POST
+  // through the deployment-configured forwarder instead of the destination
+  // directly (real target rides in X-Forward-To). Used to reach receivers that
+  // block the engine's own network origin (e.g. a webhook behind Cloudflare bot
+  // rules that reject Cloudflare Workers). The real `url` is still SSRF-checked
+  // above; the proxy requires both a url and a secret.
+  const proxied = resolveHttpPushProxy(url, config, args.ctx.engine.config?.httpPushProxy);
+  if (!proxied.ok) {
+    await recordHttpPushRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
+    return 'failed';
   }
+  const requestUrl = proxied.requestUrl;
+  const proxyHeaders = proxied.proxyHeaders;
 
   const ackMode = config.ack_mode === 'on_2xx' || config.ack_mode === 'response'
     ? config.ack_mode

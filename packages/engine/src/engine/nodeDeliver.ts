@@ -3,7 +3,7 @@ import { agents, agentNodeBindings, channelMembers, dmConversations, dmParticipa
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload } from './deliveryWire.js';
-import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch } from './httpPushDispatch.js';
+import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch, type HttpPushProxyConfig } from './httpPushDispatch.js';
 
 type NodeDeliverDeps = {
   db: EngineDb;
@@ -11,6 +11,8 @@ type NodeDeliverDeps = {
   workspaceId: string;
   /** Defaults to strict SSRF hardening when omitted (production-safe). */
   environment?: string;
+  /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
+  httpPushProxy?: HttpPushProxyConfig;
 };
 
 type NodeDeliverRecipient = {
@@ -111,6 +113,7 @@ function deliverEventToRecipient(
     return postEphemeralEventToHttpPushNode({
       deliveryConfig: recipient.deliveryConfig,
       strict: strictHttpPushDispatch(deps.environment),
+      proxy: deps.httpPushProxy,
       event: {
         workspaceId: deps.workspaceId,
         eventType: args.event,

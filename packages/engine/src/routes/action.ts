@@ -212,6 +212,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
             db: c.get('db'),
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
+            httpPushProxy: c.get('engine').config?.httpPushProxy,
             workspaceId: workspace.id,
           },
           {

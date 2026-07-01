@@ -320,6 +320,13 @@ export interface HttpPushNodeDelivery {
   url: string;
   ackMode?: NodeAckMode;
   auth?: NodeDeliveryAuth;
+  /**
+   * Route this node's webhook POST through the deployment's configured egress
+   * proxy (wire field `use_proxy`) instead of hitting `url` directly. For
+   * receivers that block the server's network origin; fails if no proxy is
+   * configured server-side.
+   */
+  useProxy?: boolean;
 }
 
 export interface NodeRosterEntry {
