@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey } = await request.json();
 
-    if (!apiKey || (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_'))) {
+    if (typeof apiKey !== 'string' || (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_'))) {
       return NextResponse.json(
         { success: false, error: 'Invalid API key format' },
         { status: 400 }
