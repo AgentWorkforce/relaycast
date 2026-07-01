@@ -175,7 +175,7 @@ export function DashboardLayout() {
           wsStatus={wsStatus}
           onSelectChannel={handleSelectChannel}
           onSelectAgent={handleSelectAgent}
-          className="m-3 mr-0"
+          className="m-3 mr-0 lg:sticky lg:top-3 lg:self-start lg:h-[calc(100vh-1.5rem)]"
         />
 
         <main className="flex min-w-0 flex-1 flex-col py-3 pr-3">

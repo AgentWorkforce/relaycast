@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent, useWebSocket } from '@relaycast/react';
 import type { WsClientEvent } from '@relaycast/sdk';
-import type { WebSocketFeedEvent } from '../types/dashboard';
+import type { WebSocketFeedCategory, WebSocketFeedEvent } from '../types/dashboard';
+import { WS_EVENTS_STORAGE_KEY } from '../lib/activity-store';
 
 const MAX_WS_EVENTS = 300;
 
@@ -13,6 +14,48 @@ function getString(value: unknown): string | null {
 
 function getNumber(value: unknown): number | null {
   return typeof value === 'number' ? value : null;
+}
+
+function categorizeEvent(type: string): WebSocketFeedCategory {
+  if (type.startsWith('action.')) return 'action';
+  if (type.startsWith('agent.status.')) return 'presence';
+  if (type === 'message.reacted') return 'reaction';
+  if (type.startsWith('channel.') || type.startsWith('member.')) return 'channel';
+  if (type.startsWith('delivery.')) return 'delivery';
+  if (
+    type === 'message.created' ||
+    type === 'message.updated' ||
+    type === 'thread.reply' ||
+    type === 'dm.received' ||
+    type === 'group_dm.received'
+  ) {
+    return 'message';
+  }
+  return 'system';
+}
+
+function loadStoredEvents(): WebSocketFeedEvent[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(WS_EVENTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is WebSocketFeedEvent =>
+          !!item &&
+          typeof item === 'object' &&
+          typeof (item as WebSocketFeedEvent).id === 'string' &&
+          typeof (item as WebSocketFeedEvent).eventType === 'string' &&
+          typeof (item as WebSocketFeedEvent).summary === 'string' &&
+          typeof (item as WebSocketFeedEvent).timestamp === 'string',
+      )
+      .map((item) => ({ ...item, category: item.category ?? categorizeEvent(item.eventType) }))
+      .slice(-MAX_WS_EVENTS);
+  } catch {
+    return [];
+  }
 }
 
 function summarizeEvent(event: WsClientEvent): string {
@@ -60,6 +103,37 @@ function summarizeEvent(event: WsClientEvent): string {
       const status = getString(record.status) ?? type.replace('agent.status.', '');
       return `${name} ${status}`;
     }
+    case 'action.invoked': {
+      const action = getString(record.actionName) ?? '?';
+      const caller = getString(record.callerName) ?? 'unknown';
+      if (action === 'spawn' || action.startsWith('spawn:')) {
+        const kind = action.includes(':') ? action.slice(action.indexOf(':') + 1) : null;
+        return kind ? `${caller} spawned ${kind}` : `${caller} requested a spawn`;
+      }
+      if (action === 'release' || action.startsWith('release:')) {
+        const kind = action.includes(':') ? action.slice(action.indexOf(':') + 1) : null;
+        return kind ? `${caller} released ${kind}` : `${caller} requested a release`;
+      }
+      return `${caller} called ${action}`;
+    }
+    case 'action.completed': {
+      const action = getString(record.actionName) ?? '?';
+      return `${action} completed`;
+    }
+    case 'action.failed': {
+      const action = getString(record.actionName) ?? '?';
+      const error = getString(record.error);
+      return error ? `${action} failed: ${error}` : `${action} failed`;
+    }
+    case 'action.denied': {
+      const action = getString(record.actionName) ?? '?';
+      const caller = getString(record.callerName) ?? 'unknown';
+      return `${caller} denied calling ${action}`;
+    }
+    case 'action.registered': {
+      const action = getString(record.actionName) ?? '?';
+      return `Action ${action} registered`;
+    }
     case 'dm.received': {
       const message = (record.message as Record<string, unknown> | undefined) ?? {};
       const agent = getString(message.agentName) ?? 'unknown';
@@ -100,7 +174,10 @@ function summarizeEvent(event: WsClientEvent): string {
 
 export function useWebSocketFeed() {
   const { status } = useWebSocket();
-  const [events, setEvents] = useState<WebSocketFeedEvent[]>([]);
+  // Hydrate from localStorage so the live feed survives a page refresh. This
+  // subtree only renders client-side (behind the session gate), so reading
+  // storage in the initializer cannot cause an SSR hydration mismatch.
+  const [events, setEvents] = useState<WebSocketFeedEvent[]>(loadStoredEvents);
   const lastStatusRef = useRef<string | null>(null);
 
   const pushEvent = useCallback((eventType: string, summary: string) => {
@@ -108,10 +185,29 @@ export function useWebSocketFeed() {
       id: `${eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       eventType,
       summary,
+      category: categorizeEvent(eventType),
       timestamp: new Date().toISOString(),
     };
     setEvents((prev) => [...prev, next].slice(-MAX_WS_EVENTS));
   }, []);
+
+  const clearEvents = useCallback(() => {
+    setEvents([]);
+    try {
+      window.localStorage.removeItem(WS_EVENTS_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures (private mode / quota); state is still cleared.
+    }
+  }, []);
+
+  // Persist the rolling window so a refresh restores recent activity.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(WS_EVENTS_STORAGE_KEY, JSON.stringify(events));
+    } catch {
+      // Ignore storage failures (private mode / quota).
+    }
+  }, [events]);
 
   useEffect(() => {
     if (lastStatusRef.current === status) return;
@@ -132,5 +228,6 @@ export function useWebSocketFeed() {
     status,
     events: newestFirst,
     latestEventAt: latest?.timestamp ?? null,
+    clearEvents,
   };
 }
