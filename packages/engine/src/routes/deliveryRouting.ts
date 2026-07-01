@@ -301,9 +301,21 @@ async function dispatchHttpPush(args: {
       method: 'POST',
       headers,
       body,
-      redirect: 'error',
+      // Do NOT follow redirects: a 3xx could point `url` at an internal address
+      // and bypass the SSRF check above. Cloudflare Workers rejects
+      // `redirect: 'error'` outright ("won't be implemented at the edge"), which
+      // would throw on every dispatch and strand every http_push delivery — so
+      // use 'manual' and reject any redirect ourselves below.
+      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });
+
+    // `redirect: 'manual'` surfaces a redirect as a 3xx status (or an
+    // opaqueredirect response with status 0); treat both as a hard failure.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      await recordHttpPushRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
+      return 'failed';
+    }
 
     if (!response.ok) {
       await recordHttpPushRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);

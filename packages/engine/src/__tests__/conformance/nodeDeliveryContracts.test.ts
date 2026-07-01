@@ -161,7 +161,9 @@ describe('node delivery contracts', () => {
     await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
-    expect(init.redirect).toBe('error');
+    // Cloudflare Workers rejects redirect:'error'; we use 'manual' and reject
+    // any 3xx ourselves (see dispatchHttpPush) to keep the no-follow SSRF guard.
+    expect(init.redirect).toBe('manual');
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Custom-Timestamp']).toBeTruthy();
     const bodyText = init.body as string;
@@ -367,6 +369,41 @@ describe('node delivery contracts', () => {
           dispatch_attempts: 2,
         }),
       ]);
+    });
+  });
+
+  it('treats a 3xx redirect response as a failed http_push dispatch', async () => {
+    const fetchMock = mockMessageDeliveryFetch([
+      () => new Response(null, { status: 302, headers: { location: 'https://evil.example.test/' } }),
+    ]);
+    const ws = await createWorkspace(stack.app, 'http-node-redirect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, { name: 'redirect-http-node', ackMode: 'on_2xx' });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'redirect me' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // The request must be made with redirect:'manual' (Workers rejects 'error'),
+    // and a 3xx must be recorded as a failure — not followed — so the delivery
+    // stays queued rather than being marked delivered against a redirect target.
+    const [, init] = deliveryPosts(fetchMock)[0];
+    expect(init.redirect).toBe('manual');
+    await waitForAssertion(async () => {
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      const [item] = ((await queued.json()) as {
+        data: Array<{ status: string; last_dispatch_error: string | null }>;
+      }).data;
+      expect(item).toMatchObject({ status: 'queued' });
+      expect(item.last_dispatch_error).toMatch(/redirect not allowed \(HTTP 302\)/);
     });
   });
 
