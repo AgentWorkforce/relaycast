@@ -847,6 +847,48 @@ describe('node delivery contracts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('claims a never-attempted http_push delivery only once across overlapping sweeps', async () => {
+    const fetchMock = mockMessageDeliveryFetch([() => new Response('', { status: 202 })]);
+    const ws = await createWorkspace(stack.app, 'http-node-null-claim');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, { name: 'null-claim-http-node' });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'never attempted' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // Reset to the never-attempted state (nextAttemptAt IS NULL). Two overlapping
+    // sweeps must still POST the webhook exactly once — the claim's `IS NULL`
+    // compare-and-swap prevents a duplicate delivery.
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, ackedAt: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+
+    let releaseFetch: ((response: Response) => void) | undefined;
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
+      releaseFetch = resolve;
+    }));
+
+    const sweep1 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+    const sweep2 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+
+    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    releaseFetch?.(new Response('', { status: 202 }));
+    await Promise.all([sweep1, sweep2]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not let a slow http_push receiver block self-connected recipients', async () => {
     // Only the durable message POST hangs; ephemeral event POSTs (presence)
     // resolve immediately so the single hung message delivery stays isolated.

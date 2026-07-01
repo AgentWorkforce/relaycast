@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppEnv, EngineRuntime } from '../env.js';
 import * as deliveryEngine from '../engine/delivery.js';
 import { buildDeliverFrame, buildDeliverPayload } from '../engine/deliveryWire.js';
@@ -271,6 +271,15 @@ async function dispatchHttpPush(args: {
     ];
     if (args.delivery.nextAttemptAt) {
       claimConditions.push(eq(deliveryRows.nextAttemptAt, args.delivery.nextAttemptAt));
+    } else {
+      // Never-attempted rows (nextAttemptAt IS NULL) are now selectable by the
+      // sweep. status stays 'queued' across the async fetch below, so without a
+      // compare-and-swap token on nextAttemptAt two concurrent dispatchers
+      // (inline vs cron, or two overlapping sweeps) could both match and
+      // double-POST the webhook. Claiming on `nextAttemptAt IS NULL` makes this
+      // atomic: the first claim stamps a non-null retry time, so the second no
+      // longer matches and bails.
+      claimConditions.push(isNull(deliveryRows.nextAttemptAt));
     }
 
     const started = await args.ctx.db
