@@ -16,13 +16,21 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  * POST /api/auth/login
  * Validates the API key against the candidate engines (gateway first, api
  * fallback), remembers the resolved engine, and sets httpOnly cookies.
- * WebSocket stream authenticates directly with the workspace key.
+ *
+ * Accepts either a full workspace key (`rk_live_...`) or a scoped, read-only
+ * observer token (`ot_live_...`). Both are treated identically here — the
+ * engine enforces the actual read-only scope restrictions for observer
+ * tokens on every request, this route just validates the credential and
+ * remembers which engine it belongs to. The WebSocket stream authenticates
+ * directly with whichever credential was used to log in (workspace key or
+ * observer token) — the engine's realtime endpoint (`GET /v1/ws`) already
+ * requires an observer token with `stream:read` scope.
  */
 export async function POST(request: NextRequest) {
   try {
     const { apiKey } = await request.json();
 
-    if (!apiKey || !apiKey.startsWith('rk_live_')) {
+    if (typeof apiKey !== 'string' || (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_'))) {
       return NextResponse.json(
         { success: false, error: 'Invalid API key format' },
         { status: 400 }
@@ -64,7 +72,8 @@ export async function POST(request: NextRequest) {
     cookieStore.set(COOKIE_NAME, apiKey, cookieOptions);
 
     // Agent cookie remains for compatibility with existing client shape.
-    // Workspace keys are accepted by read-only endpoints used in dashboard.
+    // Both workspace keys and observer tokens are accepted by the read-only
+    // endpoints used in this dashboard.
     cookieStore.set(AGENT_COOKIE_NAME, apiKey, cookieOptions);
 
     // Remember the resolved engine so session/check/logout target it directly
