@@ -94,6 +94,12 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * Master secret used to derive relayfile -> relaycast inbound HMAC secrets.
+   * Hosted adapters wire this from their internal secret; self-host can omit it
+   * to disable the relayfile inbound bridge.
+   */
+  relayfileInboundSecret?: string;
+  /**
    * Optional egress proxy for http_push node delivery. When set, nodes that
    * register with `delivery.use_proxy: true` have their webhook POST routed
    * through this forwarder instead of hitting the destination directly — the
