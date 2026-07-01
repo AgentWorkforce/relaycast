@@ -25,7 +25,7 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
 
     async function initSession() {
       try {
-        if (keyParam?.startsWith('rk_live_')) {
+        if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
           const success = await setAuth(keyParam);
           if (seq !== requestSeq.current) return;
           if (!success) {
