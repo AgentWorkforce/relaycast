@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppEnv, EngineRuntime } from '../env.js';
 import * as deliveryEngine from '../engine/delivery.js';
 import { buildDeliverFrame, buildDeliverPayload } from '../engine/deliveryWire.js';
@@ -271,6 +271,15 @@ async function dispatchHttpPush(args: {
     ];
     if (args.delivery.nextAttemptAt) {
       claimConditions.push(eq(deliveryRows.nextAttemptAt, args.delivery.nextAttemptAt));
+    } else {
+      // Never-attempted rows (nextAttemptAt IS NULL) are now selectable by the
+      // sweep. status stays 'queued' across the async fetch below, so without a
+      // compare-and-swap token on nextAttemptAt two concurrent dispatchers
+      // (inline vs cron, or two overlapping sweeps) could both match and
+      // double-POST the webhook. Claiming on `nextAttemptAt IS NULL` makes this
+      // atomic: the first claim stamps a non-null retry time, so the second no
+      // longer matches and bails.
+      claimConditions.push(isNull(deliveryRows.nextAttemptAt));
     }
 
     const started = await args.ctx.db
@@ -292,9 +301,21 @@ async function dispatchHttpPush(args: {
       method: 'POST',
       headers,
       body,
-      redirect: 'error',
+      // Do NOT follow redirects: a 3xx could point `url` at an internal address
+      // and bypass the SSRF check above. Cloudflare Workers rejects
+      // `redirect: 'error'` outright ("won't be implemented at the edge"), which
+      // would throw on every dispatch and strand every http_push delivery — so
+      // use 'manual' and reject any redirect ourselves below.
+      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });
+
+    // `redirect: 'manual'` surfaces a redirect as a 3xx status (or an
+    // opaqueredirect response with status 0); treat both as a hard failure.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      await recordHttpPushRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
+      return 'failed';
+    }
 
     if (!response.ok) {
       await recordHttpPushRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);

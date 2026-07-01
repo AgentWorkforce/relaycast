@@ -161,7 +161,9 @@ describe('node delivery contracts', () => {
     await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
-    expect(init.redirect).toBe('error');
+    // Cloudflare Workers rejects redirect:'error'; we use 'manual' and reject
+    // any 3xx ourselves (see dispatchHttpPush) to keep the no-follow SSRF guard.
+    expect(init.redirect).toBe('manual');
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Custom-Timestamp']).toBeTruthy();
     const bodyText = init.body as string;
@@ -367,6 +369,95 @@ describe('node delivery contracts', () => {
           dispatch_attempts: 2,
         }),
       ]);
+    });
+  });
+
+  it('treats a 3xx redirect response as a failed http_push dispatch', async () => {
+    const fetchMock = mockMessageDeliveryFetch([
+      () => new Response(null, { status: 302, headers: { location: 'https://evil.example.test/' } }),
+    ]);
+    const ws = await createWorkspace(stack.app, 'http-node-redirect');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, { name: 'redirect-http-node', ackMode: 'on_2xx' });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'redirect me' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // The request must be made with redirect:'manual' (Workers rejects 'error'),
+    // and a 3xx must be recorded as a failure — not followed — so the delivery
+    // stays queued rather than being marked delivered against a redirect target.
+    const [, init] = deliveryPosts(fetchMock)[0];
+    expect(init.redirect).toBe('manual');
+    await waitForAssertion(async () => {
+      const queued = await stack.app.request('/v1/deliveries', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      const [item] = ((await queued.json()) as {
+        data: Array<{ status: string; last_dispatch_error: string | null }>;
+      }).data;
+      expect(item).toMatchObject({ status: 'queued' });
+      expect(item.last_dispatch_error).toMatch(/redirect not allowed \(HTTP 302\)/);
+    });
+  });
+
+  it('sweeps never-attempted http_push deliveries (nextAttemptAt IS NULL)', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 202 }));
+    const ws = await createWorkspace(stack.app, 'http-node-null-next');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'null-next-node',
+      ackMode: 'on_2xx',
+    });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'null next attempt' }),
+    });
+    expect(post.status).toBe(201);
+    // Let the inline send-time dispatch settle first so its async POST can't
+    // bleed into the post-reset sweep count below.
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // Reproduce the failure mode where the inline send-time push never ran: the
+    // delivery exists and is queued, but nextAttemptAt was never stamped (only an
+    // inline dispatch attempt sets it). Before the fix the cron sweep skipped
+    // these forever — it required nextAttemptAt IS NOT NULL — so an http_push
+    // agent that never connects would never receive the message.
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, ackedAt: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    fetchMock.mockClear();
+
+    const swept = await sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+
+    await waitForAssertion(async () => {
+      // Filter out ephemeral (presence/receipt) POSTs — count only the
+      // message-delivery POST the sweep drove to the webhook.
+      expect(deliveryPosts(fetchMock)).toHaveLength(1);
+      const acked = await stack.app.request('/v1/deliveries?status=acked', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await acked.json()) as { data: Array<{ status: string }> }).data,
+      ).toEqual([expect.objectContaining({ status: 'acked' })]);
     });
   });
 
@@ -775,6 +866,48 @@ describe('node delivery contracts', () => {
 
     // The redrive sweep only POSTs the durable message; no agent activity fires
     // ephemeral events here, so a plain hang-all mock isolates the claim check.
+    let releaseFetch: ((response: Response) => void) | undefined;
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
+      releaseFetch = resolve;
+    }));
+
+    const sweep1 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+    const sweep2 = sweepDueHttpPushDeliveries(stack.runtime.deps, { now: new Date() });
+
+    await waitForAssertion(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    releaseFetch?.(new Response('', { status: 202 }));
+    await Promise.all([sweep1, sweep2]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims a never-attempted http_push delivery only once across overlapping sweeps', async () => {
+    const fetchMock = mockMessageDeliveryFetch([() => new Response('', { status: 202 })]);
+    const ws = await createWorkspace(stack.app, 'http-node-null-claim');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const node = await createHttpNode(ws.workspaceKey, { name: 'null-claim-http-node' });
+    expect((await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status).toBe(201);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'never attempted' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
+
+    // Reset to the never-attempted state (nextAttemptAt IS NULL). Two overlapping
+    // sweeps must still POST the webhook exactly once — the claim's `IS NULL`
+    // compare-and-swap prevents a duplicate delivery.
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, ackedAt: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+
     let releaseFetch: ((response: Response) => void) | undefined;
     fetchMock.mockReset();
     fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
