@@ -981,4 +981,56 @@ describe('observer tokens', () => {
     expect(withoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
     expect(threadWithoutDmScopeSock.ofType('thread.reply')).toHaveLength(0);
   });
+
+  it('allows GET /workspace with any observer token, still allows a workspace key, and still blocks PATCH', async () => {
+    const ws = await createWorkspace(stack.app, 'observer-workspace-read-ws');
+
+    const asKey = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(asKey.status).toBe(200);
+    const asKeyBody = await asKey.json() as { data: { id: string; name: string } };
+    expect(asKeyBody.data.id).toBe(ws.workspaceId);
+
+    // A narrowly-scoped observer token unrelated to workspace metadata (there
+    // is no dedicated "workspace:read" scope) should still be able to read
+    // this low-sensitivity endpoint — any valid observer token suffices.
+    const observer = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'workspace-metadata-reader',
+      scopes: ['agents:read'],
+    });
+    const token = observer.data.token!;
+
+    const asObserver = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(asObserver.status).toBe(200);
+    const asObserverBody = await asObserver.json() as {
+      data: { id: string; name: string; plan: unknown; system_prompt: unknown; metadata: unknown };
+    };
+    expect(asObserverBody.data.id).toBe(ws.workspaceId);
+    expect(asObserverBody.data).not.toHaveProperty('token');
+    expect(asObserverBody.data).not.toHaveProperty('apiKey');
+
+    // Writes remain workspace-key-only.
+    const patchAsObserver = await stack.app.request('/v1/workspace', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: 'renamed-by-observer' }),
+    });
+    expect(patchAsObserver.status).toBe(401);
+
+    // Agent/node tokens are still rejected for this route, matching prior
+    // behavior (only the observer-token additive path was opened up):
+    // allowAgent/allowNode: false means requireWorkspaceRead requires
+    // `require: 'workspace'` for non-observer tokens, so an agent-kind
+    // token fails token-kind validation itself (401) rather than reaching
+    // the redundant in-handler 403 branch (that branch only fires when
+    // allowNode/allowAgent mix true+false, widening `require` to 'any').
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice-workspace-read');
+    const asAgent = await stack.app.request('/v1/workspace', {
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(asAgent.status).toBe(401);
+  });
 });
