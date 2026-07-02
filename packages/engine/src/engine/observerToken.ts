@@ -106,15 +106,48 @@ function publicObserverToken(row: ObserverToken, token?: string): PublicObserver
   };
 }
 
-function isObserverTokenNameConflict(err: unknown): boolean {
-  const candidate = err as { code?: string; message?: string };
+/**
+ * Recognize a unique-constraint violation on the `observer_tokens` table (either the
+ * `observer_tokens_workspace_name_unique` index on (workspace_id, name), or the
+ * `observer_tokens_token_hash_unique` index) regardless of the underlying SQLite driver.
+ *
+ * Self-hosted engine deployments run on `better-sqlite3`, whose errors carry
+ * `.code === 'SQLITE_CONSTRAINT'` / `'SQLITE_CONSTRAINT_UNIQUE'` and a `.message` like
+ * `UNIQUE constraint failed: observer_tokens.workspace_id, observer_tokens.name`.
+ *
+ * The hosted engine (relaycast-cloud) runs on Cloudflare D1 via `drizzle-orm/d1`. D1
+ * throws the same `.code` values, but its `.message` is prefixed
+ * `D1_ERROR: UNIQUE constraint failed: ...`, and drizzle-orm may additionally re-wrap the
+ * original driver error underneath `.cause` instead of surfacing it at the top level. This
+ * is confirmed by this engine's own `engine/agent.ts` `isUniqueConstraintError`, added in
+ * PR #193 after the exact same class of bug: clean 409 "already exists" handling silently
+ * regressing to an uncaught 500 against D1 because the detection only matched
+ * better-sqlite3's shape.
+ *
+ * This intentionally recurses into `.cause` and falls back to a broad, case-insensitive
+ * "unique constraint" message match — not just the exact index/column substrings — so a
+ * future shift in a driver's error format doesn't silently reopen this bug again. The
+ * `observer_tokens` table does have a second unique index (`token_hash`), but a token-hash
+ * collision is a collision of a random 192-bit hex token's SHA-256 — astronomically
+ * unlikely — so treating any unique-constraint violation from this insert as a name
+ * conflict is an acceptable, deliberately-broad trade-off against risking a silent 500.
+ */
+export function isObserverTokenNameConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as { code?: string; message?: string; cause?: unknown };
   const message = candidate.message ?? '';
-  return (
-    candidate.code === 'SQLITE_CONSTRAINT'
-    || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
-    || message.includes('observer_tokens_workspace_name_unique')
+  const isNameIndexMessage = (
+    message.includes('observer_tokens_workspace_name_unique')
     || message.includes('observer_tokens.workspace_id, observer_tokens.name')
   );
+  const isGenericUniqueViolation = (
+    candidate.code === 'SQLITE_CONSTRAINT'
+    || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    || message.toLowerCase().includes('unique constraint failed')
+  );
+  if (isNameIndexMessage || isGenericUniqueViolation) return true;
+  if (candidate.cause && candidate.cause !== err) return isObserverTokenNameConflict(candidate.cause);
+  return false;
 }
 
 function observerTokenNameConflict(): never {
