@@ -363,10 +363,17 @@ POST   /dm
 GET    /inbox
 GET    /search
 GET    /activity
+GET    /workspace/events
 ```
 
 Activity feed channel-message items include `channel_id` and `channel_name`; DM items include
 `conversation_id`.
+
+`GET /workspace/events?since=<seq>&limit=<n>` is the durable, cursor-based log behind the
+workspace stream (30-day retention by default): every published stream frame is appended with a
+per-workspace monotonic `seq` (also stamped on the live frame), so observers can reconcile after
+reconnects instead of polling individual resources. Requires a workspace key or an observer token
+with `stream:read`; channel-filtered observer tokens only see rows for channels they may observe.
 
 Durable delivery (server-backed, per-recipient delivery contract):
 

@@ -14,6 +14,7 @@ import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
 import type { EngineDb, EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { sendNodeContextToAgents } from '../engine/nodeContext.js';
+import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -71,7 +72,11 @@ async function fanoutToAgentsForContext(
   const payload = transformForClient(buildEvent(type, ctx.workspaceId, data));
   const unique = [...new Set(agentIds)];
   const tasks: Promise<unknown>[] = [
-    ctx.engine.realtime.publishToWorkspaceStream({ workspaceId: ctx.workspaceId, event: payload }),
+    appendAndPublishWorkspaceEvent(
+      { db: ctx.db, realtime: ctx.engine.realtime },
+      ctx.workspaceId,
+      { type, payload },
+    ),
     sendNodeContextToAgents(
       {
         db: ctx.db,

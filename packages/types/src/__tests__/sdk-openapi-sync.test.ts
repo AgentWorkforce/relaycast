@@ -32,6 +32,9 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/.well-known/agent-card.json',
   '/v1/a2a/rpc',
   '/v1/a2a/webhook/{param}/{param}',
+  // Observer-plane backfill: consumed by observer clients (agent-relay SDK
+  // observer mode, pear) with observer tokens, not by the agent SDKs.
+  '/v1/workspace/events',
 ]);
 
 const CORE_SDK_PATHS = new Set([

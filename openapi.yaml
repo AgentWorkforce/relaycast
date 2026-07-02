@@ -1176,6 +1176,79 @@ paths:
         '204':
           description: Workspace deleted
 
+  /workspace/events:
+    get:
+      summary: List workspace event log
+      description: >-
+        Durable, cursor-based log of workspace stream events (30-day retention
+        by default). Returns events with `seq` greater than `since` in
+        ascending `seq` order. `payload` is the exact frame published on the
+        workspace stream (published frames additionally carry the assigned
+        `seq`). Observer tokens require `stream:read`; channel-scoped observer
+        tokens only see rows whose `channel_id` they may observe (rows without
+        a `channel_id` pass).
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - observerToken: []
+      parameters:
+        - name: since
+          in: query
+          description: Return events with seq greater than this cursor (default 0).
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          description: Maximum events to return (default 200).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        '200':
+          description: Workspace events page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      events:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            seq:
+                              type: integer
+                            type:
+                              type: string
+                            channel_id:
+                              type: string
+                              nullable: true
+                            payload:
+                              type: object
+                            created_at:
+                              type: string
+                              format: date-time
+                      latest_seq:
+                        type: integer
+                        description: MAX(seq) for the workspace (0 when the log is empty).
+                      next_since:
+                        type: integer
+                        description: >-
+                          Resume cursor: the seq of the last row the scan
+                          consumed (visible or filtered for the observer
+                          token). Pass as `since` on the next request so pages
+                          of fully-filtered rows never stall pagination.
+
   /observer-tokens:
     post:
       summary: Create observer token

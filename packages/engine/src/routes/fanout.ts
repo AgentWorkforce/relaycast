@@ -5,6 +5,7 @@ import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { dmConversations, dmParticipants } from '../db/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { sendNodeContextForChannel, sendNodeContextToAgents } from '../engine/nodeContext.js';
+import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
 
 type HonoContext = Context<AppEnv>;
 
@@ -33,17 +34,22 @@ function buildEvent(
 async function publishToWorkspaceStream(
   c: HonoContext,
   workspaceId: string,
+  type: string,
   payload: Record<string, unknown>,
+  channelId?: string,
 ): Promise<void> {
   const logger = getRequestLogger(c, 'fanout.workspace_stream');
-  try {
-    await c.get('engine').realtime.publishToWorkspaceStream({ workspaceId, event: payload });
-  } catch (err) {
-    logger.error(`workspace stream publish error for workspace ${workspaceId}`, {
-      workspace_id: workspaceId,
-      ...toErrorDetails(err),
-    });
-  }
+  await appendAndPublishWorkspaceEvent(
+    { db: c.get('db'), realtime: c.get('engine').realtime },
+    workspaceId,
+    { type, channelId: channelId ?? null, payload },
+    (err) => {
+      logger.error(`workspace stream publish error for workspace ${workspaceId}`, {
+        workspace_id: workspaceId,
+        ...toErrorDetails(err),
+      });
+    },
+  );
 }
 
 export async function publishWorkspaceEvent(
@@ -58,7 +64,7 @@ export async function publishWorkspaceEvent(
     return;
   }
   const event = buildEvent(type, workspaceId, data, channelId);
-  await publishToWorkspaceStream(c, workspaceId, transformForClient(event));
+  await publishToWorkspaceStream(c, workspaceId, type, transformForClient(event));
 }
 
 export async function fanoutToChannel(
@@ -87,7 +93,7 @@ export async function fanoutToChannel(
   const ws = workspaceId;
 
   const tasks: Promise<unknown>[] = [];
-  tasks.push(publishToWorkspaceStream(c, ws, payload));
+  tasks.push(publishToWorkspaceStream(c, ws, type, payload, channelId));
   if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
     tasks.push(
       sendNodeContextForChannel(
@@ -131,7 +137,7 @@ export async function fanoutToAgents(
 
   const unique = [...new Set(agentIds)];
   const tasks: Promise<unknown>[] = [
-    publishToWorkspaceStream(c, workspaceId, payload),
+    publishToWorkspaceStream(c, workspaceId, type, payload),
   ];
   if (!NODE_DELIVERY_EVENT_TYPES.has(type)) {
     tasks.push(sendNodeContextToAgents(
