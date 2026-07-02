@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/a2a",
-  "version": "5.0.12",
+  "version": "5.1.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
