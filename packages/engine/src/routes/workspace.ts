@@ -12,10 +12,19 @@ import * as tokenRotateEngine from '../engine/tokenRotate.js';
 import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
+  observerAllowsChannel,
   observerAllowsConversation,
   observerAllowsMessage,
   OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
+import {
+  listWorkspaceEvents,
+  WORKSPACE_EVENT_LIST_DEFAULT_LIMIT,
+  WORKSPACE_EVENT_LIST_MAX_LIMIT,
+  type WorkspaceEventRecord,
+} from '../engine/workspaceEvents.js';
+import { channels } from '../db/schema.js';
+import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
@@ -42,6 +51,22 @@ const updateWorkspaceSchema = z.object({
 
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
+});
+
+const workspaceEventsQuerySchema = z.object({
+  since: z.preprocess(
+    (value) => {
+      if (value === undefined || (typeof value === 'string' && value.trim() === '')) {
+        return undefined;
+      }
+      return Number(value);
+    },
+    z.number().int().min(0).default(0),
+  ),
+  limit: positiveIntQueryParam({
+    defaultValue: WORKSPACE_EVENT_LIST_DEFAULT_LIMIT,
+    max: WORKSPACE_EVENT_LIST_MAX_LIMIT,
+  }),
 });
 
 function workspaceNotFound(c: Context<AppEnv>) {
@@ -183,6 +208,67 @@ workspaceRoutes.get(
         return workspaceNotFound(c);
       }
       return jsonOk(c, workspace);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+/**
+ * Channel scoping for the durable event log: rows without a `channel_id` pass;
+ * channel-bound rows must be visible to the observer's channel filters (channel
+ * names are looked up so `channel_names` filters apply, mirroring
+ * `filterObserverSearchResults`). Deleted channels fall back to id-only
+ * matching; DM channels (`channel_type != 0`) fail closed via
+ * `observerAllowsChannel`.
+ */
+async function filterObserverWorkspaceEvents(
+  c: Context<AppEnv>,
+  workspaceId: string,
+  events: WorkspaceEventRecord[],
+): Promise<WorkspaceEventRecord[]> {
+  const observer = getObserverTokenFromContext(c);
+  if (!observer || events.length === 0) return events;
+
+  const channelIds = [...new Set(events.flatMap((event) => (event.channel_id ? [event.channel_id] : [])))];
+  const channelsById = new Map<string, { name: string; channel_type: number }>();
+  if (channelIds.length > 0) {
+    const rows = await c.get('db')
+      .select({ id: channels.id, name: channels.name, channel_type: channels.channelType })
+      .from(channels)
+      .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, channelIds)));
+    for (const row of rows) channelsById.set(row.id, { name: row.name, channel_type: row.channel_type });
+  }
+
+  return events.filter((event) => {
+    if (!event.channel_id) return true;
+    const channel = channelsById.get(event.channel_id);
+    return observerAllowsChannel(observer, {
+      id: event.channel_id,
+      name: channel?.name,
+      channel_type: channel?.channel_type,
+    });
+  });
+}
+
+// GET /workspace/events — durable, cursor-based workspace event log
+workspaceRoutes.get(
+  '/workspace/events',
+  requireWorkspaceRead('stream:read', { allowAgent: false, allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const parsed = parseQueryParams(c, workspaceEventsQuerySchema, 'Invalid workspace events query');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const { since, limit } = parsed.data;
+
+      const { events, latestSeq } = await listWorkspaceEvents(db, workspace.id, { since, limit });
+      const visible = await filterObserverWorkspaceEvents(c, workspace.id, events);
+      return jsonOk(c, { events: visible, latest_seq: latestSeq });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

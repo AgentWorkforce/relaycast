@@ -24,6 +24,7 @@ export interface WorkspaceRetentionSettings {
   message_ttl_days?: number | null;
   delivery_ttl_days?: number | null;
   message_log_ttl_days?: number | null;
+  workspace_event_ttl_days?: number | null;
 }
 
 export interface ObserverTokenFilters {
@@ -906,5 +907,32 @@ export const pendingEvents = sqliteTable(
   (table) => [
     index('idx_pending_events_status').on(table.status, table.processAfter),
     index('idx_pending_events_workspace').on(table.workspaceId),
+  ],
+);
+
+// ============================================
+// Workspace Event Log (durable observer plane)
+// ============================================
+/**
+ * Durable, per-workspace log of every workspace stream event. `seq` is a
+ * per-workspace monotonic cursor (from 1) assigned at insert; `payload` stores
+ * the exact `transformForClient(event)` JSON published to the stream (without
+ * `seq` — the cursor lives in the column and is stamped onto the published
+ * frame). No FK to `workspaces` by design: appends are best-effort and rows
+ * are pruned by retention, not cascades.
+ */
+export const workspaceEvents = sqliteTable(
+  'workspace_events',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    seq: integer('seq').notNull(),
+    type: text('type').notNull(),
+    channelId: text('channel_id'),
+    payload: text('payload').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.seq] }),
+    index('idx_workspace_events_created').on(table.workspaceId, table.createdAt),
   ],
 );

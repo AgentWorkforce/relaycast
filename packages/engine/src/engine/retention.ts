@@ -6,6 +6,7 @@ import {
   messageLogs,
   messages,
   readReceipts,
+  workspaceEvents,
   workspaces,
   type WorkspaceRetentionSettings,
 } from '../db/schema.js';
@@ -19,6 +20,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_DELIVERY_TTL_DAYS = 90;
 /** Message logs are operational telemetry (duplicate bodies), pruned after 90 days by default. */
 export const DEFAULT_MESSAGE_LOG_TTL_DAYS = 90;
+/** Workspace event log rows are a reconciliation window, pruned after 30 days by default. */
+export const DEFAULT_WORKSPACE_EVENT_TTL_DAYS = 30;
 
 const DEFAULT_BATCH_LIMIT = 200;
 const DEFAULT_MAX_BATCHES = 5;
@@ -44,6 +47,8 @@ export interface RetentionDefaults {
   deliveryTtlDays?: number | null;
   /** Default {@link DEFAULT_MESSAGE_LOG_TTL_DAYS}. */
   messageLogTtlDays?: number | null;
+  /** Default {@link DEFAULT_WORKSPACE_EVENT_TTL_DAYS}. */
+  workspaceEventTtlDays?: number | null;
 }
 
 export interface PruneOptions {
@@ -63,6 +68,7 @@ export interface PruneResult {
   deliveries: number;
   messageLogs: number;
   readReceipts: number;
+  workspaceEvents: number;
 }
 
 /**
@@ -126,6 +132,10 @@ export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<Pru
       opts.defaults?.messageLogTtlDays !== undefined
         ? opts.defaults.messageLogTtlDays
         : DEFAULT_MESSAGE_LOG_TTL_DAYS,
+    workspaceEventTtlDays:
+      opts.defaults?.workspaceEventTtlDays !== undefined
+        ? opts.defaults.workspaceEventTtlDays
+        : DEFAULT_WORKSPACE_EVENT_TTL_DAYS,
   };
 
   // Workspaces with explicit settings get their own pass; everyone else is
@@ -172,7 +182,7 @@ export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<Pru
     return total;
   }
 
-  const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0 };
+  const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
 
   // Messages — leaf-first so the self-referencing thread FK never breaks.
   for (const pass of passes(defaults.messageTtlDays, (s) => s.message_ttl_days, messages.workspaceId)) {
@@ -230,6 +240,22 @@ export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<Pru
         .delete(messageLogs)
         .where(inArray(messageLogs.id, batch))
         .returning({ id: messageLogs.id });
+      return deleted.length;
+    });
+  }
+
+  // Workspace event log (durable observer plane; composite PK, batched via rowid).
+  for (const pass of passes(defaults.workspaceEventTtlDays, (s) => s.workspace_event_ttl_days, workspaceEvents.workspaceId)) {
+    result.workspaceEvents += await drain(async () => {
+      const batch = db
+        .select({ rowid: sql<number>`rowid` })
+        .from(workspaceEvents)
+        .where(and(lt(workspaceEvents.createdAt, pass.cutoff), pass.scope))
+        .limit(batchLimit);
+      const deleted = await db
+        .delete(workspaceEvents)
+        .where(inArray(sql`rowid`, batch))
+        .returning({ seq: workspaceEvents.seq });
       return deleted.length;
     });
   }
