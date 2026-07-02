@@ -12,8 +12,8 @@ import * as tokenRotateEngine from '../engine/tokenRotate.js';
 import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
-  observerAllowsChannel,
   observerAllowsConversation,
+  observerAllowsEvent,
   observerAllowsMessage,
   OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
@@ -215,12 +215,13 @@ workspaceRoutes.get(
 );
 
 /**
- * Channel scoping for the durable event log: rows without a `channel_id` pass;
- * channel-bound rows must be visible to the observer's channel filters (channel
- * names are looked up so `channel_names` filters apply, mirroring
- * `filterObserverSearchResults`). Deleted channels fall back to id-only
- * matching; DM channels (`channel_type != 0`) fail closed via
- * `observerAllowsChannel`.
+ * Observer scoping for the durable event log, kept in lockstep with the live
+ * stream: each row is checked with the same `observerAllowsEvent` the realtime
+ * adapters apply per frame, so a scoped token can never read via backfill what
+ * it would not have seen live (per-event-type scopes, `event_types`,
+ * `created_after`, channel and DM filters). Channel names are looked up so
+ * `channel_names` filters apply; rows without channel or conversation context
+ * pass the channel leg but still face the scope checks.
  */
 async function filterObserverWorkspaceEvents(
   c: Context<AppEnv>,
@@ -241,12 +242,13 @@ async function filterObserverWorkspaceEvents(
   }
 
   return events.filter((event) => {
-    if (!event.channel_id) return true;
-    const channel = channelsById.get(event.channel_id);
-    return observerAllowsChannel(observer, {
-      id: event.channel_id,
-      name: channel?.name,
-      channel_type: channel?.channel_type,
+    const payload = (event.payload && typeof event.payload === 'object' ? event.payload : {}) as Record<string, unknown>;
+    const channel = event.channel_id ? channelsById.get(event.channel_id) : undefined;
+    return observerAllowsEvent(observer, {
+      ...payload,
+      type: event.type,
+      ...(event.channel_id ? { channel_id: event.channel_id } : {}),
+      ...(channel?.name && typeof payload.channel !== 'string' ? { channel: channel.name } : {}),
     });
   });
 }

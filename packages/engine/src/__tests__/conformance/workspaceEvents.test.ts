@@ -196,11 +196,22 @@ describe('workspace event log', () => {
     const allEvents = full.body.data!.events;
     expect(allEvents.filter((event) => event.type === 'message.created')).toHaveLength(2);
     const channellessSeqs = allEvents.filter((event) => event.channel_id === null).map((event) => event.seq);
-    expect(channellessSeqs.length).toBeGreaterThan(0); // agent registration events
+    expect(channellessSeqs.length).toBeGreaterThan(0); // workspace-wide rows (channel.created for team-chat)
+
+    // Backfill applies the live stream's per-event-type scopes
+    // (observerAllowsEvent): a stream:read-only token can open the route but
+    // sees no message rows — parity with the live socket.
+    const streamOnlyToken = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'stream-only',
+      scopes: ['stream:read'],
+    });
+    const streamOnly = await getEvents(stack, streamOnlyToken);
+    expect(streamOnly.status).toBe(200);
+    expect(streamOnly.body.data!.events.filter((event) => event.type === 'message.created')).toHaveLength(0);
 
     const scopedToken = await createObserverToken(stack, ws.workspaceKey, {
       name: 'general-only',
-      scopes: ['stream:read'],
+      scopes: ['stream:read', 'messages:read', 'agents:read', 'activity:read'],
       filters: { channel_names: ['general'] },
     });
     const scoped = await getEvents(stack, scopedToken);
@@ -209,15 +220,18 @@ describe('workspace event log', () => {
     const scopedMessages = scopedEvents.filter((event) => event.type === 'message.created');
     expect(scopedMessages).toHaveLength(1);
     expect(scopedMessages[0].channel_id).toBe(general.id);
-    // Rows without a channel_id pass the channel filter.
-    expect(scopedEvents.filter((event) => event.channel_id === null).map((event) => event.seq)).toEqual(channellessSeqs);
+    // Live parity: the channel.created row for team-chat has no channel_id
+    // COLUMN, but its payload carries the channel name — observerAllowsEvent
+    // hides it from a general-scoped token exactly like the live stream does
+    // (both by the channels:read scope and by the channel_names filter).
+    expect(scopedEvents.filter((event) => event.type === 'channel.created')).toHaveLength(0);
     // latest_seq reflects the workspace log, not the filtered view.
     expect(scoped.body.data!.latest_seq).toBe(full.body.data!.latest_seq);
 
     // channel_ids filters work the same way.
     const idScopedToken = await createObserverToken(stack, ws.workspaceKey, {
       name: 'general-by-id',
-      scopes: ['stream:read'],
+      scopes: ['stream:read', 'messages:read', 'agents:read', 'activity:read'],
       filters: { channel_ids: [general.id] },
     });
     const idScoped = await getEvents(stack, idScopedToken);
