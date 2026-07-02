@@ -245,12 +245,23 @@ export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<Pru
   }
 
   // Workspace event log (durable observer plane; composite PK, batched via rowid).
+  // Each workspace's highest-seq row is always retained as the seq high-water
+  // mark: seq is assigned as MAX(seq)+1, so pruning a workspace to zero rows
+  // would reset the sequence and strand every persisted observer cursor (and
+  // confuse live-frame dedupe). One stale row per workspace is the cheap price.
   for (const pass of passes(defaults.workspaceEventTtlDays, (s) => s.workspace_event_ttl_days, workspaceEvents.workspaceId)) {
     result.workspaceEvents += await drain(async () => {
       const batch = db
         .select({ rowid: sql<number>`rowid` })
         .from(workspaceEvents)
-        .where(and(lt(workspaceEvents.createdAt, pass.cutoff), pass.scope))
+        .where(and(
+          lt(workspaceEvents.createdAt, pass.cutoff),
+          pass.scope,
+          sql`${workspaceEvents.seq} < (
+            SELECT MAX(hw.seq) FROM workspace_events hw
+            WHERE hw.workspace_id = ${workspaceEvents.workspaceId}
+          )`,
+        ))
         .limit(batchLimit);
       const deleted = await db
         .delete(workspaceEvents)

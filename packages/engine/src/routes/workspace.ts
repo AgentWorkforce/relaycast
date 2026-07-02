@@ -266,11 +266,36 @@ workspaceRoutes.get(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { since, limit } = parsed.data;
+      const since = parsed.data.since;
+      const limit = parsed.data.limit ?? WORKSPACE_EVENT_LIST_DEFAULT_LIMIT;
 
-      const { events, latestSeq } = await listWorkspaceEvents(db, workspace.id, { since, limit });
-      const visible = await filterObserverWorkspaceEvents(c, workspace.id, events);
-      return jsonOk(c, { events: visible, latest_seq: latestSeq });
+      // Scoped observer tokens can hide most of a raw page, so keep scanning
+      // forward (bounded) until `limit` visible rows are collected or the log
+      // is exhausted. `next_since` is the resume cursor: the seq of the last
+      // row the scan CONSUMED (visible or hidden) — clients advance by it so
+      // an all-hidden window can never stall pagination, and no visible row
+      // beyond the returned page is ever skipped.
+      const SCAN_CAP_ROWS = 2_000;
+      const visible: Awaited<ReturnType<typeof listWorkspaceEvents>>['events'] = [];
+      let cursor = since;
+      let latestSeq = 0;
+      let scanned = 0;
+      while (visible.length < limit && scanned < SCAN_CAP_ROWS) {
+        const page = await listWorkspaceEvents(db, workspace.id, { since: cursor, limit });
+        latestSeq = page.latestSeq;
+        if (page.events.length === 0) break;
+        scanned += page.events.length;
+        const allowed = await filterObserverWorkspaceEvents(c, workspace.id, page.events);
+        for (const event of allowed) {
+          if (visible.length >= limit) break;
+          visible.push(event);
+        }
+        cursor = visible.length >= limit
+          ? visible[visible.length - 1].seq
+          : page.events[page.events.length - 1].seq;
+        if (visible.length >= limit || cursor >= page.latestSeq) break;
+      }
+      return jsonOk(c, { events: visible, latest_seq: latestSeq, next_since: cursor });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -180,4 +180,29 @@ describe('workspace event retention', () => {
     const remainingKeep = await db.select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, 'ws_keep'));
     expect(remainingKeep).toHaveLength(1);
   });
+
+  it('always retains the highest-seq row so the sequence never resets across pruning', async () => {
+    const { db } = track(openDb());
+    const now = new Date();
+    await db.insert(workspaces).values({ id: 'ws_idle', name: 'idle', apiKeyHash: 'hash_idle' });
+
+    // Every row is past the TTL — an idle workspace.
+    await db.insert(workspaceEvents).values([
+      { workspaceId: 'ws_idle', seq: 1, type: 't', payload: '{}', createdAt: new Date(now.getTime() - 90 * DAY_MS) },
+      { workspaceId: 'ws_idle', seq: 2, type: 't', payload: '{}', createdAt: new Date(now.getTime() - 80 * DAY_MS) },
+      { workspaceId: 'ws_idle', seq: 3, type: 't', payload: '{}', createdAt: new Date(now.getTime() - 70 * DAY_MS) },
+    ]);
+
+    const result = await pruneExpired(db, { now });
+    expect(result.workspaceEvents).toBe(2);
+
+    // The high-water row survives...
+    const remaining = await db.select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, 'ws_idle'));
+    expect(remaining.map((r) => r.seq)).toEqual([3]);
+
+    // ...so the next event continues the sequence instead of resetting to 1,
+    // keeping persisted observer cursors (e.g. since=3) valid.
+    const seq = await appendWorkspaceEvent(db, 'ws_idle', { type: 't', payload: {} });
+    expect(seq).toBe(4);
+  });
 });

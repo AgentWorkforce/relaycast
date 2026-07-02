@@ -1241,6 +1241,13 @@ paths:
                       latest_seq:
                         type: integer
                         description: MAX(seq) for the workspace (0 when the log is empty).
+                      next_since:
+                        type: integer
+                        description: >-
+                          Resume cursor: the seq of the last row the scan
+                          consumed (visible or filtered for the observer
+                          token). Pass as `since` on the next request so pages
+                          of fully-filtered rows never stall pagination.
 
   /observer-tokens:
     post:

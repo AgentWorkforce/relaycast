@@ -1,5 +1,7 @@
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { RealtimeBus, EngineEvent } from '../../ports/realtime.js';
+import type { EngineDb } from '../../ports/database.js';
+import { appendWorkspaceEvent } from '../../engine/workspaceEvents.js';
 
 const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_SWEEP_MS = 60_000;
@@ -16,6 +18,12 @@ export interface InProcessPresenceOptions {
   sweepIntervalMs?: number;
   /** Optional hook for adapter-specific scoped presence side effects. */
   onPresenceEvent?: (workspaceId: string, event: EngineEvent) => Promise<void> | void;
+  /**
+   * When set, presence broadcasts are appended to the durable workspace event
+   * log (and the published frame carries the assigned `seq`) so observers can
+   * backfill `agent.status.*` transitions after a reconnect.
+   */
+  db?: EngineDb;
 }
 
 /**
@@ -82,8 +90,19 @@ export class InProcessPresence implements PresenceTracker {
   }
 
   private async broadcast(workspaceId: string, event: EngineEvent): Promise<void> {
+    // Presence frames go through the durable log when a db is wired so
+    // observers can backfill status transitions; append is best-effort and a
+    // failure publishes the unstamped frame.
+    let published: EngineEvent = event;
+    if (this.options.db && typeof event.type === 'string') {
+      const seq = await appendWorkspaceEvent(this.options.db, workspaceId, {
+        type: event.type,
+        payload: event as Record<string, unknown>,
+      });
+      if (seq != null) published = { ...event, seq };
+    }
     await Promise.allSettled([
-      this.bus.publishToWorkspaceStream({ workspaceId, event }),
+      this.bus.publishToWorkspaceStream({ workspaceId, event: published }),
       this.options.onPresenceEvent?.(workspaceId, event),
     ]);
   }

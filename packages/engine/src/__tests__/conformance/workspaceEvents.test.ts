@@ -20,6 +20,7 @@ interface EventLogResponse {
       created_at: string;
     }>;
     latest_seq: number;
+    next_since: number;
   };
   error?: { code: string; message: string };
 }
@@ -238,5 +239,55 @@ describe('workspace event log', () => {
     const idScopedMessages = idScoped.body.data!.events.filter((event) => event.type === 'message.created');
     expect(idScopedMessages).toHaveLength(1);
     expect(idScopedMessages[0].channel_id).toBe(general.id);
+  });
+
+  it('pages past fully-filtered windows for scoped tokens via next_since', async () => {
+    const ws = await createWorkspace(stack.app, 'event-log-paging-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'hidden-room' }),
+    });
+
+    // Three hidden messages first, then one visible message.
+    for (const text of ['h1', 'h2', 'h3']) {
+      await stack.app.request('/v1/channels/hidden-room/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+    }
+    await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'visible' }),
+    });
+    await settle();
+
+    const scopedToken = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'general-only-paging',
+      scopes: ['stream:read', 'messages:read'],
+      filters: { channel_names: ['general'] },
+    });
+
+    // limit=1 with three hidden rows in front: the server scans past the
+    // filtered window and still returns the visible row.
+    const page = await getEvents(stack, scopedToken, '?limit=1');
+    expect(page.status).toBe(200);
+    const messages = page.body.data!.events.filter((event) => event.type === 'message.created');
+    expect(messages).toHaveLength(1);
+    expect((messages[0].payload as { message?: { text?: string } }).message?.text).toBe('visible');
+    // next_since consumed at least through the visible row, so the next page
+    // makes progress instead of re-reading the hidden window.
+    expect(page.body.data!.next_since).toBeGreaterThanOrEqual(messages[0].seq);
+
+    // A cursor past the last visible row returns an empty page whose
+    // next_since still advances to the end of the log (no stall).
+    const tailPage = await getEvents(stack, scopedToken, `?since=${page.body.data!.next_since}`);
+    expect(tailPage.status).toBe(200);
+    const tailMessages = tailPage.body.data!.events.filter((event) => event.type === 'message.created');
+    expect(tailMessages).toHaveLength(0);
+    expect(tailPage.body.data!.next_since).toBeGreaterThanOrEqual(page.body.data!.next_since);
   });
 });
