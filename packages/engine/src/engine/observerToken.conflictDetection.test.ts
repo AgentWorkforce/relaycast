@@ -73,6 +73,41 @@ describe('isObserverTokenNameConflict', () => {
     expect(isObserverTokenNameConflict(circular)).toBe(false);
   });
 
+  it('does not stack-overflow on a multi-step .cause cycle (A -> B -> A)', () => {
+    const a: { message: string; cause?: unknown } = { message: 'A' };
+    const b: { message: string; cause?: unknown } = { message: 'B' };
+    a.cause = b;
+    b.cause = a;
+    expect(() => isObserverTokenNameConflict(a)).not.toThrow();
+    // Neither message mentions a unique-constraint violation anywhere in the cycle, so
+    // walking the whole chain (without looping forever) must still land on `false` —
+    // not merely terminate.
+    expect(isObserverTokenNameConflict(a)).toBe(false);
+    expect(isObserverTokenNameConflict(b)).toBe(false);
+  });
+
+  it('still finds a real conflict when it precedes a multi-step .cause cycle', () => {
+    const tail: { message: string; cause?: unknown } = { message: 'tail' };
+    const conflict: { code: string; message: string; cause?: unknown } = {
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'UNIQUE constraint failed: observer_tokens.workspace_id, observer_tokens.name',
+      cause: tail,
+    };
+    tail.cause = conflict;
+    expect(isObserverTokenNameConflict(conflict)).toBe(true);
+  });
+
+  it('does not misreport a non-unique constraint violation carrying the bare SQLITE_CONSTRAINT code', () => {
+    expect(isObserverTokenNameConflict({
+      code: 'SQLITE_CONSTRAINT',
+      message: 'FOREIGN KEY constraint failed',
+    })).toBe(false);
+    expect(isObserverTokenNameConflict({
+      code: 'SQLITE_CONSTRAINT',
+      message: 'NOT NULL constraint failed: observer_tokens.workspace_id',
+    })).toBe(false);
+  });
+
   it('handles non-object and null inputs safely', () => {
     expect(isObserverTokenNameConflict(null)).toBe(false);
     expect(isObserverTokenNameConflict(undefined)).toBe(false);
