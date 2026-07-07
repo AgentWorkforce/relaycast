@@ -292,6 +292,28 @@ describe('translateA2aToRelay - response path', () => {
     expect(dm.thread_id).toBeNull();
     expect(dm.agent_id).toBe('task-s');
   });
+
+  it('swallows a JSON-RPC error response and emits a blank DM with a generated id', () => {
+    // Documents CURRENT behavior: an error response (error set, no result) is not
+    // propagated. With no result there is no task/message/parts, so the error detail
+    // is dropped and the DM collapses to empty text with defaulted envelope fields.
+    // Omitting the top-level id exercises the randomUuid() fallback for dm.id.
+    const resp: A2aJsonRpcResponse = {
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'upstream exploded', data: { detail: 'boom' } },
+    };
+
+    const dm = translateA2aToRelay(resp);
+
+    // The error is swallowed: no error text leaks into the DM.
+    expect(dm.text).toBe('');
+    // With no id on the response, dm.id is a freshly generated UUID (not a fixed value).
+    expect(dm.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(dm.agent_id).toBe('external');
+    expect(dm.agent_name).toBe('external');
+    expect(dm.thread_id).toBeNull();
+    expect(dm.attachments).toEqual([]);
+  });
 });
 
 describe('translateRelayToA2a <-> translateA2aToRelay round-trip', () => {
