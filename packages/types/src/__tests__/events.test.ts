@@ -30,17 +30,15 @@ const coreMessage = {
 // optional). Only MessageCreated uses this stricter payload.
 const channelMessage = { ...coreMessage, attachments: [] };
 
-type Parsed = ReturnType<typeof ServerEventSchema.safeParse>;
-
 /** True when some validation issue is reported at exactly the given dotted path. */
-function hasIssueAtPath(result: { success: boolean } & Partial<{ error: z.ZodError }>, dotted: string): boolean {
-  if (result.success || !('error' in result) || !result.error) return false;
+function hasIssueAtPath(result: z.ZodSafeParseResult<unknown>, dotted: string): boolean {
+  if (result.success) return false;
   return result.error.issues.some((i) => i.path.join('.') === dotted);
 }
 
 /** Assert a fixture parses and routes to the expected discriminant. */
 function expectRoutes(
-  schema: { safeParse: (x: unknown) => Parsed },
+  schema: { safeParse: (x: unknown) => z.ZodSafeParseResult<unknown> },
   fixture: unknown,
   expectedType: string,
 ): void {
