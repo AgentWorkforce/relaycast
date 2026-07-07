@@ -1,12 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   summarizeAgentStats,
   summarizeConsoleOverview,
   summarizeCostStats,
   type ConsoleMessageLog,
 } from '../console.js';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Build a synthetic ConsoleMessageLog. Only the fields consumed by the pure
@@ -81,13 +79,16 @@ describe('summarizeConsoleOverview', () => {
   });
 
   it('passes windowDays through and derives `since` from it', () => {
-    const before = Date.now();
-    const result = summarizeConsoleOverview([], 3);
-    expect(result.window_days).toBe(3);
-    const since = Date.parse(result.since);
-    const delta = before - since; // should be ~3 days
-    expect(delta).toBeGreaterThanOrEqual(3 * DAY_MS - 5_000);
-    expect(delta).toBeLessThanOrEqual(3 * DAY_MS + 5_000);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-01T12:00:00.000Z'));
+    try {
+      const result = summarizeConsoleOverview([], 3);
+      expect(result.window_days).toBe(3);
+      // since = now - windowDays days = 2026-07-01T12:00Z - 3d
+      expect(result.since).toBe('2026-06-28T12:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
