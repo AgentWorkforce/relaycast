@@ -16,13 +16,20 @@ import {
   A2aResponseSchema,
 } from '../index.js';
 
-// Helper: does any validation issue point at the given top-level field?
+// Helper: does any validation issue point at the given (possibly nested) path?
+// Pass a single key to match a top-level field, or multiple keys to pin an
+// exact nested path (e.g. 'file', 'bytes' or 'skills', 0, 'name'). Every path
+// segment must match in order, so a nested assertion no longer passes merely
+// because some unrelated issue exists under the same top-level key.
 function hasIssueAtPath(
   result: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } },
-  key: PropertyKey,
+  ...path: PropertyKey[]
 ): boolean {
   if (result.success || !result.error) return false;
-  return result.error.issues.some((issue) => issue.path[0] === key);
+  return result.error.issues.some((issue) => {
+    if (issue.path.length < path.length) return false;
+    return path.every((key, i) => issue.path[i] === key);
+  });
 }
 
 describe('A2aSkillSchema', () => {
@@ -138,7 +145,7 @@ describe('A2aAgentCardSchema', () => {
     });
     expect(result.success).toBe(false);
     // Issue path should descend into the skills array element's name.
-    expect(hasIssueAtPath(result, 'skills')).toBe(true);
+    expect(hasIssueAtPath(result, 'skills', 0, 'name')).toBe(true);
   });
 });
 
@@ -171,16 +178,16 @@ describe('individual part schemas', () => {
   it('A2aFilePartSchema rejects a file with an empty name', () => {
     const result = A2aFilePartSchema.safeParse({ kind: 'file', file: { name: '' } });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'file')).toBe(true);
+    expect(hasIssueAtPath(result, 'file', 'name')).toBe(true);
   });
 
   it('A2aFilePartSchema rejects negative or non-integer bytes', () => {
     const negative = A2aFilePartSchema.safeParse({ kind: 'file', file: { name: 'f', bytes: -1 } });
     expect(negative.success).toBe(false);
-    expect(hasIssueAtPath(negative, 'file')).toBe(true);
+    expect(hasIssueAtPath(negative, 'file', 'bytes')).toBe(true);
     const fractional = A2aFilePartSchema.safeParse({ kind: 'file', file: { name: 'f', bytes: 1.5 } });
     expect(fractional.success).toBe(false);
-    expect(hasIssueAtPath(fractional, 'file')).toBe(true);
+    expect(hasIssueAtPath(fractional, 'file', 'bytes')).toBe(true);
   });
 
   it('A2aDataPartSchema accepts a data part', () => {
@@ -276,7 +283,8 @@ describe('A2aMessageSchema', () => {
       parts: [{ kind: 'bogus' }],
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'parts')).toBe(true);
+    // The invalid element is the first part, failing on its `kind` discriminator.
+    expect(hasIssueAtPath(result, 'parts', 0, 'kind')).toBe(true);
   });
 });
 
@@ -351,7 +359,7 @@ describe('A2aTaskSchema', () => {
       status: { state: 'not-a-state' },
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'status')).toBe(true);
+    expect(hasIssueAtPath(result, 'status', 'state')).toBe(true);
   });
 
   it('rejects a task missing status', () => {
@@ -411,7 +419,7 @@ describe('JsonRpcRequestSchema', () => {
       params: { message: { message_id: 'm1', parts: [] } },
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'params')).toBe(true);
+    expect(hasIssueAtPath(result, 'params', 'message', 'parts')).toBe(true);
   });
 });
 
@@ -485,7 +493,8 @@ describe('JsonRpcResponseSchema', () => {
       error: { code: -1 },
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'error')).toBe(true);
+    // The nested error object is missing its required `message`.
+    expect(hasIssueAtPath(result, 'error', 'message')).toBe(true);
   });
 });
 
@@ -527,7 +536,7 @@ describe('A2aResponseSchema', () => {
       task: { id: 't1', status: { state: 'bogus' } },
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'task')).toBe(true);
+    expect(hasIssueAtPath(result, 'task', 'status', 'state')).toBe(true);
   });
 
   it('rejects an invalid nested response envelope', () => {
@@ -535,6 +544,6 @@ describe('A2aResponseSchema', () => {
       response: { jsonrpc: 'nope' },
     });
     expect(result.success).toBe(false);
-    expect(hasIssueAtPath(result, 'response')).toBe(true);
+    expect(hasIssueAtPath(result, 'response', 'jsonrpc')).toBe(true);
   });
 });
