@@ -162,10 +162,33 @@ describe("isSafeExternalUrl — strict mode", () => {
     const allowed: string[] = [
       "http://[2001:4860:4860::8888]", // Google public DNS
       "http://[2606:4700:4700::1111]", // Cloudflare public DNS
-      "http://[fec0::1]", // fec is outside fe80::/10 (deprecated site-local)
     ];
     for (const url of allowed) {
       it(`accepts ${url}`, () => {
+        expect(isSafeExternalUrl(url, { strict: true })).toBe(true);
+      });
+    }
+  });
+
+  describe("KNOWN GAPS — non-globally-routable ranges the guard does NOT block today (allowed)", () => {
+    // These addresses are NOT globally routable, so a hardened deployment would
+    // ideally reject them in strict mode. The guard does not block them today,
+    // and these tests PIN that current behavior so the gap is unmistakably
+    // intentional-for-now, not an oversight. If the guard is later hardened to
+    // cover these ranges, move the relevant entry into the corresponding
+    // "rejected" block and flip the expectation to `false`.
+    const allowed: string[] = [
+      // KNOWN GAP: deprecated IPv6 site-local fec0::/10 (RFC 3879). The IPv6
+      // check only matches link-local fe80::/10 via the fe8/fe9/fea/feb
+      // prefixes, so fec0:: falls through and is allowed in strict mode.
+      "http://[fec0::1]",
+      // KNOWN GAP: CGNAT / shared address space 100.64.0.0/10 (RFC 6598). The
+      // IPv4 range check has no case for the 100.64–100.127 second octet, so
+      // this non-globally-routable address is allowed in strict mode.
+      "http://100.64.0.1",
+    ];
+    for (const url of allowed) {
+      it(`currently accepts ${url}`, () => {
         expect(isSafeExternalUrl(url, { strict: true })).toBe(true);
       });
     }
