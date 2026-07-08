@@ -498,6 +498,29 @@ describe('node providers', () => {
     expect(py.sock.ofType('error').at(-1)).toMatchObject({ id: 'bad-channel', code: 'channel_not_found' });
   });
 
+  it('scopes node.message attribution to the node workspace, rejecting a cross-workspace from', async () => {
+    // The `from` agent resolves only within the authenticated node's workspace,
+    // so a node token cannot post as an agent that exists in another workspace.
+    const other = await createWorkspace(stack.app, 'np-msg-other-ws');
+    await registerAgent(stack.app, other.workspaceKey, 'outsider');
+
+    const ws = await createWorkspace(stack.app, 'np-msg-scope');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'cross-ws', type: 'node.message', to: 'general', from: 'outsider', text: 'hi',
+    }));
+    expect(py.sock.ofType('error').at(-1)).toMatchObject({ id: 'cross-ws', code: 'agent_not_found' });
+
+    // No message leaked into the other workspace under the outsider's name.
+    const leaked = await stack.runtime.handle.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.workspaceId, other.workspaceId));
+    expect(leaked).toHaveLength(0);
+  });
+
   it('removes a provider through DELETE /v1/nodes/:node/providers/:name', async () => {
     const ws = await createWorkspace(stack.app, 'np-delete');
     await enrollNode(ws, 'node_a', 'alpha');
