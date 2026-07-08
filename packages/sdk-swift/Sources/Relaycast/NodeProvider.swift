@@ -286,6 +286,8 @@ public actor NodeProvider {
     private var reconnectAttempt = 0
     private var heartbeatTask: Task<Void, Never>?
     private var serveTask: Task<Void, Error>?
+    private var invokeSeq = 0
+    private var invokeTasks: [Int: Task<Void, Never>] = [:]
 
     private var registrationState: RegistrationState = .pending
     private var registrationWaiters: [CheckedContinuation<NodeRegisterReplyData, Error>] = []
@@ -323,7 +325,7 @@ public actor NodeProvider {
         self.machineID = machineID
         self.heartbeatIntervalMilliseconds = max(1, heartbeatIntervalMilliseconds)
         self.reconnectBaseDelayMilliseconds = max(1, reconnectBaseDelayMilliseconds)
-        self.reconnectMaxDelayMilliseconds = max(reconnectBaseDelayMilliseconds, reconnectMaxDelayMilliseconds)
+        self.reconnectMaxDelayMilliseconds = max(self.reconnectBaseDelayMilliseconds, reconnectMaxDelayMilliseconds)
         self.reconnectJitter = reconnectJitter
         self.maxReconnectAttempts = maxReconnectAttempts
         self.onError = onError
@@ -406,13 +408,31 @@ public actor NodeProvider {
     /// Gracefully deregister the provider and close the connection.
     public func stop() async {
         stopped = true
+        // Let in-flight invoke handlers finish (and send their results) before
+        // the socket closes; bound the wait so a slow handler can't hang stop.
+        let pending = Array(invokeTasks.values)
+        if !pending.isEmpty {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { for task in pending { await task.value } }
+                group.addTask { try? await Task.sleep(nanoseconds: 5_000_000_000) }
+                await group.next()
+                group.cancelAll()
+            }
+        }
         if let transport {
             await sendDeregister(using: transport)
             await transport.close()
         }
         stopHeartbeat()
+        // A stop() before registration completed must not leave waitRegistered()
+        // hanging (settleRegistration is a no-op once it has resolved).
+        settleRegistration(.failure(NodeProviderError.stopped))
         rejectAllPending(NodeProviderError.stopped)
         serveTask?.cancel()
+    }
+
+    private func clearInvokeTask(_ id: Int) {
+        invokeTasks[id] = nil
     }
 
     // MARK: Serve loop
@@ -531,6 +551,16 @@ public actor NodeProvider {
     private func sendRegister() async throws -> NodeRegisterReplyData {
         let data = try await request(registerFrame())
         let reply = try NodeRegisterReplyData.parse(data)
+        // Every requested capability must be acknowledged; an empty/partial list
+        // cannot silently pass as success.
+        let acknowledged = Set(reply.acceptedCapabilities.map { $0.name })
+        let missing = capabilityOrder.filter { !acknowledged.contains($0) }
+        guard missing.isEmpty else {
+            throw NodeRegistrationError(
+                code: "invalid_register_reply",
+                message: "Registration reply omitted acceptance for: \(missing.joined(separator: ", "))"
+            )
+        }
         let rejected = reply.acceptedCapabilities.filter { !$0.accepted }
         guard rejected.isEmpty else {
             let detail = rejected
@@ -626,9 +656,13 @@ public actor NodeProvider {
         case .error(let id, let code, let message):
             resumePending(id: id, result: .failure(NodeRegistrationError(code: code, message: message)))
         case .actionInvoke(let invocationID, let action, let input):
-            Task { [weak self] in
+            let id = invokeSeq
+            invokeSeq += 1
+            let task = Task { [weak self] in
                 await self?.dispatchInvoke(invocationID: invocationID, action: action, input: input)
+                await self?.clearInvokeTask(id)
             }
+            invokeTasks[id] = task
         case .other:
             break
         }

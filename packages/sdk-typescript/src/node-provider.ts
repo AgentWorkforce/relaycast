@@ -145,6 +145,7 @@ export class NodeProviderClient {
 
   private readonly capabilities = new Map<string, RegisteredCapability>();
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly invokeTasks = new Set<Promise<void>>();
 
   private ws: WebSocket | null = null;
   private instanceId: string | null = null;
@@ -252,9 +253,22 @@ export class NodeProviderClient {
     this.stopped = true;
     this.clearReconnect();
     this.stopHeartbeat();
+    // Let in-flight invoke handlers finish (and send their results) before the
+    // socket closes; bound the wait so a slow handler can't hang shutdown.
+    if (this.invokeTasks.size > 0) {
+      await Promise.race([
+        Promise.allSettled([...this.invokeTasks]),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    }
     if (this.ws && this.ws.readyState === 1 && this.registered && this.instanceId) {
       this.sendFrame({ type: 'node.deregister', provider: this.providerIdentity() });
     }
+    // A stop() before registration completed must not leave whenRegistered()
+    // hanging.
+    this.rejectRegister?.(new Error('node provider stopped'));
+    this.rejectRegister = null;
+    this.resolveRegister = null;
     this.rejectPending(new Error('node provider stopped'));
     this.closeSocket();
     this.registered = false;
@@ -362,6 +376,19 @@ export class NodeProviderClient {
       ));
       return;
     }
+    // Every requested capability must be acknowledged; an empty/partial list
+    // cannot silently pass as success.
+    const acknowledged = new Set(
+      list.filter((c): c is FleetCapabilityAcceptance => !!c && typeof c.name === 'string').map((c) => c.name),
+    );
+    const missing = [...this.capabilities.keys()].filter((name) => !acknowledged.has(name));
+    if (missing.length > 0) {
+      this.onRegisterFailed(new NodeRegistrationError(
+        `Registration reply omitted acceptance for: ${missing.join(', ')}`,
+        'invalid_register_reply',
+      ));
+      return;
+    }
     const rejected = list.filter((c: FleetCapabilityAcceptance) => !c || c.accepted !== true);
     if (rejected.length > 0) {
       const detail = rejected.map((c) => `${c?.name ?? '<unknown>'}${c?.reason ? ` (${c.reason})` : ''}`).join(', ');
@@ -426,9 +453,12 @@ export class NodeProviderClient {
         }
         return;
       }
-      case 'action.invoke':
-        void this.dispatchInvoke(message.invocation_id, message.action, message.input);
+      case 'action.invoke': {
+        const task = this.dispatchInvoke(message.invocation_id, message.action, message.input);
+        this.invokeTasks.add(task);
+        void task.finally(() => this.invokeTasks.delete(task));
         return;
+      }
       default:
         // deliver / context.update / ping carry no work for a provider client.
         return;

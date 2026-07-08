@@ -344,9 +344,20 @@ class NodeProvider:
         self._stopped = True
         if self._reconnect_sleep_task is not None:
             self._reconnect_sleep_task.cancel()
+        # Let in-flight invoke handlers finish (and send their action.result)
+        # before the socket closes; bound the wait so a slow handler can't hang
+        # shutdown.
+        if self._invoke_tasks:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*list(self._invoke_tasks), return_exceptions=True), timeout=5.0
+                )
         conn = self._conn
         if conn is not None and self._registered and self._instance_id:
             await self._send_frame({"type": "node.deregister", "provider": self._provider_identity()})
+        # A stop() before registration completed must not leave wait_registered()
+        # hanging (guarded to a no-op once registration already succeeded).
+        self._reject_registered(NodeProviderError("node provider stopped"))
         self._reject_pending(NodeProviderError("node provider stopped"))
         if conn is not None:
             await self._safe_close(conn)
@@ -492,11 +503,21 @@ class NodeProvider:
             raise NodeRegistrationError(
                 "Registration reply is missing accepted_capabilities", "invalid_register_reply"
             )
-        rejected = [c for c in accepted if not (isinstance(c, dict) and c.get("accepted") is True)]
+        accepted_by_name = {
+            c.get("name"): c for c in accepted if isinstance(c, dict) and isinstance(c.get("name"), str)
+        }
+        # Every requested capability must be acknowledged; an empty/partial list
+        # cannot silently pass as success.
+        missing = sorted(set(self._handlers.keys()) - set(accepted_by_name.keys()))
+        if missing:
+            raise NodeRegistrationError(
+                f"Registration reply omitted acceptance for: {', '.join(missing)}",
+                "invalid_register_reply",
+            )
+        rejected = [c for c in accepted_by_name.values() if c.get("accepted") is not True]
         if rejected:
             detail = ", ".join(
-                f"{c.get('name') if isinstance(c, dict) else '<unknown>'}"
-                + (f" ({c['reason']})" if isinstance(c, dict) and c.get("reason") else "")
+                f"{c.get('name')}" + (f" ({c['reason']})" if c.get("reason") else "")
                 for c in rejected
             )
             raise NodeRegistrationError(f"Capabilities rejected: {detail}", "capabilities_rejected")

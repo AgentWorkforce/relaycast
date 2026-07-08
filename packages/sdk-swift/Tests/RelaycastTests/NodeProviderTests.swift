@@ -538,6 +538,7 @@ final class NodeProviderTests: XCTestCase {
             let data = try JSONSerialization.data(withJSONObject: ["ok": true, "data": ["id": "m-1", "text": "done"]])
             return (response, data)
         }
+        defer { NodeMockURLProtocol.handler = nil }
 
         let factory = FakeTransportFactory()
         let node = NodeProvider(
@@ -576,7 +577,6 @@ final class NodeProviderTests: XCTestCase {
 
         await node.stop()
         try await serveTask.value
-        NodeMockURLProtocol.handler = nil
     }
 
     func testSendMessageNormalizesWsBaseAndEscapesSlashInChannel() async throws {
@@ -588,6 +588,7 @@ final class NodeProviderTests: XCTestCase {
             let data = try JSONSerialization.data(withJSONObject: ["ok": true, "data": ["id": "m-2"]])
             return (response, data)
         }
+        defer { NodeMockURLProtocol.handler = nil }
 
         let factory = FakeTransportFactory()
         let node = NodeProvider(
@@ -615,7 +616,6 @@ final class NodeProviderTests: XCTestCase {
 
         await node.stop()
         try await serveTask.value
-        NodeMockURLProtocol.handler = nil
     }
 }
 

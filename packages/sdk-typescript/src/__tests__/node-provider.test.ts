@@ -257,6 +257,33 @@ describe('NodeProviderClient', () => {
     await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'invalid_register_reply' });
   });
 
+  it('hard-fails registration when the reply omits a requested capability', async () => {
+    const node = new NodeProviderClient({
+      ...baseOptions,
+      capabilities: { 'run-etl': async () => 'ok', deploy: async () => 'ok' },
+    });
+    node.serve().catch(() => {});
+    const sock = newSocket();
+    sock.open();
+    const register = sock.lastRegister();
+    // Only run-etl is acknowledged; deploy is silently missing.
+    sock.emit({
+      v: 1, id: register.id, type: 'reply', ok: true,
+      data: { provider: register.provider, accepted_capabilities: [{ name: 'run-etl', kind: 'action', accepted: true }] },
+    });
+    await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'invalid_register_reply' });
+  });
+
+  it('rejects whenRegistered when stopped before registration completes', async () => {
+    const node = new NodeProviderClient(baseOptions);
+    node.serve().catch(() => {});
+    const sock = newSocket();
+    sock.open();
+    // node.register was sent but no acceptance reply has arrived yet.
+    await node.stop();
+    await expect(node.whenRegistered()).rejects.toThrow(/stopped/i);
+  });
+
   it('reconnects after a transport drop during the register handshake', async () => {
     const node = new NodeProviderClient(baseOptions);
     // A transient handshake drop must not hard-fail serve(); the reconnect below
