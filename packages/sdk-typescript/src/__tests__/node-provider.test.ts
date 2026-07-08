@@ -240,6 +240,28 @@ describe('NodeProviderClient', () => {
     expect(secondInstance).not.toBe(firstInstance);
   });
 
+  it('reconnects after a transport drop during the register handshake', async () => {
+    const node = new NodeProviderClient(baseOptions);
+    // A transient handshake drop must not hard-fail serve(); the reconnect below
+    // succeeding (whenRegistered resolves) is the assertion.
+    node.serve().catch(() => {});
+    const first = newSocket();
+    first.open();
+    expect(first.sentOfType('node.register')).toHaveLength(1);
+
+    // Drop before replying to node.register.
+    first.drop();
+    await vi.advanceTimersByTimeAsync(50);
+    const second = newSocket();
+    expect(second).not.toBe(first);
+    second.open();
+    expect(second.sentOfType('node.register')).toHaveLength(1);
+
+    second.emit(acceptAll(second.lastRegister()));
+    await node.whenRegistered();
+    expect(node.connected).toBe(true);
+  });
+
   it('deregisters the provider on graceful stop', async () => {
     const node = new NodeProviderClient(baseOptions);
     node.serve();

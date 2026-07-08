@@ -181,9 +181,10 @@ export const FleetNodeSpawnMessageSchema = z
 export type FleetNodeSpawnMessage = z.infer<typeof FleetNodeSpawnMessageSchema>;
 
 /**
- * `node.message` — a provider's handler context posting a channel message. The
- * message is attributed to `from` (an agent name resolved in the workspace);
- * the engine posts it and fans out to observers and node-hosted recipients.
+ * `node.message` — a provider's handler context posting a top-level channel
+ * message. The message is attributed to `from` (an agent name resolved in the
+ * workspace); the engine posts it and fans out to observers. Thread replies are
+ * not part of this surface.
  */
 export const FleetNodeMessageMessageSchema = z
   .object({
@@ -192,7 +193,6 @@ export const FleetNodeMessageMessageSchema = z
     to: z.string(),
     from: z.string(),
     text: z.string(),
-    thread_id: z.string().optional(),
     mode: FleetDeliveryModeSchema.optional(),
     data: z.record(z.string(), FleetWireJsonValueSchema).optional(),
   })

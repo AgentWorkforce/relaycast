@@ -59,7 +59,6 @@ export interface NodeSendMessageInput {
   to: string;
   from: string;
   text: string;
-  threadId?: string;
   mode?: 'wait' | 'steer';
   data?: JsonObject;
 }
@@ -366,6 +365,17 @@ export class NodeProviderClient {
   }
 
   private onRegisterFailed(err: Error): void {
+    // Only a protocol rejection (a rejected capability or an engine `error`
+    // frame) is deterministic and must not be retried. A transport drop during
+    // the handshake is a normal disconnect — reconnect like any other drop.
+    if (!(err instanceof NodeRegistrationError)) {
+      this.reportError(err);
+      if (!this.stopped) {
+        this.closeSocket();
+        this.scheduleReconnect();
+      }
+      return;
+    }
     this.registrationRejected = true;
     this.rejectRegister?.(err);
     this.rejectRegister = null;
@@ -443,7 +453,6 @@ export class NodeProviderClient {
         to: input.to,
         from: input.from,
         text: input.text,
-        ...(input.threadId ? { thread_id: input.threadId } : {}),
         ...(input.mode ? { mode: input.mode } : {}),
         ...(input.data ? { data: input.data } : {}),
       }),

@@ -53,13 +53,13 @@ public struct NodeHandlerContext: Sendable {
     /// The invocation being handled.
     public let invocationID: String
 
-    private let sendMessageImpl: @Sendable (String, String, String, String?, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue
+    private let sendMessageImpl: @Sendable (String, String, String, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue
     private let spawnAgentImpl: @Sendable (JSONValue) async throws -> JSONValue
 
     init(
         node: NodeInfo,
         invocationID: String,
-        sendMessageImpl: @escaping @Sendable (String, String, String, String?, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue,
+        sendMessageImpl: @escaping @Sendable (String, String, String, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue,
         spawnAgentImpl: @escaping @Sendable (JSONValue) async throws -> JSONValue
     ) {
         self.node = node
@@ -68,17 +68,17 @@ public struct NodeHandlerContext: Sendable {
         self.spawnAgentImpl = spawnAgentImpl
     }
 
-    /// Post a channel message, attributed to `from` (an agent name resolved in
-    /// the workspace). Resolves with the posted message.
+    /// Post a top-level channel message, attributed to `from` (an agent name
+    /// resolved in the workspace). Resolves with the posted message. Thread
+    /// replies are not part of this surface.
     public func sendMessage(
         to: String,
         from: String,
         text: String,
-        threadID: String? = nil,
         mode: NodeMessageMode? = nil,
         data: [String: JSONValue]? = nil
     ) async throws -> JSONValue {
-        try await sendMessageImpl(to, from, text, threadID, mode, data)
+        try await sendMessageImpl(to, from, text, mode, data)
     }
 
     /// Spawn an agent through the node's capacity executor. Capacity-direct: it
@@ -653,9 +653,9 @@ public actor NodeProvider {
         NodeHandlerContext(
             node: .init(name: nodeName, capabilities: capabilityOrder),
             invocationID: invocationID,
-            sendMessageImpl: { [weak self] to, from, text, threadID, mode, data in
+            sendMessageImpl: { [weak self] to, from, text, mode, data in
                 guard let self else { throw NodeProviderError.stopped }
-                return try await self.sendMessageFrame(to: to, from: from, text: text, threadID: threadID, mode: mode, data: data)
+                return try await self.sendMessageFrame(to: to, from: from, text: text, mode: mode, data: data)
             },
             spawnAgentImpl: { [weak self] input in
                 guard let self else { throw NodeProviderError.stopped }
@@ -668,7 +668,6 @@ public actor NodeProvider {
         to: String,
         from: String,
         text: String,
-        threadID: String?,
         mode: NodeMessageMode?,
         data: [String: JSONValue]?
     ) async throws -> JSONValue {
@@ -678,7 +677,6 @@ public actor NodeProvider {
             "from": .string(from),
             "text": .string(text)
         ]
-        if let threadID { payload["thread_id"] = .string(threadID) }
         if let mode { payload["mode"] = .string(mode.rawValue) }
         if let data { payload["data"] = .object(data) }
         return try await request(payload)

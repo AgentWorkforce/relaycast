@@ -148,15 +148,13 @@ class NodeHandlerContext:
         to: str,
         from_: str,
         text: str,
-        thread_id: str | None = None,
         mode: Literal["wait", "steer"] | None = None,
         data: dict[str, Any] | None = None,
     ) -> Any:
-        """Post a channel message, attributed to `from_` (an agent name
-        resolved in the workspace). Resolves with the posted message."""
+        """Post a top-level channel message, attributed to `from_` (an agent
+        name resolved in the workspace). Resolves with the posted message.
+        Thread replies are not part of this surface."""
         frame: dict[str, Any] = {"type": "node.message", "to": to, "from": from_, "text": text}
-        if thread_id is not None:
-            frame["thread_id"] = thread_id
         if mode is not None:
             frame["mode"] = mode
         if data is not None:
@@ -392,19 +390,26 @@ class NodeProvider:
                 self._conn = None
 
     async def _reader_loop(self, conn: NodeConnection) -> None:
-        while True:
-            try:
-                raw = await conn.recv()
-            except NodeConnectionClosed:
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._report_error(exc)
-                return
-            await self._handle_frame(raw)
-            if self._stopped:
-                return
+        try:
+            while True:
+                try:
+                    raw = await conn.recv()
+                except NodeConnectionClosed:
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._report_error(exc)
+                    return
+                await self._handle_frame(raw)
+                if self._stopped:
+                    return
+        finally:
+            # The socket ended; unblock any in-flight request — including a
+            # register still awaiting its reply — so the attempt can't hang
+            # waiting on a socket that is gone. A transport drop during the
+            # handshake then flows through _run_connection's retry path.
+            self._reject_pending(NodeProviderError("node provider connection closed"))
 
     async def _backoff_sleep(self) -> None:
         if self._max_reconnect_attempts is not None and self._reconnect_attempt >= self._max_reconnect_attempts:

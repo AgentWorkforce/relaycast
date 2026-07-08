@@ -330,6 +330,28 @@ async def test_reconnects_with_new_instance_id_after_unexpected_drop():
 
 
 @pytest.mark.asyncio
+async def test_reconnects_when_dropped_during_register_handshake():
+    # A transport drop before the register reply must retry, not hang or
+    # hard-fail: only a protocol rejection is a terminal failure.
+    server = FakeNodeServer()
+    node = NodeProvider(**base_kwargs(server))
+
+    task = asyncio.create_task(node.serve())
+    first = await server.next_connection()
+    await wait_until(lambda: len(first.sent_of_type("node.register")) == 1)
+    first.drop()  # drop before replying to node.register
+
+    second = await server.next_connection()
+    assert second is not first
+    second.push(accept_all(second.last_register()))
+    await asyncio.wait_for(node.wait_registered(), timeout=1.0)
+    assert node.connected is True
+
+    await node.stop()
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_deregisters_on_graceful_stop():
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))
