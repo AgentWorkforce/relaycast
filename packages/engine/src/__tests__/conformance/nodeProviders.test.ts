@@ -265,7 +265,10 @@ describe('node providers', () => {
       body: JSON.stringify({ text: 'hello worker' }),
     });
     expect(post.status).toBe(201);
-    await new Promise((r) => setTimeout(r, 60));
+    // Poll for the async fanout instead of a fixed sleep, to avoid CI flakiness.
+    for (let i = 0; i < 50 && deliverFramesOfType(py.sock, 'message.created').length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
@@ -293,6 +296,67 @@ describe('node providers', () => {
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
     expect(node.reserved).toBe(0);
+  });
+
+  it('does not release another spawn’s reservation when a shadowed spawn completes', async () => {
+    const ws = await createWorkspace(stack.app, 'np-shadow-capacity');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    // Broker offers native capacity for two harnesses; policy shadows only claude.
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [
+      { name: 'spawn:claude', kind: 'capacity' },
+      { name: 'spawn:codex', kind: 'capacity' },
+    ], { maxAgents: 4 });
+    const policy = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+
+    // A native codex spawn reserves capacity and stays in flight.
+    const codex = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'codex', name: 'codex-1' } }),
+    });
+    expect(codex.status).toBe(201);
+    const reservedAfterCodex = await stack.runtime.handle.db
+      .select({ reserved: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')))
+      .then((r) => r[0].reserved);
+    expect(reservedAfterCodex).toBe(1);
+
+    // A shadowed claude spawn dispatches to policy (holds no native reservation).
+    const claude = await stack.app.request('/v1/actions/spawn/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { cli: 'claude', name: 'claude-1' } }),
+    });
+    expect(claude.status).toBe(201);
+    const claudeInv = (await claude.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    // Completing the shadow spawn must not release the codex spawn's reservation.
+    await policy.handle.handleMessage(JSON.stringify({ v: 1, type: 'action.result', invocation_id: claudeInv, output: { ok: true } }));
+    const reservedAfterClaude = await stack.runtime.handle.db
+      .select({ reserved: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')))
+      .then((r) => r[0].reserved);
+    expect(reservedAfterClaude).toBe(1);
+  });
+
+  it('rejects an explicit global alias that would shadow an agent-hosted action', async () => {
+    const ws = await createWorkspace(stack.app, 'np-global-conflict');
+    const helper = await registerAgent(stack.app, ws.workspaceKey, 'helper');
+    const reg = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${helper.token}` },
+      body: JSON.stringify({ name: 'run-etl', description: 'agent hosted', handler_agent: 'helper' }),
+    });
+    expect(reg.status).toBe(201);
+
+    await enrollNode(ws, 'node_a', 'alpha');
+    const sock = new FakeSocket();
+    const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, 'node_a', sock);
+    await handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'py', instance_id: 'py-i1' }, [{ name: 'run-etl', kind: 'action', global: true }]));
+    expect(sock.ofType('error').at(-1)).toMatchObject({ code: 'action_name_conflict' });
   });
 
   it('routes context.update to the provider hosting the agent, not a phantom node default', async () => {

@@ -13,7 +13,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionName' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'attemptedNodeIds' | 'dispatchAttempts'
+  'id' | 'workspaceId' | 'actionName' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -578,7 +578,11 @@ export async function invokeNodeAction(
   const action = await fetchNodeAction(db, workspaceId, nodeId, actionName);
   if (!action) {
     if (isSpawnInvocation(actionName)) {
-      return dispatchSpawn({ db, registry: options.nodeConnections, workspaceId, data, targetNodeId: nodeId });
+      // Carry the harness from the URL (`spawn:<harness>`) into placement so the
+      // native fallback targets the right capacity even when the body omits it.
+      const harness = actionName.startsWith('spawn:') ? actionName.slice('spawn:'.length) : undefined;
+      const spawnInput = harness ? { ...(data.input ?? {}), capability: harness } : data.input;
+      return dispatchSpawn({ db, registry: options.nodeConnections, workspaceId, data: { ...data, input: spawnInput }, targetNodeId: nodeId });
     }
     if (isReleaseInvocation(actionName)) {
       return dispatchRelease({ db, registry: options.nodeConnections, workspaceId, data });
@@ -687,15 +691,21 @@ export async function invokeAction(
     const reservedNode = isSpawnInvocation(action.name)
       ? await reserveNodeCapacity(db, workspaceId, action.handlerNodeId)
       : null;
-    const dispatched = await dispatchNodeInvocation({
+    const providerName = action.handlerProvider ?? DEFAULT_PROVIDER_NAME;
+    // Route through the per-provider liveness gate so an offline provider fails
+    // fast unless the capability opted into queue. The synthetic `default`
+    // provider keeps the legacy queue-on-offline behavior (broker reconnect
+    // resilience), so its aliases queue and drain on reconnect as before.
+    const dispatched = await dispatchNodeProviderInvocation({
       db,
       registry: options.nodeConnections,
       workspaceId,
       invocationId: invocation.id,
       nodeId: action.handlerNodeId,
-      providerName: action.handlerProvider ?? DEFAULT_PROVIDER_NAME,
+      providerName,
       action: action.name,
       input: recordInput(invocation.input),
+      queue: action.queue || providerName === DEFAULT_PROVIDER_NAME,
       reservationHeld: !!reservedNode,
     });
     return {
@@ -999,13 +1009,14 @@ async function selectRetryPlacement(
 async function targetAgentForInvocation(
   db: Db,
   invocation: Pick<InvocationRow, 'id' | 'workspaceId'>,
-): Promise<{ agentId: string; agentName: string; nodeId: string } | null> {
+): Promise<{ agentId: string; agentName: string; nodeId: string; providerName: string } | null> {
   const [row] = await db
     .select({
       agentId: agents.id,
       agentName: agents.name,
       locationType: agents.locationType,
       nodeId: agents.locationNodeId,
+      providerName: agents.providerName,
     })
     .from(actionInvocations)
     .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
@@ -1015,7 +1026,7 @@ async function targetAgentForInvocation(
       eq(actionInvocations.id, invocation.id),
     ));
   if (!row || row.locationType !== 'via_node' || !row.nodeId) return null;
-  return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId };
+  return { agentId: row.agentId, agentName: row.agentName, nodeId: row.nodeId, providerName: row.providerName };
 }
 
 export async function drainNodeInvocations(
@@ -1151,7 +1162,10 @@ export async function rescheduleNodeInvocation(
   invocation: RetryableInvocationRow,
   opts: { allowAttemptedFallback?: boolean; retryAfterAt?: Date | null } = {},
 ) {
-  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
+  // Only release capacity the invocation actually holds. A shadowed spawn
+  // dropped its native reservation at dispatch (spawnReservedAt is null), so it
+  // must not release capacity that now belongs to another spawn.
+  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
     await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
   }
   // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
@@ -1181,6 +1195,7 @@ export async function rescheduleNodeInvocation(
       workspaceId: invocation.workspaceId,
       invocationId: invocation.id,
       nodeId: targetAgent.nodeId,
+      providerName: targetAgent.providerName,
       action: invocation.actionName,
       input: recordInput(invocation.input),
       agent: { id: targetAgent.agentId, name: targetAgent.agentName },
@@ -1378,6 +1393,7 @@ export async function completeNodeInvocation(
       durationMs: actionInvocations.durationMs,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedAt: actionInvocations.dispatchedAt,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
       createdAt: actionInvocations.createdAt,
@@ -1427,7 +1443,10 @@ export async function completeNodeInvocation(
     ))
     .returning();
 
-  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId) {
+  // Release only capacity this invocation actually reserved. A shadowed spawn
+  // holds no native reservation (spawnReservedAt is null), so releasing here
+  // would decrement capacity owned by another spawn.
+  if (updated && isSpawnInvocation(updated.actionName) && updated.dispatchedNodeId && existing.spawnReservedAt) {
     await releaseNodeCapacity(db, workspaceId, updated.dispatchedNodeId);
   }
 

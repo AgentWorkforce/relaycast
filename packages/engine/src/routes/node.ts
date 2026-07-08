@@ -324,6 +324,8 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
         ),
         'node deliver action.denied',
       );
+      await sendWebhookEvent(c, { type: 'action.denied', workspaceId: workspace.id, data: eventData });
+      runInBackground(c, fanoutToWorkspace(c, 'action.denied', eventData), 'fanout action.denied');
     }
     return errorResponse(c, error);
   }

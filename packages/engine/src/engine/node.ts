@@ -549,8 +549,11 @@ export async function deregisterProvider(
   if (!remaining || remaining.count === 0) {
     await markNodeOffline(db, registry, workspaceId, nodeId);
   } else {
+    // Other providers remain: recompute the node aggregate but don't reschedule
+    // node-wide — that would disturb the surviving providers' in-flight invokes.
+    // Work dispatched to the removed provider is caught by the dispatch-timeout
+    // sweep, matching the provider-disconnect path.
     await recomputeNodeAggregate(db, workspaceId, nodeId);
-    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
   }
 }
 
@@ -1273,6 +1276,7 @@ export async function reconcileInventory(
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
     })
@@ -1359,9 +1363,12 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   const boundProviderName = args.connectionId
     ? args.registry.providerNameForConnection?.(args.connectionId)
     : undefined;
-  const frameProviderName = (
-    'provider' in message && message.provider ? message.provider.name : undefined
-  ) ?? boundProviderName ?? DEFAULT_PROVIDER_NAME;
+  // The connection's registered identity is authoritative — a provider can't act
+  // on another provider by putting a different name in the frame. The frame's
+  // provider is only a hint for unbound/back-compat traffic.
+  const frameProviderName = boundProviderName
+    ?? ('provider' in message && message.provider ? message.provider.name : undefined)
+    ?? DEFAULT_PROVIDER_NAME;
 
   try {
     switch (message.type) {

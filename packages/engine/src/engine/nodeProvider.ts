@@ -235,6 +235,18 @@ export async function materializeProviderActions(
         if (isDefault) continue;
         throw codedError(`Action "${name}" already claims the workspace-global alias`, 'action_name_conflict', 409);
       }
+      // An explicit global alias must not shadow an agent-hosted action of the
+      // same name — the agent-hosted row wins workspace-invoke resolution, so the
+      // alias would be unreachable. Collide loudly instead.
+      if (!isDefault) {
+        const [agentHosted] = await db
+          .select({ id: actions.id })
+          .from(actions)
+          .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name), sql`${actions.handlerNodeId} IS NULL`));
+        if (agentHosted) {
+          throw codedError(`Action "${name}" is already registered as an agent-hosted action`, 'action_name_conflict', 409);
+        }
+      }
     }
 
     const [existing] = await db
@@ -295,7 +307,10 @@ export async function recomputeNodeAggregate(
   const activeAgents = providers.reduce((sum, p) => sum + p.activeAgents, 0);
   const load = providers.reduce((max, p) => Math.max(max, p.load), 0);
   const handlersLive = online.some((p) => p.handlersLive);
-  const lastHeartbeatAt = providers.reduce<Date | null>((latest, p) => {
+  // Node liveness must reflect an online provider's heartbeat. An offline
+  // provider's disconnect timestamp is fresh, so including it here could keep a
+  // node "live" while every online provider has gone stale.
+  const lastHeartbeatAt = online.reduce<Date | null>((latest, p) => {
     if (!p.lastHeartbeatAt) return latest;
     return !latest || p.lastHeartbeatAt > latest ? p.lastHeartbeatAt : latest;
   }, null);
