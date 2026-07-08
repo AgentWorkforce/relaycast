@@ -9,7 +9,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { actions, agents, nodeProviders, nodes } from '../../db/schema.js';
+import { actions, agents, messages, nodeProviders, nodes, workspaceEvents } from '../../db/schema.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -421,6 +421,81 @@ describe('node providers', () => {
       .from(actions)
       .where(eq(actions.workspaceId, ws.workspaceId));
     expect(actionRows.map((a) => a.name).sort()).toEqual(['run-etl']);
+  });
+
+  it('routes a node.spawn frame capacity-direct, bypassing any spawn shadow', async () => {
+    const ws = await createWorkspace(stack.app, 'np-node-spawn');
+    await enrollNode(ws, 'node_a', 'alpha');
+    // Broker provider offers native spawn:claude capacity.
+    const broker = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
+    // A policy provider shadows it with a spawn:claude action, and is where the
+    // handler runs: its ctx.spawnAgent must delegate to broker capacity, never
+    // re-enter its own shadow.
+    const policy = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+
+    await policy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'spawn-1',
+      type: 'node.spawn',
+      input: { cli: 'claude', name: 'worker-1' },
+    }));
+
+    // Delegated to the broker's native capacity...
+    expect(broker.sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'spawn:claude' });
+    // ...not back into the policy provider's shadow action.
+    expect(policy.sock.ofType('action.invoke')).toHaveLength(0);
+    const reply = policy.sock.ofType('reply').at(-1) as { ok?: boolean; id?: string; data?: { invocation_id?: string } };
+    expect(reply).toMatchObject({ ok: true, id: 'spawn-1' });
+    expect(typeof reply.data?.invocation_id).toBe('string');
+  });
+
+  it('posts a channel message from a node.message frame and fans out to observers', async () => {
+    const ws = await createWorkspace(stack.app, 'np-node-message');
+    await registerAgent(stack.app, ws.workspaceKey, 'reporter');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'msg-1',
+      type: 'node.message',
+      to: 'general',
+      from: 'reporter',
+      text: 'etl finished',
+    }));
+
+    const reply = py.sock.ofType('reply').at(-1) as { ok?: boolean; id?: string; data?: { id?: string; text?: string } };
+    expect(reply).toMatchObject({ ok: true, id: 'msg-1' });
+    expect(reply.data?.text).toBe('etl finished');
+
+    const rows = await stack.runtime.handle.db
+      .select({ body: messages.body, agentId: messages.agentId })
+      .from(messages)
+      .where(eq(messages.workspaceId, ws.workspaceId));
+    expect(rows.map((r) => r.body)).toContain('etl finished');
+
+    const events = await stack.runtime.handle.db
+      .select({ type: workspaceEvents.type })
+      .from(workspaceEvents)
+      .where(and(eq(workspaceEvents.workspaceId, ws.workspaceId), eq(workspaceEvents.type, 'message.created')));
+    expect(events.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects a node.message from an unknown agent or to an unknown channel', async () => {
+    const ws = await createWorkspace(stack.app, 'np-node-message-errors');
+    await registerAgent(stack.app, ws.workspaceKey, 'reporter');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'bad-agent', type: 'node.message', to: 'general', from: 'ghost', text: 'hi',
+    }));
+    expect(py.sock.ofType('error').at(-1)).toMatchObject({ id: 'bad-agent', code: 'agent_not_found' });
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'bad-channel', type: 'node.message', to: 'nowhere', from: 'reporter', text: 'hi',
+    }));
+    expect(py.sock.ofType('error').at(-1)).toMatchObject({ id: 'bad-channel', code: 'channel_not_found' });
   });
 
   it('removes a provider through DELETE /v1/nodes/:node/providers/:name', async () => {

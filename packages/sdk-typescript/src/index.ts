@@ -51,5 +51,13 @@ export {
 export type { RegisterAgentInput, RegisterOrRotateInput, ResolvedIdentity } from './identity.js';
 export { WsClient } from './ws.js';
 export type { WsClientOptions, EventHandler } from './ws.js';
+export { NodeProviderClient, NodeRegistrationError } from './node-provider.js';
+export type {
+  NodeProviderOptions,
+  NodeCapabilityOptions,
+  NodeCapabilityHandler,
+  NodeHandlerContext,
+  NodeSendMessageInput,
+} from './node-provider.js';
 export type { Subscription } from './subscription.js';
 export type * from './types.js';
