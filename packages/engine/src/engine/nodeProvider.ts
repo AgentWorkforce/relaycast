@@ -154,9 +154,12 @@ export async function heartbeatProvider(
 }
 
 export async function markProviderOffline(db: Db, workspaceId: string, nodeId: string, name: string): Promise<void> {
+  // A disconnected provider hosts no live agents; zero its activeAgents so
+  // recomputeNodeAggregate (which sums across all providers) stops counting them
+  // on the node. A reconnect/heartbeat repopulates it from the provider's report.
   await db
     .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, lastHeartbeatAt: new Date() })
+    .set({ status: 'offline', handlersLive: false, load: 0, activeAgents: 0, lastHeartbeatAt: new Date() })
     .where(and(
       eq(nodeProviders.workspaceId, workspaceId),
       eq(nodeProviders.nodeId, nodeId),

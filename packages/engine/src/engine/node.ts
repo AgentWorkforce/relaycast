@@ -471,10 +471,11 @@ export async function markNodeOffline(
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
 
   // Provider capability sets persist (offline nodes still show their manifest);
-  // only their liveness flips.
+  // only their liveness flips. Zero activeAgents too, so a later
+  // recomputeNodeAggregate never resurrects a dropped provider's agent count.
   await db
     .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, lastHeartbeatAt: new Date() })
+    .set({ status: 'offline', handlersLive: false, load: 0, activeAgents: 0, lastHeartbeatAt: new Date() })
     .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
 
   await db
