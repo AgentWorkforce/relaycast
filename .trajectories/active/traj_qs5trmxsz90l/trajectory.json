@@ -55,6 +55,42 @@
             "reasoning": "The workflow changes pyproject.toml version before uv sync; uv.lock must be refreshed and committed so release tags do not leave the Python SDK lockfile at the previous version."
           },
           "significance": "high"
+        },
+        {
+          "ts": 1783497752646,
+          "type": "decision",
+          "content": "Validated relayfile-cloud event payload as typed camelCase instead of renaming it: Validated relayfile-cloud event payload as typed camelCase instead of renaming it",
+          "raw": {
+            "question": "Validated relayfile-cloud event payload as typed camelCase instead of renaming it",
+            "chosen": "Validated relayfile-cloud event payload as typed camelCase instead of renaming it",
+            "alternatives": [],
+            "reasoning": "relayfile producer currently emits eventId/contentHash/contentType/correlationId; Relaycast owns the target request and callback URL, so only those new Relaycast wire fields were changed to path_glob."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783497752659,
+          "type": "decision",
+          "content": "Added strict idempotency mode only for relayfile inbound: Added strict idempotency mode only for relayfile inbound",
+          "raw": {
+            "question": "Added strict idempotency mode only for relayfile inbound",
+            "chosen": "Added strict idempotency mode only for relayfile inbound",
+            "alternatives": [],
+            "reasoning": "Provider redelivery with the same X-Relay-Event-Id must not proceed without durable dedupe, while existing user-authenticated routes keep their historical best-effort fallback."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783498123318,
+          "type": "reflection",
+          "content": "Review-clean pass addressed relayfile inbound security, validation, delivery routing, idempotency, OpenAPI, and test-gate issues; focused and root gates now pass under Node 22.",
+          "raw": {
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "confidence:0.9"
+          ]
         }
       ]
     }

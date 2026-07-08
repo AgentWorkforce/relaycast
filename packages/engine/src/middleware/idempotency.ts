@@ -35,6 +35,7 @@ interface RunIdempotentOptions<T> {
   fingerprint?: string;
   ttlSeconds?: number;
   kv?: KeyValueStore;
+  requireKv?: boolean;
   operation: () => Promise<T>;
   /**
    * Fresh-result hook that must complete before the idempotency success record
@@ -42,6 +43,12 @@ interface RunIdempotentOptions<T> {
    * by a later idempotent replay.
    */
   afterOperation?: (data: T) => Promise<void>;
+}
+
+function idempotencyUnavailableError(cause?: unknown): Error {
+  const err = new Error('Idempotency storage is unavailable');
+  Object.assign(err, { code: 'idempotency_unavailable', status: 503, cause });
+  return err;
 }
 
 async function buildKey(workspaceId: string, actorId: string, scope: string, key: string): Promise<string> {
@@ -113,9 +120,15 @@ export async function runIdempotent<T>(
     status = 201,
     ttlSeconds = IDEMPOTENCY_TTL_SECONDS,
     kv,
+    requireKv = false,
   } = options;
 
   if (!key) {
+    if (requireKv) {
+      const err = new Error('Idempotency key is required');
+      Object.assign(err, { code: 'idempotency_key_required', status: 400 });
+      throw err;
+    }
     const data = await operation();
     if (afterOperation) await afterOperation(data);
     return { status, data, replayed: false };
@@ -125,6 +138,10 @@ export async function runIdempotent<T>(
   let kvKey: string | null = null;
   let lockKey: string | null = null;
   let lockAcquired = false;
+
+  if (!kvStore && requireKv) {
+    throw idempotencyUnavailableError();
+  }
 
   if (kvStore) {
     kvKey = await buildKey(workspaceId, actorId, scope, key);
@@ -197,6 +214,9 @@ export async function runIdempotent<T>(
       if (err instanceof Error && ['idempotency_key_reused', 'idempotency_in_progress'].includes((err as Error & { code?: string }).code ?? '')) {
         throw err;
       }
+      if (requireKv) {
+        throw idempotencyUnavailableError(err);
+      }
       // KV unavailable or decode failure: proceed without idempotency.
       kvStore = null;
       kvKey = null;
@@ -217,7 +237,10 @@ export async function runIdempotent<T>(
       };
       try {
         await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });
-      } catch {
+      } catch (err) {
+        if (requireKv) {
+          throw idempotencyUnavailableError(err);
+        }
         // KV failure during record storage — proceed without idempotency record.
       } finally {
         if (lockKey) {

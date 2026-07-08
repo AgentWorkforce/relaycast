@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. packages/cli/src/__tests__/cli.test.ts",
     "lint": "eslint src/"
   },
   "dependencies": {

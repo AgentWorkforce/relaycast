@@ -32,7 +32,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. packages/openclaw/src/__tests__/bridge.test.ts packages/openclaw/src/__tests__/config.test.ts packages/openclaw/src/__tests__/setup.test.ts",
     "lint": "eslint src/"
   },
   "dependencies": {
