@@ -415,6 +415,31 @@ async def test_reconnect_exhaustion_does_not_overwrite_successful_registration()
 
 
 @pytest.mark.asyncio
+async def test_handler_can_call_stop_without_deadlocking():
+    server = FakeNodeServer()
+    node = NodeProvider(**base_kwargs(server))
+    done: dict = {}
+
+    @node.capability("shutdown")
+    async def handler(input, ctx):
+        # A handler that triggers shutdown must not deadlock draining its own task.
+        await node.stop()
+        done["ok"] = True
+        return "ok"
+
+    task = asyncio.create_task(node.serve())
+    conn = await server.next_connection()
+    conn.push(accept_all(conn.last_register()))
+    await node.wait_registered()
+
+    conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-stop", "action": "shutdown", "input": {}})
+    # serve() completes promptly (no 5s self-deadlock) and deregister was sent.
+    await asyncio.wait_for(task, timeout=2.0)
+    await wait_until(lambda: done.get("ok") is True)
+    assert len(conn.sent_of_type("node.deregister")) == 1
+
+
+@pytest.mark.asyncio
 async def test_deregisters_on_graceful_stop():
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))

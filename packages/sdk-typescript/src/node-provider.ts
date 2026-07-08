@@ -256,10 +256,10 @@ export class NodeProviderClient {
     // Let in-flight invoke handlers finish (and send their results) before the
     // socket closes; bound the wait so a slow handler can't hang shutdown.
     if (this.invokeTasks.size > 0) {
-      await Promise.race([
-        Promise.allSettled([...this.invokeTasks]),
-        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-      ]);
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<void>((resolve) => { drainTimer = setTimeout(resolve, 5000); });
+      await Promise.race([Promise.allSettled([...this.invokeTasks]), timeout]);
+      if (drainTimer) clearTimeout(drainTimer);
     }
     if (this.ws && this.ws.readyState === 1 && this.registered && this.instanceId) {
       this.sendFrame({ type: 'node.deregister', provider: this.providerIdentity() });
@@ -359,11 +359,11 @@ export class NodeProviderClient {
       ...(this.machineId ? { machine_id: this.machineId } : {}),
       resume_cursor: null,
     })
-      .then((data) => this.onRegistered(data as NodeRegisterReplyData))
+      .then((data) => this.onRegistered(data as NodeRegisterReplyData, capabilities.map((c) => c.name)))
       .catch((err) => this.onRegisterFailed(err as Error));
   }
 
-  private onRegistered(data: NodeRegisterReplyData): void {
+  private onRegistered(data: NodeRegisterReplyData, sentNames: string[]): void {
     // The reply must carry a well-formed acceptance list (the engine always
     // does). A missing/corrupt reply (including a null `data`) means acceptance
     // can't be confirmed, so fail registration rather than assume success or
@@ -376,12 +376,13 @@ export class NodeProviderClient {
       ));
       return;
     }
-    // Every requested capability must be acknowledged; an empty/partial list
-    // cannot silently pass as success.
+    // Every capability the register frame ADVERTISED must be acknowledged.
+    // Validate against the snapshot that was sent, not the live map — a
+    // `capability()` added after the frame was sent isn't in this reply.
     const acknowledged = new Set(
       list.filter((c): c is FleetCapabilityAcceptance => !!c && typeof c.name === 'string').map((c) => c.name),
     );
-    const missing = [...this.capabilities.keys()].filter((name) => !acknowledged.has(name));
+    const missing = sentNames.filter((name) => !acknowledged.has(name));
     if (missing.length > 0) {
       this.onRegisterFailed(new NodeRegistrationError(
         `Registration reply omitted acceptance for: ${missing.join(', ')}`,
@@ -454,6 +455,9 @@ export class NodeProviderClient {
         return;
       }
       case 'action.invoke': {
+        // Stop accepting new invokes once shutting down/draining; the engine
+        // reschedules an undispatched invocation when the node goes offline.
+        if (this.stopped) return;
         const task = this.dispatchInvoke(message.invocation_id, message.action, message.input);
         this.invokeTasks.add(task);
         void task.finally(() => this.invokeTasks.delete(task));

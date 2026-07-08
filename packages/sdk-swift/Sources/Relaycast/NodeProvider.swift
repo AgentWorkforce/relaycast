@@ -408,6 +408,8 @@ public actor NodeProvider {
     /// Gracefully deregister the provider and close the connection.
     public func stop() async {
         stopped = true
+        // Stop heartbeats before draining so none fire during the drain window.
+        stopHeartbeat()
         // Let in-flight invoke handlers finish (and send their results) before
         // the socket closes; bound the wait so a slow handler can't hang stop.
         let pending = Array(invokeTasks.values)
@@ -423,7 +425,6 @@ public actor NodeProvider {
             await sendDeregister(using: transport)
             await transport.close()
         }
-        stopHeartbeat()
         // A stop() before registration completed must not leave waitRegistered()
         // hanging (settleRegistration is a no-op once it has resolved).
         settleRegistration(.failure(NodeProviderError.stopped))
@@ -549,12 +550,17 @@ public actor NodeProvider {
     }
 
     private func sendRegister() async throws -> NodeRegisterReplyData {
+        // Snapshot the advertised capabilities before the await; actor
+        // reentrancy lets `capability(...)` mutate capabilityOrder while the
+        // register request is in flight, and this reply reflects only the frame
+        // that was sent.
+        let requested = capabilityOrder
         let data = try await request(registerFrame())
         let reply = try NodeRegisterReplyData.parse(data)
-        // Every requested capability must be acknowledged; an empty/partial list
-        // cannot silently pass as success.
+        // Every advertised capability must be acknowledged; an empty/partial
+        // list cannot silently pass as success.
         let acknowledged = Set(reply.acceptedCapabilities.map { $0.name })
-        let missing = capabilityOrder.filter { !acknowledged.contains($0) }
+        let missing = requested.filter { !acknowledged.contains($0) }
         guard missing.isEmpty else {
             throw NodeRegistrationError(
                 code: "invalid_register_reply",
@@ -656,6 +662,9 @@ public actor NodeProvider {
         case .error(let id, let code, let message):
             resumePending(id: id, result: .failure(NodeRegistrationError(code: code, message: message)))
         case .actionInvoke(let invocationID, let action, let input):
+            // Stop accepting new invokes once shutting down/draining; the engine
+            // reschedules an undispatched invocation when the node goes offline.
+            if stopped { break }
             let id = invokeSeq
             invokeSeq += 1
             let task = Task { [weak self] in

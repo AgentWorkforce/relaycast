@@ -346,11 +346,14 @@ class NodeProvider:
             self._reconnect_sleep_task.cancel()
         # Let in-flight invoke handlers finish (and send their action.result)
         # before the socket closes; bound the wait so a slow handler can't hang
-        # shutdown.
-        if self._invoke_tasks:
+        # shutdown. Exclude the caller's own task so a handler that calls stop()
+        # doesn't deadlock (and get cancelled) waiting on itself.
+        current = asyncio.current_task()
+        drain = [t for t in self._invoke_tasks if t is not current]
+        if drain:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(
-                    asyncio.gather(*list(self._invoke_tasks), return_exceptions=True), timeout=5.0
+                    asyncio.gather(*drain, return_exceptions=True), timeout=5.0
                 )
         conn = self._conn
         if conn is not None and self._registered and self._instance_id:
@@ -506,9 +509,12 @@ class NodeProvider:
         accepted_by_name = {
             c.get("name"): c for c in accepted if isinstance(c, dict) and isinstance(c.get("name"), str)
         }
-        # Every requested capability must be acknowledged; an empty/partial list
-        # cannot silently pass as success.
-        missing = sorted(set(self._handlers.keys()) - set(accepted_by_name.keys()))
+        # Every capability the register frame ADVERTISED must be acknowledged.
+        # Validate against the snapshot that was sent (`capabilities`), not the
+        # live handler map — a capability added after the frame was sent isn't
+        # in this reply.
+        requested = {entry["name"] for entry in capabilities}
+        missing = sorted(requested - set(accepted_by_name.keys()))
         if missing:
             raise NodeRegistrationError(
                 f"Registration reply omitted acceptance for: {', '.join(missing)}",
@@ -566,6 +572,10 @@ class NodeProvider:
                 )
             return
         if msg_type == "action.invoke":
+            # Stop accepting new invokes once shutting down/draining; the engine
+            # reschedules an undispatched invocation when the node goes offline.
+            if self._stopped:
+                return
             invocation_id = message.get("invocation_id", "")
             action = message.get("action", "")
             input_ = message.get("input")

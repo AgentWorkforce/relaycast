@@ -274,6 +274,18 @@ describe('NodeProviderClient', () => {
     await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'invalid_register_reply' });
   });
 
+  it('validates registration against the capabilities sent, not later additions', async () => {
+    const node = new NodeProviderClient({ ...baseOptions, capabilities: { 'run-etl': async () => 'ok' } });
+    node.serve().catch(() => {});
+    const sock = newSocket();
+    sock.open();
+    const register = sock.lastRegister();
+    // A capability added AFTER the register frame was sent isn't in this reply.
+    node.capability('late', async () => 'ok');
+    sock.emit(acceptAll(register)); // acknowledges only run-etl (what was sent)
+    await expect(node.whenRegistered()).resolves.toBeTruthy();
+  });
+
   it('rejects whenRegistered when stopped before registration completes', async () => {
     const node = new NodeProviderClient(baseOptions);
     node.serve().catch(() => {});
