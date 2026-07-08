@@ -6,6 +6,7 @@ import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -123,8 +124,14 @@ function publicAction(row: {
   };
 }
 
+/**
+ * Resolve a workspace-scoped invoke (`POST /v1/actions/:name/invoke`). Only
+ * agent-hosted actions and node actions that claimed a workspace-global alias
+ * are reachable here; plain node-scoped actions are node-addressed. Agent-hosted
+ * actions win when both somehow exist for a name.
+ */
 async function fetchAction(db: Db, workspaceId: string, actionName: string): Promise<ActionRow | null> {
-  const [action] = await db
+  const rows = await db
     .select()
     .from(actions)
     .where(
@@ -132,8 +139,23 @@ async function fetchAction(db: Db, workspaceId: string, actionName: string): Pro
         eq(actions.workspaceId, workspaceId),
         eq(actions.name, actionName),
         eq(actions.isActive, true),
+        or(isNull(actions.handlerNodeId), eq(actions.isGlobal, true)),
       ),
     );
+  return rows.sort((a, b) => Number(a.handlerNodeId !== null) - Number(b.handlerNodeId !== null))[0] ?? null;
+}
+
+/** Resolve a node-addressed action by its unique `(node, name)` key. */
+async function fetchNodeAction(db: Db, workspaceId: string, nodeId: string, actionName: string): Promise<ActionRow | null> {
+  const [action] = await db
+    .select()
+    .from(actions)
+    .where(and(
+      eq(actions.workspaceId, workspaceId),
+      eq(actions.handlerNodeId, nodeId),
+      eq(actions.name, actionName),
+      eq(actions.isActive, true),
+    ));
   return action ?? null;
 }
 
@@ -307,6 +329,55 @@ async function createInvocation(
   return invocation;
 }
 
+/** Is a node provider currently invokable — connection up AND heartbeat handlers_live. */
+async function isNodeProviderLive(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+): Promise<boolean> {
+  if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) return false;
+  const provider = await getProvider(db, workspaceId, nodeId, providerName);
+  return !!provider && isProviderLive(provider);
+}
+
+/**
+ * Dispatch an invoke to a specific provider on a node. When the provider is
+ * offline the invoke fails fast (the invocation is failed) unless it opted into
+ * the per-provider offline queue.
+ */
+async function dispatchNodeProviderInvocation(args: {
+  db: Db;
+  registry: NodeConnectionRegistry;
+  workspaceId: string;
+  invocationId: string;
+  nodeId: string;
+  providerName: string;
+  action: string;
+  input: Record<string, unknown>;
+  agent?: { id: string; name: string } | null;
+  queue: boolean;
+  reservationHeld?: boolean;
+}): Promise<{ accepted: boolean; pending: boolean }> {
+  const live = await isNodeProviderLive(args.db, args.registry, args.workspaceId, args.nodeId, args.providerName);
+  if (!live) {
+    if (!args.queue) {
+      await args.db
+        .update(actionInvocations)
+        .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+      throw codedError(`Provider "${args.providerName}" is offline for action "${args.action}"`, 'handler_unavailable', 503);
+    }
+    return dispatchNodeInvocation({ ...args, pending: true });
+  }
+  return dispatchNodeInvocation({ ...args });
+}
+
 async function dispatchRelease(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
@@ -344,12 +415,14 @@ async function dispatchRelease(args: {
     action_name: 'release',
   });
 
+  // Release is a capacity operation handled by the provider hosting the agent.
   const dispatched = await dispatchNodeInvocation({
     db: args.db,
     registry: args.registry,
     workspaceId: args.workspaceId,
     invocationId: invocation.id,
     nodeId: agent.locationNodeId,
+    providerName: agent.providerName,
     action: 'release',
     input,
   });
@@ -366,6 +439,23 @@ async function dispatchRelease(args: {
   };
 }
 
+function spawnResult(
+  invocation: InvocationRow,
+  nodeId: string,
+  dispatched: { accepted: boolean; pending: boolean },
+) {
+  return {
+    invocation_id: invocation.id,
+    action_name: 'spawn',
+    handler_agent_id: null,
+    handler_node_id: nodeId,
+    dispatched_node_id: dispatched.accepted ? nodeId : null,
+    input: recordInput(invocation.input),
+    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    created_at: invocation.createdAt.toISOString(),
+  };
+}
+
 async function dispatchSpawn(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
@@ -375,10 +465,17 @@ async function dispatchSpawn(args: {
     caller_id?: string;
     caller_name?: string;
   };
+  /** Node-address the spawn instead of placing by capacity. */
+  targetNodeId?: string;
+  /** Capacity-direct delegation (`ctx.spawnAgent`) — never re-enters a shadow. */
+  bypassShadow?: boolean;
 }) {
   if (!args.registry) {
     throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
   }
+
+  const input = recordInput(args.data.input);
+  const capability = dispatchActionNameForInvocation('spawn', input);
 
   const invocation = await createInvocation(args.db, args.workspaceId, null, {
     input: args.data.input,
@@ -388,28 +485,136 @@ async function dispatchSpawn(args: {
 
   const placement = await claimSpawnNode(args.db, args.workspaceId, {
     actionName: 'spawn',
-    input: args.data.input,
+    input,
     callerId: args.data.caller_id,
+    preferredNodeId: args.targetNodeId,
   });
+  const nodeId = placement.node.id;
 
+  // A registered `spawn:<harness>` action shadows native capacity on this node.
+  // Capacity-direct delegation (ctx.spawnAgent) bypasses the shadow so a handler
+  // that delegates cannot re-enter itself.
+  if (!args.bypassShadow) {
+    const shadow = await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
+    if (shadow && shadow.handlerProvider) {
+      if (!placement.queued) await releaseNodeCapacity(args.db, args.workspaceId, nodeId);
+      const dispatched = await dispatchNodeProviderInvocation({
+        db: args.db,
+        registry: args.registry,
+        workspaceId: args.workspaceId,
+        invocationId: invocation.id,
+        nodeId,
+        providerName: shadow.handlerProvider,
+        action: capability,
+        input,
+        queue: shadow.queue,
+      });
+      return spawnResult(invocation, nodeId, dispatched);
+    }
+  }
+
+  const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
   const dispatched = await dispatchNodeInvocation({
     db: args.db,
     registry: args.registry,
     workspaceId: args.workspaceId,
     invocationId: invocation.id,
-    nodeId: placement.node.id,
-    action: placement.capability,
-    input: recordInput(invocation.input),
+    nodeId,
+    providerName: capProvider,
+    action: capability,
+    input,
     pending: placement.queued,
     reservationHeld: !placement.queued,
   });
+  return spawnResult(invocation, nodeId, dispatched);
+}
 
+/**
+ * Capacity-direct spawn used by handler-context `ctx.spawnAgent`: it targets a
+ * node's capacity executor and never re-enters action dispatch, so a
+ * `spawn:<harness>` shadow handler that delegates cannot recurse into itself.
+ */
+export async function dispatchCapacitySpawn(
+  db: Db,
+  workspaceId: string,
+  data: { input?: Record<string, unknown>; caller_id?: string; caller_name?: string; target_node_id?: string },
+  options: { nodeConnections?: NodeConnectionRegistry } = {},
+) {
+  return dispatchSpawn({
+    db,
+    registry: options.nodeConnections,
+    workspaceId,
+    data,
+    targetNodeId: data.target_node_id,
+    bypassShadow: true,
+  });
+}
+
+/**
+ * Invoke a node-addressed action: `POST /v1/nodes/:node/actions/:name/invoke`.
+ * Resolves capability -> provider -> socket on the given node. A `spawn:*` name
+ * with no shadow action falls through to native capacity on that node.
+ */
+export async function invokeNodeAction(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  actionName: string,
+  data: {
+    input?: Record<string, unknown>;
+    caller_id?: string;
+    caller_name?: string;
+  },
+  options: { nodeConnections?: NodeConnectionRegistry } = {},
+) {
+  if (!options.nodeConnections) {
+    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
+  }
+  const action = await fetchNodeAction(db, workspaceId, nodeId, actionName);
+  if (!action) {
+    if (isSpawnInvocation(actionName)) {
+      return dispatchSpawn({ db, registry: options.nodeConnections, workspaceId, data, targetNodeId: nodeId });
+    }
+    if (isReleaseInvocation(actionName)) {
+      return dispatchRelease({ db, registry: options.nodeConnections, workspaceId, data });
+    }
+    throw codedError(`Action "${actionName}" not found on node`, 'action_not_found', 404);
+  }
+
+  if (action.availableTo && action.availableTo.length > 0) {
+    if (!data.caller_name || !action.availableTo.includes(data.caller_name)) {
+      const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
+      throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
+    }
+  }
+
+  const invocation = await createInvocation(db, workspaceId, action, {
+    input: data.input,
+    caller_id: data.caller_id,
+    caller_name: data.caller_name,
+  });
+  const providerName = action.handlerProvider ?? DEFAULT_PROVIDER_NAME;
+  const reservedNode = isSpawnInvocation(action.name)
+    ? await reserveNodeCapacity(db, workspaceId, nodeId)
+    : null;
+  const dispatched = await dispatchNodeProviderInvocation({
+    db,
+    registry: options.nodeConnections,
+    workspaceId,
+    invocationId: invocation.id,
+    nodeId,
+    providerName,
+    action: action.name,
+    input: recordInput(invocation.input),
+    queue: action.queue,
+    reservationHeld: !!reservedNode,
+  });
   return {
     invocation_id: invocation.id,
-    action_name: 'spawn',
+    action_name: actionName,
     handler_agent_id: null,
-    handler_node_id: placement.node.id,
-    dispatched_node_id: dispatched.accepted ? placement.node.id : null,
+    handler_node_id: nodeId,
+    dispatched_node_id: dispatched.accepted ? nodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
@@ -483,6 +688,7 @@ export async function invokeAction(
       workspaceId,
       invocationId: invocation.id,
       nodeId: action.handlerNodeId,
+      providerName: action.handlerProvider ?? DEFAULT_PROVIDER_NAME,
       action: action.name,
       input: recordInput(invocation.input),
       reservationHeld: !!reservedNode,
@@ -512,6 +718,7 @@ export async function invokeAction(
       name: agents.name,
       locationType: agents.locationType,
       locationNodeId: agents.locationNodeId,
+      providerName: agents.providerName,
     })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, action.handlerAgentId)));
@@ -530,6 +737,7 @@ export async function invokeAction(
     workspaceId,
     invocationId: invocation.id,
     nodeId: handlerAgent.locationNodeId,
+    providerName: handlerAgent.providerName,
     action: action.name,
     input: recordInput(invocation.input),
     agent: { id: handlerAgent.id, name: handlerAgent.name },
@@ -711,6 +919,8 @@ async function dispatchNodeInvocation(args: {
   workspaceId: string;
   invocationId: string;
   nodeId: string;
+  /** When set, route to this provider's socket; otherwise the node default. */
+  providerName?: string;
   action: string;
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
@@ -719,15 +929,20 @@ async function dispatchNodeInvocation(args: {
   reservationHeld?: boolean;
   skipIncrementAttempts?: boolean;
 }): Promise<{ accepted: boolean; pending: boolean }> {
-  const connectedBefore = args.registry.isNodeConnected(args.workspaceId, args.nodeId);
-  const sent = await args.registry.sendToNode(args.workspaceId, args.nodeId, {
-    v: 1,
-    type: 'action.invoke',
+  const frame = {
+    v: 1 as const,
+    type: 'action.invoke' as const,
     invocation_id: args.invocationId,
     action: args.action,
     ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
     input: toFleetWireJson(args.input),
-  });
+  };
+  const connectedBefore = args.providerName
+    ? args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName)
+    : args.registry.isNodeConnected(args.workspaceId, args.nodeId);
+  const sent = args.providerName
+    ? await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame)
+    : await args.registry.sendToNode(args.workspaceId, args.nodeId, frame);
 
   if (!sent) return { accepted: false, pending: false };
 
@@ -814,10 +1029,12 @@ export async function drainNodeInvocations(
       spawnReservedAt: actionInvocations.spawnReservedAt,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       handlerNodeId: actions.handlerNodeId,
+      handlerProvider: actions.handlerProvider,
       handlerAgentId: agents.id,
       handlerAgentName: agents.name,
       handlerAgentLocationType: agents.locationType,
       handlerAgentNodeId: agents.locationNodeId,
+      handlerAgentProvider: agents.providerName,
     })
     .from(actionInvocations)
     .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
@@ -845,11 +1062,29 @@ export async function drainNodeInvocations(
     const targetNodeId = targetAgent?.nodeId ?? row.handlerNodeId ?? row.dispatchedNodeId;
     if (targetNodeId !== nodeId) continue;
 
+    const input = recordInput(row.input);
+    // Resolve the target provider so the offline queue drains per provider. A
+    // spawn with a registered shadow re-dispatches to the shadow (no capacity
+    // reservation); otherwise native capacity handles it.
+    let shadowProvider: string | null = null;
+    if (isSpawnInvocation(row.actionName)) {
+      const shadow = await fetchNodeAction(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input));
+      shadowProvider = shadow?.handlerProvider ?? null;
+    }
+    const providerName = targetAgent
+      ? row.handlerAgentProvider ?? DEFAULT_PROVIDER_NAME
+      : row.handlerNodeId
+        ? row.handlerProvider ?? DEFAULT_PROVIDER_NAME
+        : shadowProvider
+          ?? (isSpawnInvocation(row.actionName)
+            ? (await capacityProviderName(db, workspaceId, nodeId, dispatchActionNameForInvocation(row.actionName, input))) ?? DEFAULT_PROVIDER_NAME
+            : DEFAULT_PROVIDER_NAME);
+    const nativeSpawn = isSpawnInvocation(row.actionName) && !shadowProvider;
+
     let reservedForDrain = false;
     try {
-      const input = recordInput(row.input);
-      let reservationHeld = isSpawnInvocation(row.actionName) && !!row.spawnReservedAt;
-      if (isSpawnInvocation(row.actionName) && !reservationHeld) {
+      let reservationHeld = nativeSpawn && !!row.spawnReservedAt;
+      if (nativeSpawn && !reservationHeld) {
         const reserved = await reserveNodeCapacity(db, workspaceId, nodeId);
         if (!reserved) {
           const [node] = await db
@@ -882,6 +1117,7 @@ export async function drainNodeInvocations(
         workspaceId,
         invocationId: row.id,
         nodeId,
+        providerName,
         action: dispatchActionNameForInvocation(row.actionName, input),
         input,
         agent: targetAgent ? { id: targetAgent.id, name: targetAgent.name } : null,
@@ -912,6 +1148,25 @@ export async function rescheduleNodeInvocation(
 ) {
   if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
     await releaseNodeCapacity(db, invocation.workspaceId, invocation.dispatchedNodeId);
+  }
+  // A shadowed spawn stays pinned to its node: while a `spawn:<harness>` shadow
+  // is registered there, native capacity for that harness is unreachable — even
+  // across a node loss — so it never falls through to generic placement (which
+  // would silently bypass the shadow). It re-drains when the provider returns.
+  if (invocation.dispatchedNodeId && isSpawnInvocation(invocation.actionName)) {
+    const capability = dispatchActionNameForInvocation(invocation.actionName, recordInput(invocation.input));
+    const shadow = await fetchNodeAction(db, invocation.workspaceId, invocation.dispatchedNodeId, capability);
+    if (shadow) {
+      await db
+        .update(actionInvocations)
+        .set({ status: 'pending', dispatchedAt: null, spawnReservedAt: null, retryAfterAt: null })
+        .where(and(
+          eq(actionInvocations.workspaceId, invocation.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ));
+      return false;
+    }
   }
   const targetAgent = await targetAgentForInvocation(db, invocation);
   if (targetAgent) {

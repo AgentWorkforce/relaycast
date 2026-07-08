@@ -467,7 +467,10 @@ Adapters that terminate `/v1/node/ws` outside the engine request handler should 
 node control frames to `handleNodeControlMessage` from `@relaycast/engine/node-control`:
 the handler only needs `{ db, registry, workspaceId, nodeId, socket, raw }`, where
 `socket` is any object with `send(data: string): void`. It is self-contained and does
-not read Hono context. Pass `completionDeps` (`db`, `realtime`, `webhookQueue`, and
+not read Hono context. Pass `connectionId` (the registry's id for this socket) so a
+provider binds its name to the connection at `node.register` and later frames resolve
+their provider from it; omit it and every frame keys to the synthetic `default`
+provider. Pass `completionDeps` (`db`, `realtime`, `webhookQueue`, and
 `nodeConnections`) if `action.result` should emit completion fan-out and webhook effects;
 without it, the invocation state is still completed in the database. The handler already
 drains queued node invocations and replays pending node deliveries after
@@ -533,7 +536,9 @@ Programmability, directory & observability:
 
 ```text
 POST   /v1/actions                   Register an action (agent-to-agent RPC)
-POST   /v1/actions/:name/invoke      Invoke an action
+POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global alias)
+POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
+DELETE /v1/nodes/:node/providers/:name       Remove a node provider
 POST   /v1/agents/:name/events       Emit an agent session event
 POST   /v1/directory/agents          Publish an agent to the directory
 GET    /v1/directory/search          Search the agent directory

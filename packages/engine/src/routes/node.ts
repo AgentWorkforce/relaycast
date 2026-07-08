@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import {
   jsonCreated,
@@ -12,8 +12,15 @@ import {
   jsonNoContent,
   jsonOk,
   parseJsonBody,
+  parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
+import * as actionEngine from '../engine/action.js';
+import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
+import { fanoutToWorkspace } from './fanout.js';
+import { runInBackground } from './background.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
+import { emitServerEvent } from '../lib/serverTelemetry.js';
 import {
   getObserverTokenFromContext,
   normalizeObserverFilters,
@@ -69,6 +76,10 @@ const bindAgentSchema = z.object({
   agent_name: z.string().min(1),
   session_ref: z.string().nullable().optional(),
   priority: z.number().int().optional(),
+});
+
+const invokeNodeActionSchema = z.object({
+  input: z.record(z.string(), z.unknown()).optional(),
 });
 
 function normalizeDelivery(kind: z.infer<typeof nodeKindSchema>, delivery: Record<string, unknown> | null | undefined) {
@@ -237,6 +248,97 @@ nodeRoutes.delete('/nodes/:name/agents/:agentName', requireWorkspaceKey, rateLim
     if (!deleted) {
       return jsonNotFound(c, 'node_agent_binding_not_found', 'Node agent binding not found');
     }
+    return jsonNoContent(c);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// POST /v1/nodes/:node/actions/:name/invoke - node-addressed action invoke
+nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const agent = c.get('agent');
+    if (!agent) {
+      return jsonError(c, 'agent_token_required', 'Agent token required to invoke actions', 403);
+    }
+    const node = await nodeEngine.getNodeByName(db, workspace.id, c.req.param('node'));
+    if (!node) {
+      return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    const parsed = await parseOptionalJsonBody(c, invokeNodeActionSchema, 'invalid invocation body');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+
+    const { nodeConnections } = c.get('engine');
+    const actionName = c.req.param('name');
+    const result = await actionEngine.invokeNodeAction(
+      db,
+      workspace.id,
+      node.id,
+      actionName,
+      { input: parsed.data.input, caller_id: agent.id, caller_name: agent.name },
+      { nodeConnections },
+    );
+
+    const eventData = {
+      invocation_id: result.invocation_id,
+      action_name: result.action_name,
+      caller_name: agent.name,
+      handler_agent_id: result.handler_agent_id,
+      handler_node_id: result.handler_node_id,
+    };
+    await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
+    emitServerEvent(c, workspace.id, 'relaycast_server_action_invoked', {
+      action_name: result.action_name,
+      invocation_id: result.invocation_id,
+      caller_agent_id: agent.id,
+    });
+    runInBackground(c, fanoutToWorkspace(c, 'action.invoked', eventData), 'fanout action.invoked');
+    return jsonCreated(c, result);
+  } catch (err: unknown) {
+    const error = asCodedError(err);
+    if (error.code === 'action_denied') {
+      const workspace = c.get('workspace');
+      const agent = c.get('agent')!;
+      const eventData = { action_name: c.req.param('name'), caller_name: agent.name, error: error.message };
+      runInBackground(
+        c,
+        sendNodeDeliveriesToAgents(
+          {
+            db: c.get('db'),
+            nodeConnections: c.get('engine').nodeConnections,
+            environment: c.get('engine').config?.environment,
+            httpPushProxy: c.get('engine').config?.httpPushProxy,
+            workspaceId: workspace.id,
+          },
+          {
+            agentIds: [agent.id],
+            event: 'action.denied',
+            eventKey: `${c.req.param('name')}:${agent.id}`,
+            data: eventData,
+            messageId: c.req.param('name'),
+          },
+        ),
+        'node deliver action.denied',
+      );
+    }
+    return errorResponse(c, error);
+  }
+});
+
+// DELETE /v1/nodes/:node/providers/:name - remove a provider's attachment + manifest
+nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const node = await nodeEngine.getNodeByName(db, workspace.id, c.req.param('node'));
+    if (!node) {
+      return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    await nodeEngine.deregisterProvider(db, c.get('engine').nodeConnections, workspace.id, node.id, c.req.param('name'));
     return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);

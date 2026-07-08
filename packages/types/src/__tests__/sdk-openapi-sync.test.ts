@@ -39,6 +39,11 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Observer-plane backfill: consumed by observer clients (agent-relay SDK
   // observer mode, pear) with observer tokens, not by the agent SDKs.
   '/v1/workspace/events',
+  // Node provider control: node-addressed invoke and provider removal. The
+  // node-provider client that consumes these lands with the SDK step of the
+  // node-providers work; the engine surface ships first.
+  '/v1/nodes/{param}/actions/{param}/invoke',
+  '/v1/nodes/{param}/providers/{param}',
 ]);
 
 const CORE_SDK_PATHS = new Set([

@@ -10,7 +10,9 @@ import type { ObserverToken } from '../../ports/auth.js';
 import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import { observerTokens } from '../../db/schema.js';
-import { handleNodeControlMessage, markNodeOffline } from '../../engine/node.js';
+import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
+import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
+import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
@@ -33,8 +35,18 @@ export interface SocketHandle {
   handleClose(): Promise<void>;
 }
 
+/**
+ * One node control connection. A provider binds its name at `node.register`;
+ * `lastSeen` bounds how long a still-open-but-silent instance is treated as live
+ * for duplicate-vs-reconnect arbitration.
+ */
 interface NodeConn {
   socket: EngineSocket;
+  workspaceId: string;
+  nodeId: string;
+  providerName?: string;
+  instanceId?: string;
+  lastSeen: number;
 }
 
 interface WorkspaceConn {
@@ -64,11 +76,18 @@ interface QueuedNodeMessage {
  */
 export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly workspaceSockets = new Map<string, Set<WorkspaceConn>>();
-  private readonly nodeSockets = new Map<string, NodeConn>();
+  /** Every attached node control connection, keyed by its registry connection id. */
+  private readonly nodeConnections = new Map<string, NodeConn>();
+  /** All connection ids attached to a node (bound to a provider or not yet). */
+  private readonly nodeConnIndex = new Map<string, Set<string>>();
+  /** Per node, the connection id currently bound to each provider name. */
+  private readonly providerIndex = new Map<string, Map<string, string>>();
+  /** Per-provider queued `action.invoke` frames (`workspace:node::provider`). */
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   /** Serializes drains per node so concurrent triggers never overlap. */
   private readonly nodeDrainChains = new Map<string, Promise<void>>();
   private nodeCompletionDeps: InvocationCompletionDeps | undefined;
+  private connectionSeq = 0;
 
   constructor(private readonly db: EngineDb) {}
 
@@ -78,6 +97,36 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   private nodeKey(workspaceId: string, nodeId: string): string {
     return `${workspaceId}:${nodeId}`;
+  }
+
+  private providerQueueKey(nodeKey: string, providerName: string): string {
+    return `${nodeKey}::${providerName}`;
+  }
+
+  private providerConnId(nodeKey: string, providerName: string): string | undefined {
+    return this.providerIndex.get(nodeKey)?.get(providerName);
+  }
+
+  private providerSocket(nodeKey: string, providerName: string): EngineSocket | undefined {
+    const connId = this.providerConnId(nodeKey, providerName);
+    if (connId) return this.nodeConnections.get(connId)?.socket;
+    // Reconnect-before-reregister: a node's sole live connection is addressable
+    // even before it has bound a provider, so queued frames drain to it.
+    const conns = this.nodeConnIndex.get(nodeKey);
+    if (conns && conns.size === 1) {
+      const [only] = [...conns];
+      const conn = this.nodeConnections.get(only);
+      if (conn && !conn.providerName) return conn.socket;
+    }
+    return undefined;
+  }
+
+  /** The provider a node-addressed message should target when none is specified. */
+  private defaultProviderName(nodeKey: string): string | undefined {
+    const providers = this.providerIndex.get(nodeKey);
+    if (!providers || providers.size === 0) return undefined;
+    if (providers.has(DEFAULT_PROVIDER_NAME)) return DEFAULT_PROVIDER_NAME;
+    return providers.size === 1 ? [...providers.keys()][0] : DEFAULT_PROVIDER_NAME;
   }
 
   async publishToWorkspaceStream(args: { workspaceId: string; event: EngineEvent }): Promise<void> {
@@ -161,14 +210,25 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     nodeId: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
-    const key = this.nodeKey(workspaceId, nodeId);
-    const current = this.nodeSockets.get(key)?.socket;
-    if (current) {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const providerName = this.defaultProviderName(nodeKey) ?? DEFAULT_PROVIDER_NAME;
+    return this.sendToProvider(workspaceId, nodeId, providerName, message);
+  }
+
+  async sendToProvider(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean> {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const socket = this.providerSocket(nodeKey, providerName);
+    if (socket) {
       try {
-        current.send(JSON.stringify(message));
+        socket.send(JSON.stringify(message));
         return true;
       } catch {
-        this.nodeSockets.delete(key);
+        this.detachProvider(workspaceId, nodeId, providerName);
       }
     }
 
@@ -176,30 +236,123 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       return false;
     }
 
-    const queue = this.nodeQueues.get(key) ?? [];
-    const queueKey = `${message.type}:${message.invocation_id}`;
-    if (!queue.some((item) => item.key === queueKey)) {
-      queue.push({ key: queueKey, message });
+    const queueKey = this.providerQueueKey(nodeKey, providerName);
+    const queue = this.nodeQueues.get(queueKey) ?? [];
+    const dedupKey = `${message.type}:${message.invocation_id}`;
+    if (!queue.some((item) => item.key === dedupKey)) {
+      queue.push({ key: dedupKey, message });
     }
     while (queue.length > 100) queue.shift();
-    this.nodeQueues.set(key, queue);
+    this.nodeQueues.set(queueKey, queue);
     return true;
   }
 
   isNodeConnected(workspaceId: string, nodeId: string): boolean {
-    return !!this.nodeSockets.get(this.nodeKey(workspaceId, nodeId));
+    const conns = this.nodeConnIndex.get(this.nodeKey(workspaceId, nodeId));
+    return !!conns && conns.size > 0;
+  }
+
+  isProviderConnected(workspaceId: string, nodeId: string, providerName: string): boolean {
+    return !!this.providerSocket(this.nodeKey(workspaceId, nodeId), providerName);
+  }
+
+  providerNameForConnection(connectionId: string): string | undefined {
+    return this.nodeConnections.get(connectionId)?.providerName;
+  }
+
+  providerAttachConflict(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    _instanceId: string,
+    connectionId: string,
+  ): { code: string; message: string } | null {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const existingConnId = this.providerConnId(nodeKey, providerName);
+    if (!existingConnId || existingConnId === connectionId) return null;
+    const existing = this.nodeConnections.get(existingConnId);
+    if (!existing) return null;
+    // A still-live instance owns the name (duplicate process). A dropped or
+    // silent (stale) instance is a reconnect and gets replaced on attach.
+    if (Date.now() - existing.lastSeen <= NODE_LIVENESS_TTL_MS) {
+      return {
+        code: 'provider_instance_conflict',
+        message: `Provider "${providerName}" is already connected on this node`,
+      };
+    }
+    return null;
+  }
+
+  attachProvider(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    instanceId: string,
+    connectionId: string,
+  ): void {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return;
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    let providers = this.providerIndex.get(nodeKey);
+    if (!providers) {
+      providers = new Map();
+      this.providerIndex.set(nodeKey, providers);
+    }
+    const existingConnId = providers.get(providerName);
+    if (existingConnId && existingConnId !== connectionId) {
+      const superseded = this.nodeConnections.get(existingConnId);
+      this.nodeConnections.delete(existingConnId);
+      if (superseded) {
+        superseded.providerName = undefined;
+        try {
+          superseded.socket.close(1000, 'superseded');
+        } catch {
+          // already closed
+        }
+      }
+    }
+    conn.providerName = providerName;
+    conn.instanceId = instanceId;
+    conn.lastSeen = Date.now();
+    providers.set(providerName, connectionId);
+  }
+
+  detachProvider(workspaceId: string, nodeId: string, providerName: string): void {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const providers = this.providerIndex.get(nodeKey);
+    const connId = providers?.get(providerName);
+    if (providers) {
+      providers.delete(providerName);
+      if (providers.size === 0) this.providerIndex.delete(nodeKey);
+    }
+    if (connId) {
+      const conn = this.nodeConnections.get(connId);
+      if (conn) conn.providerName = undefined;
+    }
+    this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
   }
 
   async disconnectNode(workspaceId: string, nodeId: string): Promise<void> {
-    const key = this.nodeKey(workspaceId, nodeId);
-    const conn = this.nodeSockets.get(key);
-    if (!conn) return;
-    this.nodeSockets.delete(key);
-    try {
-      conn.socket.close(1000, 'force-disconnect');
-    } catch {
-      // already closed
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const providers = this.providerIndex.get(nodeKey);
+    const connIds = new Set<string>(providers ? providers.values() : []);
+    // Also close any connections bound to this node that never registered.
+    for (const [connId, conn] of this.nodeConnections) {
+      if (conn.nodeId === nodeId && conn.workspaceId === workspaceId) connIds.add(connId);
     }
+    for (const connId of connIds) {
+      const conn = this.nodeConnections.get(connId);
+      this.nodeConnections.delete(connId);
+      if (conn) {
+        try {
+          conn.socket.close(1000, 'force-disconnect');
+        } catch {
+          // already closed
+        }
+      }
+    }
+    this.providerIndex.delete(nodeKey);
+    this.nodeConnIndex.delete(nodeKey);
   }
 
   /* --------------------- Node transport attach helpers ----------------- */
@@ -228,39 +381,68 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   /** Register a live fleet node control socket; returns handlers the transport drives. */
   attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
-    const key = this.nodeKey(workspaceId, nodeId);
-    const previous = this.nodeSockets.get(key)?.socket;
-    this.nodeSockets.set(key, { socket });
-    if (previous && previous !== socket) {
-      try {
-        previous.close(1000, 'superseded');
-      } catch {
-        // already closed
-      }
+    const connectionId = `nconn_${++this.connectionSeq}`;
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    this.nodeConnections.set(connectionId, {
+      socket,
+      workspaceId,
+      nodeId,
+      lastSeen: Date.now(),
+    });
+    let conns = this.nodeConnIndex.get(nodeKey);
+    if (!conns) {
+      conns = new Set();
+      this.nodeConnIndex.set(nodeKey, conns);
     }
+    conns.add(connectionId);
     const handle: SocketHandle = {
-      handleMessage: async (raw) => handleNodeControlMessage({
-        db: this.db,
-        registry: this,
-        completionDeps: this.nodeCompletionDeps,
-        workspaceId,
-        nodeId,
-        socket,
-        raw,
-      }),
-      handleClose: async () => {
-        const conn = this.nodeSockets.get(key);
-        if (conn?.socket === socket) {
-          this.nodeSockets.delete(key);
-          await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
-        }
+      handleMessage: async (raw) => {
+        const conn = this.nodeConnections.get(connectionId);
+        if (conn) conn.lastSeen = Date.now();
+        return handleNodeControlMessage({
+          db: this.db,
+          registry: this,
+          completionDeps: this.nodeCompletionDeps,
+          workspaceId,
+          nodeId,
+          socket,
+          connectionId,
+          raw,
+        });
       },
+      handleClose: async () => this.onNodeConnectionClose(connectionId),
     };
     // Best-effort early flush (covers non-spawn frames that need no capacity);
     // the authoritative drain fires post node.register/heartbeat once the node
     // is marked online, so queued spawns can reserve capacity. See drainNode.
     void this.drainNode(workspaceId, nodeId);
     return handle;
+  }
+
+  private async onNodeConnectionClose(connectionId: string): Promise<void> {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return;
+    this.nodeConnections.delete(connectionId);
+    const { workspaceId, nodeId, providerName } = conn;
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const conns = this.nodeConnIndex.get(nodeKey);
+    if (conns) {
+      conns.delete(connectionId);
+      if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
+    }
+    const providers = this.providerIndex.get(nodeKey);
+    if (providerName && providers?.get(providerName) === connectionId) {
+      providers.delete(providerName);
+      if (providers.size === 0) this.providerIndex.delete(nodeKey);
+      this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
+    }
+    const hasRemaining = this.isNodeConnected(workspaceId, nodeId);
+    if (providerName) {
+      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining).catch(() => {});
+    } else if (!hasRemaining) {
+      // Connection dropped before it bound a provider and it was the node's last.
+      await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
+    }
   }
 
   /**
@@ -280,11 +462,14 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   }
 
   private async drainNodeQueue(workspaceId: string, nodeId: string): Promise<void> {
-    const key = this.nodeKey(workspaceId, nodeId);
-    const conn = this.nodeSockets.get(key)?.socket;
-    if (!conn) return;
+    if (!this.isNodeConnected(workspaceId, nodeId)) return;
     await drainNodeInvocations(this.db, this, workspaceId, nodeId);
-    this.nodeQueues.delete(key);
+    // The authoritative re-dispatch is DB-driven; clear the per-provider
+    // in-memory buffers now that their frames have been re-sent.
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    for (const queueKey of [...this.nodeQueues.keys()]) {
+      if (queueKey.startsWith(`${nodeKey}::`)) this.nodeQueues.delete(queueKey);
+    }
   }
 
   private async onWorkspaceMessage(socket: EngineSocket, raw: string): Promise<void> {

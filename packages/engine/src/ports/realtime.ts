@@ -70,15 +70,57 @@ export interface NodeConnectionRegistry {
    */
   upgradeNode(args: NodeUpgradeArgs): Promise<Response>;
 
-  /** Push a typed node protocol message to a live broker node or implicit direct node. */
+  /**
+   * Push a typed node protocol message to a node's default provider (or its sole
+   * connected provider). Provider-addressed callers use {@link sendToProvider}.
+   */
   sendToNode(
     workspaceId: string,
     nodeId: string,
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean>;
 
-  /** True when the node currently has a live control connection. */
+  /** Push a typed node protocol message to a specific provider's socket. */
+  sendToProvider(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    message: FleetRelaycastToBrokerMessage,
+  ): Promise<boolean>;
+
+  /** True when the node currently has at least one connected provider. */
   isNodeConnected(workspaceId: string, nodeId: string): boolean;
+
+  /** True when a specific provider currently has a connected socket. */
+  isProviderConnected(workspaceId: string, nodeId: string, providerName: string): boolean;
+
+  /** The provider name bound to a registry connection, once it has registered. */
+  providerNameForConnection?(connectionId: string): string | undefined;
+
+  /**
+   * Read-only pre-check for a provider registration: returns a conflict when the
+   * name's current instance is a different, still-live connection (duplicate
+   * process). A dropped/stale instance is replaced on {@link attachProvider}.
+   */
+  providerAttachConflict?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    instanceId: string,
+    connectionId: string,
+  ): { code: string; message: string } | null;
+
+  /** Bind a provider name to a connection, superseding a stale prior attachment. */
+  attachProvider?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    instanceId: string,
+    connectionId: string,
+  ): void;
+
+  /** Drop a provider's attachment (provider-scoped deregister / prune). */
+  detachProvider(workspaceId: string, nodeId: string, providerName: string): void;
 
   /** Force-close all sockets for a node. */
   disconnectNode(workspaceId: string, nodeId: string): Promise<void>;
