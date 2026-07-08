@@ -363,6 +363,11 @@ async function dispatchNodeProviderInvocation(args: {
   const live = await isNodeProviderLive(args.db, args.registry, args.workspaceId, args.nodeId, args.providerName);
   if (!live) {
     if (!args.queue) {
+      // Release any capacity reserved for this fail-fast spawn so the node's
+      // reserved-agent count doesn't stay inflated.
+      if (args.reservationHeld) {
+        await releaseNodeCapacity(args.db, args.workspaceId, args.nodeId);
+      }
       await args.db
         .update(actionInvocations)
         .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })

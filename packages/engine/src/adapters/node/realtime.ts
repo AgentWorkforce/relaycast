@@ -110,8 +110,13 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private providerSocket(nodeKey: string, providerName: string): EngineSocket | undefined {
     const connId = this.providerConnId(nodeKey, providerName);
     if (connId) return this.nodeConnections.get(connId)?.socket;
-    // Reconnect-before-reregister: a node's sole live connection is addressable
-    // even before it has bound a provider, so queued frames drain to it.
+    // Reconnect-before-reregister applies only to the synthetic `default`
+    // provider (the legacy single-socket broker): its sole live connection is
+    // addressable even before it re-registers, so queued frames drain to it. A
+    // named provider's queue never drains to an unbound connection whose
+    // identity isn't yet established — that could misroute to a different
+    // provider that happens to be reconnecting.
+    if (providerName !== DEFAULT_PROVIDER_NAME) return undefined;
     const conns = this.nodeConnIndex.get(nodeKey);
     if (conns && conns.size === 1) {
       const [only] = [...conns];

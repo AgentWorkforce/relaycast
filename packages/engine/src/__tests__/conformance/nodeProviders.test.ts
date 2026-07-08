@@ -271,6 +271,30 @@ describe('node providers', () => {
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
   });
 
+  it('releases reserved capacity when a fail-fast node-scoped spawn hits an offline provider', async () => {
+    const ws = await createWorkspace(stack.app, 'np-failfast-capacity');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    // Broker provides native capacity so the node is online with capacity.
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }], { maxAgents: 4 });
+    // A shadow spawn:claude action whose provider then goes offline.
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'spawn:claude', kind: 'action' }]);
+    await py.handle.handleClose();
+
+    const res = await stack.app.request('/v1/nodes/alpha/actions/spawn:claude/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { name: 'w1' } }),
+    });
+    expect(res.status).toBe(503);
+
+    const [node] = await stack.runtime.handle.db
+      .select({ reserved: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+    expect(node.reserved).toBe(0);
+  });
+
   it('routes context.update to the provider hosting the agent, not a phantom node default', async () => {
     const ws = await createWorkspace(stack.app, 'np-context');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
