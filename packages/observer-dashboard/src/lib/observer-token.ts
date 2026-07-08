@@ -129,7 +129,10 @@ export async function revokeObserverStreamToken(
 ): Promise<void> {
   try {
     await fetch(
-      new URL(`/v1/observer-tokens/${tokenId}`, baseUrl).toString(),
+      new URL(
+        `/v1/observer-tokens/${encodeURIComponent(tokenId)}`,
+        baseUrl
+      ).toString(),
       {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${adminKey}` },

@@ -4,7 +4,10 @@ import {
   resolveRelayServerCandidatesFromRequest,
   selectEngineForKey,
 } from '../../../../lib/relay-server';
-import { mintObserverStreamToken } from '../../../../lib/observer-token';
+import {
+  mintObserverStreamToken,
+  revokeObserverStreamToken,
+} from '../../../../lib/observer-token';
 
 export const runtime = 'edge';
 
@@ -109,6 +112,19 @@ export async function POST(request: NextRequest) {
       cookieStore.set(WS_TOKEN_COOKIE_NAME, wsToken, cookieOptions);
     } else {
       cookieStore.delete(WS_TOKEN_COOKIE_NAME);
+    }
+
+    // Revoke the observer token minted for this browser's previous session
+    // before overwriting its id — otherwise repeated workspace-key logins
+    // orphan tokens that stay active until their 30-day expiry. Best effort;
+    // only a workspace key can revoke, and a different key just 404s harmlessly.
+    const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
+    if (
+      previousWsTokenId &&
+      previousWsTokenId !== wsTokenId &&
+      apiKey.startsWith('rk_live_')
+    ) {
+      await revokeObserverStreamToken(relayServer, apiKey, previousWsTokenId);
     }
     // Remember the minted token id so logout can revoke it on the engine.
     if (wsTokenId) {

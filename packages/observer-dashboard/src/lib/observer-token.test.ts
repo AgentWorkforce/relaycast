@@ -83,7 +83,7 @@ describe('mintObserverStreamToken', () => {
     ).resolves.toBeNull();
   });
 
-  it('rejects a response missing token material or id', async () => {
+  it('rejects a non-observer-token in the response', async () => {
     mockFetch(
       jsonResponse({ ok: true, data: { id: 'ot_1', token: 'rk_live_leaked' } }, 201)
     );
