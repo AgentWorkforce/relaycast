@@ -19,16 +19,48 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 export const relayfileInboundRoutes = new Hono<AppEnv>();
 
 const MAX_SKEW_MS = 5 * 60 * 1000;
+const MAX_RELAYFILE_BODY_BYTES = 1024 * 1024;
 const SECRET_LABEL = 'relayfile-inbound:v1';
 const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 const createTargetSchema = z.object({
   channel: z.string().min(1),
   provider: z.string().min(1),
-  pathGlob: z.string().min(1),
+  path_glob: z.string().min(1),
 });
 
-interface RelayfileEvent {
+const relayfileSnapshotSchema = z.object({
+  path: z.string().optional(),
+  contentType: z.string().optional(),
+  encoding: z.string().optional(),
+  content: z.string().optional(),
+  truncated: z.boolean().optional(),
+}).passthrough();
+
+const relayfileEventSchema = z.object({
+  eventId: z.string().optional(),
+  type: z.string().optional(),
+  path: z.string().optional(),
+  revision: z.string().optional(),
+  origin: z.string().optional(),
+  provider: z.string().optional(),
+  correlationId: z.string().optional(),
+  timestamp: z.string().optional(),
+  contentHash: z.string().optional(),
+  snapshot: relayfileSnapshotSchema.optional(),
+}).passthrough();
+
+type RelayfileEvent = z.infer<typeof relayfileEventSchema>;
+
+interface RelayfileSnapshot {
+  path?: string;
+  contentType?: string;
+  encoding?: string;
+  content?: string;
+  truncated?: boolean;
+}
+
+interface RelayfileEventPublic {
   eventId?: string;
   type?: string;
   path?: string;
@@ -39,14 +71,6 @@ interface RelayfileEvent {
   timestamp?: string;
   contentHash?: string;
   snapshot?: RelayfileSnapshot;
-}
-
-interface RelayfileSnapshot {
-  path?: string;
-  contentType?: string;
-  encoding?: string;
-  content?: string;
-  truncated?: boolean;
 }
 
 relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWorkspaceKey, rateLimit, async (c) => {
@@ -66,7 +90,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
   }
 
   const provider = normalizeProvider(parsed.data.provider);
-  const pathGlob = normalizePathGlob(parsed.data.pathGlob);
+  const pathGlob = normalizePathGlob(parsed.data.path_glob);
   const secret = await deriveRelayfileInboundSecret(master, {
     workspaceId: workspace.id,
     channelId: channel.id,
@@ -75,7 +99,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound-target', requireWor
   });
   const url = new URL(`/v1/integrations/relayfile/inbound/${encodeURIComponent(workspace.id)}/${encodeURIComponent(channel.id)}`, c.req.url);
   url.searchParams.set('provider', provider);
-  url.searchParams.set('pathGlob', pathGlob);
+  url.searchParams.set('path_glob', pathGlob);
 
   return jsonCreated(c, {
     url: url.toString(),
@@ -93,7 +117,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   const workspaceId = c.req.param('workspaceId');
   const channelId = c.req.param('channelId');
   const provider = normalizeProvider(c.req.query('provider') ?? '');
-  const pathGlob = normalizePathGlob(c.req.query('pathGlob') ?? '');
+  const pathGlob = normalizePathGlob(c.req.query('path_glob') ?? '');
   if (!workspaceId || !channelId || !provider || !pathGlob) {
     return jsonError(c, 'bad_request', 'missing relayfile inbound route parameters', 400);
   }
@@ -103,7 +127,11 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'relayfile_inbound_unavailable', 'Relayfile inbound bridge is not configured', 503);
   }
 
-  const rawBody = await c.req.raw.clone().arrayBuffer();
+  const rawBodyResult = await readRequestBodyWithLimit(c.req.raw, MAX_RELAYFILE_BODY_BYTES);
+  if (!rawBodyResult.ok) {
+    return jsonError(c, 'payload_too_large', 'relayfile event body exceeds maximum size', 413);
+  }
+  const rawBody = rawBodyResult.body;
   const secret = await deriveRelayfileInboundSecret(master, { workspaceId, channelId, provider, pathGlob });
   const verified = await verifyRelayfileSignature(c.req.raw.headers, rawBody, secret, Date.now());
   if (!verified.ok) {
@@ -111,12 +139,17 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
     return jsonError(c, 'unauthorized', 'invalid relayfile signature', 401);
   }
 
-  let event: RelayfileEvent;
+  let parsedEvent: unknown;
   try {
-    event = JSON.parse(new TextDecoder().decode(rawBody)) as RelayfileEvent;
+    parsedEvent = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
   } catch {
     return jsonError(c, 'bad_request', 'invalid relayfile event body', 400);
   }
+  const eventResult = relayfileEventSchema.safeParse(parsedEvent);
+  if (!eventResult.success) {
+    return jsonError(c, 'bad_request', 'invalid relayfile event body', 400);
+  }
+  const event = eventResult.data;
   const deliveryEventId = c.req.header('X-Relay-Event-Id')?.trim() || event.eventId;
 
   // Without a stable dedupe key we cannot make delivery idempotent, so a
@@ -125,33 +158,33 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   // sends X-Relay-Event-Id, so this only trips on malformed deliveries.
   if (!deliveryEventId) {
     logger.warn('relayfile inbound missing event id', { workspace_id: workspaceId, channel_id: channelId });
-    return jsonOk(c, { ok: true, skipped: 'missing_event_id' });
+    return jsonOk(c, { skipped: 'missing_event_id' });
   }
 
   if (!event.path || !event.type) {
-    return jsonOk(c, { ok: true, skipped: 'missing_event_fields' });
+    return jsonOk(c, { skipped: 'missing_event_fields' });
   }
   if (event.provider && normalizeProvider(event.provider) !== provider) {
-    return jsonOk(c, { ok: true, skipped: 'provider_mismatch' });
+    return jsonOk(c, { skipped: 'provider_mismatch' });
   }
   if (!eventMatchesGlob(event.path, pathGlob)) {
-    return jsonOk(c, { ok: true, skipped: 'path_mismatch' });
+    return jsonOk(c, { skipped: 'path_mismatch' });
   }
   if (event.origin === 'agent_write') {
-    return jsonOk(c, { ok: true, skipped: 'agent_write' });
+    return jsonOk(c, { skipped: 'agent_write' });
   }
   if (event.type !== 'file.created' && event.type !== 'file.updated') {
-    return jsonOk(c, { ok: true, skipped: 'ignored_event_type' });
+    return jsonOk(c, { skipped: 'ignored_event_type' });
   }
 
   const channel = await getChannelById(c.get('db'), workspaceId, channelId);
   if (!channel) {
-    return jsonOk(c, { ok: true, skipped: 'channel_not_found' });
+    return jsonOk(c, { skipped: 'channel_not_found' });
   }
 
   const message = formatRelayfileEventMessage(event, provider);
   if (!message) {
-    return jsonOk(c, { ok: true, skipped: 'unformatted_event' });
+    return jsonOk(c, { skipped: 'unformatted_event' });
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
@@ -164,6 +197,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       key: deliveryEventId,
       fingerprint: JSON.stringify({ path: event.path, revision: event.revision, contentHash: event.contentHash }),
       kv: c.get('engine').kv,
+      requireKv: true,
       ttlSeconds: IDEMPOTENCY_TTL_SECONDS,
       operation: () => inboundWebhookEngine.triggerIntegrationMessage(c.get('db'), workspaceId, channelId, {
         text: message.text,
@@ -224,7 +258,7 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       if (deliveries && deliveries.length > 0) {
         runInBackground(
           c,
-          routeDeliveryOutcomes(c, deliveries, 'message.created', eventData),
+          routeDeliveryOutcomes(c, deliveries, 'message.created', eventData, { workspaceId }),
           'relayfile inbound deliveries',
         );
       }
@@ -235,15 +269,19 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
       });
     }
 
-    return jsonCreated(c, { ok: true, replayed: result.replayed, message_id: result.data.message_id });
+    return jsonCreated(c, { replayed: result.replayed, message_id: result.data.message_id });
   } catch (err) {
     const code = (err as Error & { code?: string }).code;
     if (code === 'idempotency_in_progress') {
-      return jsonOk(c, { ok: true, skipped: 'duplicate_in_progress' });
+      return jsonOk(c, { skipped: 'duplicate_in_progress' });
     }
     if (code === 'idempotency_key_reused') {
       logger.warn('relayfile inbound event id reused with different payload', { workspace_id: workspaceId, event_id: deliveryEventId });
-      return jsonOk(c, { ok: true, skipped: 'event_id_reused' });
+      return jsonOk(c, { skipped: 'event_id_reused' });
+    }
+    if (code === 'idempotency_unavailable') {
+      logger.error('relayfile inbound idempotency storage unavailable', { workspace_id: workspaceId, event_id: deliveryEventId });
+      return jsonError(c, 'idempotency_unavailable', 'idempotency storage unavailable', 503);
     }
     logger.error('relayfile inbound delivery failed', {
       workspace_id: workspaceId,
@@ -301,14 +339,17 @@ export async function verifyRelayfileSignature(
   const providedHex = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;
   const provided = hexToBytes(providedHex);
   if (!provided) return { ok: false, reason: 'invalid_signature_encoding' };
-  const raw = new TextDecoder().decode(body);
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${raw}`));
+  const prefix = new TextEncoder().encode(`${timestamp}.`);
+  const data = new Uint8Array(prefix.length + body.byteLength);
+  data.set(prefix);
+  data.set(new Uint8Array(body), prefix.length);
+  const signed = await crypto.subtle.sign('HMAC', key, data);
   if (!constantTimeEqual(provided, new Uint8Array(signed))) return { ok: false, reason: 'signature_mismatch' };
   return { ok: true };
 }
 
-export function formatRelayfileEventMessage(event: RelayfileEvent, provider: string): { text: string; author: string; record: unknown } | null {
+export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
   const record = parseSnapshotRecord(event.snapshot);
   const author = recordAuthor(record) ?? provider;
   const title = recordTitle(record);
@@ -351,7 +392,8 @@ function recordTitle(record: unknown): string | null {
   if (typeof record === 'string') return record;
   const r = asRecord(record);
   if (!r) return null;
-  return firstString(r.title, r.name, r.identifier, r.subject, r.text, r.body, r.message);
+  const title = firstString(r.title, r.name, r.identifier, r.subject);
+  return title && title.length > 300 ? `${title.slice(0, 300)}...` : title;
 }
 
 function recordBody(record: unknown): string | null {
@@ -403,6 +445,40 @@ function eventMatchesGlob(path: string, glob: string): boolean {
 function eventWorkspaceId(event: RelayfileEvent): string | undefined {
   const correlation = event.correlationId ?? '';
   return correlation.startsWith('workspace:') ? correlation.slice('workspace:'.length) : undefined;
+}
+
+async function readRequestBodyWithLimit(
+  request: Request,
+  maxBytes: number,
+): Promise<{ ok: true; body: ArrayBuffer } | { ok: false }> {
+  const contentLength = request.headers.get('content-length')?.trim();
+  if (contentLength && /^\d+$/.test(contentLength) && Number.parseInt(contentLength, 10) > maxBytes) {
+    return { ok: false };
+  }
+
+  if (!request.body) return { ok: true, body: new ArrayBuffer(0) };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, body: out.buffer };
 }
 
 function parseRelayTimestamp(timestamp: string): number {

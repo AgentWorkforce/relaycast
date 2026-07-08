@@ -5,9 +5,11 @@ import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import { createWorkspace, registerAgent } from '../../__tests__/conformance/harness.js';
 import { deliveries } from '../../db/schema.js';
+import type { KeyValueStore } from '../../ports/kv.js';
 import {
   deriveRelayfileInboundSecret,
   formatRelayfileEventMessage,
+  verifyRelayfileSignature,
 } from '../relayfileInbound.js';
 
 interface Stack {
@@ -17,7 +19,7 @@ interface Stack {
 
 const stacks: Stack[] = [];
 
-function makeStack(): Stack {
+function makeStack(opts: { kv?: KeyValueStore } = {}): Stack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
@@ -29,6 +31,7 @@ function makeStack(): Stack {
     presence: { sweepIntervalMs: 0 },
     eventQueue: { pollIntervalMs: 0 },
   });
+  if (opts.kv) runtime.deps.kv = opts.kv;
   runtime.webhookQueue.stop();
   const stack = { app: createEngine(runtime.deps), runtime };
   stacks.push(stack);
@@ -48,6 +51,24 @@ function signedHeaders(secret: string, body: string, timestamp = String(Math.flo
   };
 }
 
+class FailingKeyValueStore implements KeyValueStore {
+  async get(): Promise<string | null> {
+    throw new Error('kv unavailable');
+  }
+
+  async put(): Promise<void> {
+    throw new Error('kv unavailable');
+  }
+
+  async delete(): Promise<void> {
+    throw new Error('kv unavailable');
+  }
+
+  async increment(): Promise<number> {
+    throw new Error('kv unavailable');
+  }
+}
+
 describe('relayfile inbound bridge', () => {
   it('provisions a signed relayfile target for a workspace channel', async () => {
     const stack = makeStack();
@@ -56,14 +77,15 @@ describe('relayfile inbound bridge', () => {
     const res = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
-      body: JSON.stringify({ channel: 'general', provider: 'slack', pathGlob: '/slack/channels/C123/messages/**' }),
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json() as { data: { url: string; secret: string; channel_id: string } };
+    const body = await res.json() as { ok: boolean; data: { url: string; secret: string; channel_id: string } };
+    expect(body.ok).toBe(true);
     expect(body.data.url).toContain('/v1/integrations/relayfile/inbound/');
     expect(body.data.url).toContain('provider=slack');
-    expect(body.data.url).toContain('pathGlob=%2Fslack%2Fchannels%2FC123%2Fmessages%2F**');
+    expect(body.data.url).toContain('path_glob=%2Fslack%2Fchannels%2FC123%2Fmessages%2F**');
     expect(body.data.secret).toBe(await deriveRelayfileInboundSecret('relaycast-master', {
       workspaceId: ws.workspaceId,
       channelId: body.data.channel_id,
@@ -78,7 +100,7 @@ describe('relayfile inbound bridge', () => {
     const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
-      body: JSON.stringify({ channel: 'general', provider: 'slack', pathGlob: '/slack/channels/C123/messages/**' }),
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
     });
     const targetBody = await targetRes.json() as { data: { url: string; secret: string } };
     const target = targetBody.data;
@@ -106,13 +128,14 @@ describe('relayfile inbound bridge', () => {
       body: payload,
     });
     expect(first.status).toBe(201);
+    expect(await first.json()).toMatchObject({ ok: true, data: { replayed: false } });
     const replay = await stack.app.request(target.url, {
       method: 'POST',
       headers: signedHeaders(target.secret, payload, timestamp),
       body: payload,
     });
     expect(replay.status).toBe(201);
-    expect(await replay.json()).toMatchObject({ data: { replayed: true } });
+    expect(await replay.json()).toMatchObject({ ok: true, data: { replayed: true } });
 
     const list = await stack.app.request('/v1/channels/general/messages', {
       headers: { authorization: `Bearer ${ws.workspaceKey}` },
@@ -135,7 +158,7 @@ describe('relayfile inbound bridge', () => {
     const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
-      body: JSON.stringify({ channel: 'general', provider: 'slack', pathGlob: '/slack/channels/C123/messages/**' }),
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
     });
     const target = (await targetRes.json() as { data: { url: string; secret: string } }).data;
 
@@ -177,7 +200,7 @@ describe('relayfile inbound bridge', () => {
     const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
-      body: JSON.stringify({ channel: 'general', provider: 'linear', pathGlob: '/linear/issues/**' }),
+      body: JSON.stringify({ channel: 'general', provider: 'linear', path_glob: '/linear/issues/**' }),
     });
     const targetBody = await targetRes.json() as { data: { url: string } };
     const target = targetBody.data;
@@ -188,6 +211,110 @@ describe('relayfile inbound bridge', () => {
       body: payload,
     });
     expect(res.status).toBe(401);
+    const body = await res.json() as { ok: boolean; error: { code: string; message: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('unauthorized');
+    expect(body.error.message).toBeTruthy();
+  });
+
+  it('rejects oversized relayfile event bodies before signature verification', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-large-body');
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'linear', path_glob: '/linear/issues/**' }),
+    });
+    const target = (await targetRes.json() as { data: { url: string } }).data;
+    const payload = 'x'.repeat(1024 * 1024 + 1);
+
+    const res = await stack.app.request(target.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+      body: payload,
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'payload_too_large' },
+    });
+  });
+
+  it('rejects malformed signed event fields as bad requests', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-malformed-event');
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'linear', path_glob: '/linear/issues/**' }),
+    });
+    const target = (await targetRes.json() as { data: { url: string; secret: string } }).data;
+    const payload = JSON.stringify({
+      eventId: 'evt_bad_type',
+      type: 'file.created',
+      path: { not: 'a string' },
+      provider: 'linear',
+      snapshot: { content: 42 },
+    });
+
+    const res = await stack.app.request(target.url, {
+      method: 'POST',
+      headers: signedHeaders(target.secret, payload),
+      body: payload,
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'bad_request' },
+    });
+  });
+
+  it('fails closed when idempotency storage is unavailable', async () => {
+    const stack = makeStack({ kv: new FailingKeyValueStore() });
+    const ws = await createWorkspace(stack.app, 'relayfile-kv-failure');
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'linear', path_glob: '/linear/issues/**' }),
+    });
+    const target = (await targetRes.json() as { data: { url: string; secret: string } }).data;
+    const payload = JSON.stringify({
+      eventId: 'evt_kv_failure',
+      type: 'file.created',
+      path: '/linear/issues/ENG-1.json',
+      provider: 'linear',
+      snapshot: { content: JSON.stringify({ title: 'Do not duplicate' }) },
+    });
+
+    const res = await stack.app.request(target.url, {
+      method: 'POST',
+      headers: signedHeaders(target.secret, payload),
+      body: payload,
+    });
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'idempotency_unavailable' },
+    });
+  });
+
+  it('verifies signatures against the exact request bytes', async () => {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const secret = 'binary-secret';
+    const body = new Uint8Array([0xff, 0x00, 0x61]).buffer;
+    const signature = createHmac('sha256', secret)
+      .update(Buffer.concat([Buffer.from(`${timestamp}.`), Buffer.from(body)]))
+      .digest('hex');
+
+    await expect(verifyRelayfileSignature(
+      new Headers({ 'X-Relay-Timestamp': timestamp, 'X-Relay-Signature': signature }),
+      body,
+      secret,
+      Number.parseInt(timestamp, 10) * 1000,
+    )).resolves.toEqual({ ok: true });
   });
 
   it('formats provider records with a path fallback', () => {
@@ -199,5 +326,18 @@ describe('relayfile inbound bridge', () => {
       author: 'octo',
       text: expect.stringContaining('Bug'),
     });
+  });
+
+  it('keeps long provider body fields under the body cap', () => {
+    const longBody = 'x'.repeat(1400);
+
+    const message = formatRelayfileEventMessage({
+      type: 'file.created',
+      path: '/github/repos/o/r/issues/1.json',
+      snapshot: { content: JSON.stringify({ body: longBody }) },
+    }, 'github');
+
+    expect(message?.text).toContain(`${'x'.repeat(1200)}...`);
+    expect(message?.text).not.toContain(longBody);
   });
 });

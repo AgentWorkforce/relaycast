@@ -33,10 +33,14 @@ type DeliveryTarget = {
 
 const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
 
-function routingContextFromHono(c: HonoContext): RoutingContext {
+function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
+  const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
+  if (!workspaceId) {
+    throw new Error('Delivery routing requires workspace context');
+  }
   return {
     db: c.get('db'),
-    workspaceId: c.get('workspace').id,
+    workspaceId,
     engine: c.get('engine'),
   };
 }
@@ -449,8 +453,9 @@ export async function routeDeliveryOutcomes(
   deliveries: DeliveryFanoutRecord[],
   eventType: string,
   eventData: Record<string, unknown>,
+  opts: { workspaceId?: string } = {},
 ): Promise<void> {
-  await routeDeliveryOutcomesForContext(routingContextFromHono(c), deliveries, eventType, eventData);
+  await routeDeliveryOutcomesForContext(routingContextFromHono(c, opts.workspaceId), deliveries, eventType, eventData);
 }
 
 export async function sweepDueHttpPushDeliveries(

@@ -32,6 +32,8 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/.well-known/agent-card.json',
   '/v1/a2a/rpc',
   '/v1/a2a/webhook/{param}/{param}',
+  '/v1/integrations/relayfile/inbound-target',
+  '/v1/integrations/relayfile/inbound/{param}/{param}',
 ]);
 
 const CORE_SDK_PATHS = new Set([

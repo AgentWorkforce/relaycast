@@ -974,6 +974,123 @@ components:
           items:
             $ref: '#/components/schemas/ConsoleCostAgent'
 
+    RelayfileInboundTargetRequest:
+      type: object
+      required:
+        - channel
+        - provider
+        - path_glob
+      properties:
+        channel:
+          type: string
+          description: Relaycast channel name that receives matching relayfile events.
+        provider:
+          type: string
+          description: Relayfile provider namespace, such as `slack`, `linear`, or `github`.
+        path_glob:
+          type: string
+          description: Relayfile path glob to bind to this channel.
+
+    RelayfileInboundTarget:
+      type: object
+      required:
+        - url
+        - secret
+        - workspace_id
+        - channel_id
+        - channel
+        - provider
+        - path_glob
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HMAC-authenticated callback URL for relayfile deliveries.
+        secret:
+          type: string
+          description: Derived HMAC secret for signing callback requests.
+        workspace_id:
+          type: string
+        channel_id:
+          type: string
+        channel:
+          type: string
+        provider:
+          type: string
+        path_glob:
+          type: string
+
+    RelayfileInboundEventSnapshot:
+      type: object
+      properties:
+        path:
+          type: string
+        contentType:
+          type: string
+        encoding:
+          type: string
+        content:
+          type: string
+        truncated:
+          type: boolean
+      additionalProperties: true
+
+    RelayfileInboundEvent:
+      type: object
+      properties:
+        eventId:
+          type: string
+        type:
+          type: string
+          enum: [file.created, file.updated, file.deleted]
+        path:
+          type: string
+        revision:
+          type: string
+        origin:
+          type: string
+        provider:
+          type: string
+        correlationId:
+          type: string
+        timestamp:
+          type: string
+        contentHash:
+          type: string
+        snapshot:
+          $ref: '#/components/schemas/RelayfileInboundEventSnapshot'
+      additionalProperties: true
+
+    RelayfileInboundDeliveryResult:
+      type: object
+      required:
+        - replayed
+        - message_id
+      properties:
+        replayed:
+          type: boolean
+        message_id:
+          type: string
+
+    RelayfileInboundSkipResult:
+      type: object
+      required:
+        - skipped
+      properties:
+        skipped:
+          type: string
+          enum:
+            - missing_event_id
+            - missing_event_fields
+            - provider_mismatch
+            - path_mismatch
+            - agent_write
+            - ignored_event_type
+            - channel_not_found
+            - unformatted_event
+            - duplicate_in_progress
+            - event_id_reused
+
     Error:
       type: object
       properties:
@@ -4072,6 +4189,160 @@ paths:
         '204':
           description: Subscription deleted
 
+  /integrations/relayfile/inbound-target:
+    post:
+      summary: Create relayfile inbound target
+      description: >
+        Provision a relayfile inbound callback URL and derived HMAC secret for a
+        workspace channel/provider/path binding.
+      tags:
+        - Relayfile
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelayfileInboundTargetRequest'
+      responses:
+        '201':
+          description: Relayfile inbound target created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RelayfileInboundTarget'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Channel not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Relayfile inbound bridge is not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /integrations/relayfile/inbound/{workspaceId}/{channelId}:
+    post:
+      summary: Receive relayfile inbound event
+      description: >
+        HMAC-authenticated callback used by relayfile to inject matching provider
+        file events into a Relaycast channel. The HMAC input is
+        `X-Relay-Timestamp + "." + raw request body`, signed with SHA-256.
+      tags:
+        - Relayfile
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: provider
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: path_glob
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: X-Relay-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Relay-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Hex HMAC-SHA256 signature, optionally prefixed with `sha256=`.
+        - name: X-Relay-Event-Id
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Stable delivery id used for idempotency. If omitted, `eventId` from the JSON body is used.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelayfileInboundEvent'
+      responses:
+        '201':
+          description: Event delivered as a Relaycast message
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RelayfileInboundDeliveryResult'
+        '200':
+          description: Event accepted but skipped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RelayfileInboundSkipResult'
+        '400':
+          description: Invalid route parameters, JSON, or event body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid relayfile signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Event body exceeds the relayfile inbound size limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Transient delivery failure; relayfile should retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Relayfile inbound bridge or idempotency storage is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /webhooks:
     post:
       summary: Create inbound webhook
@@ -4768,6 +5039,8 @@ tags:
     description: Outbound event subscription management
   - name: Webhooks
     description: Inbound webhook management and trigger endpoints
+  - name: Relayfile
+    description: Relayfile inbound integration bridge
   - name: A2A
     description: Agent-to-Agent protocol gateway
   - name: Certify
