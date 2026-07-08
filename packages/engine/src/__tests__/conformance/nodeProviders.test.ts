@@ -6,6 +6,7 @@ import {
   registerAgent,
   FakeSocket,
   deliverFramesOfType,
+  contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
 import { actions, agents, nodeProviders, nodes } from '../../db/schema.js';
@@ -268,6 +269,23 @@ describe('node providers', () => {
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
+  });
+
+  it('routes context.update to the provider hosting the agent, not a phantom node default', async () => {
+    const ws = await createWorkspace(stack.app, 'np-context');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+    const rb = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', [{ name: 'build', kind: 'action' }]);
+    await py.handle.handleMessage(JSON.stringify({ v: 1, id: 'agent-1', type: 'agent.register', name: 'worker', session_ref: 'pty://py/worker' }));
+
+    py.sock.received.length = 0;
+    rb.sock.received.length = 0;
+    await stack.runtime.presence.heartbeat(ws.workspaceId, alice.agentId, 'alice');
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(contextUpdatesOfType(py.sock, 'agent.status.active').length).toBeGreaterThanOrEqual(1);
+    expect(contextUpdatesOfType(rb.sock, 'agent.status.active')).toHaveLength(0);
   });
 
   it('provider-scoped deregister removes its attachment, capabilities, and actions', async () => {

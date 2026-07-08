@@ -796,6 +796,10 @@ export const actions = sqliteTable(
     // NULL handlerNodeId (agent-hosted) rows as distinct here, so agent-hosted
     // uniqueness is enforced by the partial index below.
     uniqueIndex('actions_workspace_node_name_unique').on(table.workspaceId, table.handlerNodeId, table.name),
+    // Agent-hosted actions (no node) keep one action per workspace name.
+    uniqueIndex('actions_workspace_agent_name_unique').on(table.workspaceId, table.name).where(sql`${table.handlerNodeId} IS NULL`),
+    // At most one node action may claim a given workspace-global alias.
+    uniqueIndex('actions_workspace_global_name_unique').on(table.workspaceId, table.name).where(sql`${table.isGlobal} = 1`),
     index('idx_actions_workspace').on(table.workspaceId),
     index('idx_actions_handler').on(table.handlerAgentId),
     index('idx_actions_node_handler').on(table.handlerNodeId),

@@ -121,12 +121,17 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return undefined;
   }
 
-  /** The provider a node-addressed message should target when none is specified. */
+  /**
+   * The provider a node-addressed message targets when none is specified: the
+   * `default` provider if attached, otherwise any currently-attached provider.
+   * Never returns a name that is not in the index, so node-level sends do not
+   * silently target a phantom provider. `undefined` means nothing is attached.
+   */
   private defaultProviderName(nodeKey: string): string | undefined {
     const providers = this.providerIndex.get(nodeKey);
     if (!providers || providers.size === 0) return undefined;
     if (providers.has(DEFAULT_PROVIDER_NAME)) return DEFAULT_PROVIDER_NAME;
-    return providers.size === 1 ? [...providers.keys()][0] : DEFAULT_PROVIDER_NAME;
+    return [...providers.keys()][0];
   }
 
   async publishToWorkspaceStream(args: { workspaceId: string; event: EngineEvent }): Promise<void> {
@@ -302,6 +307,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (existingConnId && existingConnId !== connectionId) {
       const superseded = this.nodeConnections.get(existingConnId);
       this.nodeConnections.delete(existingConnId);
+      const conns = this.nodeConnIndex.get(nodeKey);
+      if (conns) {
+        conns.delete(existingConnId);
+        if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
+      }
       if (superseded) {
         superseded.providerName = undefined;
         try {
