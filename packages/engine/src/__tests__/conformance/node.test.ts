@@ -1318,7 +1318,10 @@ describe('node adapter conformance', () => {
       const rejectingRegistry: NodeConnectionRegistry = {
         upgradeNode: async () => new Response(null, { status: 501 }),
         sendToNode: async () => false,
+        sendToProvider: async () => false,
         isNodeConnected: () => true,
+        isProviderConnected: () => true,
+        detachProvider: () => {},
         disconnectNode: async () => {},
         drainNode: async () => {},
       };

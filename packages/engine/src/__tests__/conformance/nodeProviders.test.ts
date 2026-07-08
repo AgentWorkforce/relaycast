@@ -365,14 +365,23 @@ describe('node providers', () => {
     await enrollNode(ws, 'node_a', 'alpha');
     const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
     const rb = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', [{ name: 'build', kind: 'action' }]);
+    // The recipient `worker` is hosted by py; rb hosts no agents.
     await py.handle.handleMessage(JSON.stringify({ v: 1, id: 'agent-1', type: 'agent.register', name: 'worker', session_ref: 'pty://py/worker' }));
+    const workerId = (py.sock.ofType('reply').at(-1) as { data?: { agent_id?: string } }).data?.agent_id;
+    expect(workerId).toBeTruthy();
 
     py.sock.received.length = 0;
     rb.sock.received.length = 0;
+    // A presence change on alice (the subject) fans context out to the agents
+    // that host it — worker on py — and never to rb, which hosts none.
     await stack.runtime.presence.heartbeat(ws.workspaceId, alice.agentId, 'alice');
-    await new Promise((r) => setTimeout(r, 40));
+    for (let i = 0; i < 50 && contextUpdatesOfType(py.sock, 'agent.status.active').length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
 
-    expect(contextUpdatesOfType(py.sock, 'agent.status.active').length).toBeGreaterThanOrEqual(1);
+    const pyUpdates = contextUpdatesOfType(py.sock, 'agent.status.active');
+    expect(pyUpdates.length).toBeGreaterThanOrEqual(1);
+    expect(pyUpdates[0].agent_ids).toContain(workerId);
     expect(contextUpdatesOfType(rb.sock, 'agent.status.active')).toHaveLength(0);
   });
 

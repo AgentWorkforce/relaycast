@@ -54,7 +54,9 @@ type GroupedNode = {
 function groupByNodeProvider(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
   const grouped = new Map<string, GroupedNode>();
   for (const row of rows) {
-    const key = `${row.nodeId}::${row.providerName}`;
+    // Collision-safe key: node ids and provider names are free-form and may
+    // contain any separator, so encode the tuple rather than joining on a string.
+    const key = JSON.stringify([row.nodeId, row.providerName]);
     const existing = grouped.get(key) ?? {
       nodeId: row.nodeId,
       providerName: row.providerName,

@@ -1097,6 +1097,12 @@ export async function drainNodeInvocations(
             : DEFAULT_PROVIDER_NAME);
     const nativeSpawn = isSpawnInvocation(row.actionName) && !shadowProvider;
 
+    // Skip draining to a provider that isn't connected yet (e.g. a named
+    // provider reconnecting before it re-registers). Dispatching here would mark
+    // the frame delivered and push retryAfterAt out by the dispatch timeout,
+    // leaving it idle; leave it pending so the post-register drain re-sends it.
+    if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) continue;
+
     let reservedForDrain = false;
     try {
       let reservationHeld = nativeSpawn && !!row.spawnReservedAt;
