@@ -5,6 +5,7 @@ export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
+const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 
 /**
@@ -16,6 +17,7 @@ export async function POST(_request: NextRequest) {
 
   cookieStore.delete(COOKIE_NAME);
   cookieStore.delete(AGENT_COOKIE_NAME);
+  cookieStore.delete(WS_TOKEN_COOKIE_NAME);
   cookieStore.delete(ENGINE_COOKIE_NAME);
   return NextResponse.json({ success: true });
 }
