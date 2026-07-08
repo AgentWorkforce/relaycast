@@ -238,6 +238,23 @@ describe('NodeProviderClient', () => {
     const secondInstance = (secondRegister.provider as { instance_id: string }).instance_id;
     expect(secondRegister).toMatchObject({ name: 'alpha', provider: { name: 'py' } });
     expect(secondInstance).not.toBe(firstInstance);
+
+    // The reconnected registration completes its lifecycle: accepting it brings
+    // the provider back to connected.
+    second.emit(acceptAll(secondRegister));
+    await vi.waitFor(() => expect(node.connected).toBe(true));
+  });
+
+  it('hard-fails registration when the reply omits accepted_capabilities', async () => {
+    const node = new NodeProviderClient({ ...baseOptions, capabilities: { 'run-etl': async () => 'ok' } });
+    node.serve().catch(() => {});
+    const sock = newSocket();
+    sock.open();
+    const register = sock.lastRegister();
+    // A reply that confirms nothing about capability acceptance must not be
+    // treated as success.
+    sock.emit({ v: 1, id: register.id, type: 'reply', ok: true, data: { provider: register.provider } });
+    await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'invalid_register_reply' });
   });
 
   it('reconnects after a transport drop during the register handshake', async () => {

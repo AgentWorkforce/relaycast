@@ -350,9 +350,21 @@ export class NodeProviderClient {
   }
 
   private onRegistered(data: NodeRegisterReplyData): void {
-    const rejected = (data.accepted_capabilities ?? []).filter((c: FleetCapabilityAcceptance) => !c.accepted);
+    // The reply must carry a well-formed acceptance list (the engine always
+    // does). A missing/corrupt list means acceptance can't be confirmed, so
+    // fail registration rather than assume success; an entry missing `accepted`
+    // counts as rejected (fail-safe).
+    const list = data.accepted_capabilities;
+    if (!Array.isArray(list)) {
+      this.onRegisterFailed(new NodeRegistrationError(
+        'Registration reply is missing accepted_capabilities',
+        'invalid_register_reply',
+      ));
+      return;
+    }
+    const rejected = list.filter((c: FleetCapabilityAcceptance) => !c || c.accepted !== true);
     if (rejected.length > 0) {
-      const detail = rejected.map((c) => `${c.name}${c.reason ? ` (${c.reason})` : ''}`).join(', ');
+      const detail = rejected.map((c) => `${c?.name ?? '<unknown>'}${c?.reason ? ` (${c.reason})` : ''}`).join(', ');
       this.onRegisterFailed(new NodeRegistrationError(`Capabilities rejected: ${detail}`, 'capabilities_rejected'));
       return;
     }

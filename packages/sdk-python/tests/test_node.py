@@ -231,6 +231,45 @@ async def test_invoke_runs_handler_and_replies_with_output():
 
 
 @pytest.mark.asyncio
+async def test_invoke_supports_a_sync_handler():
+    server = FakeNodeServer()
+    node = NodeProvider(**base_kwargs(server))
+
+    @node.capability("run-etl")
+    def handler(input, ctx):  # a plain (non-async) handler
+        return {"echoed": input}
+
+    task = asyncio.create_task(node.serve())
+    conn = await server.next_connection()
+    conn.push(accept_all(conn.last_register()))
+    await node.wait_registered()
+
+    conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-sync", "action": "run-etl", "input": {"rows": 2}})
+    await wait_until(lambda: len(conn.sent_of_type("action.result")) == 1)
+    result = conn.sent_of_type("action.result")[-1]
+    assert result["output"] == {"echoed": {"rows": 2}}
+
+    await node.stop()
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_registration_missing_accepted_capabilities_raises():
+    server = FakeNodeServer()
+    node = NodeProvider(**base_kwargs(server))
+
+    task = asyncio.create_task(node.serve())
+    conn = await server.next_connection()
+    register = conn.last_register()
+    # A reply that confirms nothing about capability acceptance is not success.
+    conn.push({"v": 1, "id": register["id"], "type": "reply", "ok": True, "data": {"provider": register["provider"]}})
+    with pytest.raises(NodeRegistrationError):
+        await asyncio.wait_for(node.wait_registered(), timeout=1.0)
+    with pytest.raises(NodeRegistrationError):
+        await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_handler_throw_becomes_error_result_never_dropped():
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import random
@@ -130,7 +131,8 @@ class _RegisteredCapability:
     handler: "NodeCapabilityHandler"
 
 
-NodeCapabilityHandler = Callable[[Any, "NodeHandlerContext"], Awaitable[Any]]
+# A handler may be async (returning an awaitable) or a plain sync callable.
+NodeCapabilityHandler = Callable[[Any, "NodeHandlerContext"], Awaitable[Any] | Any]
 NodeCapabilitySpec = NodeCapabilityHandler | Mapping[str, Any]
 
 
@@ -469,11 +471,21 @@ class NodeProvider:
             frame["machine_id"] = self._machine_id
 
         data = await self._request(req_id, frame)
-        accepted = (data or {}).get("accepted_capabilities") or []
-        rejected = [c for c in accepted if not c.get("accepted")]
+        # The reply must carry a well-formed acceptance list (the engine always
+        # does). A missing/corrupt list means acceptance can't be confirmed, so
+        # fail registration rather than assume success; an entry missing
+        # `accepted` counts as rejected (fail-safe).
+        accepted = (data or {}).get("accepted_capabilities")
+        if not isinstance(accepted, list):
+            raise NodeRegistrationError(
+                "Registration reply is missing accepted_capabilities", "invalid_register_reply"
+            )
+        rejected = [c for c in accepted if not (isinstance(c, dict) and c.get("accepted") is True)]
         if rejected:
             detail = ", ".join(
-                f"{c.get('name')}" + (f" ({c['reason']})" if c.get("reason") else "") for c in rejected
+                f"{c.get('name') if isinstance(c, dict) else '<unknown>'}"
+                + (f" ({c['reason']})" if isinstance(c, dict) and c.get("reason") else "")
+                for c in rejected
             )
             raise NodeRegistrationError(f"Capabilities rejected: {detail}", "capabilities_rejected")
 
@@ -540,7 +552,9 @@ class NodeProvider:
             return
         ctx = NodeHandlerContext(self, invocation_id)
         try:
-            output = await cap.handler(input_, ctx)
+            # Support both async and plain (sync) handlers.
+            result = cap.handler(input_, ctx)
+            output = await result if inspect.isawaitable(result) else result
         except Exception as exc:  # a handler throw becomes an error result; never dropped
             await self._send_frame(
                 {"type": "action.result", "invocation_id": invocation_id, "error": str(exc)}

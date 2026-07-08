@@ -216,6 +216,47 @@ final class NodeProviderTests: XCTestCase {
         }
     }
 
+    func testHardFailsRegistrationWhenReplyOmitsAcceptedCapabilities() async throws {
+        let factory = FakeTransportFactory()
+        let node = NodeProvider(
+            nodeToken: baseOptions.nodeToken,
+            nodeID: baseOptions.nodeID,
+            nodeName: baseOptions.nodeName,
+            provider: (name: "py", instanceID: nil),
+            transport: { factory.make() }
+        )
+        await node.capability("run-etl") { input, _ in input }
+
+        let serveTask = Task { try await node.serve() }
+
+        await waitUntil { factory.instances.count == 1 }
+        let transport = factory.instances[0]
+        await waitUntil { await !transport.sentOfType("node.register").isEmpty }
+        let register = await transport.lastRegister()!
+
+        // A reply that confirms nothing about capability acceptance is not success.
+        await transport.emit([
+            "id": register["id"] ?? .null,
+            "type": .string("reply"),
+            "ok": .bool(true),
+            "data": .object(["provider": register["provider"] ?? .object([:])])
+        ])
+
+        do {
+            _ = try await node.waitRegistered()
+            XCTFail("expected waitRegistered() to throw")
+        } catch let error as NodeRegistrationError {
+            XCTAssertEqual(error.code, "invalid_register_reply")
+        }
+
+        do {
+            try await serveTask.value
+            XCTFail("expected serve() to throw")
+        } catch {
+            // expected
+        }
+    }
+
     func testHardFailsRegistrationOnEngineErrorFrame() async throws {
         let factory = FakeTransportFactory()
         let node = NodeProvider(
@@ -450,7 +491,7 @@ final class NodeProviderTests: XCTestCase {
             transport: { factory.make() }
         )
         await node.capability("spawn:claude") { _, ctx in
-            try await ctx.spawnAgent(.object(["cli": .string("claude"), "name": .string("worker-1")]))
+            try await ctx.spawnAgent(["cli": .string("claude"), "name": .string("worker-1")])
         }
 
         let serveTask = Task { try await node.serve() }

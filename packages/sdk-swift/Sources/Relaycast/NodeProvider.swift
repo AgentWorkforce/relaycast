@@ -54,13 +54,13 @@ public struct NodeHandlerContext: Sendable {
     public let invocationID: String
 
     private let sendMessageImpl: @Sendable (String, String, String, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue
-    private let spawnAgentImpl: @Sendable (JSONValue) async throws -> JSONValue
+    private let spawnAgentImpl: @Sendable ([String: JSONValue]) async throws -> JSONValue
 
     init(
         node: NodeInfo,
         invocationID: String,
         sendMessageImpl: @escaping @Sendable (String, String, String, NodeMessageMode?, [String: JSONValue]?) async throws -> JSONValue,
-        spawnAgentImpl: @escaping @Sendable (JSONValue) async throws -> JSONValue
+        spawnAgentImpl: @escaping @Sendable ([String: JSONValue]) async throws -> JSONValue
     ) {
         self.node = node
         self.invocationID = invocationID
@@ -83,9 +83,10 @@ public struct NodeHandlerContext: Sendable {
 
     /// Spawn an agent through the node's capacity executor. Capacity-direct: it
     /// never re-enters action dispatch, so a `spawn:<harness>` shadow handler
-    /// that delegates cannot recurse into itself. Resolves with the spawn
-    /// placement.
-    public func spawnAgent(_ input: JSONValue) async throws -> JSONValue {
+    /// that delegates cannot recurse into itself. The spawn spec is a JSON
+    /// object (the engine's `node.spawn` input is object-typed). Resolves with
+    /// the spawn placement.
+    public func spawnAgent(_ input: [String: JSONValue]) async throws -> JSONValue {
         try await spawnAgentImpl(input)
     }
 }
@@ -109,25 +110,33 @@ public struct NodeRegisterReplyData: Equatable, Sendable {
     public let raw: JSONValue
 
     static func parse(_ json: JSONValue) throws -> NodeRegisterReplyData {
+        // A malformed reply is a deterministic registration failure (thrown as a
+        // NodeRegistrationError so it hard-fails rather than being retried as a
+        // transient drop).
         guard case .object(let obj) = json,
               case .object(let providerObj)? = obj["provider"],
               case .string(let name)? = providerObj["name"],
               case .string(let instanceID)? = providerObj["instance_id"]
         else {
-            throw NodeProviderError.invalidRegisterReply
+            throw NodeRegistrationError(code: "invalid_register_reply", message: "node.register reply is malformed")
         }
 
-        var acceptedCapabilities: [NodeCapabilityAcceptance] = []
-        if case .array(let items)? = obj["accepted_capabilities"] {
-            acceptedCapabilities = items.compactMap { item -> NodeCapabilityAcceptance? in
-                guard case .object(let capObj) = item,
-                      case .string(let capName)? = capObj["name"],
-                      case .bool(let accepted)? = capObj["accepted"]
-                else { return nil }
-                let kind: String = { if case .string(let k)? = capObj["kind"] { return k } else { return "action" } }()
-                let reason: String? = { if case .string(let r)? = capObj["reason"] { return r } else { return nil } }()
-                return NodeCapabilityAcceptance(name: capName, kind: kind, accepted: accepted, reason: reason)
+        // The reply must carry a well-formed acceptance list (the engine always
+        // does). A missing/corrupt list means acceptance can't be confirmed, so
+        // fail registration rather than assume success.
+        guard case .array(let items)? = obj["accepted_capabilities"] else {
+            throw NodeRegistrationError(code: "invalid_register_reply", message: "node.register reply is missing accepted_capabilities")
+        }
+        let acceptedCapabilities: [NodeCapabilityAcceptance] = items.map { item -> NodeCapabilityAcceptance in
+            // A malformed entry can't be confirmed accepted — count it as
+            // rejected (fail-safe) rather than dropping it.
+            guard case .object(let capObj) = item, case .string(let capName)? = capObj["name"] else {
+                return NodeCapabilityAcceptance(name: "<unknown>", kind: "action", accepted: false, reason: "malformed acceptance entry")
             }
+            let accepted: Bool = { if case .bool(let a)? = capObj["accepted"] { return a } else { return false } }()
+            let kind: String = { if case .string(let k)? = capObj["kind"] { return k } else { return "action" } }()
+            let reason: String? = { if case .string(let r)? = capObj["reason"] { return r } else { return nil } }()
+            return NodeCapabilityAcceptance(name: capName, kind: kind, accepted: accepted, reason: reason)
         }
 
         return NodeRegisterReplyData(providerName: name, instanceID: instanceID, acceptedCapabilities: acceptedCapabilities, raw: json)
@@ -682,12 +691,12 @@ public actor NodeProvider {
         return try await request(payload)
     }
 
-    private func spawnAgentFrame(_ input: JSONValue) async throws -> JSONValue {
+    private func spawnAgentFrame(_ input: [String: JSONValue]) async throws -> JSONValue {
         // Capacity-direct: the engine always targets this connection's own node,
         // so the frame carries no node target.
         try await request([
             "type": .string("node.spawn"),
-            "input": input
+            "input": .object(input)
         ])
     }
 
