@@ -58,8 +58,12 @@ runs:
       run: |
         set -euo pipefail
         cd packages/observer-dashboard
-        npx @cloudflare/next-on-pages@1
+        npx @cloudflare/next-on-pages@1.13.16
         npx wrangler pages deploy .vercel/output/static --project-name="${{ inputs.project-name }}" --branch="${{ inputs.branch }}"
       env:
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+        # next-on-pages peers on @cloudflare/workers-types@^4, but the wrangler it
+        # transitively resolves now peers on ^5; tolerate that optional-peer mismatch
+        # so the ephemeral npx install can resolve. See CI ERESOLVE on wrangler 4.108.0.
+        NPM_CONFIG_LEGACY_PEER_DEPS: "true"
