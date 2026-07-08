@@ -168,8 +168,9 @@ class NodeHandlerContext:
 
         Capacity-direct: it never re-enters action dispatch, so a
         `spawn:<harness>` shadow handler that delegates cannot recurse into
-        itself. Resolves with the spawn placement."""
-        frame = {"type": "node.spawn", "input": input, "target_node_id": self._provider._node_id}
+        itself. The engine always targets this connection's own node, so the
+        frame carries no node target. Resolves with the spawn placement."""
+        frame = {"type": "node.spawn", "input": input}
         return await self._provider._request(_random_id(), frame)
 
 

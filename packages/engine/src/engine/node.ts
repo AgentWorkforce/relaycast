@@ -1436,15 +1436,17 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         await deregisterProvider(args.db, args.registry, args.workspaceId, args.nodeId, frameProviderName);
         return;
       case 'node.spawn': {
-        // Handler-context `ctx.spawnAgent`: capacity-direct delegation to the
-        // node's capacity executor (the broker provider). Bypasses action
-        // dispatch so a `spawn:<harness>` shadow handler cannot re-enter itself.
+        // Handler-context `ctx.spawnAgent`: capacity-direct delegation to this
+        // connection's own node capacity executor (the broker provider).
+        // Bypasses action dispatch so a `spawn:<harness>` shadow handler cannot
+        // re-enter itself. The target is always the connection's node — a node
+        // credential cannot direct a spawn at another node.
         const result = await dispatchCapacitySpawn(
           args.db,
           args.workspaceId,
           {
             input: message.input,
-            target_node_id: message.target_node_id ?? args.nodeId,
+            target_node_id: args.nodeId,
           },
           { nodeConnections: args.registry },
         );

@@ -275,7 +275,10 @@ describe('NodeProviderClient', () => {
     sock.emit({ v: 1, type: 'action.invoke', invocation_id: 'inv-spawn', action: 'spawn:claude', input: {} });
     await vi.waitFor(() => expect(sock.sentOfType('node.spawn')).toHaveLength(1));
     const spawn = sock.sentOfType('node.spawn').at(-1)!;
-    expect(spawn).toMatchObject({ input: { cli: 'claude', name: 'worker-1' }, target_node_id: 'node_a' });
+    // Capacity-direct: the frame carries no node target; the engine uses the
+    // connection's own node.
+    expect(spawn).toMatchObject({ input: { cli: 'claude', name: 'worker-1' } });
+    expect(spawn).not.toHaveProperty('target_node_id');
 
     sock.emit({ v: 1, id: spawn.id, type: 'reply', ok: true, data: { invocation_id: 'spawned-1', status: 'dispatched' } });
     await vi.waitFor(() => expect(sock.sentOfType('action.result')).toHaveLength(1));

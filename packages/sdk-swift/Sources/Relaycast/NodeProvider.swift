@@ -685,10 +685,11 @@ public actor NodeProvider {
     }
 
     private func spawnAgentFrame(_ input: JSONValue) async throws -> JSONValue {
+        // Capacity-direct: the engine always targets this connection's own node,
+        // so the frame carries no node target.
         try await request([
             "type": .string("node.spawn"),
-            "input": input,
-            "target_node_id": .string(nodeID)
+            "input": input
         ])
     }
 

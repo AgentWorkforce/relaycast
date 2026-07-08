@@ -447,10 +447,11 @@ export class NodeProviderClient {
         ...(input.mode ? { mode: input.mode } : {}),
         ...(input.data ? { data: input.data } : {}),
       }),
+      // Capacity-direct: the engine always targets this connection's own node,
+      // so the frame carries no node target.
       spawnAgent: (input) => this.request(randomId(), {
         type: 'node.spawn',
         input,
-        target_node_id: this.nodeId,
       }),
     };
   }

@@ -423,15 +423,19 @@ describe('node providers', () => {
     expect(actionRows.map((a) => a.name).sort()).toEqual(['run-etl']);
   });
 
-  it('routes a node.spawn frame capacity-direct, bypassing any spawn shadow', async () => {
+  it('routes a node.spawn frame to the connection\'s own node capacity, bypassing any spawn shadow', async () => {
     const ws = await createWorkspace(stack.app, 'np-node-spawn');
     await enrollNode(ws, 'node_a', 'alpha');
-    // Broker provider offers native spawn:claude capacity.
+    // node_a: broker provider offers native spawn:claude capacity.
     const broker = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
     // A policy provider shadows it with a spawn:claude action, and is where the
     // handler runs: its ctx.spawnAgent must delegate to broker capacity, never
     // re-enter its own shadow.
     const policy = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+    // A second node with its own spawn capacity: a node.spawn from node_a must
+    // never reach it — a node credential cannot direct a spawn at another node.
+    await enrollNode(ws, 'node_b', 'beta');
+    const otherBroker = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
 
     await policy.handle.handleMessage(JSON.stringify({
       v: 1,
@@ -440,13 +444,16 @@ describe('node providers', () => {
       input: { cli: 'claude', name: 'worker-1' },
     }));
 
-    // Delegated to the broker's native capacity...
+    // Delegated to node_a's broker capacity...
     expect(broker.sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'spawn:claude' });
-    // ...not back into the policy provider's shadow action.
+    // ...not back into the policy provider's shadow action...
     expect(policy.sock.ofType('action.invoke')).toHaveLength(0);
-    const reply = policy.sock.ofType('reply').at(-1) as { ok?: boolean; id?: string; data?: { invocation_id?: string } };
+    // ...and never crossing to the other node.
+    expect(otherBroker.sock.ofType('action.invoke')).toHaveLength(0);
+    const reply = policy.sock.ofType('reply').at(-1) as { ok?: boolean; id?: string; data?: { invocation_id?: string; handler_node_id?: string } };
     expect(reply).toMatchObject({ ok: true, id: 'spawn-1' });
     expect(typeof reply.data?.invocation_id).toBe('string');
+    expect(reply.data?.handler_node_id).toBe('node_a');
   });
 
   it('posts a channel message from a node.message frame and fans out to observers', async () => {

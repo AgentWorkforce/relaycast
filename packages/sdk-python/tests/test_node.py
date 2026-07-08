@@ -366,7 +366,9 @@ async def test_spawn_agent_sends_capacity_direct_node_spawn_frame():
     await wait_until(lambda: len(conn.sent_of_type("node.spawn")) == 1)
     spawn_frame = conn.sent_of_type("node.spawn")[-1]
     assert spawn_frame["input"] == {"cli": "claude", "name": "worker-1"}
-    assert spawn_frame["target_node_id"] == "node_a"
+    # Capacity-direct: the frame carries no node target; the engine uses the
+    # connection's own node.
+    assert "target_node_id" not in spawn_frame
 
     conn.push(
         {

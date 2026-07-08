@@ -467,7 +467,9 @@ final class NodeProviderTests: XCTestCase {
         await waitUntil { await !transport.sentOfType("node.spawn").isEmpty }
         let spawn = await transport.sentOfType("node.spawn").last!
         XCTAssertEqual(spawn["input"], .object(["cli": .string("claude"), "name": .string("worker-1")]))
-        XCTAssertEqual(spawn["target_node_id"], .string("node_a"))
+        // Capacity-direct: the frame carries no node target; the engine uses the
+        // connection's own node.
+        XCTAssertNil(spawn["target_node_id"])
 
         await transport.emit([
             "id": spawn["id"] ?? .null,
