@@ -11,6 +11,7 @@ export const runtime = 'edge';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
+const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get(COOKIE_NAME)?.value;
   const agentToken = cookieStore.get(AGENT_COOKIE_NAME)?.value;
+  const wsToken = cookieStore.get(WS_TOKEN_COOKIE_NAME)?.value;
 
   if (!apiKey) {
     return NextResponse.json(
@@ -74,7 +76,12 @@ export async function GET(request: NextRequest) {
     authenticated: true,
     apiKey,
     agentToken: agentToken ?? apiKey,
-    wsToken: apiKey,
+    // The stream credential is the observer token minted at login (or an
+    // `ot_live_` login credential). It is intentionally NOT backfilled from the
+    // workspace admin key: the realtime socket must never carry an admin key.
+    // A workspace-key session with no ws token (mint failed, or a session
+    // created before this cookie existed) has no live stream until next login.
+    wsToken: wsToken ?? null,
     baseUrl,
   });
 }
