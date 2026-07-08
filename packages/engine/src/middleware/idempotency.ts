@@ -237,9 +237,9 @@ export async function runIdempotent<T>(
       };
       try {
         await kvStore.put(kvKey, JSON.stringify(record), { expirationTtl: ttlSeconds });
-      } catch {
+      } catch (err) {
         if (requireKv) {
-          throw idempotencyUnavailableError();
+          throw idempotencyUnavailableError(err);
         }
         // KV failure during record storage — proceed without idempotency record.
       } finally {

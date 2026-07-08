@@ -94,6 +94,73 @@ describe('relayfile inbound bridge', () => {
     }));
   });
 
+  it('rejects whitespace-only relayfile target path globs', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-target-blank-glob');
+
+    const res = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '   ' }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request' },
+    });
+  });
+
+  it('rejects inbound delivery URLs without an explicit path glob', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-missing-glob');
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
+    });
+    const target = (await targetRes.json() as { data: { url: string } }).data;
+    const url = new URL(target.url);
+    url.searchParams.delete('path_glob');
+
+    const res = await stack.app.request(url.toString(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'bad_request' },
+    });
+  });
+
+  it('rejects inbound delivery URLs with blank path globs', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-blank-query-glob');
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
+    });
+    const target = (await targetRes.json() as { data: { url: string } }).data;
+    const url = new URL(target.url);
+    url.searchParams.set('path_glob', '   ');
+
+    const res = await stack.app.request(url.toString(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: 'bad_request' },
+    });
+  });
+
   it('accepts a signed relayfile event, injects one message, and dedupes replay', async () => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, 'relayfile-delivery');

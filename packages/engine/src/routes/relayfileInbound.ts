@@ -26,7 +26,7 @@ const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30;
 const createTargetSchema = z.object({
   channel: z.string().min(1),
   provider: z.string().min(1),
-  path_glob: z.string().min(1),
+  path_glob: z.string().trim().min(1),
 });
 
 const relayfileSnapshotSchema = z.object({
@@ -117,10 +117,11 @@ relayfileInboundRoutes.post('/integrations/relayfile/inbound/:workspaceId/:chann
   const workspaceId = c.req.param('workspaceId');
   const channelId = c.req.param('channelId');
   const provider = normalizeProvider(c.req.query('provider') ?? '');
-  const pathGlob = normalizePathGlob(c.req.query('path_glob') ?? '');
-  if (!workspaceId || !channelId || !provider || !pathGlob) {
+  const rawPathGlob = c.req.query('path_glob')?.trim();
+  if (!workspaceId || !channelId || !provider || !rawPathGlob) {
     return jsonError(c, 'bad_request', 'missing relayfile inbound route parameters', 400);
   }
+  const pathGlob = normalizePathGlob(rawPathGlob);
 
   const master = c.get('engine').config?.relayfileInboundSecret?.trim();
   if (!master) {
