@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 
-from relay_sdk.node import NodeConnectionClosed, NodeProvider, NodeRegistrationError
+from relay_sdk.node import NodeConnectionClosed, NodeProvider, NodeProviderError, NodeRegistrationError
 
 BASE_URL = "https://engine.test"
 
@@ -389,6 +389,26 @@ async def test_reconnects_when_dropped_during_register_handshake():
     second.push(accept_all(second.last_register()))
     await asyncio.wait_for(node.wait_registered(), timeout=1.0)
     assert node.connected is True
+
+    await node.stop()
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_exhaustion_does_not_overwrite_successful_registration():
+    server = FakeNodeServer()
+    node = NodeProvider(**base_kwargs(server))
+    task = asyncio.create_task(node.serve())
+    conn = await server.next_connection()
+    conn.push(accept_all(conn.last_register()))
+    reg = await node.wait_registered()
+    assert reg is not None
+
+    # A later reconnect-exhaustion rejection must not overwrite the completed
+    # registration: wait_registered() keeps returning the success.
+    node._reject_registered(NodeProviderError("exhausted"))
+    again = await node.wait_registered()
+    assert again is not None
 
     await node.stop()
     await asyncio.wait_for(task, timeout=1.0)

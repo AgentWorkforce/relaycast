@@ -374,4 +374,27 @@ describe('NodeProviderClient', () => {
     // No node.message frame is sent over the socket — posting is HTTP now.
     expect(sock.sentOfType('node.message')).toHaveLength(0);
   });
+
+  it('ctx.sendMessage normalizes a ws base URL to http and encodes the channel', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return { ok: true, status: 201, json: async () => ({ data: { id: 'm' } }) } as unknown as Response;
+    }));
+
+    const node = new NodeProviderClient({
+      ...baseOptions,
+      baseUrl: 'wss://engine.test',
+      capabilities: { 'run-etl': async (_i: unknown, ctx) => ctx.sendMessage({ to: 'team/alpha', from: 'reporter', text: 'x' }) },
+    });
+    node.serve();
+    const sock = newSocket();
+    sock.open();
+    sock.emit(acceptAll(sock.lastRegister()));
+    await node.whenRegistered();
+
+    sock.emit({ v: 1, type: 'action.invoke', invocation_id: 'i', action: 'run-etl', input: {} });
+    await vi.waitFor(() => expect(urls).toHaveLength(1));
+    expect(urls[0]).toBe('https://engine.test/v1/channels/team%2Falpha/messages');
+  });
 });

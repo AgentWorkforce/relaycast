@@ -578,6 +578,45 @@ final class NodeProviderTests: XCTestCase {
         try await serveTask.value
         NodeMockURLProtocol.handler = nil
     }
+
+    func testSendMessageNormalizesWsBaseAndEscapesSlashInChannel() async throws {
+        NodeMockURLProtocol.handler = { request in
+            // ws base normalized to https; the slash in the channel name escaped
+            // into a single path segment.
+            XCTAssertEqual(request.url?.absoluteString, "https://engine.test/v1/channels/team%2Falpha/messages")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!
+            let data = try JSONSerialization.data(withJSONObject: ["ok": true, "data": ["id": "m-2"]])
+            return (response, data)
+        }
+
+        let factory = FakeTransportFactory()
+        let node = NodeProvider(
+            baseURL: "wss://engine.test",
+            nodeToken: baseOptions.nodeToken,
+            nodeID: baseOptions.nodeID,
+            nodeName: baseOptions.nodeName,
+            provider: (name: "py", instanceID: nil),
+            session: makeNodeMockSession(),
+            transport: { factory.make() }
+        )
+        await node.capability("run-etl") { _, ctx in
+            try await ctx.sendMessage(to: "team/alpha", from: "reporter", text: "hi")
+        }
+
+        let serveTask = Task { try await node.serve() }
+        let transport = try await registerAndAccept(node: node, factory: factory)
+        await transport.emit([
+            "v": .int(1), "type": .string("action.invoke"),
+            "invocation_id": .string("inv-2"), "action": .string("run-etl"), "input": .object([:])
+        ])
+        await waitUntil { await !transport.sentOfType("action.result").isEmpty }
+        let result = await transport.sentOfType("action.result").last!
+        XCTAssertEqual(result["output"], .object(["id": .string("m-2")]))
+
+        await node.stop()
+        try await serveTask.value
+        NodeMockURLProtocol.handler = nil
+    }
 }
 
 private final class NodeMockURLProtocol: URLProtocol {

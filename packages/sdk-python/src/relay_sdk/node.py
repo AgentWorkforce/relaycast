@@ -206,10 +206,12 @@ class NodeProvider:
         connect: NodeConnectFactory | None = None,
     ) -> None:
         base = (base_url or _DEFAULT_BASE_URL).rstrip("/")
-        self._http_base_url = base
+        # The base may be given as ws(s):// (also accepted by the socket);
+        # normalize it back to http(s):// for the REST client.
+        self._http_base_url = base.replace("wss://", "https://").replace("ws://", "http://")
         self._ws_base_url = base.replace("https://", "wss://").replace("http://", "ws://")
         self._node_token = node_token
-        self._http = AsyncHttpClient(api_key=node_token, base_url=base, origin_client=_ORIGIN_CLIENT)
+        self._http = AsyncHttpClient(api_key=node_token, base_url=self._http_base_url, origin_client=_ORIGIN_CLIENT)
         self._node_id = node_id
         self._node_name = node_name
         self._provider_name = provider["name"]
@@ -509,6 +511,10 @@ class NodeProvider:
             self._register_future.set_result(data)
 
     def _reject_registered(self, err: Exception) -> None:
+        # Never overwrite a completed registration: once registered, a later
+        # disconnect/exhaustion must not make wait_registered() start raising.
+        if self._register_result is not None:
+            return
         self._register_error = err
         if self._register_future is not None and not self._register_future.done():
             self._register_future.set_exception(err)

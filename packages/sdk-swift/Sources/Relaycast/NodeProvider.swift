@@ -705,10 +705,12 @@ public actor NodeProvider {
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (respData, response) = try await httpSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard let http = response as? HTTPURLResponse else {
+            throw NodeProviderError.messageFailed(code: "invalid_response", message: "sendMessage response was not HTTP")
+        }
         let decoded = try? JSONDecoder().decode(JSONValue.self, from: respData)
-        if status >= 300 {
-            var code = "http_\(status)"
+        if http.statusCode >= 300 {
+            var code = "http_\(http.statusCode)"
             var message = "sendMessage to \"\(to)\" failed"
             if case .object(let obj)? = decoded, case .object(let err)? = obj["error"] {
                 if case .string(let c)? = err["code"] { code = c }
@@ -716,15 +718,28 @@ public actor NodeProvider {
             }
             throw NodeProviderError.messageFailed(code: code, message: message)
         }
-        if case .object(let obj)? = decoded, let dataVal = obj["data"] {
-            return dataVal
+        // A 2xx must carry a decodable `{ ok, data }` envelope; anything else is
+        // a malformed success and should surface, not silently return null.
+        guard case .object(let obj)? = decoded, let dataVal = obj["data"] else {
+            throw NodeProviderError.messageFailed(code: "invalid_response", message: "sendMessage response was not a valid message envelope")
         }
-        return decoded ?? .null
+        return dataVal
     }
 
     private static func channelMessageURL(baseURL: String, channel: String) -> URL? {
-        let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
-        let encoded = channel.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? channel
+        // The HTTP base may be given as ws(s):// (also accepted by the socket);
+        // normalize it back to http(s):// for the REST call.
+        var httpBase = baseURL
+        if httpBase.hasPrefix("wss://") {
+            httpBase = "https://" + httpBase.dropFirst("wss://".count)
+        } else if httpBase.hasPrefix("ws://") {
+            httpBase = "http://" + httpBase.dropFirst("ws://".count)
+        }
+        let trimmed = httpBase.hasSuffix("/") ? String(httpBase.dropLast()) : httpBase
+        // Encode the channel as a single path segment — `/` must be escaped.
+        var segment = CharacterSet.urlPathAllowed
+        segment.remove(charactersIn: "/")
+        let encoded = channel.addingPercentEncoding(withAllowedCharacters: segment) ?? channel
         return URL(string: "\(trimmed)/v1/channels/\(encoded)/messages")
     }
 

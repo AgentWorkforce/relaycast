@@ -491,7 +491,10 @@ describe('node providers', () => {
     const body = await res.json() as { data: { agent_name: string; text: string } };
     expect(body.data).toMatchObject({ agent_name: 'poster', text: 'etl finished' });
 
-    await new Promise((r) => setTimeout(r, 60));
+    // Poll for the async fanout instead of a fixed sleep, to avoid CI flakiness.
+    for (let i = 0; i < 50 && deliverFramesOfType(py.sock, 'message.created').length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     // Delivery routing came for free from the canonical route.
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
   });

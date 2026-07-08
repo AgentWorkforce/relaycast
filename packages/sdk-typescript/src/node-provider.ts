@@ -476,7 +476,10 @@ export class NodeProviderClient {
    * delivery routing, observer events, and triggers by construction.
    */
   private async postChannelMessage(input: NodeSendMessageInput): Promise<unknown> {
-    const url = `${this.baseUrl}/v1/channels/${encodeURIComponent(input.to)}/messages`;
+    // The base may be given as ws(s):// (also accepted by the socket); normalize
+    // it back to http(s):// for the REST call.
+    const httpBase = this.baseUrl.replace(/^ws(s?):\/\//, 'http$1://');
+    const url = `${httpBase}/v1/channels/${encodeURIComponent(input.to)}/messages`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.nodeToken}` },
