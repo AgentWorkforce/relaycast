@@ -34,13 +34,14 @@ describe('node-control provider-disconnect exports', () => {
     providerName: string,
     capability: string,
     activeAgents = 0,
+    instanceId = `${providerName}-i1`,
   ) {
-    const provider = { name: providerName, instance_id: `${providerName}-i1` };
+    const provider = { name: providerName, instance_id: instanceId };
     const sock = new FakeSocket();
     const handle = stack.runtime.realtime.attachNodeSocket(workspaceId, nodeId, sock);
     await handle.handleMessage(JSON.stringify({
       v: 1,
-      id: `reg-${providerName}`,
+      id: `reg-${instanceId}`,
       type: 'node.register',
       name: nodeName,
       node_id: nodeId,
@@ -51,15 +52,20 @@ describe('node-control provider-disconnect exports', () => {
       version: 'v1',
       resume_cursor: null,
     }));
-    await heartbeat(handle, providerName, activeAgents);
+    await heartbeat(handle, providerName, activeAgents, instanceId);
     return { sock, handle };
   }
 
-  function heartbeat(handle: { handleMessage(raw: string): Promise<void> }, providerName: string, activeAgents: number) {
+  function heartbeat(
+    handle: { handleMessage(raw: string): Promise<void> },
+    providerName: string,
+    activeAgents: number,
+    instanceId = `${providerName}-i1`,
+  ) {
     return handle.handleMessage(JSON.stringify({
       v: 1,
       type: 'node.heartbeat',
-      provider: { name: providerName, instance_id: `${providerName}-i1` },
+      provider: { name: providerName, instance_id: instanceId },
       load: 0,
       active_agents: activeAgents,
       handlers_live: true,
@@ -141,15 +147,16 @@ describe('node-control provider-disconnect exports', () => {
     // The node aggregate sums both providers' active agents.
     expect(await nodeActiveAgents(ws.workspaceId, 'node_a')).toBe(5);
 
-    // py drops (others remain): its agents are gone, so the node aggregate must
-    // no longer count them — recomputeNodeAggregate would resurrect them if the
-    // provider row kept its stale activeAgents.
-    await handleProviderDisconnect(db(), stack.runtime.realtime, ws.workspaceId, 'node_a', 'py', true);
+    // py's socket drops (others remain): its agents are gone, so the node
+    // aggregate must no longer count them — recomputeNodeAggregate would resurrect
+    // them if the provider row kept its stale activeAgents.
+    await py.handle.handleClose();
     expect(await providerActiveAgents(ws.workspaceId, 'node_a', 'py')).toBe(0);
     expect(await nodeActiveAgents(ws.workspaceId, 'node_a')).toBe(3);
 
-    // Symmetric restore: py's next heartbeat repopulates its count.
-    await heartbeat(py.handle, 'py', 2);
+    // Symmetric restore through a real reconnect: a fresh socket registers py
+    // (new instance) and heartbeats, repopulating its count.
+    await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', 'run-etl', 2, 'py-i2');
     expect(await providerActiveAgents(ws.workspaceId, 'node_a', 'py')).toBe(2);
     expect(await nodeActiveAgents(ws.workspaceId, 'node_a')).toBe(5);
   });
