@@ -423,6 +423,118 @@ describe('node providers', () => {
     expect(actionRows.map((a) => a.name).sort()).toEqual(['run-etl']);
   });
 
+  it('routes a node.spawn frame to the connection\'s own node capacity, bypassing any spawn shadow', async () => {
+    const ws = await createWorkspace(stack.app, 'np-node-spawn');
+    await enrollNode(ws, 'node_a', 'alpha');
+    // node_a: broker provider offers native spawn:claude capacity.
+    const broker = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
+    // A policy provider shadows it with a spawn:claude action, and is where the
+    // handler runs: its ctx.spawnAgent must delegate to broker capacity, never
+    // re-enter its own shadow.
+    const policy = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'policy', [{ name: 'spawn:claude', kind: 'action' }]);
+    // A second node with its own spawn capacity: a node.spawn from node_a must
+    // never reach it — a node credential cannot direct a spawn at another node.
+    await enrollNode(ws, 'node_b', 'beta');
+    const otherBroker = await attachProvider(ws.workspaceId, 'node_b', 'beta', 'default', [{ name: 'spawn:claude', kind: 'capacity' }]);
+
+    await policy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'spawn-1',
+      type: 'node.spawn',
+      input: { cli: 'claude', name: 'worker-1' },
+    }));
+
+    // Delegated to node_a's broker capacity...
+    expect(broker.sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'spawn:claude' });
+    // ...not back into the policy provider's shadow action...
+    expect(policy.sock.ofType('action.invoke')).toHaveLength(0);
+    // ...and never crossing to the other node.
+    expect(otherBroker.sock.ofType('action.invoke')).toHaveLength(0);
+    const reply = policy.sock.ofType('reply').at(-1) as { ok?: boolean; id?: string; data?: { invocation_id?: string; handler_node_id?: string } };
+    expect(reply).toMatchObject({ ok: true, id: 'spawn-1' });
+    expect(typeof reply.data?.invocation_id).toBe('string');
+    expect(reply.data?.handler_node_id).toBe('node_a');
+  });
+
+  // ctx.sendMessage posts through the canonical message route with a node token
+  // and a required `from`, so node-attributed posts get delivery routing,
+  // observer events, and triggers by construction (no parallel posting path).
+  async function enrollNodeWithToken(ws: { workspaceKey: string }, nodeId: string, name: string): Promise<string> {
+    const res = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: nodeId, name, role: 'broker', capabilities: [], max_agents: 4, tags: ['test'], version: 'v0' }),
+    });
+    expect(res.status).toBe(201);
+    return (await res.json() as { data: { token: string } }).data.token;
+  }
+
+  function postMessage(token: string, channel: string, body: Record<string, unknown>) {
+    return stack.app.request(`/v1/channels/${channel}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('posts a node-token message attributed to `from`, delivered to node-hosted recipients', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg');
+    await registerAgent(stack.app, ws.workspaceKey, 'poster');
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+    // A worker agent hosted by py joins #general, so it is a delivery recipient.
+    await py.handle.handleMessage(JSON.stringify({ v: 1, id: 'agent-1', type: 'agent.register', name: 'worker', session_ref: 'pty://py/worker' }));
+    py.sock.received.length = 0;
+
+    const res = await postMessage(nodeToken, 'general', { text: 'etl finished', from: 'poster' });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { data: { agent_name: string; text: string } };
+    expect(body.data).toMatchObject({ agent_name: 'poster', text: 'etl finished' });
+
+    // Poll for the async fanout instead of a fixed sleep, to avoid CI flakiness.
+    for (let i = 0; i < 50 && deliverFramesOfType(py.sock, 'message.created').length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // Delivery routing came for free from the canonical route.
+    expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('requires `from` on a node-token message', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg-from-required');
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const res = await postMessage(nodeToken, 'general', { text: 'hi' });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('from_required');
+  });
+
+  it('rejects a node-token message whose `from` agent does not exist', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg-unknown');
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const res = await postMessage(nodeToken, 'general', { text: 'hi', from: 'ghost' });
+    expect(res.status).toBe(404);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('agent_not_found');
+  });
+
+  it('scopes node-token `from` to the node workspace, rejecting a cross-workspace agent', async () => {
+    const other = await createWorkspace(stack.app, 'nt-msg-other-ws');
+    await registerAgent(stack.app, other.workspaceKey, 'outsider');
+
+    const ws = await createWorkspace(stack.app, 'nt-msg-scope');
+    const nodeToken = await enrollNodeWithToken(ws, 'node_a', 'alpha');
+    const res = await postMessage(nodeToken, 'general', { text: 'hi', from: 'outsider' });
+    expect(res.status).toBe(404);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('agent_not_found');
+  });
+
+  it('rejects `from` on an agent-token message', async () => {
+    const ws = await createWorkspace(stack.app, 'nt-msg-agent-from');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'poster');
+    const other = await registerAgent(stack.app, ws.workspaceKey, 'other');
+    const res = await postMessage(agent.token, 'general', { text: 'hi', from: other.name });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('from_not_allowed');
+  });
+
   it('removes a provider through DELETE /v1/nodes/:node/providers/:name', async () => {
     const ws = await createWorkspace(stack.app, 'np-delete');
     await enrollNode(ws, 'node_a', 'alpha');

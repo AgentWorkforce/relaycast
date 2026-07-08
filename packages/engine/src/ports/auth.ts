@@ -6,7 +6,7 @@ export type Agent = typeof agents.$inferSelect;
 export type Node = typeof nodes.$inferSelect;
 export type ObserverToken = typeof observerTokens.$inferSelect;
 
-export type AuthRequire = 'workspace' | 'agent' | 'node' | 'observer' | 'any';
+export type AuthRequire = 'workspace' | 'agent' | 'node' | 'observer' | 'any' | 'sender';
 
 export type AuthResult =
   | { ok: true; workspace: Workspace; agent?: Agent; node?: Node; observerToken?: ObserverToken }

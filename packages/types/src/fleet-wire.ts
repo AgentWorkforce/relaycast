@@ -163,6 +163,23 @@ export const FleetNodeDeregisterMessageSchema = z
   .strict();
 export type FleetNodeDeregisterMessage = z.infer<typeof FleetNodeDeregisterMessageSchema>;
 
+/**
+ * `node.spawn` — a provider's handler context delegating a spawn to its own
+ * node's capacity executor (the broker provider). Capacity-direct: the engine
+ * bypasses action dispatch, so a `spawn:<harness>` shadow handler that delegates
+ * cannot re-enter itself. The target is always the connection's node — a node
+ * credential cannot direct a spawn at another node (that is workspace-level
+ * placement, which uses agent/workspace credentials).
+ */
+export const FleetNodeSpawnMessageSchema = z
+  .object({
+    ...FleetRequestEnvelopeFields,
+    type: z.literal('node.spawn'),
+    input: z.record(z.string(), FleetWireJsonValueSchema),
+  })
+  .strict();
+export type FleetNodeSpawnMessage = z.infer<typeof FleetNodeSpawnMessageSchema>;
+
 export const FleetAgentRegisterMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
@@ -340,6 +357,7 @@ export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminate
   FleetNodeRegisterMessageSchema,
   FleetNodeHeartbeatMessageSchema,
   FleetNodeDeregisterMessageSchema,
+  FleetNodeSpawnMessageSchema,
   FleetAgentRegisterMessageSchema,
   FleetAgentDeregisterMessageSchema,
   FleetDeliveryAckMessageSchema,

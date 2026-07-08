@@ -127,6 +127,13 @@ export const requireWorkspaceKey = makeAuthMiddleware('workspace');
 /** Accepts either a workspace key or an agent token. */
 export const requireAuth = makeAuthMiddleware('any');
 
+/**
+ * Accepts a workspace key, an agent token, or a node token — the principals that
+ * can post a message. An agent posts as itself; a node posts as an explicit
+ * `from` agent resolved within the node's workspace.
+ */
+export const requireSender = makeAuthMiddleware('sender');
+
 /** Requires an agent token (`at_live_...`). */
 export const requireAgentToken = makeAuthMiddleware('agent');
 

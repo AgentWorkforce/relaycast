@@ -10,6 +10,7 @@ from .client import (
     sanitize_agent_relay_distinct_id,
 )
 from .errors import RelayError
+from .node import NodeProvider, NodeRegistrationError
 from .relay import AsyncRelay, Relay
 from .ws import WsClient
 
@@ -23,6 +24,8 @@ __all__ = [
     "AsyncHttpClient",
     "AsyncRelay",
     "HttpClient",
+    "NodeProvider",
+    "NodeRegistrationError",
     "Relay",
     "RelayError",
     "SDK_VERSION",
