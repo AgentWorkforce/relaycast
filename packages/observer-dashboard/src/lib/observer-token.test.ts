@@ -125,6 +125,15 @@ describe('mintObserverStreamToken', () => {
     ).resolves.toBeNull();
   });
 
+  it('fails soft to null when a network request rejects', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch(new Error('dns failed'));
+
+    await expect(
+      mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
+    ).resolves.toBeNull();
+  });
+
   it('rejects token material that is not an observer token', async () => {
     mockFetch(
       jsonResponse({ ok: true, data: { id: 'ot_1', token: 'rk_live_leaked' } }, 201)

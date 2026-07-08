@@ -117,48 +117,59 @@ export async function mintObserverStreamToken(
   baseUrl: string,
   adminKey: string
 ): Promise<string | null> {
-  const jsonAuthHeaders = {
-    Authorization: `Bearer ${adminKey}`,
-    'Content-Type': 'application/json',
-  };
-  const payload = dashboardTokenPayload();
-  const collectionUrl = new URL('/v1/observer-tokens', baseUrl).toString();
+  // Fail soft: any network rejection (DNS, timeout, unreachable engine) from
+  // the requests below returns null so the caller can fall back to a REST-only
+  // login instead of surfacing a hard 500.
+  try {
+    const jsonAuthHeaders = {
+      Authorization: `Bearer ${adminKey}`,
+      'Content-Type': 'application/json',
+    };
+    const payload = dashboardTokenPayload();
+    const collectionUrl = new URL('/v1/observer-tokens', baseUrl).toString();
 
-  const created = await fetch(collectionUrl, {
-    method: 'POST',
-    headers: jsonAuthHeaders,
-    cache: 'no-store',
-    body: JSON.stringify(payload),
-  });
-  if (created.ok) return readTokenMaterial(created);
-  // Only a name conflict (token already exists) is recoverable via reuse.
-  if (created.status !== 409) return null;
+    const created = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: jsonAuthHeaders,
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+    });
+    if (created.ok) return readTokenMaterial(created);
+    // Only a name conflict (token already exists) is recoverable via reuse.
+    if (created.status !== 409) return null;
 
-  const existingId = await findExistingTokenId(collectionUrl, adminKey);
-  if (!existingId) return null;
+    const existingId = await findExistingTokenId(collectionUrl, adminKey);
+    if (!existingId) return null;
 
-  const tokenUrl = new URL(
-    `/v1/observer-tokens/${existingId}`,
-    baseUrl
-  ).toString();
-  // Refresh scopes/filters/expiry so the rotated token reflects the current
-  // dashboard preset and never rotates into an already-expired window.
-  await fetch(tokenUrl, {
-    method: 'PATCH',
-    headers: jsonAuthHeaders,
-    cache: 'no-store',
-    body: JSON.stringify({
-      scopes: payload.scopes,
-      filters: payload.filters,
-      expires_at: payload.expires_at,
-    }),
-  });
+    const tokenUrl = new URL(
+      `/v1/observer-tokens/${existingId}`,
+      baseUrl
+    ).toString();
+    // Refresh scopes/filters/expiry so the rotated token reflects the current
+    // dashboard preset and never rotates into an already-expired window.
+    await fetch(tokenUrl, {
+      method: 'PATCH',
+      headers: jsonAuthHeaders,
+      cache: 'no-store',
+      body: JSON.stringify({
+        scopes: payload.scopes,
+        filters: payload.filters,
+        expires_at: payload.expires_at,
+      }),
+    });
 
-  const rotated = await fetch(`${tokenUrl}/rotate`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${adminKey}` },
-    cache: 'no-store',
-  });
-  if (!rotated.ok) return null;
-  return readTokenMaterial(rotated);
+    const rotated = await fetch(`${tokenUrl}/rotate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` },
+      cache: 'no-store',
+    });
+    if (!rotated.ok) return null;
+    return readTokenMaterial(rotated);
+  } catch (error) {
+    console.error(
+      '[mintObserverStreamToken] Failed to mint/rotate observer token:',
+      error
+    );
+    return null;
+  }
 }
