@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mintObserverStreamToken } from './observer-token';
+import {
+  mintObserverStreamToken,
+  revokeObserverStreamToken,
+} from './observer-token';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -27,14 +30,14 @@ describe('mintObserverStreamToken', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates a scoped observer token and returns its material', async () => {
+  it('creates a fresh, uniquely-named scoped token and returns token + id', async () => {
     const fetchMock = mockFetch(
       jsonResponse({ ok: true, data: { id: 'ot_1', token: 'ot_live_new' } }, 201)
     );
 
     await expect(
       mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
-    ).resolves.toBe('ot_live_new');
+    ).resolves.toEqual({ token: 'ot_live_new', id: 'ot_1' });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -42,52 +45,28 @@ describe('mintObserverStreamToken', () => {
     expect(init.method).toBe('POST');
     expect(init.headers.Authorization).toBe('Bearer rk_live_admin');
     const body = JSON.parse(init.body);
-    expect(body.name).toBe('observer-dashboard');
+    expect(body.name).toMatch(/^observer-dashboard-/);
     expect(body.scopes).toContain('stream:read');
     expect(body.scopes).toContain('dms:read');
     expect(body.filters).toEqual({ include_dms: true });
     expect(typeof body.expires_at).toBe('string');
   });
 
-  it('reuses the existing token by rotating it on a name conflict', async () => {
+  it('mints a distinct token name on each call', async () => {
     const fetchMock = mockFetch(
-      jsonResponse(
-        { ok: false, error: { code: 'observer_token_name_conflict' } },
-        409
-      ),
-      jsonResponse({
-        ok: true,
-        data: [
-          { id: 'ot_old', name: 'observer-dashboard', status: 'active' },
-          { id: 'ot_dead', name: 'observer-dashboard', status: 'revoked' },
-        ],
-      }),
-      jsonResponse({ ok: true, data: { id: 'ot_old' } }),
-      jsonResponse({ ok: true, data: { id: 'ot_old', token: 'ot_live_rotated' } })
+      jsonResponse({ ok: true, data: { id: 'ot_1', token: 'ot_live_a' } }, 201),
+      jsonResponse({ ok: true, data: { id: 'ot_2', token: 'ot_live_b' } }, 201)
     );
 
-    await expect(
-      mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
-    ).resolves.toBe('ot_live_rotated');
+    await mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin');
+    await mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin');
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      'https://cast.agentrelay.com/v1/observer-tokens',
-      expect.objectContaining({ method: 'GET' })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      'https://cast.agentrelay.com/v1/observer-tokens/ot_old',
-      expect.objectContaining({ method: 'PATCH' })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
-      'https://cast.agentrelay.com/v1/observer-tokens/ot_old/rotate',
-      expect.objectContaining({ method: 'POST' })
-    );
+    const nameA = JSON.parse(fetchMock.mock.calls[0][1].body).name;
+    const nameB = JSON.parse(fetchMock.mock.calls[1][1].body).name;
+    expect(nameA).not.toBe(nameB);
   });
 
-  it('returns null when creation fails for a non-conflict reason', async () => {
+  it('returns null when creation fails', async () => {
     mockFetch(jsonResponse({ ok: false }, 401));
 
     await expect(
@@ -95,37 +74,7 @@ describe('mintObserverStreamToken', () => {
     ).resolves.toBeNull();
   });
 
-  it('returns null when no active token exists to rotate on conflict', async () => {
-    mockFetch(
-      jsonResponse({ ok: false }, 409),
-      jsonResponse({
-        ok: true,
-        data: [{ id: 'ot_dead', name: 'observer-dashboard', status: 'revoked' }],
-      })
-    );
-
-    await expect(
-      mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
-    ).resolves.toBeNull();
-  });
-
-  it('returns null when rotation fails', async () => {
-    mockFetch(
-      jsonResponse({ ok: false }, 409),
-      jsonResponse({
-        ok: true,
-        data: [{ id: 'ot_old', name: 'observer-dashboard', status: 'active' }],
-      }),
-      jsonResponse({ ok: true, data: { id: 'ot_old' } }),
-      jsonResponse({ ok: false }, 500)
-    );
-
-    await expect(
-      mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
-    ).resolves.toBeNull();
-  });
-
-  it('fails soft to null when a network request rejects', async () => {
+  it('fails soft to null when the network request rejects', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mockFetch(new Error('dns failed'));
 
@@ -134,7 +83,7 @@ describe('mintObserverStreamToken', () => {
     ).resolves.toBeNull();
   });
 
-  it('rejects token material that is not an observer token', async () => {
+  it('rejects a response missing token material or id', async () => {
     mockFetch(
       jsonResponse({ ok: true, data: { id: 'ot_1', token: 'rk_live_leaked' } }, 201)
     );
@@ -142,5 +91,43 @@ describe('mintObserverStreamToken', () => {
     await expect(
       mintObserverStreamToken('https://cast.agentrelay.com', 'rk_live_admin')
     ).resolves.toBeNull();
+  });
+});
+
+describe('revokeObserverStreamToken', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('sends DELETE for the token id with the admin key', async () => {
+    const fetchMock = mockFetch(new Response(null, { status: 204 }));
+
+    await revokeObserverStreamToken(
+      'https://cast.agentrelay.com',
+      'rk_live_admin',
+      'ot_1'
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://cast.agentrelay.com/v1/observer-tokens/ot_1',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer rk_live_admin' },
+      })
+    );
+  });
+
+  it('swallows network errors so logout can still clear cookies', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch(new Error('unreachable'));
+
+    await expect(
+      revokeObserverStreamToken(
+        'https://cast.agentrelay.com',
+        'rk_live_admin',
+        'ot_1'
+      )
+    ).resolves.toBeUndefined();
   });
 });

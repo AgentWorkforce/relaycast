@@ -76,10 +76,12 @@ export async function GET(request: NextRequest) {
     authenticated: true,
     apiKey,
     agentToken: agentToken ?? apiKey,
-    // Prefer the observer stream token minted at login. Sessions created before
-    // the ws-token cookie existed fall back to the login credential; those
-    // workspace-key sessions re-mint a working stream token on next login.
-    wsToken: wsToken ?? apiKey,
+    // The stream credential is the observer token minted at login (or an
+    // `ot_live_` login credential). It is intentionally NOT backfilled from the
+    // workspace admin key: the realtime socket must never carry an admin key.
+    // A workspace-key session with no ws token (mint failed, or a session
+    // created before this cookie existed) has no live stream until next login.
+    wsToken: wsToken ?? null,
     baseUrl,
   });
 }

@@ -9,7 +9,7 @@ import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 interface Session {
   apiKey: string;
   agentToken: string;
-  wsToken: string;
+  wsToken: string | null;
   baseUrl: string;
 }
 
@@ -53,7 +53,9 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,
-            wsToken: data.wsToken ?? data.apiKey,
+            // Never fall back to the REST/admin credential for the socket; a
+            // missing stream token means the realtime stream stays offline.
+            wsToken: data.wsToken ?? null,
             baseUrl: data.baseUrl,
           });
           if (keyParam) router.replace('/');
@@ -86,8 +88,13 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
   return (
     <RelayProvider
       apiKey={session.apiKey}
-      agentToken={session.agentToken}
-      wsToken={session.wsToken}
+      // The socket credential is resolved as `wsToken ?? agentToken`, so keep
+      // the admin key out of both: the realtime socket must only ever use the
+      // observer stream token (empty when there is none, so it never falls back
+      // to the REST/admin key). REST reads still use `apiKey`. The dashboard is
+      // observer-only and never uses the agent (REST-as-agent) client.
+      agentToken={session.wsToken ?? ''}
+      wsToken={session.wsToken ?? undefined}
       baseUrl={session.baseUrl}
       debug
     >

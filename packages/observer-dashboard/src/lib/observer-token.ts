@@ -4,13 +4,20 @@
  * The engine rejects the root workspace key (`rk_live_`) on the realtime
  * endpoint (`GET /v1/ws`) — only a scoped observer token (`ot_live_`) with
  * `stream:read` may open the workspace stream. So when an operator logs into
- * the dashboard with a workspace admin key, we mint (or reuse) a read-only
- * observer token on their behalf and hand *that* to the stream, instead of
- * pushing the root key onto a long-lived browser socket.
+ * the dashboard with a workspace admin key, we mint a read-only observer token
+ * on their behalf and hand *that* to the stream, so the socket never carries a
+ * workspace admin key.
+ *
+ * Each login mints a fresh, uniquely-named token (revoked on logout, expiring
+ * after 30 days). This deliberately avoids reusing a single fixed-name token:
+ * a shared token would have to be rotated to hand out usable material (token
+ * secrets are never retrievable after creation), which invalidates other live
+ * dashboard sessions, and a revoked fixed name would permanently block
+ * re-minting under the engine's unique (workspace_id, name) constraint.
  */
 
-/** Fixed cookie/name for the dashboard's per-workspace observer token. */
-const DASHBOARD_OBSERVER_TOKEN_NAME = 'observer-dashboard';
+/** Name prefix for tokens this dashboard mints; each mint appends a unique id. */
+const DASHBOARD_OBSERVER_TOKEN_PREFIX = 'observer-dashboard';
 
 /**
  * Token lifetime, matched to the dashboard auth cookie (30 days) so the minted
@@ -41,135 +48,98 @@ const DASHBOARD_OBSERVER_SCOPES = [
   'reactions:read',
 ] as const;
 
-interface DashboardObserverTokenPayload {
-  name: string;
-  description: string;
-  scopes: readonly string[];
-  filters: { include_dms: boolean };
-  expires_at: string;
+export interface MintedObserverToken {
+  /** Raw `ot_live_` token material for the workspace stream. */
+  token: string;
+  /** Observer-token id (`ot_...`), used to revoke the token on logout. */
+  id: string;
 }
 
-function dashboardTokenPayload(): DashboardObserverTokenPayload {
-  return {
-    name: DASHBOARD_OBSERVER_TOKEN_NAME,
-    description: 'Auto-minted for the Relaycast observer dashboard live stream',
-    scopes: DASHBOARD_OBSERVER_SCOPES,
-    // The operator holds the workspace key, so DM visibility is not an
-    // escalation — keep the dashboard's existing firehose view intact.
-    filters: { include_dms: true },
-    expires_at: new Date(
-      Date.now() + DASHBOARD_OBSERVER_TOKEN_TTL_MS
-    ).toISOString(),
-  };
-}
-
-async function readTokenMaterial(res: Response): Promise<string | null> {
+/**
+ * Mint a fresh, uniquely-named scoped observer token using a workspace admin
+ * key, for the workspace stream.
+ *
+ * Returns `{ token, id }`, or `null` if minting failed (network error or a
+ * non-2xx response). Callers should let REST-only login proceed on `null`
+ * rather than block the operator — and must NOT fall back to the workspace
+ * admin key for the stream credential.
+ */
+export async function mintObserverStreamToken(
+  baseUrl: string,
+  adminKey: string
+): Promise<MintedObserverToken | null> {
+  // Fail soft: any network rejection (DNS, timeout, unreachable engine) returns
+  // null so the caller can fall back to a REST-only login instead of surfacing
+  // a hard 500.
   try {
+    const payload = {
+      name: `${DASHBOARD_OBSERVER_TOKEN_PREFIX}-${crypto.randomUUID()}`,
+      description: 'Auto-minted for the Relaycast observer dashboard live stream',
+      scopes: DASHBOARD_OBSERVER_SCOPES,
+      // The operator holds the workspace key, so DM visibility is not an
+      // escalation — keep the dashboard's existing firehose view intact.
+      filters: { include_dms: true },
+      expires_at: new Date(
+        Date.now() + DASHBOARD_OBSERVER_TOKEN_TTL_MS
+      ).toISOString(),
+    };
+
+    const res = await fetch(new URL('/v1/observer-tokens', baseUrl).toString(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminKey}`,
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return null;
+
     const body = await res.json();
     const token = body?.data?.token;
-    return typeof token === 'string' && token.startsWith('ot_live_')
-      ? token
-      : null;
-  } catch {
+    const id = body?.data?.id;
+    if (
+      typeof token === 'string' &&
+      token.startsWith('ot_live_') &&
+      typeof id === 'string' &&
+      id.length > 0
+    ) {
+      return { token, id };
+    }
     return null;
-  }
-}
-
-async function findExistingTokenId(
-  collectionUrl: string,
-  adminKey: string
-): Promise<string | null> {
-  const res = await fetch(collectionUrl, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${adminKey}` },
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
-  try {
-    const body = await res.json();
-    const tokens: Array<{ id?: string; name?: string; status?: string }> =
-      Array.isArray(body?.data) ? body.data : [];
-    const match = tokens.find(
-      (t) => t?.name === DASHBOARD_OBSERVER_TOKEN_NAME && t?.status === 'active'
+  } catch (error) {
+    console.error(
+      '[mintObserverStreamToken] Failed to mint observer token:',
+      error
     );
-    return typeof match?.id === 'string' ? match.id : null;
-  } catch {
     return null;
   }
 }
 
 /**
- * Mint (or reuse) the dashboard's scoped observer token using a workspace admin
- * key, and return the raw `ot_live_` token for the workspace stream.
- *
- * A single durable `observer-dashboard` token is kept per workspace: it is
- * created on first login and rotated on subsequent logins. Rotation is required
- * because token material is never retrievable after creation — so reuse means
- * refreshing the existing token's scopes/expiry and rotating it to obtain a new
- * usable secret. (Trade-off: a login invalidates any other browser still using
- * the previous secret; that session re-syncs on its next `/api/auth/session`
- * poll or re-login. Acceptable for an operator dashboard.)
- *
- * Returns `null` if minting failed; callers should let REST-only login proceed
- * rather than block the operator on a stream-token failure.
+ * Best-effort revocation of a minted observer token on logout, so a leaked ws
+ * cookie value stops working immediately instead of lingering until expiry.
+ * Requires the workspace admin key (only it may revoke observer tokens). Any
+ * failure is swallowed — logout must clear cookies regardless.
  */
-export async function mintObserverStreamToken(
+export async function revokeObserverStreamToken(
   baseUrl: string,
-  adminKey: string
-): Promise<string | null> {
-  // Fail soft: any network rejection (DNS, timeout, unreachable engine) from
-  // the requests below returns null so the caller can fall back to a REST-only
-  // login instead of surfacing a hard 500.
+  adminKey: string,
+  tokenId: string
+): Promise<void> {
   try {
-    const jsonAuthHeaders = {
-      Authorization: `Bearer ${adminKey}`,
-      'Content-Type': 'application/json',
-    };
-    const payload = dashboardTokenPayload();
-    const collectionUrl = new URL('/v1/observer-tokens', baseUrl).toString();
-
-    const created = await fetch(collectionUrl, {
-      method: 'POST',
-      headers: jsonAuthHeaders,
-      cache: 'no-store',
-      body: JSON.stringify(payload),
-    });
-    if (created.ok) return readTokenMaterial(created);
-    // Only a name conflict (token already exists) is recoverable via reuse.
-    if (created.status !== 409) return null;
-
-    const existingId = await findExistingTokenId(collectionUrl, adminKey);
-    if (!existingId) return null;
-
-    const tokenUrl = new URL(
-      `/v1/observer-tokens/${existingId}`,
-      baseUrl
-    ).toString();
-    // Refresh scopes/filters/expiry so the rotated token reflects the current
-    // dashboard preset and never rotates into an already-expired window.
-    await fetch(tokenUrl, {
-      method: 'PATCH',
-      headers: jsonAuthHeaders,
-      cache: 'no-store',
-      body: JSON.stringify({
-        scopes: payload.scopes,
-        filters: payload.filters,
-        expires_at: payload.expires_at,
-      }),
-    });
-
-    const rotated = await fetch(`${tokenUrl}/rotate`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${adminKey}` },
-      cache: 'no-store',
-    });
-    if (!rotated.ok) return null;
-    return readTokenMaterial(rotated);
+    await fetch(
+      new URL(`/v1/observer-tokens/${tokenId}`, baseUrl).toString(),
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${adminKey}` },
+        cache: 'no-store',
+      }
+    );
   } catch (error) {
     console.error(
-      '[mintObserverStreamToken] Failed to mint/rotate observer token:',
+      '[revokeObserverStreamToken] Failed to revoke observer token:',
       error
     );
-    return null;
   }
 }

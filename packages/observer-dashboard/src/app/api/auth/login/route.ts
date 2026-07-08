@@ -11,6 +11,7 @@ export const runtime = 'edge';
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
 const WS_TOKEN_COOKIE_NAME = 'relaycast_ws_token';
+const WS_TOKEN_ID_COOKIE_NAME = 'relaycast_ws_token_id';
 const ENGINE_COOKIE_NAME = 'relaycast_engine';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -23,9 +24,13 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  * observer token (`ot_live_...`). The credential is used for read-only REST
  * (the engine enforces observer scope restrictions on every request), but the
  * realtime endpoint (`GET /v1/ws`) accepts *only* an observer token with
- * `stream:read`. So when the login credential is a workspace key we mint (or
- * reuse) a scoped observer token here and use that as the stream credential;
- * an `ot_live_` login already works on the stream directly.
+ * `stream:read`. So when the login credential is a workspace key we mint a
+ * scoped observer token here and use that as the stream credential; an
+ * `ot_live_` login already works on the stream directly.
+ *
+ * The workspace admin key is never used as the stream credential: if minting
+ * fails, the stream token is left unset (the realtime socket simply does not
+ * connect) rather than handing an admin key to a long-lived browser socket.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -61,16 +66,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // The workspace stream requires an observer token. A workspace-key login
-    // mints one on the operator's behalf; an observer-token login is already a
-    // valid stream credential. On mint failure, fall back to the login
-    // credential so REST-only login still succeeds (the stream will be refused
-    // by the engine, but that is no worse than not attempting the mint).
-    let wsToken = apiKey;
-    if (apiKey.startsWith('rk_live_')) {
+    // Resolve the stream credential. An observer-token login is already a valid
+    // stream credential; a workspace-key login mints a scoped observer token.
+    // The admin key is never used for the stream — on mint failure the stream
+    // token stays unset (null) and the realtime socket does not connect.
+    let wsToken: string | null = null;
+    let wsTokenId: string | null = null;
+    if (apiKey.startsWith('ot_live_')) {
+      wsToken = apiKey;
+    } else {
       const minted = await mintObserverStreamToken(relayServer, apiKey);
       if (minted) {
-        wsToken = minted;
+        wsToken = minted.token;
+        wsTokenId = minted.id;
       } else {
         console.error(
           '[api/auth/login] Failed to mint observer stream token for workspace key'
@@ -95,8 +103,19 @@ export async function POST(request: NextRequest) {
     cookieStore.set(AGENT_COOKIE_NAME, apiKey, cookieOptions);
 
     // Stream credential (observer token) kept separate from the REST key so the
-    // realtime socket never carries a workspace admin key.
-    cookieStore.set(WS_TOKEN_COOKIE_NAME, wsToken, cookieOptions);
+    // realtime socket never carries a workspace admin key. When there is no
+    // stream token, clear any stale cookies rather than leaving an old one.
+    if (wsToken) {
+      cookieStore.set(WS_TOKEN_COOKIE_NAME, wsToken, cookieOptions);
+    } else {
+      cookieStore.delete(WS_TOKEN_COOKIE_NAME);
+    }
+    // Remember the minted token id so logout can revoke it on the engine.
+    if (wsTokenId) {
+      cookieStore.set(WS_TOKEN_ID_COOKIE_NAME, wsTokenId, cookieOptions);
+    } else {
+      cookieStore.delete(WS_TOKEN_ID_COOKIE_NAME);
+    }
 
     // Remember the resolved engine so session/check/logout target it directly
     // without re-probing both engines on every request.
