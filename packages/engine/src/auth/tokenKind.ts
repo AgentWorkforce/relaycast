@@ -65,7 +65,7 @@ export function getAuthTokenKind(token: string): AuthTokenKind | undefined {
   return parseAuthToken(token)?.kind;
 }
 
-export function requiredTokenMessage(kind: Exclude<AuthRequire, 'any'>): string {
+export function requiredTokenMessage(kind: Exclude<AuthRequire, 'any' | 'sender'>): string {
   return tokenKindConfig[kind].requiredMessage;
 }
 
@@ -77,6 +77,9 @@ const allowedKindsByRequire = {
   // `any` intentionally means user/workspace API credentials, not transport-only
   // node credentials or scoped observer credentials.
   any: ['workspace', 'agent'],
+  // `sender` is a principal that can post a message: a workspace key, an agent
+  // (posts as itself), or a node token (posts as an explicit `from` agent).
+  sender: ['workspace', 'agent', 'node'],
 } as const satisfies Record<AuthRequire, readonly AuthTokenKind[]>;
 
 export type AuthRequirementValidation =
@@ -108,7 +111,7 @@ export function validateTokenRequirement(
     };
   }
 
-  if (require === 'any') {
+  if (require === 'any' || require === 'sender') {
     return { ok: false, code: 'unauthorized', message: 'Invalid token format' };
   }
 

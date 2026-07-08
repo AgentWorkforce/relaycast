@@ -460,14 +460,7 @@ export class NodeProviderClient {
     return {
       node: { name: this.nodeName, capabilities: [...this.capabilities.keys()] },
       invocationId,
-      sendMessage: (input) => this.request(randomId(), {
-        type: 'node.message',
-        to: input.to,
-        from: input.from,
-        text: input.text,
-        ...(input.mode ? { mode: input.mode } : {}),
-        ...(input.data ? { data: input.data } : {}),
-      }),
+      sendMessage: (input) => this.postChannelMessage(input),
       // Capacity-direct: the engine always targets this connection's own node,
       // so the frame carries no node target.
       spawnAgent: (input) => this.request(randomId(), {
@@ -475,6 +468,31 @@ export class NodeProviderClient {
         input,
       }),
     };
+  }
+
+  /**
+   * Post a channel message through the canonical message route with the node
+   * token, attributed to `input.from`. Node-attributed posts share the route's
+   * delivery routing, observer events, and triggers by construction.
+   */
+  private async postChannelMessage(input: NodeSendMessageInput): Promise<unknown> {
+    const url = `${this.baseUrl}/v1/channels/${encodeURIComponent(input.to)}/messages`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.nodeToken}` },
+      body: JSON.stringify({
+        text: input.text,
+        from: input.from,
+        ...(input.mode ? { mode: input.mode } : {}),
+        ...(input.data ? { data: input.data } : {}),
+      }),
+    });
+    const body = await res.json().catch(() => ({})) as { data?: unknown; error?: { code?: string; message?: string } };
+    if (!res.ok) {
+      const code = body.error?.code ?? `http_${res.status}`;
+      throw new Error(`sendMessage to "${input.to}" failed (${code})${body.error?.message ? `: ${body.error.message}` : ''}`);
+    }
+    return body.data ?? body;
   }
 
   /** Send a request frame keyed by `id` and await its reply/error. */

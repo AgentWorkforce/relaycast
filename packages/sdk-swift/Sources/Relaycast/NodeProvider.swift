@@ -165,6 +165,7 @@ public enum NodeProviderError: Error, LocalizedError, Sendable, Equatable {
     case reconnectAttemptsExhausted
     case encodingFailed
     case invalidRegisterReply
+    case messageFailed(code: String, message: String)
 
     public var errorDescription: String? {
         switch self {
@@ -174,6 +175,7 @@ public enum NodeProviderError: Error, LocalizedError, Sendable, Equatable {
         case .reconnectAttemptsExhausted: return "node provider exhausted reconnect attempts"
         case .encodingFailed: return "failed to encode node provider frame"
         case .invalidRegisterReply: return "node provider received an invalid node.register reply"
+        case .messageFailed(let code, let message): return "sendMessage failed (\(code)): \(message)"
         }
     }
 }
@@ -271,6 +273,7 @@ public actor NodeProvider {
     private let maxReconnectAttempts: Int
     private let onError: (@Sendable (Error) -> Void)?
     private let makeTransport: @Sendable () -> NodeTransport
+    private let httpSession: URLSession
 
     private var capabilityOrder: [String] = []
     private var capabilityHandlers: [String: RegisteredCapability] = [:]
@@ -325,6 +328,7 @@ public actor NodeProvider {
         self.maxReconnectAttempts = maxReconnectAttempts
         self.onError = onError
 
+        self.httpSession = session
         if let transportFactory {
             self.makeTransport = transportFactory
         } else {
@@ -664,7 +668,7 @@ public actor NodeProvider {
             invocationID: invocationID,
             sendMessageImpl: { [weak self] to, from, text, mode, data in
                 guard let self else { throw NodeProviderError.stopped }
-                return try await self.sendMessageFrame(to: to, from: from, text: text, mode: mode, data: data)
+                return try await self.postChannelMessage(to: to, from: from, text: text, mode: mode, data: data)
             },
             spawnAgentImpl: { [weak self] input in
                 guard let self else { throw NodeProviderError.stopped }
@@ -673,22 +677,51 @@ public actor NodeProvider {
         )
     }
 
-    private func sendMessageFrame(
+    /// Post a channel message through the canonical message route with the node
+    /// token, attributed to `from`. Node-attributed posts share the route's
+    /// delivery routing, observer events, and triggers by construction.
+    private func postChannelMessage(
         to: String,
         from: String,
         text: String,
         mode: NodeMessageMode?,
         data: [String: JSONValue]?
     ) async throws -> JSONValue {
-        var payload: [String: JSONValue] = [
-            "type": .string("node.message"),
-            "to": .string(to),
-            "from": .string(from),
-            "text": .string(text)
-        ]
+        var payload: [String: JSONValue] = ["text": .string(text), "from": .string(from)]
         if let mode { payload["mode"] = .string(mode.rawValue) }
         if let data { payload["data"] = .object(data) }
-        return try await request(payload)
+
+        guard let url = NodeProvider.channelMessageURL(baseURL: baseURL, channel: to) else {
+            throw NodeProviderError.encodingFailed
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(nodeToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (respData, response) = try await httpSession.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let decoded = try? JSONDecoder().decode(JSONValue.self, from: respData)
+        if status >= 300 {
+            var code = "http_\(status)"
+            var message = "sendMessage to \"\(to)\" failed"
+            if case .object(let obj)? = decoded, case .object(let err)? = obj["error"] {
+                if case .string(let c)? = err["code"] { code = c }
+                if case .string(let m)? = err["message"] { message = m }
+            }
+            throw NodeProviderError.messageFailed(code: code, message: message)
+        }
+        if case .object(let obj)? = decoded, let dataVal = obj["data"] {
+            return dataVal
+        }
+        return decoded ?? .null
+    }
+
+    private static func channelMessageURL(baseURL: String, channel: String) -> URL? {
+        let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+        let encoded = channel.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? channel
+        return URL(string: "\(trimmed)/v1/channels/\(encoded)/messages")
     }
 
     private func spawnAgentFrame(_ input: [String: JSONValue]) async throws -> JSONValue {

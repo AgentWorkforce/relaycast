@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { and, eq } from 'drizzle-orm';
+import { agents } from '../db/schema.js';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
+import { requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
@@ -40,6 +42,9 @@ const postMessageSchema = z.object({
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   content_type: z.string().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
+  // Node-token posts attribute the message to `from` — an agent name resolved
+  // strictly within the node token's workspace. Agent-token posts must omit it.
+  from: z.string().min(1).optional(),
 });
 
 type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
@@ -58,18 +63,19 @@ function postMessageInvalidMessage(failure: ValidationFailure) {
 // POST /v1/channels/:name/messages - post a message
 messageRoutes.post(
   '/channels/:name/messages',
-  requireAuth,
+  requireSender,
   rateLimit,
   async (c) => {
     try {
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
+      const node = c.get('node');
       const parsed = await parseJsonBody(c, postMessageSchema, postMessageInvalidMessage);
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { text, blocks, attachments, data, content_type, mode } = parsed.data;
+      const { text, blocks, attachments, data, content_type, mode, from } = parsed.data;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -84,33 +90,55 @@ messageRoutes.post(
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
       }
 
-      // Determine agent ID (from agent token or body)
-      const agentId = agent?.id;
-      if (!agentId) {
-        return jsonError(c, 'agent_token_required', 'Agent token required to post messages', 403);
+      // Resolve the sender. An agent token posts as itself; a node token posts
+      // as `from`, an agent resolved strictly within the node's workspace (so a
+      // node credential can never attribute a message to another workspace).
+      let senderAgentId: string;
+      let senderAgentName: string;
+      if (agent) {
+        if (from !== undefined) {
+          return jsonError(c, 'from_not_allowed', '"from" is only valid with a node token', 400);
+        }
+        senderAgentId = agent.id;
+        senderAgentName = agent.name;
+      } else if (node) {
+        if (!from) {
+          return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
+        }
+        const [fromAgent] = await db
+          .select({ id: agents.id, name: agents.name })
+          .from(agents)
+          .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
+        if (!fromAgent) {
+          return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
+        }
+        senderAgentId = fromAgent.id;
+        senderAgentName = fromAgent.name;
+      } else {
+        return jsonError(c, 'agent_token_required', 'Agent or node token required to post messages', 403);
       }
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
       const toMessageCreatedEventData = (data: Awaited<ReturnType<typeof messageEngine.postMessage>>) => buildMessageCreatedEventData(data, {
         channelName,
-        fromName: agent?.name ?? 'unknown',
+        fromName: senderAgentName,
         mode,
       });
 
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
-        actorId: agentId,
+        actorId: senderAgentId,
         scope: `channel-message:${channel.id}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode }),
+        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode, from }),
         kv: c.get('engine').kv,
         operation: () =>
           messageEngine.postMessage(
             db,
             workspace.id,
             channel.id,
-            agentId,
+            senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
             { mailbox },
           ),
@@ -146,7 +174,7 @@ messageRoutes.post(
         if (_delivery_rejections && _delivery_rejections.length > 0) {
           runInBackground(
             c,
-            notifyDeliveryRejections(c, agentId, _delivery_rejections),
+            notifyDeliveryRejections(c, senderAgentId, _delivery_rejections),
             'fanout delivery rejected',
           );
         }
@@ -170,8 +198,8 @@ messageRoutes.post(
                 id: String(publicData.id),
                 channel_id: channel.id,
                 channel_name: channelName,
-                agent_id: agentId,
-                agent_name: agent?.name,
+                agent_id: senderAgentId,
+                agent_name: senderAgentName,
                 text: String(publicData.text ?? text),
                 mentions: Array.isArray(publicData.mentions) ? publicData.mentions as string[] : [],
                 metadata: (publicData.metadata ?? null) as Record<string, unknown> | null,

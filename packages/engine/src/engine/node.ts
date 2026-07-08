@@ -39,11 +39,6 @@ import {
 import { emitInvocationCompletionEffects } from './invocationCompletion.js';
 import type { InvocationCompletionDeps } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
-import { getChannel } from './channel.js';
-import { postMessage } from './message.js';
-import { buildMessageCreatedEventData } from './deliveryWire.js';
-import { transformForClient } from './wsTransform.js';
-import { appendAndPublishWorkspaceEvent } from './workspaceEvents.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -1456,58 +1451,6 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           type: 'reply',
           ok: true,
           data: result as Record<string, unknown>,
-        });
-        return;
-      }
-      case 'node.message': {
-        // Handler-context `ctx.sendMessage`: post a channel message attributed
-        // to `from` (an agent resolved by name in the workspace).
-        const channel = await getChannel(args.db, args.workspaceId, message.to);
-        if (!channel) {
-          throw codedError(`Channel "${message.to}" not found`, 'channel_not_found', 404);
-        }
-        const [fromAgent] = await args.db
-          .select({ id: agents.id, name: agents.name })
-          .from(agents)
-          .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, message.from)));
-        if (!fromAgent) {
-          throw codedError(`Agent "${message.from}" not found`, 'agent_not_found', 404);
-        }
-        const posted = await postMessage(args.db, args.workspaceId, channel.id, fromAgent.id, {
-          text: message.text,
-          ...(message.data ? { data: message.data } : {}),
-          ...(message.mode ? { mode: message.mode } : {}),
-        });
-        // Fan out to workspace observers, mirroring the message route's publish.
-        if (args.completionDeps) {
-          const eventData = buildMessageCreatedEventData(posted as unknown as Record<string, unknown>, {
-            channelName: message.to,
-            fromName: fromAgent.name,
-            ...(message.mode ? { mode: message.mode } : {}),
-          });
-          const payload = transformForClient({
-            type: 'message.created',
-            workspace_id: args.workspaceId,
-            channel_id: channel.id,
-            data: eventData,
-            timestamp: new Date().toISOString(),
-          });
-          await appendAndPublishWorkspaceEvent(
-            { db: args.completionDeps.db, realtime: args.completionDeps.realtime },
-            args.workspaceId,
-            { type: 'message.created', channelId: channel.id, payload },
-          );
-        }
-        const { _deliveries, _delivery_rejections, ...publicMessage } = posted as typeof posted & {
-          _deliveries?: unknown;
-          _delivery_rejections?: unknown;
-        };
-        sendControl(args.socket, {
-          v: 1,
-          id: requestId(message),
-          type: 'reply',
-          ok: true,
-          data: publicMessage as Record<string, unknown>,
         });
         return;
       }

@@ -324,7 +324,14 @@ describe('NodeProviderClient', () => {
     expect(spawnResult).toMatchObject({ invocation_id: 'spawned-1' });
   });
 
-  it('ctx.sendMessage sends a node.message frame and resolves with the reply', async () => {
+  it('ctx.sendMessage posts to the canonical channel route with the node token', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return { ok: true, status: 201, json: async () => ({ data: { id: 'm-1', text: 'done' } }) } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
     let posted: unknown;
     const node = new NodeProviderClient({
       ...baseOptions,
@@ -342,12 +349,15 @@ describe('NodeProviderClient', () => {
     await node.whenRegistered();
 
     sock.emit({ v: 1, type: 'action.invoke', invocation_id: 'inv-msg', action: 'run-etl', input: {} });
-    await vi.waitFor(() => expect(sock.sentOfType('node.message')).toHaveLength(1));
-    const msg = sock.sentOfType('node.message').at(-1)!;
-    expect(msg).toMatchObject({ to: 'ops', from: 'reporter', text: 'done' });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const call = calls[0]!;
+    expect(call.url).toBe('https://engine.test/v1/channels/ops/messages');
+    expect((call.init.headers as Record<string, string>).authorization).toBe('Bearer nt_live_test');
+    expect(JSON.parse(call.init.body as string)).toEqual({ text: 'done', from: 'reporter' });
 
-    sock.emit({ v: 1, id: msg.id, type: 'reply', ok: true, data: { id: 'm-1', text: 'done' } });
     await vi.waitFor(() => expect(posted).toBeTruthy());
     expect(posted).toMatchObject({ id: 'm-1' });
+    // No node.message frame is sent over the socket — posting is HTTP now.
+    expect(sock.sentOfType('node.message')).toHaveLength(0);
   });
 });

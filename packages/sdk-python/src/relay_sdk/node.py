@@ -27,7 +27,7 @@ from urllib.parse import quote
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from .client import SDK_VERSION
+from .client import SDK_VERSION, AsyncHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -153,15 +153,17 @@ class NodeHandlerContext:
         mode: Literal["wait", "steer"] | None = None,
         data: dict[str, Any] | None = None,
     ) -> Any:
-        """Post a top-level channel message, attributed to `from_` (an agent
-        name resolved in the workspace). Resolves with the posted message.
-        Thread replies are not part of this surface."""
-        frame: dict[str, Any] = {"type": "node.message", "to": to, "from": from_, "text": text}
+        """Post a top-level channel message through the canonical message route
+        with the node token, attributed to `from_` (an agent name resolved in
+        the node's workspace). Node-attributed posts share the route's delivery
+        routing, observer events, and triggers by construction. Thread replies
+        are not part of this surface."""
+        payload: dict[str, Any] = {"text": text, "from": from_}
         if mode is not None:
-            frame["mode"] = mode
+            payload["mode"] = mode
         if data is not None:
-            frame["data"] = data
-        return await self._provider._request(_random_id(), frame)
+            payload["data"] = data
+        return await self._provider._post_channel_message(to, payload)
 
     async def spawn_agent(self, input: Any) -> Any:
         """Spawn an agent through the node's capacity executor.
@@ -204,8 +206,10 @@ class NodeProvider:
         connect: NodeConnectFactory | None = None,
     ) -> None:
         base = (base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self._http_base_url = base
         self._ws_base_url = base.replace("https://", "wss://").replace("http://", "ws://")
         self._node_token = node_token
+        self._http = AsyncHttpClient(api_key=node_token, base_url=base, origin_client=_ORIGIN_CLIENT)
         self._node_id = node_id
         self._node_name = node_name
         self._provider_name = provider["name"]
@@ -344,6 +348,8 @@ class NodeProvider:
         self._reject_pending(NodeProviderError("node provider stopped"))
         if conn is not None:
             await self._safe_close(conn)
+        with contextlib.suppress(Exception):
+            await self._http.close()
         self._registered = False
 
     # ── Connection lifecycle ─────────────────────────────────────
@@ -588,6 +594,9 @@ class NodeProvider:
         }
         qs = "&".join(f"{k}={quote(v, safe='')}" for k, v in query.items())
         return f"{self._ws_base_url}/v1/node/ws?{qs}"
+
+    async def _post_channel_message(self, to: str, payload: dict[str, Any]) -> Any:
+        return await self._http.post(f"/v1/channels/{quote(to, safe='')}/messages", payload)
 
     async def _request(self, req_id: str, frame: dict[str, Any]) -> Any:
         conn = self._conn

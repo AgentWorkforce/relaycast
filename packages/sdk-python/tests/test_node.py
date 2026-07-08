@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
+import respx
 
 from relay_sdk.node import NodeConnectionClosed, NodeProvider, NodeRegistrationError
 
@@ -448,7 +450,11 @@ async def test_spawn_agent_sends_capacity_direct_node_spawn_frame():
 
 
 @pytest.mark.asyncio
-async def test_send_message_sends_node_message_frame():
+@respx.mock
+async def test_send_message_posts_to_canonical_channel_route():
+    route = respx.post("https://engine.test/v1/channels/ops/messages").mock(
+        return_value=httpx.Response(201, json={"ok": True, "data": {"id": "m-1", "text": "done"}})
+    )
     server = FakeNodeServer()
     node = NodeProvider(**base_kwargs(server))
     posted: dict = {}
@@ -464,15 +470,15 @@ async def test_send_message_sends_node_message_frame():
     await node.wait_registered()
 
     conn.push({"v": 1, "type": "action.invoke", "invocation_id": "inv-msg", "action": "run-etl", "input": {}})
-    await wait_until(lambda: len(conn.sent_of_type("node.message")) == 1)
-    msg_frame = conn.sent_of_type("node.message")[-1]
-    assert msg_frame["to"] == "ops"
-    assert msg_frame["from"] == "reporter"
-    assert msg_frame["text"] == "done"
-
-    conn.push({"v": 1, "id": msg_frame["id"], "type": "reply", "ok": True, "data": {"id": "m-1", "text": "done"}})
     await wait_until(lambda: "value" in posted)
     assert posted["value"]["id"] == "m-1"
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer nt_live_test"
+    assert json.loads(request.content) == {"text": "done", "from": "reporter"}
+    # No node.message frame is sent over the socket — posting is HTTP now.
+    assert conn.sent_of_type("node.message") == []
 
     await node.stop()
     await asyncio.wait_for(task, timeout=1.0)

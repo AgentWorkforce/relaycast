@@ -527,13 +527,26 @@ final class NodeProviderTests: XCTestCase {
         try await serveTask.value
     }
 
-    func testSendMessageSendsANodeMessageFrameAndResolvesWithTheReply() async throws {
+    func testSendMessagePostsToTheCanonicalChannelRoute() async throws {
+        NodeMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://engine.test/v1/channels/ops/messages")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer nt_live_test")
+            let json = (try? JSONSerialization.jsonObject(with: nodeRequestBody(request) ?? Data())) as? [String: Any]
+            XCTAssertEqual(json?["text"] as? String, "done")
+            XCTAssertEqual(json?["from"] as? String, "reporter")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!
+            let data = try JSONSerialization.data(withJSONObject: ["ok": true, "data": ["id": "m-1", "text": "done"]])
+            return (response, data)
+        }
+
         let factory = FakeTransportFactory()
         let node = NodeProvider(
+            baseURL: "https://engine.test",
             nodeToken: baseOptions.nodeToken,
             nodeID: baseOptions.nodeID,
             nodeName: baseOptions.nodeName,
             provider: (name: "py", instanceID: nil),
+            session: makeNodeMockSession(),
             transport: { factory.make() }
         )
         await node.capability("run-etl") { _, ctx in
@@ -551,26 +564,67 @@ final class NodeProviderTests: XCTestCase {
             "input": .object([:])
         ])
 
-        await waitUntil { await !transport.sentOfType("node.message").isEmpty }
-        let message = await transport.sentOfType("node.message").last!
-        XCTAssertEqual(message["to"], .string("ops"))
-        XCTAssertEqual(message["from"], .string("reporter"))
-        XCTAssertEqual(message["text"], .string("done"))
-
-        await transport.emit([
-            "id": message["id"] ?? .null,
-            "type": .string("reply"),
-            "ok": .bool(true),
-            "data": .object(["id": .string("m-1"), "text": .string("done")])
-        ])
-
+        // The handler returns sendMessage's result, so the action.result output
+        // is the posted message `data` envelope unwrapped.
         await waitUntil { await !transport.sentOfType("action.result").isEmpty }
         let result = await transport.sentOfType("action.result").last!
         XCTAssertEqual(result["output"], .object(["id": .string("m-1"), "text": .string("done")]))
 
+        // No node.message frame over the socket — posting is HTTP now.
+        let messageFrames = await transport.sentOfType("node.message")
+        XCTAssertTrue(messageFrames.isEmpty)
+
         await node.stop()
         try await serveTask.value
+        NodeMockURLProtocol.handler = nil
     }
+}
+
+private final class NodeMockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private func makeNodeMockSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [NodeMockURLProtocol.self]
+    return URLSession(configuration: configuration)
+}
+
+private func nodeRequestBody(_ request: URLRequest) -> Data? {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let bufferSize = 1024
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+    while stream.hasBytesAvailable {
+        let read = stream.read(buffer, maxLength: bufferSize)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data
 }
 
 /// Waits for the (first) transport to be created, sends `node.register`, and
