@@ -2,15 +2,17 @@ import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRegisterMessage,
   FleetBrokerToRelaycastMessage,
+  FleetCapabilityAcceptance,
   FleetInventoryAgent,
   FleetNodeHeartbeatMessage,
   FleetNodeRegisterMessage,
+  FleetProviderIdentity,
   FleetCapability,
   AgentRegisterReplyData,
 } from '@relaycast/types';
 import { parseFleetBrokerToRelaycastMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodes } from '../db/schema.js';
+import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
@@ -18,6 +20,16 @@ import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
+import {
+  DEFAULT_PROVIDER_NAME,
+  capabilityKind,
+  heartbeatProvider,
+  markProviderOffline,
+  materializeProviderActions,
+  recomputeNodeAggregate,
+  removeProvider,
+  upsertProvider,
+} from './nodeProvider.js';
 import { completeNodeInvocation, rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from './action.js';
 import { emitInvocationCompletionEffects } from './invocationCompletion.js';
 import type { InvocationCompletionDeps } from './invocationCompletion.js';
@@ -41,7 +53,21 @@ export interface HandleNodeControlMessageArgs {
   workspaceId: string;
   nodeId: string;
   socket?: NodeSocketLike;
+  /**
+   * The registry connection this frame arrived on. Providers are bound to it at
+   * `node.register`; later frames resolve their provider from it. Absent when a
+   * caller drives node control without a registry-managed socket.
+   */
+  connectionId?: string;
   raw: string;
+}
+
+function resolveProviderIdentity(
+  message: { provider?: FleetProviderIdentity },
+  connectionId: string | undefined,
+): FleetProviderIdentity {
+  if (message.provider) return message.provider;
+  return { name: DEFAULT_PROVIDER_NAME, instance_id: connectionId ?? generateId() };
 }
 
 type CapabilityLike = string | FleetCapability;
@@ -56,11 +82,6 @@ function directNodeNameForAgent(agentId: string): string {
 
 function isImplicitDirectLocation(agent: Pick<AgentRow, 'id' | 'locationNodeId'>): boolean {
   return agent.locationNodeId === directNodeIdForAgent(agent.id);
-}
-
-function capabilityName(capability: CapabilityLike | null | undefined): string | null {
-  if (typeof capability === 'string') return capability;
-  return capability?.name ?? null;
 }
 
 function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[] {
@@ -149,35 +170,6 @@ function normalizeLegacyAdapter(adapter: string | null | undefined): string | un
   if (!adapter) return undefined;
   if (adapter === 'fleet.ws.v1' || adapter === 'direct.ws.v1') return 'ws.node.v1';
   return adapter;
-}
-
-async function ensureCapabilityActions(db: Db, workspaceId: string, nodeId: string, capabilities: CapabilityLike[]) {
-  for (const capability of capabilities) {
-    const name = capabilityName(capability);
-    if (!name || name.startsWith('spawn:')) continue;
-    const [existing] = await db
-      .select()
-      .from(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
-    if (!existing) {
-      await db.insert(actions).values({
-        id: `act_${generateId()}`,
-        workspaceId,
-        name,
-        description: `Node handler ${name}`,
-        handlerAgentId: null,
-        handlerNodeId: nodeId,
-        inputSchema: {},
-        outputSchema: {},
-        availableTo: null,
-      });
-    } else if (!existing.handlerAgentId && (!existing.handlerNodeId || existing.handlerNodeId === nodeId)) {
-      await db
-        .update(actions)
-        .set({ handlerNodeId: nodeId, isActive: true })
-        .where(eq(actions.id, existing.id));
-    }
-  }
 }
 
 export async function createNodeToken(
@@ -283,12 +275,19 @@ export async function getNodeByName(db: Db, workspaceId: string, name: string) {
   return node ?? null;
 }
 
+export interface RegisterNodeResult {
+  node: ReturnType<typeof publicNode>;
+  acceptance: FleetCapabilityAcceptance[];
+  provider: FleetProviderIdentity;
+}
+
 export async function registerNode(
   db: Db,
   workspaceId: string,
   authenticatedNodeId: string,
   message: FleetNodeRegisterMessage,
-) {
+  provider: FleetProviderIdentity,
+): Promise<RegisterNodeResult> {
   if (message.node_id !== authenticatedNodeId) {
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
   }
@@ -311,48 +310,75 @@ export async function registerNode(
     throw codedError(`Node name "${message.name}" is already enrolled`, 'node_name_conflict', 409);
   }
 
-  const role: NodeRole = existing.role === 'direct' ? 'direct' : 'broker';
-  const capabilities = role === 'direct' ? [] : normalizeCapabilities(message.capabilities);
-  const maxAgents = role === 'direct' ? 1 : message.max_agents;
-  const [updated] = await db
-    .update(nodes)
-    .set({
-      name: message.name,
-      capabilities,
-      kind: 'ws',
-      role,
-      deliveryAdapter: 'ws.node.v1',
-      deliveryConfig: role === 'direct' ? existing.deliveryConfig : null,
-      maxAgents,
-      activeAgents: role === 'direct' ? 1 : existing.activeAgents,
-      tags: role === 'direct' ? existing.tags : message.tags,
-      version: message.version,
-      status: 'online',
-      handlersLive: role === 'broker' && capabilities.length > 0,
-      lastHeartbeatAt: now,
-    })
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)))
-    .returning();
-
-  if (role === 'broker') {
-    await ensureCapabilityActions(db, workspaceId, updated.id, capabilities);
+  // Direct nodes are the per-agent delivery hosts: they never carry providers.
+  if (existing.role === 'direct') {
+    const [updated] = await db
+      .update(nodes)
+      .set({
+        name: message.name,
+        capabilities: [],
+        kind: 'ws',
+        role: 'direct',
+        deliveryAdapter: 'ws.node.v1',
+        deliveryConfig: existing.deliveryConfig,
+        maxAgents: 1,
+        activeAgents: 1,
+        tags: existing.tags,
+        version: message.version,
+        status: 'online',
+        handlersLive: false,
+        lastHeartbeatAt: now,
+      })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)))
+      .returning();
+    return { node: publicNode(updated), acceptance: [], provider };
   }
-  return publicNode(updated);
+
+  const capabilities = normalizeCapabilities(message.capabilities);
+  await runAtomic(db, async (tx) => {
+    await upsertProvider(tx, workspaceId, authenticatedNodeId, {
+      name: provider.name,
+      instanceId: provider.instance_id,
+      capabilities,
+      maxAgents: message.max_agents,
+      version: message.version,
+      handlersLive: capabilities.length > 0,
+    });
+    await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
+    await tx
+      .update(nodes)
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: message.tags })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
+    await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
+      version: message.version,
+      machineId: message.machine_id ?? null,
+    });
+  });
+
+  const [updated] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
+  const acceptance: FleetCapabilityAcceptance[] = capabilities.map((cap) => ({
+    name: cap.name,
+    kind: capabilityKind(cap),
+    accepted: true,
+  }));
+  return { node: publicNode(updated), acceptance, provider };
 }
 
 export async function heartbeatNode(
   db: Db,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
   message: FleetNodeHeartbeatMessage,
 ) {
-  // A heartbeat may carry the node's roster snapshot so the engine can keep its
-  // node descriptor fresh between (or in the absence of a fresh) node.register —
-  // e.g. after an engine restart where the broker keeps heartbeating an
-  // already-registered node. The roster fields are optional; a minimal heartbeat
-  // updates only liveness/capacity. lastHeartbeatAt is always stamped
-  // server-side here as the authoritative receipt time — the broker never sends
-  // it, and any client-supplied value would be ignored.
+  // A heartbeat is provider-scoped by connection. It may carry the provider's
+  // roster snapshot so the engine can refresh the descriptor between (or in the
+  // absence of a fresh) node.register — e.g. after an engine restart where the
+  // provider keeps heartbeating. lastHeartbeatAt is always stamped server-side
+  // as the authoritative receipt time; the client never sends it.
   if (message.node_id !== undefined && message.node_id !== nodeId) {
     throw codedError('node_id does not match the authenticated node token', 'node_id_mismatch', 403);
   }
@@ -361,36 +387,69 @@ export async function heartbeatNode(
     .select({ role: nodes.role })
     .from(nodes)
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-  const role: NodeRole = nodeState?.role === 'direct' ? 'direct' : 'broker';
-  const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
-  if (message.name !== undefined) rosterUpdate.name = message.name;
-  if (message.capabilities !== undefined) {
-    if (role !== 'direct') {
-      rosterUpdate.capabilities = normalizeCapabilities(message.capabilities);
+  if (!nodeState) return null;
+
+  if (nodeState.role === 'direct') {
+    const rosterUpdate: Partial<typeof nodes.$inferInsert> = {};
+    if (message.name !== undefined) rosterUpdate.name = message.name;
+    if (message.version !== undefined) rosterUpdate.version = message.version;
+    const [updated] = await db
+      .update(nodes)
+      .set({
+        ...rosterUpdate,
+        status: 'online',
+        load: message.load,
+        activeAgents: 1,
+        handlersLive: false,
+        lastHeartbeatAt: new Date(),
+      })
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
+      .returning();
+    return updated ? publicNode(updated) : null;
+  }
+
+  await runAtomic(db, async (tx) => {
+    if (message.capabilities !== undefined) {
+      const caps = normalizeCapabilities(message.capabilities);
+      const [existingProvider] = await tx
+        .select({ instanceId: nodeProviders.instanceId, maxAgents: nodeProviders.maxAgents, version: nodeProviders.version })
+        .from(nodeProviders)
+        .where(and(
+          eq(nodeProviders.workspaceId, workspaceId),
+          eq(nodeProviders.nodeId, nodeId),
+          eq(nodeProviders.name, providerName),
+        ));
+      await upsertProvider(tx, workspaceId, nodeId, {
+        name: providerName,
+        instanceId: existingProvider?.instanceId ?? `${providerName}:heartbeat`,
+        capabilities: caps,
+        maxAgents: message.max_agents ?? existingProvider?.maxAgents ?? 0,
+        version: message.version ?? existingProvider?.version ?? 'unknown',
+        handlersLive: message.handlers_live,
+      });
+      await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
+        load: message.load,
+        activeAgents: message.active_agents,
+        handlersLive: message.handlers_live,
+      });
+      await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
+    } else {
+      await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
+        load: message.load,
+        activeAgents: message.active_agents,
+        handlersLive: message.handlers_live,
+      });
     }
-  }
-  if (message.max_agents !== undefined) {
-    rosterUpdate.maxAgents = role === 'direct' ? 1 : message.max_agents;
-  }
-  if (message.version !== undefined) rosterUpdate.version = message.version;
+    if (message.name !== undefined) {
+      await tx.update(nodes).set({ name: message.name }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    }
+    await recomputeNodeAggregate(tx, workspaceId, nodeId, message.version !== undefined ? { version: message.version } : {});
+  });
 
   const [updated] = await db
-    .update(nodes)
-    .set({
-      ...rosterUpdate,
-      status: 'online',
-      load: message.load,
-      activeAgents: role === 'direct' ? 1 : message.active_agents,
-      handlersLive: role !== 'direct' && message.handlers_live,
-      lastHeartbeatAt: new Date(),
-    })
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)))
-    .returning();
-
-  if (updated && updated.role !== 'direct' && message.capabilities !== undefined) {
-    await ensureCapabilityActions(db, workspaceId, updated.id, message.capabilities);
-  }
-
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   return updated ? publicNode(updated) : null;
 }
 
@@ -411,6 +470,13 @@ export async function markNodeOffline(
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
 
+  // Provider capability sets persist (offline nodes still show their manifest);
+  // only their liveness flips.
+  await db
+    .update(nodeProviders)
+    .set({ status: 'offline', handlersLive: false, load: 0, lastHeartbeatAt: new Date() })
+    .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
+
   await db
     .update(agents)
     .set({ status: 'offline', lastSeen: new Date() })
@@ -423,13 +489,72 @@ export async function markNodeOffline(
   await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
 }
 
-export async function deregisterNode(
+/**
+ * A provider's control connection dropped. Its capability set persists (marked
+ * offline) so the node still shows the manifest; agents it hosted go offline.
+ * When it was the node's last connection the whole node goes offline.
+ */
+export async function handleProviderDisconnect(
   db: Db,
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
+  hasRemainingConnections: boolean,
 ) {
-  await markNodeOffline(db, registry, workspaceId, nodeId);
+  if (!hasRemainingConnections) {
+    await markNodeOffline(db, registry, workspaceId, nodeId);
+    return;
+  }
+  await markProviderOffline(db, workspaceId, nodeId, providerName);
+  await db
+    .update(agents)
+    .set({ status: 'offline', lastSeen: new Date() })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  await recomputeNodeAggregate(db, workspaceId, nodeId);
+}
+
+/**
+ * Provider-scoped deregister: removes the provider's attachment, persisted
+ * capability set, and materialized actions. When it was the node's last
+ * provider the node goes fully offline.
+ */
+export async function deregisterProvider(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+) {
+  await removeProvider(db, workspaceId, nodeId, providerName);
+  registry.detachProvider(workspaceId, nodeId, providerName);
+  await db
+    .update(agents)
+    .set({ status: 'offline', lastSeen: new Date() })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  const [remaining] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(nodeProviders)
+    .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
+  if (!remaining || remaining.count === 0) {
+    await markNodeOffline(db, registry, workspaceId, nodeId);
+  } else {
+    // Other providers remain: recompute the node aggregate but don't reschedule
+    // node-wide — that would disturb the surviving providers' in-flight invokes.
+    // Work dispatched to the removed provider is caught by the dispatch-timeout
+    // sweep, matching the provider-disconnect path.
+    await recomputeNodeAggregate(db, workspaceId, nodeId);
+  }
 }
 
 export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry): Promise<number> {
@@ -874,6 +999,7 @@ export async function registerAgentViaNode(
   db: Db,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
   message: FleetAgentRegisterMessage,
 ): Promise<AgentRegisterReplyData> {
   return runAtomic(db, async (tx) => {
@@ -905,6 +1031,7 @@ export async function registerAgentViaNode(
         metadata: { fleet: { node_id: nodeId, invocation_id: message.invocation_id ?? null, registered_at: now } },
         locationType: 'via_node',
         locationNodeId: nodeId,
+        providerName,
         originNodeId: nodeId,
         resumable: message.resumable ?? false,
         sessionRef: message.session_ref ?? null,
@@ -918,6 +1045,7 @@ export async function registerAgentViaNode(
           metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
           locationType: 'via_node',
           locationNodeId: nodeId,
+          providerName,
           originNodeId: sql`COALESCE(${agents.originNodeId}, ${nodeId})`,
           resumable: message.resumable ?? false,
           sessionRef: message.session_ref ?? null,
@@ -1148,6 +1276,7 @@ export async function reconcileInventory(
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
     })
@@ -1227,16 +1356,56 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     return;
   }
 
+  // A provider binds its name to the connection at node.register; later frames
+  // (heartbeat, deregister, agent.register, results) resolve it from the
+  // connection. Absent a bound provider (or when driven without a registry
+  // connection), fall back to the synthetic `default` provider.
+  const boundProviderName = args.connectionId
+    ? args.registry.providerNameForConnection?.(args.connectionId)
+    : undefined;
+  // The connection's registered identity is authoritative — a provider can't act
+  // on another provider by putting a different name in the frame. The frame's
+  // provider is only a hint for unbound/back-compat traffic.
+  const frameProviderName = boundProviderName
+    ?? ('provider' in message && message.provider ? message.provider.name : undefined)
+    ?? DEFAULT_PROVIDER_NAME;
+
   try {
     switch (message.type) {
       case 'node.register': {
-        const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message);
+        const provider = resolveProviderIdentity(message, args.connectionId);
+        if (args.connectionId && args.registry.providerAttachConflict) {
+          const conflict = args.registry.providerAttachConflict(
+            args.workspaceId,
+            args.nodeId,
+            provider.name,
+            provider.instance_id,
+            args.connectionId,
+          );
+          if (conflict) {
+            throw codedError(conflict.message, conflict.code, 409);
+          }
+        }
+        const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message, provider);
+        if (args.connectionId && args.registry.attachProvider) {
+          args.registry.attachProvider(
+            args.workspaceId,
+            args.nodeId,
+            provider.name,
+            provider.instance_id,
+            args.connectionId,
+          );
+        }
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
           type: 'reply',
           ok: true,
-          data: registered,
+          data: {
+            ...registered.node,
+            provider: registered.provider,
+            accepted_capabilities: registered.acceptance,
+          },
         });
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
@@ -1248,16 +1417,16 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'node.heartbeat':
-        await heartbeatNode(args.db, args.workspaceId, args.nodeId, message);
+        await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
         // Heartbeat refreshes online/capacity state; re-drain as a backstop in
         // case a queued spawn could not reserve capacity at register time.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
         return;
       case 'node.deregister':
-        await deregisterNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        await deregisterProvider(args.db, args.registry, args.workspaceId, args.nodeId, frameProviderName);
         return;
       case 'agent.register': {
-        const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
+        const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
         // The relay broker's node_control client awaits a `reply` frame keyed by
         // the request id (it matches `pending_agent_registrations` by `reply.id`
         // and parses `data` as {agent_id, token, name} with deny_unknown_fields).

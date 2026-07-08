@@ -39,14 +39,55 @@ const FleetResponseEnvelopeFields = {
   id: z.string(),
 } as const;
 
+/**
+ * Canonical capability kinds. `action` capabilities are invokable handlers the
+ * engine materializes and dispatches to the registering provider; `capacity`
+ * capabilities (`spawn:<harness>`, `release`) describe what a node can run and
+ * feed placement and `ctx.spawnAgent` delegation without being materialized.
+ * Registrations that omit `kind` (or carry a legacy value) are classified by
+ * name: `spawn:*` and `release` are capacity, everything else is an action.
+ */
+export const FleetCapabilityKindSchema = z.enum(['action', 'capacity']);
+export type FleetCapabilityKind = z.infer<typeof FleetCapabilityKindSchema>;
+
 export const FleetCapabilitySchema = z
   .object({
     name: z.string(),
     kind: z.string().optional(),
+    /** `action` capability opts into a workspace-global alias claiming this name. */
+    global: z.boolean().optional(),
+    /** `action` capability opts into the offline queue when its provider is down. */
+    queue: z.boolean().optional(),
     metadata: z.record(z.string(), FleetWireJsonValueSchema).optional(),
   })
   .strict();
 export type FleetCapability = z.infer<typeof FleetCapabilitySchema>;
+
+/**
+ * Provider identity carried on connection-scoped node frames. `name` is the
+ * provider's stable identity — persistence, capability-conflict checks, and
+ * routing key on it. `instance_id` is the connection epoch: re-registering the
+ * same name with a new instance replaces the previous attachment (reconnect),
+ * while a name whose current instance is still connected is rejected.
+ */
+export const FleetProviderIdentitySchema = z
+  .object({
+    name: z.string(),
+    instance_id: z.string(),
+  })
+  .strict();
+export type FleetProviderIdentity = z.infer<typeof FleetProviderIdentitySchema>;
+
+/** Per-capability outcome reported in a `node.register` reply. */
+export const FleetCapabilityAcceptanceSchema = z
+  .object({
+    name: z.string(),
+    kind: FleetCapabilityKindSchema,
+    accepted: z.boolean(),
+    reason: z.string().optional(),
+  })
+  .strict();
+export type FleetCapabilityAcceptance = z.infer<typeof FleetCapabilityAcceptanceSchema>;
 
 function forbidOwnProperty(property: string) {
   return (message: object, ctx: z.RefinementCtx): void => {
@@ -66,10 +107,16 @@ export const FleetNodeRegisterMessageSchema = z
     type: z.literal('node.register'),
     name: z.string(),
     node_id: z.string(),
+    // Absent means the synthetic `default` provider (the current broker), keyed
+    // to the connection epoch — additive migration for pre-provider clients.
+    provider: FleetProviderIdentitySchema.optional(),
+    // The registering provider's own capabilities (fully replaces its prior set).
     capabilities: z.array(FleetCapabilitySchema),
+    // Provider-level capacity; the node figure is the aggregate across providers.
     max_agents: z.number().int().nonnegative(),
     tags: z.array(z.string()),
     version: z.string(),
+    machine_id: z.string().optional(),
     // Absent and null both mean a fresh node with no resume cursor.
     resume_cursor: z.string().nullable().optional(),
   })
@@ -80,6 +127,10 @@ export const FleetNodeHeartbeatMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
     type: z.literal('node.heartbeat'),
+    // Heartbeats are provider-scoped by connection; absent provider means the
+    // synthetic `default` provider. Load/active_agents/handlers_live describe
+    // the sending provider, and the node figures aggregate across providers.
+    provider: FleetProviderIdentitySchema.optional(),
     load: z.number().finite().nonnegative(),
     active_agents: z.number().int().nonnegative(),
     handlers_live: z.boolean(),
@@ -105,6 +156,9 @@ export const FleetNodeDeregisterMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
     type: z.literal('node.deregister'),
+    // Removes this provider's attachment and persisted capability set; absent
+    // provider means the synthetic `default` provider.
+    provider: FleetProviderIdentitySchema.optional(),
   })
   .strict();
 export type FleetNodeDeregisterMessage = z.infer<typeof FleetNodeDeregisterMessageSchema>;
@@ -198,6 +252,19 @@ export const AgentRegisterReplyDataSchema = z
   })
   .strict();
 export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema>;
+
+/**
+ * `node.register` reply data. Carries the resolved provider identity and
+ * per-capability acceptance alongside the node's public descriptor (which is
+ * passed through as additional fields).
+ */
+export const NodeRegisterReplyDataSchema = z
+  .object({
+    provider: FleetProviderIdentitySchema,
+    accepted_capabilities: z.array(FleetCapabilityAcceptanceSchema),
+  })
+  .passthrough();
+export type NodeRegisterReplyData = z.infer<typeof NodeRegisterReplyDataSchema>;
 
 export const FleetReplyMessageSchema = z
   .object({

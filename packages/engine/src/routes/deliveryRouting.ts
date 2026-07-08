@@ -30,6 +30,7 @@ type DeliveryTarget = {
   nodeRole: string | null;
   deliveryAdapter: string | null;
   deliveryConfig: Record<string, unknown> | null;
+  providerName?: string;
 };
 
 const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
@@ -115,6 +116,7 @@ async function resolveLiveLocations(
       nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
+      providerName: agents.providerName,
     })
     .from(agentNodeBindings)
     .innerJoin(agents, and(
@@ -140,6 +142,7 @@ async function resolveLiveLocations(
       nodeRole: binding.nodeRole,
       deliveryAdapter: binding.deliveryAdapter,
       deliveryConfig: binding.deliveryConfig as Record<string, unknown> | null,
+      providerName: binding.providerName,
     });
   }
 
@@ -152,6 +155,7 @@ async function resolveLiveLocations(
       nodeRole: nodes.role,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
+      providerName: agents.providerName,
     })
     .from(agents)
     .leftJoin(nodes, eq(agents.locationNodeId, nodes.id))
@@ -166,6 +170,7 @@ async function resolveLiveLocations(
       nodeRole: row.nodeRole ?? (row.locationNodeId ? 'broker' : null),
       deliveryAdapter: row.deliveryAdapter ?? (row.locationNodeId ? 'ws.node.v1' : null),
       deliveryConfig: row.deliveryConfig as Record<string, unknown> | null,
+      providerName: row.providerName,
     });
   }
 
@@ -410,7 +415,8 @@ async function routeOneDeliveryOutcome(
   const deliveryAdapter = normalizeDeliveryAdapter(target?.deliveryAdapter ?? delivery.deliveryAdapter, nodeKind);
 
   if (locationType === 'via_node' && locationNodeId && deliveryAdapter === 'ws.node.v1') {
-    const sent = await ctx.engine.nodeConnections.sendToNode(ctx.workspaceId, locationNodeId, buildDeliverFrame({
+    const providerName = liveLocation?.providerName ?? recordedTarget?.providerName ?? 'default';
+    const sent = await ctx.engine.nodeConnections.sendToProvider(ctx.workspaceId, locationNodeId, providerName, buildDeliverFrame({
       delivery_id: delivery.id,
       agent_id: delivery.agentId,
       agent: delivery.agentName,

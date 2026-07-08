@@ -725,6 +725,7 @@ export async function deliverPendingToNode(
     .select({
       delivery: deliveries,
       recipientAgentName: agents.name,
+      recipientProviderName: agents.providerName,
       ackSeq: agents.deliveryAckSeq,
       body: messages.body,
       blocks: messages.blocks,
@@ -763,7 +764,7 @@ export async function deliverPendingToNode(
     const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
     const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments);
 
-    const sent = await registry.sendToNode(workspaceId, nodeId, buildDeliverFrame({
+    const sent = await registry.sendToProvider(workspaceId, nodeId, row.recipientProviderName, buildDeliverFrame({
       delivery_id: row.delivery.id,
       agent_id: row.delivery.agentId,
       agent: row.recipientAgentName,

@@ -20,6 +20,7 @@ type NodeDeliverRecipient = {
   agentName: string;
   nodeId: string;
   nodeKind: string;
+  providerName: string;
   deliveryConfig: Record<string, unknown> | null;
 };
 
@@ -47,6 +48,7 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
         agentName: agents.name,
         nodeId: agentNodeBindings.nodeId,
         nodeKind: nodes.kind,
+        providerName: agents.providerName,
         deliveryConfig: nodes.deliveryConfig,
       })
       .from(dmParticipants)
@@ -78,6 +80,7 @@ async function channelRecipients(deps: NodeDeliverDeps, channelId: string): Prom
       agentName: agents.name,
       nodeId: agentNodeBindings.nodeId,
       nodeKind: nodes.kind,
+      providerName: agents.providerName,
       deliveryConfig: nodes.deliveryConfig,
     })
     .from(channelMembers)
@@ -126,7 +129,7 @@ function deliverEventToRecipient(
       },
     });
   }
-  return deps.nodeConnections.sendToNode(deps.workspaceId, recipient.nodeId, buildDeliverFrame({
+  return deps.nodeConnections.sendToProvider(deps.workspaceId, recipient.nodeId, recipient.providerName, buildDeliverFrame({
     delivery_id: eventDeliveryId(args.event, args.eventKey, recipient.agentId),
     agent_id: recipient.agentId,
     agent: recipient.agentName,
@@ -178,6 +181,7 @@ export async function sendNodeDeliveriesToAgents(
       agentName: agents.name,
       nodeId: agentNodeBindings.nodeId,
       nodeKind: nodes.kind,
+      providerName: agents.providerName,
       deliveryConfig: nodes.deliveryConfig,
     })
     .from(agents)

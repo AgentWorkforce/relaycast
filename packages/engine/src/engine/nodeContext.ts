@@ -23,6 +23,7 @@ type ScopedNodeRow = {
   agentId: string;
   nodeKind: string;
   nodeRole: string;
+  providerName: string;
   deliveryAdapter: string | null;
   deliveryConfig: Record<string, unknown> | null;
 };
@@ -39,6 +40,8 @@ function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: 
 }
 
 type GroupedNode = {
+  nodeId: string;
+  providerName: string;
   nodeKind: string;
   nodeRole: string;
   deliveryAdapter: string | null;
@@ -46,10 +49,17 @@ type GroupedNode = {
   agentIds: string[];
 };
 
-function groupByNode(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
+// Group by (node, provider) so a WebSocket context.update lands on the provider
+// whose connection hosts those agents, not a phantom node-default provider.
+function groupByNodeProvider(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
   const grouped = new Map<string, GroupedNode>();
   for (const row of rows) {
-    const existing = grouped.get(row.nodeId) ?? {
+    // Collision-safe key: node ids and provider names are free-form and may
+    // contain any separator, so encode the tuple rather than joining on a string.
+    const key = JSON.stringify([row.nodeId, row.providerName]);
+    const existing = grouped.get(key) ?? {
+      nodeId: row.nodeId,
+      providerName: row.providerName,
       nodeKind: row.nodeKind,
       nodeRole: row.nodeRole,
       deliveryAdapter: row.deliveryAdapter,
@@ -57,7 +67,7 @@ function groupByNode(rows: ScopedNodeRow[]): Map<string, GroupedNode> {
       agentIds: [],
     };
     existing.agentIds.push(row.agentId);
-    grouped.set(row.nodeId, existing);
+    grouped.set(key, existing);
   }
   return grouped;
 }
@@ -72,13 +82,14 @@ async function sendContextToRows(
     data: Record<string, unknown>;
   },
 ): Promise<void> {
-  const grouped = groupByNode(rows);
+  const grouped = groupByNodeProvider(rows);
   const tasks: Promise<unknown>[] = [];
-  for (const [nodeId, group] of grouped.entries()) {
+  for (const group of grouped.values()) {
+    const nodeId = group.nodeId;
     const agentIds = [...new Set(group.agentIds)];
     if (normalizeDeliveryAdapter(group.deliveryAdapter, group.nodeKind) === 'ws.node.v1') {
       tasks.push(
-        deps.nodeConnections.sendToNode(deps.workspaceId, nodeId, {
+        deps.nodeConnections.sendToProvider(deps.workspaceId, nodeId, group.providerName, {
           v: 1,
           type: 'context.update',
           topic: message.topic,
@@ -139,6 +150,7 @@ export async function sendNodeContextForChannel(
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
+      providerName: agents.providerName,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })
@@ -185,6 +197,7 @@ export async function sendNodePresenceContext(
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
+      providerName: agents.providerName,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })
@@ -229,6 +242,7 @@ export async function sendNodeContextToAgents(
       agentId: agentNodeBindings.agentId,
       nodeKind: nodes.kind,
       nodeRole: nodes.role,
+      providerName: agents.providerName,
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })

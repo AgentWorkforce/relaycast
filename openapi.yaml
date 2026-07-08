@@ -3918,6 +3918,97 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /nodes/{node}/actions/{name}/invoke:
+    post:
+      summary: Invoke a node-addressed action
+      description: >
+        Invoke an action on a specific node. The engine resolves the action to
+        the provider that registered it and dispatches over that provider's
+        socket. A `spawn:<harness>` name with no shadow action falls through to
+        the node's native capacity. Fails fast with `handler_unavailable` when
+        the owning provider is offline unless the capability opted into queueing.
+      tags:
+        - Nodes
+      security:
+        - agentToken: []
+      parameters:
+        - name: node
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+      responses:
+        '201':
+          description: Invocation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Agent token required or caller not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Node or action not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Owning provider offline (fail fast)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /nodes/{node}/providers/{name}:
+    delete:
+      summary: Remove a node provider
+      description: >
+        Remove a provider's attachment, its persisted capability set, and the
+        actions it materialized on the node. When it was the node's last provider
+        the node goes offline.
+      tags:
+        - Nodes
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: node
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Provider removed
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /node/ws:
     get:
       summary: Node control WebSocket

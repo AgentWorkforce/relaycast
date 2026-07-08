@@ -68,6 +68,10 @@ export const agents = sqliteTable(
     capabilities: text('capabilities', { mode: 'json' }).$type<Record<string, unknown>>(),
     locationType: text('location_type').notNull().default('self_connected'),
     locationNodeId: text('location_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
+    // The node provider whose connection registered this agent. `deliver` frames
+    // route to that provider's socket. Defaults to the synthetic `default`
+    // provider (the broker) for agents registered before the provider model.
+    providerName: text('provider_name').notNull().default('default'),
     resumable: integer('resumable', { mode: 'boolean' }).notNull().default(false),
     sessionRef: text('session_ref'),
     originNodeId: text('origin_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
@@ -95,6 +99,9 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    // Physical machine grouping in fleet views and a placement input; never a
+    // capability scope. Null until a provider reports it on register.
+    machineId: text('machine_id'),
     kind: text('kind').notNull().default('ws'),
     role: text('role').notNull().default('broker'),
     deliveryAdapter: text('delivery_adapter').notNull().default('ws.node.v1'),
@@ -117,6 +124,45 @@ export const nodes = sqliteTable(
     index('idx_nodes_workspace').on(table.workspaceId),
     index('idx_nodes_token').on(table.tokenHash),
     index('idx_nodes_status').on(table.workspaceId, table.status),
+  ],
+);
+
+// ============================================
+// Node Providers
+// ============================================
+/**
+ * A process attached to a broker-role node, keyed by provider `name`. Each
+ * provider registers a subset of the node's capabilities and executes their
+ * invokes over its own socket. `instanceId` is the connection epoch. Capability
+ * sets persist here so an offline node still displays its full manifest, and the
+ * per-provider liveness/capacity/load columns are aggregated onto the `nodes`
+ * row. Implicit direct nodes (per self-connected agent) do not use this table.
+ */
+export const nodeProviders = sqliteTable(
+  'node_providers',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    nodeId: text('node_id')
+      .notNull()
+      .references(() => nodes.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    instanceId: text('instance_id').notNull(),
+    capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
+    maxAgents: integer('max_agents').notNull().default(0),
+    activeAgents: integer('active_agents').notNull().default(0),
+    load: real('load').notNull().default(0),
+    handlersLive: integer('handlers_live', { mode: 'boolean' }).notNull().default(false),
+    status: text('status').notNull().default('offline'),
+    version: text('version').notNull().default('unknown'),
+    lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('node_providers_node_name_unique').on(table.workspaceId, table.nodeId, table.name),
+    index('idx_node_providers_node').on(table.workspaceId, table.nodeId),
   ],
 );
 
@@ -729,6 +775,16 @@ export const actions = sqliteTable(
     handlerAgentId: text('handler_agent_id')
       .references(() => agents.id, { onDelete: 'cascade' }),
     handlerNodeId: text('handler_node_id').references(() => nodes.id, { onDelete: 'cascade' }),
+    // The provider (within handlerNodeId) that registered this action; dispatch
+    // resolves capability -> provider -> socket through it. Null for agent-hosted
+    // actions.
+    handlerProvider: text('handler_provider'),
+    // A node-scoped action may claim the workspace-global name so it resolves
+    // through `POST /v1/actions/:name/invoke`. At most one global alias per name.
+    isGlobal: integer('is_global', { mode: 'boolean' }).notNull().default(false),
+    // When true, an invoke whose provider is offline queues instead of failing
+    // fast (the per-provider offline queue).
+    queue: integer('queue', { mode: 'boolean' }).notNull().default(false),
     inputSchema: text('input_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     outputSchema: text('output_schema', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     availableTo: text('available_to', { mode: 'json' }).$type<string[]>(),
@@ -736,7 +792,14 @@ export const actions = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (table) => [
-    uniqueIndex('actions_workspace_name_unique').on(table.workspaceId, table.name),
+    // Node-scoped uniqueness: two nodes may both define `run-etl`. SQLite treats
+    // NULL handlerNodeId (agent-hosted) rows as distinct here, so agent-hosted
+    // uniqueness is enforced by the partial index below.
+    uniqueIndex('actions_workspace_node_name_unique').on(table.workspaceId, table.handlerNodeId, table.name),
+    // Agent-hosted actions (no node) keep one action per workspace name.
+    uniqueIndex('actions_workspace_agent_name_unique').on(table.workspaceId, table.name).where(sql`${table.handlerNodeId} IS NULL`),
+    // At most one node action may claim a given workspace-global alias.
+    uniqueIndex('actions_workspace_global_name_unique').on(table.workspaceId, table.name).where(sql`${table.isGlobal} = 1`),
     index('idx_actions_workspace').on(table.workspaceId),
     index('idx_actions_handler').on(table.handlerAgentId),
     index('idx_actions_node_handler').on(table.handlerNodeId),
