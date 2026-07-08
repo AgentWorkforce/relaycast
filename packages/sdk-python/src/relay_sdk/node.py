@@ -421,9 +421,13 @@ class NodeProvider:
 
     async def _backoff_sleep(self) -> None:
         if self._max_reconnect_attempts is not None and self._reconnect_attempt >= self._max_reconnect_attempts:
-            self._report_error(NodeProviderError("node provider exhausted reconnect attempts"))
+            err = NodeProviderError("node provider exhausted reconnect attempts")
+            self._report_error(err)
+            # If registration never completed, reject its waiter too — otherwise
+            # wait_registered() would hang forever after reconnects are exhausted.
+            self._reject_registered(err)
             self._stopped = True
-            return
+            raise err
         self._reconnect_attempt += 1
         exp = min(self._reconnect_base_delay * (2 ** (self._reconnect_attempt - 1)), self._reconnect_max_delay)
         delay = exp * (0.5 + random.random()) if self._reconnect_jitter else exp

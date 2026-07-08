@@ -351,10 +351,10 @@ export class NodeProviderClient {
 
   private onRegistered(data: NodeRegisterReplyData): void {
     // The reply must carry a well-formed acceptance list (the engine always
-    // does). A missing/corrupt list means acceptance can't be confirmed, so
-    // fail registration rather than assume success; an entry missing `accepted`
-    // counts as rejected (fail-safe).
-    const list = data.accepted_capabilities;
+    // does). A missing/corrupt reply (including a null `data`) means acceptance
+    // can't be confirmed, so fail registration rather than assume success or
+    // throw; an entry missing `accepted` counts as rejected (fail-safe).
+    const list = (data ?? ({} as NodeRegisterReplyData)).accepted_capabilities;
     if (!Array.isArray(list)) {
       this.onRegisterFailed(new NodeRegistrationError(
         'Registration reply is missing accepted_capabilities',
@@ -546,6 +546,11 @@ export class NodeProviderClient {
       const err = new Error('node provider exhausted reconnect attempts');
       this.reportError(err);
       this.stopped = true;
+      // If registration never completed, reject its waiter too — otherwise
+      // whenRegistered() would hang forever after reconnects are exhausted.
+      this.rejectRegister?.(err);
+      this.rejectRegister = null;
+      this.resolveRegister = null;
       this.settleServe(err);
       return;
     }

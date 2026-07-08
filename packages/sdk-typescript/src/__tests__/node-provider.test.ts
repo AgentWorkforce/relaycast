@@ -279,6 +279,20 @@ describe('NodeProviderClient', () => {
     expect(node.connected).toBe(true);
   });
 
+  it('rejects whenRegistered when reconnects are exhausted before registering', async () => {
+    const node = new NodeProviderClient({ ...baseOptions, maxReconnectAttempts: 1 });
+    node.serve().catch(() => {});
+    const first = newSocket();
+    first.open();
+    first.drop(); // dropped mid-handshake -> reconnect
+    await vi.advanceTimersByTimeAsync(50);
+    const second = newSocket();
+    second.open();
+    second.drop(); // second attempt drops -> reconnects exhausted
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(node.whenRegistered()).rejects.toThrow(/exhausted/i);
+  });
+
   it('deregisters the provider on graceful stop', async () => {
     const node = new NodeProviderClient(baseOptions);
     node.serve();

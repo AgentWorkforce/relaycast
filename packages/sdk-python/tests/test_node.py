@@ -357,6 +357,7 @@ async def test_reconnects_with_new_instance_id_after_unexpected_drop():
     first.drop()
     second = await server.next_connection()
     assert second is not first
+    await wait_until(lambda: len(second.sent_of_type("node.register")) >= 1)
     second_register = second.last_register()
     assert second_register["name"] == "alpha"
     assert second_register["provider"]["name"] == "py"
@@ -384,6 +385,7 @@ async def test_reconnects_when_dropped_during_register_handshake():
 
     second = await server.next_connection()
     assert second is not first
+    await wait_until(lambda: len(second.sent_of_type("node.register")) >= 1)
     second.push(accept_all(second.last_register()))
     await asyncio.wait_for(node.wait_registered(), timeout=1.0)
     assert node.connected is True

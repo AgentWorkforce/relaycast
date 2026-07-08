@@ -434,6 +434,10 @@ public actor NodeProvider {
                     let error = NodeProviderError.reconnectAttemptsExhausted
                     stopped = true
                     reportError(error)
+                    // If registration never completed, fail its waiter too —
+                    // otherwise waitRegistered() would hang forever after
+                    // reconnects are exhausted.
+                    settleRegistration(.failure(error))
                     throw error
                 }
                 reconnectAttempt += 1
