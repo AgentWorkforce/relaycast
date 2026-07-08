@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/observer-dashboard",
-  "version": "5.0.10",
+  "version": "5.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3100",
@@ -9,9 +9,9 @@
     "start": "next start"
   },
   "dependencies": {
-    "@relaycast/react": "5.0.10",
-    "@relaycast/sdk": "5.0.10",
-    "@relaycast/types": "5.0.10",
+    "@relaycast/react": "5.1.0",
+    "@relaycast/sdk": "5.1.0",
+    "@relaycast/types": "5.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.400.0",

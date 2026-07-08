@@ -122,10 +122,15 @@ describe('pruneExpired', () => {
     await insertMessageLog(db, base, oldMsg, idAt(400, 1));
 
     const result = await pruneExpired(db, {
-      defaults: { messageTtlDays: null, deliveryTtlDays: null, messageLogTtlDays: null },
+      defaults: {
+        messageTtlDays: null,
+        deliveryTtlDays: null,
+        messageLogTtlDays: null,
+        workspaceEventTtlDays: null,
+      },
     });
 
-    expect(result).toEqual({ messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0 });
+    expect(result).toEqual({ messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 });
     expect(await db.select().from(messages)).toHaveLength(1);
     expect(await db.select().from(deliveries)).toHaveLength(1);
     expect(await db.select().from(messageLogs)).toHaveLength(1);

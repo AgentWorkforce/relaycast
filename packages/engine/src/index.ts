@@ -84,9 +84,22 @@ export {
   pruneExpired,
   DEFAULT_DELIVERY_TTL_DAYS,
   DEFAULT_MESSAGE_LOG_TTL_DAYS,
+  DEFAULT_WORKSPACE_EVENT_TTL_DAYS,
 } from './engine/retention.js';
 export type { PruneOptions, PruneResult, RetentionDefaults } from './engine/retention.js';
 export type { WorkspaceRetentionSettings } from './db/schema.js';
+
+// Durable workspace event log (observer plane): append + cursor reads over
+// `workspace_events`, and the shared append+stamp+publish helper used by every
+// workspace stream call site.
+export {
+  appendWorkspaceEvent,
+  appendAndPublishWorkspaceEvent,
+  listWorkspaceEvents,
+  WORKSPACE_EVENT_LIST_DEFAULT_LIMIT,
+  WORKSPACE_EVENT_LIST_MAX_LIMIT,
+} from './engine/workspaceEvents.js';
+export type { WorkspaceEventInput, WorkspaceEventRecord } from './engine/workspaceEvents.js';
 
 // ID generation.
 export {

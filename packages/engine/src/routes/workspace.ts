@@ -13,8 +13,18 @@ import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
   observerAllowsConversation,
+  observerAllowsEvent,
   observerAllowsMessage,
+  OBSERVER_SCOPES,
 } from '../engine/observerToken.js';
+import {
+  listWorkspaceEvents,
+  WORKSPACE_EVENT_LIST_DEFAULT_LIMIT,
+  WORKSPACE_EVENT_LIST_MAX_LIMIT,
+  type WorkspaceEventRecord,
+} from '../engine/workspaceEvents.js';
+import { channels } from '../db/schema.js';
+import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
@@ -41,6 +51,22 @@ const updateWorkspaceSchema = z.object({
 
 const activityQuerySchema = z.object({
   limit: positiveIntQueryParam({ defaultValue: 20, max: 500 }),
+});
+
+const workspaceEventsQuerySchema = z.object({
+  since: z.preprocess(
+    (value) => {
+      if (value === undefined || (typeof value === 'string' && value.trim() === '')) {
+        return undefined;
+      }
+      return Number(value);
+    },
+    z.number().int().min(0).default(0),
+  ),
+  limit: positiveIntQueryParam({
+    defaultValue: WORKSPACE_EVENT_LIST_DEFAULT_LIMIT,
+    max: WORKSPACE_EVENT_LIST_MAX_LIMIT,
+  }),
 });
 
 function workspaceNotFound(c: Context<AppEnv>) {
@@ -163,19 +189,118 @@ workspaceRoutes.get('/workspaces/by-name/:name', publicWorkspaceLookupRateLimit,
   }
 });
 
-// GET /workspace - get current workspace
-workspaceRoutes.get('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
-  try {
-    const db = c.get('db');
-    const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
-    if (!workspace) {
-      return workspaceNotFound(c);
+// GET /workspace - get current workspace metadata (id/name/plan/system_prompt/
+// created_at/metadata only, nothing sensitive) — accepts an observer token
+// (any scope; this endpoint predates per-scope enforcement and there's no
+// narrower scope that fits "read workspace metadata") in addition to a
+// workspace key, so `selectEngineForKey`-style credential probes succeed for
+// observer-token logins, not just full workspace keys. Agent/node tokens are
+// still rejected, matching prior behavior.
+workspaceRoutes.get(
+  '/workspace',
+  requireWorkspaceRead([...OBSERVER_SCOPES], { allowAgent: false, allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = await workspaceEngine.getWorkspace(db, c.get('workspace').id);
+      if (!workspace) {
+        return workspaceNotFound(c);
+      }
+      return jsonOk(c, workspace);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
     }
-    return jsonOk(c, workspace);
-  } catch (err: unknown) {
-    return errorResponse(c, err);
+  },
+);
+
+/**
+ * Observer scoping for the durable event log, kept in lockstep with the live
+ * stream: each row is checked with the same `observerAllowsEvent` the realtime
+ * adapters apply per frame, so a scoped token can never read via backfill what
+ * it would not have seen live (per-event-type scopes, `event_types`,
+ * `created_after`, channel and DM filters). Channel names are looked up so
+ * `channel_names` filters apply; rows without channel or conversation context
+ * pass the channel leg but still face the scope checks.
+ */
+async function filterObserverWorkspaceEvents(
+  c: Context<AppEnv>,
+  workspaceId: string,
+  events: WorkspaceEventRecord[],
+): Promise<WorkspaceEventRecord[]> {
+  const observer = getObserverTokenFromContext(c);
+  if (!observer || events.length === 0) return events;
+
+  const channelIds = [...new Set(events.flatMap((event) => (event.channel_id ? [event.channel_id] : [])))];
+  const channelsById = new Map<string, { name: string; channel_type: number }>();
+  if (channelIds.length > 0) {
+    const rows = await c.get('db')
+      .select({ id: channels.id, name: channels.name, channel_type: channels.channelType })
+      .from(channels)
+      .where(and(eq(channels.workspaceId, workspaceId), inArray(channels.id, channelIds)));
+    for (const row of rows) channelsById.set(row.id, { name: row.name, channel_type: row.channel_type });
   }
-});
+
+  return events.filter((event) => {
+    const payload = (event.payload && typeof event.payload === 'object' ? event.payload : {}) as Record<string, unknown>;
+    const channel = event.channel_id ? channelsById.get(event.channel_id) : undefined;
+    return observerAllowsEvent(observer, {
+      ...payload,
+      type: event.type,
+      ...(event.channel_id ? { channel_id: event.channel_id } : {}),
+      ...(channel?.name && typeof payload.channel !== 'string' ? { channel: channel.name } : {}),
+    });
+  });
+}
+
+// GET /workspace/events — durable, cursor-based workspace event log
+workspaceRoutes.get(
+  '/workspace/events',
+  requireWorkspaceRead('stream:read', { allowAgent: false, allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const parsed = parseQueryParams(c, workspaceEventsQuerySchema, 'Invalid workspace events query');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const since = parsed.data.since;
+      const limit = parsed.data.limit ?? WORKSPACE_EVENT_LIST_DEFAULT_LIMIT;
+
+      // Scoped observer tokens can hide most of a raw page, so keep scanning
+      // forward (bounded) until `limit` visible rows are collected or the log
+      // is exhausted. `next_since` is the resume cursor: the seq of the last
+      // row the scan CONSUMED (visible or hidden) — clients advance by it so
+      // an all-hidden window can never stall pagination, and no visible row
+      // beyond the returned page is ever skipped.
+      const SCAN_CAP_ROWS = 2_000;
+      const visible: Awaited<ReturnType<typeof listWorkspaceEvents>>['events'] = [];
+      let cursor = since;
+      let latestSeq = 0;
+      let scanned = 0;
+      while (visible.length < limit && scanned < SCAN_CAP_ROWS) {
+        const page = await listWorkspaceEvents(db, workspace.id, { since: cursor, limit });
+        latestSeq = page.latestSeq;
+        if (page.events.length === 0) break;
+        scanned += page.events.length;
+        const allowed = await filterObserverWorkspaceEvents(c, workspace.id, page.events);
+        for (const event of allowed) {
+          if (visible.length >= limit) break;
+          visible.push(event);
+        }
+        cursor = visible.length >= limit
+          ? visible[visible.length - 1].seq
+          : page.events[page.events.length - 1].seq;
+        if (visible.length >= limit || cursor >= page.latestSeq) break;
+      }
+      return jsonOk(c, { events: visible, latest_seq: latestSeq, next_since: cursor });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
 
 // PATCH /workspace - update workspace
 workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) => {

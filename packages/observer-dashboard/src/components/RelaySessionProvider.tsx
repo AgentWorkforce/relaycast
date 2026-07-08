@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { RelayProvider } from '@relaycast/react';
 import { setAuth } from '../lib/auth';
+import { resetActivityIfWorkspaceChanged } from '../lib/activity-store';
 
 interface Session {
   apiKey: string;
@@ -25,7 +26,7 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
 
     async function initSession() {
       try {
-        if (keyParam?.startsWith('rk_live_')) {
+        if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
           const success = await setAuth(keyParam);
           if (seq !== requestSeq.current) return;
           if (!success) {
@@ -46,6 +47,9 @@ export function RelaySessionProvider({ children }: { children: React.ReactNode }
         if (seq !== requestSeq.current) return;
 
         if (data?.authenticated) {
+          // Drop another workspace's cached activity before this dashboard
+          // mounts, so switching keys never hydrates stale cross-workspace events.
+          resetActivityIfWorkspaceChanged(data.apiKey);
           setSession({
             apiKey: data.apiKey,
             agentToken: data.agentToken,

@@ -2,6 +2,7 @@ import { transformForClient } from './wsTransform.js';
 import { enqueueEvent } from './eventQueue.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
+import { appendAndPublishWorkspaceEvent } from './workspaceEvents.js';
 
 export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
@@ -57,7 +58,14 @@ export async function emitInvocationCompletionEffects(
       }),
     );
   }
-  fanoutTasks.push(deps.realtime.publishToWorkspaceStream({ workspaceId, event: payload }));
+  // Through the durable log so observers can backfill action results too.
+  fanoutTasks.push(
+    appendAndPublishWorkspaceEvent(
+      { db: deps.db, realtime: deps.realtime },
+      workspaceId,
+      { type: eventType, payload },
+    ),
+  );
   await Promise.allSettled(fanoutTasks);
 
   let outboxId: string | undefined;

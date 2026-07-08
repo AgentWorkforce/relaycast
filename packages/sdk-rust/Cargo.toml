@@ -1,6 +1,6 @@
 [package]
 name = "relaycast"
-version = "5.0.2"
+version = "5.0.3"
 edition = "2021"
 authors = ["Agent Workforce <team@agentrelay.dev>"]
 description = "Rust SDK for RelayCast - multi-agent coordination platform"

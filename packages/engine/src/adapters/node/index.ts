@@ -102,6 +102,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const upstreamOnPresenceEvent = options.presence?.onPresenceEvent;
   const presence = new InProcessPresence(realtime, {
     ...options.presence,
+    db,
     onPresenceEvent: async (workspaceId, event) => {
       await upstreamOnPresenceEvent?.(workspaceId, event);
       const subjectAgentId = typeof event.subject_agent_id === 'string' ? event.subject_agent_id : null;
