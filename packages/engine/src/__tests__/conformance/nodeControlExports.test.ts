@@ -12,7 +12,9 @@ import { nodeProviders, nodes } from '../../db/schema.js';
 describe('node-control provider-disconnect exports', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
-  afterEach(() => stack.close());
+  // Optional-chain so a failed beforeEach (undefined stack) surfaces its real
+  // error instead of a TypeError from teardown.
+  afterEach(() => stack?.close());
 
   const db = () => stack.runtime.handle.db;
 
