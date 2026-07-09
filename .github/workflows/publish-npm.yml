@@ -78,7 +78,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.14.0"
+          node-version: "22.22.2"
           cache: "npm"
           cache-dependency-path: package-lock.json
           registry-url: "https://registry.npmjs.org"
@@ -205,7 +205,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.14.0"
+          node-version: "22.22.2"
           registry-url: "https://registry.npmjs.org"
 
       - name: Download build artifacts
@@ -244,7 +244,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.14.0"
+          node-version: "22.22.2"
           registry-url: "https://registry.npmjs.org"
 
       - name: Download build artifacts
