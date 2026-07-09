@@ -208,6 +208,9 @@ jobs:
           node-version: "22.22.3"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Setup npm for trusted publishing
+        run: npm install -g npm@11
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -243,6 +246,9 @@ jobs:
         with:
           node-version: "22.22.3"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Setup npm for trusted publishing
+        run: npm install -g npm@11
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
