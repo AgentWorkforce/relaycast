@@ -572,10 +572,22 @@ export async function deregisterProvider(
 export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry): Promise<number> {
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
   const stale = rows.filter((node) => !isNodeLive(node));
+  let swept = 0;
   for (const node of stale) {
-    await serializeNodeOp(node.workspaceId, node.id, () => markNodeOffline(db, registry, node.workspaceId, node.id));
+    const offlined = await serializeNodeOp(node.workspaceId, node.id, async () => {
+      // Re-read under the lock: a heartbeat/register queued ahead of this sweep
+      // may have refreshed the node since the stale snapshot was taken.
+      const [current] = await db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, node.workspaceId), eq(nodes.id, node.id)));
+      if (!current || current.status !== 'online' || isNodeLive(current)) return false;
+      await markNodeOffline(db, registry, node.workspaceId, node.id);
+      return true;
+    });
+    if (offlined) swept++;
   }
-  return stale.length;
+  return swept;
 }
 
 async function autoJoinGeneral(db: Db, workspaceId: string, agentId: string) {

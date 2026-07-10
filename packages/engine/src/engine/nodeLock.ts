@@ -16,7 +16,9 @@
 const chains = new Map<string, Promise<unknown>>();
 
 export function serializeNodeOp<T>(workspaceId: string, nodeId: string, fn: () => Promise<T>): Promise<T> {
-  const key = `${workspaceId}:${nodeId}`;
+  // Collision-safe key: ids are free-form and may contain any separator, so
+  // encode the tuple rather than joining on a character.
+  const key = JSON.stringify([workspaceId, nodeId]);
   const prev = chains.get(key) ?? Promise.resolve();
   const run = prev.then(fn, fn);
   const tail = run.then(() => undefined, () => undefined);
