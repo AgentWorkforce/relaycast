@@ -15,6 +15,7 @@ import {
   parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
 import * as nodeEngine from '../engine/node.js';
+import { serializeNodeOp } from '../engine/nodeLock.js';
 import * as actionEngine from '../engine/action.js';
 import { sendNodeDeliveriesToAgents } from '../engine/nodeDeliver.js';
 import { fanoutToWorkspace } from './fanout.js';
@@ -340,7 +341,11 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
     if (!node) {
       return jsonNotFound(c, 'node_not_found', 'Node not found');
     }
-    await nodeEngine.deregisterProvider(db, c.get('engine').nodeConnections, workspace.id, node.id, c.req.param('name'));
+    // Serialize with node-control operations so removal can't race a concurrent
+    // register/heartbeat's aggregate recompute.
+    await serializeNodeOp(workspace.id, node.id, () =>
+      nodeEngine.deregisterProvider(db, c.get('engine').nodeConnections, workspace.id, node.id, c.req.param('name')),
+    );
     return jsonNoContent(c);
   } catch (err: unknown) {
     return errorResponse(c, err);

@@ -30,6 +30,7 @@ import {
   removeProvider,
   upsertProvider,
 } from './nodeProvider.js';
+import { serializeNodeOp } from './nodeLock.js';
 import {
   completeNodeInvocation,
   dispatchCapacitySpawn,
@@ -508,21 +509,26 @@ export async function handleProviderDisconnect(
   providerName: string,
   hasRemainingConnections: boolean,
 ) {
-  if (!hasRemainingConnections) {
-    await markNodeOffline(db, registry, workspaceId, nodeId);
-    return;
-  }
-  await markProviderOffline(db, workspaceId, nodeId, providerName);
-  await db
-    .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-      eq(agents.providerName, providerName),
-    ));
-  await recomputeNodeAggregate(db, workspaceId, nodeId);
+  // Serialized with node-control operations so a teardown can't race a
+  // concurrent register's provider upsert / aggregate recompute (or, on
+  // better-sqlite3, deadlock its isolated transaction).
+  return serializeNodeOp(workspaceId, nodeId, async () => {
+    if (!hasRemainingConnections) {
+      await markNodeOffline(db, registry, workspaceId, nodeId);
+      return;
+    }
+    await markProviderOffline(db, workspaceId, nodeId, providerName);
+    await db
+      .update(agents)
+      .set({ status: 'offline', lastSeen: new Date() })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+        eq(agents.providerName, providerName),
+      ));
+    await recomputeNodeAggregate(db, workspaceId, nodeId);
+  });
 }
 
 /**
@@ -567,7 +573,7 @@ export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
   const stale = rows.filter((node) => !isNodeLive(node));
   for (const node of stale) {
-    await markNodeOffline(db, registry, node.workspaceId, node.id);
+    await serializeNodeOp(node.workspaceId, node.id, () => markNodeOffline(db, registry, node.workspaceId, node.id));
   }
   return stale.length;
 }
@@ -1362,6 +1368,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     return;
   }
 
+  // Serialize all control operations for a node so a concurrent register and
+  // teardown (or two providers attaching at once) can't race the duplicate
+  // check, the provider-row upsert, or the aggregate recompute.
+  return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   // A provider binds its name to the connection at node.register; later frames
   // (heartbeat, deregister, agent.register, results) resolve it from the
   // connection. Absent a bound provider (or when driven without a registry
@@ -1514,4 +1524,5 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       message: error.message,
     });
   }
+  });
 }
