@@ -270,7 +270,7 @@ pub async fn bootstrap_session(
     let name = config
         .preferred_name
         .or(cached_name)
-        .unwrap_or_else(|| format!("agent-{}", &uuid_v4_short()));
+        .unwrap_or_else(|| format!("agent-{}", uuid_v4_short()));
 
     let agent_type = config.agent_type.unwrap_or_else(|| "agent".into());
     let conflict_strategy = config.conflict_strategy;
@@ -372,7 +372,7 @@ pub async fn bootstrap_session(
 }
 
 async fn create_fresh_workspace(base_url: Option<&str>) -> Result<(String, Option<String>)> {
-    let ws_name = format!("relay-{}", &uuid_v4_short());
+    let ws_name = format!("relay-{}", uuid_v4_short());
     let result = RelayCast::create_workspace(&ws_name, base_url).await?;
     Ok((result.api_key, Some(result.workspace_id)))
 }
