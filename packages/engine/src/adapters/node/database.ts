@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,8 +107,22 @@ function attachMemoryTransaction(db: NodeEngineDb, sqlite: Database.Database): v
  */
 function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
   let writeGate: Promise<unknown> = Promise.resolve();
+  // Marks the async context of a write that currently holds the gate. A nested
+  // gated write (e.g. a statement built from this handle awaited inside a
+  // `withTransaction` body) would queue behind the very transaction that is
+  // awaiting it — a self-deadlock. Such a write also belongs on the
+  // transaction's own connection, not this handle's; reject it loudly instead.
+  const gateHeld = new AsyncLocalStorage<true>();
   const runGated: WriteGate = (task) => {
-    const result = writeGate.then(task);
+    if (gateHeld.getStore()) {
+      return Promise.reject(
+        new Error(
+          'write issued through the engine handle inside a transaction; use the ' +
+            'transaction handle (tx) for writes inside withTransaction/runAtomic',
+        ),
+      );
+    }
+    const result = writeGate.then(() => gateHeld.run(true, task));
     // The chain must survive an individual failure so later writes still run.
     writeGate = result.then(noop, noop);
     return result;
@@ -140,18 +155,27 @@ function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
 }
 
 /**
+ * Every method on `BaseSQLiteDatabase` that executes SQL directly on the main
+ * connection — including raw statements that may carry `RETURNING` writes and
+ * drizzle's native interactive `transaction`. Each is deferred behind the gate.
+ * `insert`/`update`/`delete` are handled separately (they return lazy builders).
+ */
+const GATED_HANDLE_EXECUTORS = new Set(['run', 'all', 'get', 'values', 'transaction']);
+
+/**
  * Wrap the main-connection handle so raw statement writes route through the
  * write gate. `insert`/`update`/`delete` return lazy drizzle builders, so the
- * builder is wrapped and gated at its execution seam; `run(sql)` executes on
- * call, so the whole call is deferred behind the gate. Reads and every other
- * method run directly against the main connection.
+ * builder is wrapped and gated at its execution seam; the direct executors
+ * ({@link GATED_HANDLE_EXECUTORS}) run on call, so the whole call is deferred
+ * behind the gate. Query-builder reads (`db.select()...`) and every other member
+ * run directly against the main connection — WAL readers never block the writer.
  */
 function gateRawWrites(db: NodeEngineDb, runGated: WriteGate): NodeEngineDb {
   return new Proxy(db, {
     get(target, prop) {
       const value = Reflect.get(target, prop, target);
       if (typeof value !== 'function') return value;
-      if (prop === 'run') {
+      if (typeof prop === 'string' && GATED_HANDLE_EXECUTORS.has(prop)) {
         return (...args: unknown[]) => runGated(() => (value as DbFn).apply(target, args));
       }
       if (prop === 'insert' || prop === 'update' || prop === 'delete') {
@@ -165,18 +189,26 @@ function gateRawWrites(db: NodeEngineDb, runGated: WriteGate): NodeEngineDb {
   });
 }
 
+/** Terminal executors on a thenable drizzle statement (and on a prepared query). */
+const GATED_STATEMENT_EXECUTORS = new Set(['execute', 'run', 'all', 'get', 'values']);
+
 /**
  * Wrap a drizzle write-statement builder so its execution runs inside the write
- * gate. Drizzle builders are lazy and thenable — SQL runs only when the promise
- * protocol (`then`/`catch`/`finally`) or an explicit executor (`run`/`execute`/
- * `all`/`get`) fires. Those points are gated; chain methods (`values`/`set`/
- * `where`/`returning`/`onConflict*`) are re-wrapped so whichever stage the
- * caller finally awaits still routes through the gate.
+ * gate. Drizzle builders are lazy — SQL runs only when the promise protocol
+ * (`then`/`catch`/`finally`), an explicit executor ({@link
+ * GATED_STATEMENT_EXECUTORS}), or a `prepare()`d statement's executor fires.
+ * Every one of those seams is gated; chain methods (`set`/`where`/`returning`/
+ * `onConflict*`, and `values`/`set` on the pre-thenable builder) are re-wrapped
+ * so whichever stage the caller finally awaits still routes through the gate.
+ *
+ * `values` is ambiguous: on the pre-thenable insert builder it sets rows (a
+ * chain step); on a thenable statement it is a placeholder executor. The
+ * `targetThenable` guard routes each correctly.
  */
 function gateWriteBuilder<B extends object>(builder: B, runGated: WriteGate): B {
+  const targetThenable = isThenable(builder);
   return new Proxy(builder, {
     get(target, prop) {
-      const targetThenable = isThenable(target);
       if (targetThenable && (prop === 'then' || prop === 'catch' || prop === 'finally')) {
         // Await the raw builder inside the gate — that is where SQL executes.
         const gated = () => runGated(() => Promise.resolve(target as PromiseLike<unknown>));
@@ -191,13 +223,36 @@ function gateWriteBuilder<B extends object>(builder: B, runGated: WriteGate): B 
       }
       const value = Reflect.get(target, prop, target);
       if (typeof value !== 'function') return value;
-      if (targetThenable && (prop === 'execute' || prop === 'run' || prop === 'all' || prop === 'get')) {
+      if (targetThenable && typeof prop === 'string' && GATED_STATEMENT_EXECUTORS.has(prop)) {
         return (...args: unknown[]) => runGated(() => (value as DbFn).apply(target, args));
+      }
+      // `prepare()` returns a reusable prepared query whose own executors run
+      // SQL; gate them so a prepared write can't bypass the gate either.
+      if (prop === 'prepare') {
+        return (...args: unknown[]) =>
+          gatePreparedStatement((value as DbFn).apply(target, args) as object, runGated);
       }
       return (...args: unknown[]) => {
         const result = (value as DbFn).apply(target, args);
         return isThenable(result) ? gateWriteBuilder(result as object, runGated) : result;
       };
+    },
+  });
+}
+
+/**
+ * Wrap a drizzle prepared statement (from `statement.prepare()`) so its
+ * executors run inside the write gate, matching the un-prepared path.
+ */
+function gatePreparedStatement<P extends object>(prepared: P, runGated: WriteGate): P {
+  return new Proxy(prepared, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target);
+      if (typeof value !== 'function') return value;
+      if (typeof prop === 'string' && GATED_STATEMENT_EXECUTORS.has(prop)) {
+        return (...args: unknown[]) => runGated(() => (value as DbFn).apply(target, args));
+      }
+      return (value as DbFn).bind(target);
     },
   });
 }

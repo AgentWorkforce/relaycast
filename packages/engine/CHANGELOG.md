@@ -8,7 +8,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
-- Self-host (file-backed SQLite): route every write through one async gate so a raw statement write can no longer busy-wait the event loop while a transaction holds the write lock. Under concurrent node registration this deadlocked on `busy_timeout` and silently dropped a provider's capabilities from the node aggregate (#250).
+- Self-host (file-backed SQLite): route every write through one async gate so a raw statement write can no longer busy-wait the event loop while a transaction holds the write lock. Under concurrent node registration, this deadlocked on `busy_timeout` and silently dropped a provider's capabilities from the node aggregate (#250).
 
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.
