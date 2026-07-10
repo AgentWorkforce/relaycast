@@ -1368,14 +1368,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     return;
   }
 
-  // Serialize all control operations for a node so a concurrent register and
-  // teardown (or two providers attaching at once) can't race the duplicate
-  // check, the provider-row upsert, or the aggregate recompute.
-  return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   // A provider binds its name to the connection at node.register; later frames
   // (heartbeat, deregister, agent.register, results) resolve it from the
   // connection. Absent a bound provider (or when driven without a registry
   // connection), fall back to the synthetic `default` provider.
+  //
+  // Resolve this at frame ARRIVAL, before entering the per-node queue: if the
+  // socket closes while this frame is queued, `onNodeConnectionClose` clears the
+  // connection's provider binding synchronously, and a lookup inside the callback
+  // would then fall back to `default` and act on the wrong provider.
   const boundProviderName = args.connectionId
     ? args.registry.providerNameForConnection?.(args.connectionId)
     : undefined;
@@ -1386,6 +1387,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     ?? ('provider' in message && message.provider ? message.provider.name : undefined)
     ?? DEFAULT_PROVIDER_NAME;
 
+  // Serialize all control operations for a node so a concurrent register and
+  // teardown (or two providers attaching at once) can't race the duplicate
+  // check, the provider-row upsert, or the aggregate recompute.
+  return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
     switch (message.type) {
       case 'node.register': {
