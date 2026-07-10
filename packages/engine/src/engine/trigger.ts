@@ -196,7 +196,10 @@ export async function fireMessageTriggers(args: {
           trigger_id: row.id,
           message: args.message,
         },
-      }, { nodeConnections: args.nodeConnections });
+        // A trigger binds to an action name without a node, so it must reach
+        // node-scoped (fleet-provider) actions too, not only agent-hosted and
+        // workspace-global ones.
+      }, { nodeConnections: args.nodeConnections, includeNodeScoped: true });
       invoked.push(row.id);
     } catch {
       // Trigger delivery is best-effort; message posting has already succeeded.

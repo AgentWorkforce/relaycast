@@ -124,13 +124,30 @@ function publicAction(row: {
   };
 }
 
+/** Resolution priority when a name has several handlers: agent-hosted, then a
+ * node action with a workspace-global alias, then a plain node-scoped action. */
+function actionResolutionRank(row: ActionRow): number {
+  if (row.handlerNodeId === null) return 0;
+  if (row.isGlobal) return 1;
+  return 2;
+}
+
 /**
- * Resolve a workspace-scoped invoke (`POST /v1/actions/:name/invoke`). Only
- * agent-hosted actions and node actions that claimed a workspace-global alias
- * are reachable here; plain node-scoped actions are node-addressed. Agent-hosted
- * actions win when both somehow exist for a name.
+ * Resolve an action by name for invocation. The workspace-scoped invoke
+ * (`POST /v1/actions/:name/invoke`) reaches only agent-hosted actions and node
+ * actions that claimed a workspace-global alias — plain node-scoped actions are
+ * node-addressed there. `includeNodeScoped` lifts that filter for callers that
+ * bind to a name without a node (message triggers), so a trigger can fire a
+ * fleet-provider action; the resolved node-scoped row is then dispatched
+ * node-addressed by {@link invokeAction}. `(workspaceId, name)` is not unique
+ * across nodes, so a stable id tiebreak keeps resolution deterministic.
  */
-async function fetchAction(db: Db, workspaceId: string, actionName: string): Promise<ActionRow | null> {
+async function fetchAction(
+  db: Db,
+  workspaceId: string,
+  actionName: string,
+  includeNodeScoped = false,
+): Promise<ActionRow | null> {
   const rows = await db
     .select()
     .from(actions)
@@ -139,10 +156,12 @@ async function fetchAction(db: Db, workspaceId: string, actionName: string): Pro
         eq(actions.workspaceId, workspaceId),
         eq(actions.name, actionName),
         eq(actions.isActive, true),
-        or(isNull(actions.handlerNodeId), eq(actions.isGlobal, true)),
+        ...(includeNodeScoped ? [] : [or(isNull(actions.handlerNodeId), eq(actions.isGlobal, true))]),
       ),
     );
-  return rows.sort((a, b) => Number(a.handlerNodeId !== null) - Number(b.handlerNodeId !== null))[0] ?? null;
+  return rows.sort(
+    (a, b) => actionResolutionRank(a) - actionResolutionRank(b) || a.id.localeCompare(b.id),
+  )[0] ?? null;
 }
 
 /** Resolve a node-addressed action by its unique `(node, name)` key. */
@@ -641,9 +660,12 @@ export async function invokeAction(
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
+    /** Resolve plain node-scoped actions too (message triggers bind by name
+     * without a node); the resolved row is dispatched node-addressed. */
+    includeNodeScoped?: boolean;
   } = {},
 ) {
-  const action = await fetchAction(db, workspaceId, actionName);
+  const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
 
   if (!action && actionName === 'spawn') {
     return dispatchSpawn({

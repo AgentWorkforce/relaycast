@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Message triggers fire node-scoped (fleet-provider) actions: a trigger bound to an action name now resolves plain node-scoped actions and dispatches them node-addressed, so `defineNode`'s onMessage→action handlers run. Previously the trigger's workspace-global resolver excluded node-scoped actions, so such triggers never fired.
+
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.
 - Split engine internals into focused modules for background jobs, migrations, node adapters, websocket handling, and shared route utilities.
