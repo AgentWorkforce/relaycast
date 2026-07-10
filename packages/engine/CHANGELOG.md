@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Rescheduling a node-scoped action onto a fallback node targets the provider that owns the action, not the node's default (broker) provider. Previously a crash-recovery reschedule onto a multi-provider node dispatched to the broker, which rejected it with `handler_unavailable` and looped the invocation.
+
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.
 - Split engine internals into focused modules for background jobs, migrations, node adapters, websocket handling, and shared route utilities.

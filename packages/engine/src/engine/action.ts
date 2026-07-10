@@ -1233,12 +1233,20 @@ export async function rescheduleNodeInvocation(
         });
         return true;
       }
+      // Route to the provider that owns the action on the CHOSEN node. A
+      // multi-provider node (broker + fleet) otherwise falls back to the default
+      // provider — the broker — which rejects a node-scoped action with
+      // handler_unavailable, looping the invocation. Mirrors the initial-invoke
+      // path (fetchAction -> handlerProvider). No node action row (spawn/capacity
+      // or a legacy single-socket node) keeps the default-provider fallback.
+      const target = await fetchNodeAction(db, invocation.workspaceId, placement.node.id, actionToSend);
       const dispatched = await dispatchNodeInvocation({
         db,
         registry,
         workspaceId: invocation.workspaceId,
         invocationId: invocation.id,
         nodeId: placement.node.id,
+        providerName: target?.handlerProvider ?? undefined,
         action: actionToSend,
         input,
         reservationHeld: isSpawnInvocation(invocation.actionName) && !placement.queued,
