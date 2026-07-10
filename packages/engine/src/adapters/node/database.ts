@@ -112,9 +112,16 @@ function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
   // `withTransaction` body) would queue behind the very transaction that is
   // awaiting it — a self-deadlock. Such a write also belongs on the
   // transaction's own connection, not this handle's; reject it loudly instead.
-  const gateHeld = new AsyncLocalStorage<true>();
-  const runGated: WriteGate = (task) => {
-    if (gateHeld.getStore()) {
+  //
+  // The marker is a per-run token cleared when its task settles, not a bare
+  // `true`: AsyncLocalStorage propagates the store to every descendant context,
+  // so a detached async resource created inside a transaction body would inherit
+  // it forever. Keying on `active` restricts rejection to writes issued *while*
+  // the enclosing task is still running; a leaked descendant that writes after
+  // the transaction commits gates normally.
+  const gateHeld = new AsyncLocalStorage<{ active: boolean }>();
+  const runGated: WriteGate = <T>(task: () => Promise<T> | T): Promise<T> => {
+    if (gateHeld.getStore()?.active) {
       return Promise.reject(
         new Error(
           'write issued through the engine handle inside a transaction; use the ' +
@@ -122,7 +129,15 @@ function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
         ),
       );
     }
-    const result = writeGate.then(() => gateHeld.run(true, task));
+    const token = { active: true };
+    const runTask = async (): Promise<T> => {
+      try {
+        return await task();
+      } finally {
+        token.active = false;
+      }
+    };
+    const result = writeGate.then(() => gateHeld.run(token, runTask));
     // The chain must survive an individual failure so later writes still run.
     writeGate = result.then(noop, noop);
     return result;

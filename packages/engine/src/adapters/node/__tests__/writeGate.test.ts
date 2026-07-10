@@ -57,6 +57,32 @@ describe('self-host write gate', () => {
     expect(await db.select().from(pendingEvents)).toHaveLength(0);
   });
 
+  // The re-entrancy marker must not leak past the transaction. A detached async
+  // resource created inside a transaction body inherits the gate marker via
+  // AsyncLocalStorage; once the transaction commits it must be able to write
+  // normally rather than being rejected forever.
+  it('lets an async resource that outlived its transaction write normally', async () => {
+    const db = openFile();
+    const ws = await seedWorkspace(db);
+    const leakedId = `evt_${++seq}`;
+    let releaseLeaked!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseLeaked = resolve; });
+    let leakedWrite!: Promise<unknown>;
+
+    await runAtomicWrites(db, (tx) => {
+      // Scheduled inside the transaction's async context, but resolves later.
+      leakedWrite = gate.then(() =>
+        db.insert(pendingEvents).values({ id: leakedId, workspaceId: ws, eventType: 'leaked', payload: {} }),
+      );
+      return [tx.insert(pendingEvents).values({ id: `evt_${++seq}`, workspaceId: ws, eventType: 'tx', payload: {} })];
+    });
+
+    // Transaction has committed; the leaked write must succeed, not reject.
+    releaseLeaked();
+    await expect(leakedWrite).resolves.toBeDefined();
+    expect(await db.select().from(pendingEvents).where(eq(pendingEvents.id, leakedId))).toHaveLength(1);
+  });
+
   // The builder form rebuilds statements on the transaction handle, so it is
   // unaffected and commits normally.
   it('runs the builder form atomically (file-backed)', async () => {
