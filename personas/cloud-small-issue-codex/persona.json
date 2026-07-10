@@ -1,0 +1,30 @@
+{
+  "id": "cloud-small-issue-codex",
+  "intent": "review",
+  "slug": "cloud-small-issue-codex",
+  "cloud": true,
+  "onEvent": "./agent.ts",
+  "description": "Picks up AgentWorkforce/cloud issues labeled `small`, posts a handoff to Slack #proj-cloud (relayfile writeback), claims the issue with a comment (relayfile writeback), then spawns the cloud-small-issue-codex workflow inside the persona sandbox to draft a PR via codex (impl) + claude (reviewer).",
+  "tags": ["implementation", "review"],
+  "skills": [],
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Handle the proactive event.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 1800 },
+  "inputs": {
+    "SLACK_CHANNEL": {
+      "type": "string",
+      "default": "proj-cloud",
+      "description": "Slack channel name to post handoff messages to."
+    }
+  },
+  "integrations": {
+    "github": {
+      "source": { "kind": "workspace" }
+    },
+    "slack": {
+      "source": { "kind": "workspace" },
+      "scope": { "channel": "proj-cloud" }
+    }
+  }
+}

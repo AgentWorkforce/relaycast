@@ -1,0 +1,28 @@
+{
+  "id": "cloud-team-issue",
+  "intent": "relay-orchestrator",
+  "slug": "cloud-team-issue",
+  "cloud": true,
+  "onEvent": "./agent.ts",
+  "description": "Dormant N=1 seam-proof persona for AgentWorkforce/cloud issues labeled `team`. The live member spawn is handled by the guarded web teamSolve adapter.",
+  "tags": ["implementation", "team"],
+  "skills": [],
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Stand by for the guarded teamSolve N=1 launch path.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 1800 },
+  "capabilities": {
+    "teamSolve": {
+      "enabled": true,
+      "maxMembers": 1,
+      "roles": ["implementer"],
+      "tokenBudget": 400000,
+      "timeBudgetSeconds": 1800
+    }
+  },
+  "integrations": {
+    "github": {
+      "source": { "kind": "workspace" }
+    }
+  }
+}

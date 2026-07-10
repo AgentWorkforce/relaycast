@@ -1,0 +1,510 @@
+{
+  "nango": {
+    "batchSave": {
+      "Product": [
+        {
+          "id": "417950381260",
+          "name": "Relayfile Seed Product 1779365259819-11",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-11",
+          "price": 111,
+          "createdAt": "2026-05-21T12:08:23.196Z",
+          "updatedAt": "2026-05-21T12:08:23.745Z"
+        },
+        {
+          "id": "417952077004",
+          "name": "Relayfile Seed Product 1779365259819-10",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-10",
+          "price": 110,
+          "createdAt": "2026-05-21T12:08:19.529Z",
+          "updatedAt": "2026-05-21T12:08:20.234Z"
+        },
+        {
+          "id": "417957447891",
+          "name": "Relayfile Seed Product 1779365259819-4",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-4",
+          "price": 104,
+          "createdAt": "2026-05-21T12:07:57.547Z",
+          "updatedAt": "2026-05-21T12:07:57.938Z"
+        },
+        {
+          "id": "417983311042",
+          "name": "Relayfile Seed Product 1779365259819-7",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-7",
+          "price": 107,
+          "createdAt": "2026-05-21T12:08:08.247Z",
+          "updatedAt": "2026-05-21T12:08:08.814Z"
+        },
+        {
+          "id": "417985218756",
+          "name": "Relayfile Seed Product 1779365259819-14",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-14",
+          "price": 114,
+          "createdAt": "2026-05-21T12:08:35.220Z",
+          "updatedAt": "2026-05-21T12:08:35.864Z"
+        },
+        {
+          "id": "417995709682",
+          "name": "Relayfile Seed Product 1779365239995-0",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365239995-0",
+          "price": 100,
+          "createdAt": "2026-05-21T12:07:22.956Z",
+          "updatedAt": "2026-05-21T12:07:23.341Z"
+        },
+        {
+          "id": "418001030367",
+          "name": "Relayfile Seed Product 1779365259819-1",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-1",
+          "price": 101,
+          "createdAt": "2026-05-21T12:07:46.876Z",
+          "updatedAt": "2026-05-21T12:07:47.638Z"
+        },
+        {
+          "id": "418001030374",
+          "name": "Relayfile Seed Product 1779365259819-9",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-9",
+          "price": 109,
+          "createdAt": "2026-05-21T12:08:15.798Z",
+          "updatedAt": "2026-05-21T12:08:16.259Z"
+        },
+        {
+          "id": "418001030376",
+          "name": "Relayfile Seed Product 1779365259819-12",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-12",
+          "price": 112,
+          "createdAt": "2026-05-21T12:08:27.037Z",
+          "updatedAt": "2026-05-21T12:08:27.614Z"
+        },
+        {
+          "id": "418011845845",
+          "name": "Relayfile Seed Product 1779365259819-0",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-0",
+          "price": 100,
+          "createdAt": "2026-05-21T12:07:42.893Z",
+          "updatedAt": "2026-05-21T12:07:43.489Z"
+        },
+        {
+          "id": "418022258875",
+          "name": "Relayfile Seed Product 1779365259819-5",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-5",
+          "price": 105,
+          "createdAt": "2026-05-21T12:08:01.184Z",
+          "updatedAt": "2026-05-21T12:08:02.206Z"
+        },
+        {
+          "id": "418024035561",
+          "name": "Relayfile Seed Product 1779365259819-6",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-6",
+          "price": 106,
+          "createdAt": "2026-05-21T12:08:04.783Z",
+          "updatedAt": "2026-05-21T12:08:05.274Z"
+        },
+        {
+          "id": "418027607272",
+          "name": "Relayfile Seed Product 1779365259819-13",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-13",
+          "price": 113,
+          "createdAt": "2026-05-21T12:08:30.923Z",
+          "updatedAt": "2026-05-21T12:08:31.475Z"
+        },
+        {
+          "id": "418031271138",
+          "name": "Relayfile Seed Product 1779365259819-8",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-8",
+          "price": 108,
+          "createdAt": "2026-05-21T12:08:12.086Z",
+          "updatedAt": "2026-05-21T12:08:12.577Z"
+        },
+        {
+          "id": "418053548258",
+          "name": "Relayfile Seed Product 1779365259819-2",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-2",
+          "price": 102,
+          "createdAt": "2026-05-21T12:07:50.429Z",
+          "updatedAt": "2026-05-21T12:07:50.949Z"
+        },
+        {
+          "id": "418053548259",
+          "name": "Relayfile Seed Product 1779365259819-3",
+          "description": "Seeded via Nango proxy",
+          "sku": "RF-SKU-1779365259819-3",
+          "price": 103,
+          "createdAt": "2026-05-21T12:07:53.953Z",
+          "updatedAt": "2026-05-21T12:07:54.373Z"
+        }
+      ]
+    },
+    "batchDelete": {
+      "Product": []
+    }
+  },
+  "api": {
+    "get": {
+      "/crm/v3/objects/products": {
+        "response": {
+          "results": [
+            {
+              "id": "417950381260",
+              "properties": {
+                "createdate": "2026-05-21T12:08:23.196Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:23.745Z",
+                "hs_object_id": "417950381260",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-11",
+                "name": "Relayfile Seed Product 1779365259819-11",
+                "price": "111",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:23.196Z",
+              "updatedAt": "2026-05-21T12:08:23.745Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417950381260%22%7D%5D"
+            },
+            {
+              "id": "417952077004",
+              "properties": {
+                "createdate": "2026-05-21T12:08:19.529Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:20.234Z",
+                "hs_object_id": "417952077004",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-10",
+                "name": "Relayfile Seed Product 1779365259819-10",
+                "price": "110",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:19.529Z",
+              "updatedAt": "2026-05-21T12:08:20.234Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417952077004%22%7D%5D"
+            },
+            {
+              "id": "417957447891",
+              "properties": {
+                "createdate": "2026-05-21T12:07:57.547Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:57.938Z",
+                "hs_object_id": "417957447891",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-4",
+                "name": "Relayfile Seed Product 1779365259819-4",
+                "price": "104",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:57.547Z",
+              "updatedAt": "2026-05-21T12:07:57.938Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417957447891%22%7D%5D"
+            },
+            {
+              "id": "417983311042",
+              "properties": {
+                "createdate": "2026-05-21T12:08:08.247Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:08.814Z",
+                "hs_object_id": "417983311042",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-7",
+                "name": "Relayfile Seed Product 1779365259819-7",
+                "price": "107",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:08.247Z",
+              "updatedAt": "2026-05-21T12:08:08.814Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417983311042%22%7D%5D"
+            },
+            {
+              "id": "417985218756",
+              "properties": {
+                "createdate": "2026-05-21T12:08:35.220Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:35.864Z",
+                "hs_object_id": "417985218756",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-14",
+                "name": "Relayfile Seed Product 1779365259819-14",
+                "price": "114",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:35.220Z",
+              "updatedAt": "2026-05-21T12:08:35.864Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417985218756%22%7D%5D"
+            },
+            {
+              "id": "417995709682",
+              "properties": {
+                "createdate": "2026-05-21T12:07:22.956Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:23.341Z",
+                "hs_object_id": "417995709682",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365239995-0",
+                "name": "Relayfile Seed Product 1779365239995-0",
+                "price": "100",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:22.956Z",
+              "updatedAt": "2026-05-21T12:07:23.341Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22417995709682%22%7D%5D"
+            },
+            {
+              "id": "418001030367",
+              "properties": {
+                "createdate": "2026-05-21T12:07:46.876Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:47.638Z",
+                "hs_object_id": "418001030367",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-1",
+                "name": "Relayfile Seed Product 1779365259819-1",
+                "price": "101",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:46.876Z",
+              "updatedAt": "2026-05-21T12:07:47.638Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418001030367%22%7D%5D"
+            },
+            {
+              "id": "418001030374",
+              "properties": {
+                "createdate": "2026-05-21T12:08:15.798Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:16.259Z",
+                "hs_object_id": "418001030374",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-9",
+                "name": "Relayfile Seed Product 1779365259819-9",
+                "price": "109",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:15.798Z",
+              "updatedAt": "2026-05-21T12:08:16.259Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418001030374%22%7D%5D"
+            },
+            {
+              "id": "418001030376",
+              "properties": {
+                "createdate": "2026-05-21T12:08:27.037Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:27.614Z",
+                "hs_object_id": "418001030376",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-12",
+                "name": "Relayfile Seed Product 1779365259819-12",
+                "price": "112",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:27.037Z",
+              "updatedAt": "2026-05-21T12:08:27.614Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418001030376%22%7D%5D"
+            },
+            {
+              "id": "418011845845",
+              "properties": {
+                "createdate": "2026-05-21T12:07:42.893Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:43.489Z",
+                "hs_object_id": "418011845845",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-0",
+                "name": "Relayfile Seed Product 1779365259819-0",
+                "price": "100",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:42.893Z",
+              "updatedAt": "2026-05-21T12:07:43.489Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418011845845%22%7D%5D"
+            },
+            {
+              "id": "418022258875",
+              "properties": {
+                "createdate": "2026-05-21T12:08:01.184Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:02.206Z",
+                "hs_object_id": "418022258875",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-5",
+                "name": "Relayfile Seed Product 1779365259819-5",
+                "price": "105",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:01.184Z",
+              "updatedAt": "2026-05-21T12:08:02.206Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418022258875%22%7D%5D"
+            },
+            {
+              "id": "418024035561",
+              "properties": {
+                "createdate": "2026-05-21T12:08:04.783Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:05.274Z",
+                "hs_object_id": "418024035561",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-6",
+                "name": "Relayfile Seed Product 1779365259819-6",
+                "price": "106",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:04.783Z",
+              "updatedAt": "2026-05-21T12:08:05.274Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418024035561%22%7D%5D"
+            },
+            {
+              "id": "418027607272",
+              "properties": {
+                "createdate": "2026-05-21T12:08:30.923Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:31.475Z",
+                "hs_object_id": "418027607272",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-13",
+                "name": "Relayfile Seed Product 1779365259819-13",
+                "price": "113",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:30.923Z",
+              "updatedAt": "2026-05-21T12:08:31.475Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418027607272%22%7D%5D"
+            },
+            {
+              "id": "418031271138",
+              "properties": {
+                "createdate": "2026-05-21T12:08:12.086Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:08:12.577Z",
+                "hs_object_id": "418031271138",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-8",
+                "name": "Relayfile Seed Product 1779365259819-8",
+                "price": "108",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:08:12.086Z",
+              "updatedAt": "2026-05-21T12:08:12.577Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418031271138%22%7D%5D"
+            },
+            {
+              "id": "418053548258",
+              "properties": {
+                "createdate": "2026-05-21T12:07:50.429Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:50.949Z",
+                "hs_object_id": "418053548258",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-2",
+                "name": "Relayfile Seed Product 1779365259819-2",
+                "price": "102",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:50.429Z",
+              "updatedAt": "2026-05-21T12:07:50.949Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418053548258%22%7D%5D"
+            },
+            {
+              "id": "418053548259",
+              "properties": {
+                "createdate": "2026-05-21T12:07:53.953Z",
+                "description": "Seeded via Nango proxy",
+                "hs_cost_of_goods_sold": null,
+                "hs_lastmodifieddate": "2026-05-21T12:07:54.373Z",
+                "hs_object_id": "418053548259",
+                "hs_recurring_billing_period": null,
+                "hs_sku": "RF-SKU-1779365259819-3",
+                "name": "Relayfile Seed Product 1779365259819-3",
+                "price": "103",
+                "recurringbillingfrequency": null
+              },
+              "createdAt": "2026-05-21T12:07:53.953Z",
+              "updatedAt": "2026-05-21T12:07:54.373Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/objects/0-7/views/all/list?filters=%5B%7B%22property%22%3A%22hs_object_id%22%2C%22operator%22%3A%22EQ%22%2C%22value%22%3A%22418053548259%22%7D%5D"
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 12:36:45 GMT",
+          "content-type": "application/json;charset=utf-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "987",
+          "x-ratelimit-reset": "1779367022",
+          "cf-ray": "9ff3a0e52a7cacc8-PDX",
+          "cf-cache-status": "DYNAMIC",
+          "server": "cloudflare",
+          "vary": "origin, accept-encoding",
+          "access-control-allow-credentials": "false",
+          "server-timing": "hcid;desc=\"6a0efc5c-0000-0000-1694-7f1d34972ceb\", cfr;desc=\"9ff3a0e525d7acc8-FRA\"",
+          "x-hubspot-correlation-id": "6a0efc5c-0000-0000-1694-7f1d34972ceb",
+          "x-hubspot-ratelimit-interval-milliseconds": "10000",
+          "x-hubspot-ratelimit-max": "110",
+          "x-hubspot-ratelimit-remaining": "109",
+          "x-hubspot-ratelimit-secondly": "11",
+          "x-hubspot-ratelimit-secondly-remaining": "10",
+          "set-cookie": "__cf_bm=gHvzSqHq5T3pCTmKXIIKVSqAvh60zkWW8MQ86n9uWDY-1779367004.9817688-1.0.1.1-Kd8VQWLQa8dKaAroYVavp7_JzVBak0yc0Jei48rnwvOcf2M0lW1W_dzZ1QMzRLhR3d9NNYgDUd9qV.8olrscIxJmRu7_EsYpmAYOkSwmUi8jfMsqKygKxjJ3CZKpY3_B; HttpOnly; SameSite=None; Secure; Path=/; Domain=hubapi.com; Expires=Thu, 21 May 2026 13:06:45 GMT",
+          "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=qjN3lSZ50E7wL4niiltNpMIw0%2FQznURHC6SebETSKIUrczkGdT496QIi%2B9kM7%2FxIJ0LSbZQy%2BoeEhXJjfnGA6ZyYdYFSSa1ngF1KcbYXTfQsdZRNF5Hll9bXGmCZWnsg\"}]}",
+          "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}"
+        },
+        "hash": "e2ec91458e6408a19fab727cafc1b01807afd076",
+        "request": {
+          "params": {
+            "limit": "100",
+            "properties": "name,description,hs_sku,price,hs_cost_of_goods_sold,recurringbillingfrequency,hs_recurring_billing_period,createdate,hs_lastmodifieddate"
+          }
+        }
+      }
+    }
+  }
+}

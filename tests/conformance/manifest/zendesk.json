@@ -1,0 +1,37 @@
+{
+  "provider": "zendesk",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-zendesk",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "zen:event-type:ticket.updated",
+      "source": "official:https://developer.zendesk.com/api-reference/webhooks/webhooks-api/webhooks/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/zendesk | local:relayfile-adapters/packages/zendesk/src/webhook-normalizer.ts",
+      "payload": {
+        "ticket": {
+          "id": 123,
+          "subject": "Fixture ticket",
+          "status": "open"
+        },
+        "current_user": {
+          "id": 456
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/zendesk/tickets/123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

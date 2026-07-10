@@ -1,0 +1,166 @@
+{
+  "provider": "gitlab",
+  "nangoIntegration": "gitlab-relay",
+  "adapterPackage": "@relayfile/adapter-gitlab",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "merge_request.open",
+      "source": "official:https://docs.gitlab.com/user/project/integrations/webhook_events/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/webhook-normalizer.ts",
+      "payload": {
+        "object_kind": "merge_request",
+        "event_type": "merge_request",
+        "object_attributes": {
+          "id": 301,
+          "iid": 7,
+          "title": "Add conformance",
+          "state": "opened"
+        },
+        "project": {
+          "id": 42,
+          "path_with_namespace": "acme/app",
+          "web_url": "https://gitlab.com/acme/app"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "title",
+          "state"
+        ],
+        "paths": [
+          "/gitlab/projects/acme/app/merge_requests/7__add-conformance/meta.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "update-issue",
+      "source": "official:https://docs.gitlab.com/api/issues/#edit-an-issue | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "filePath": "/gitlab/projects/acme/app/issues/5__bug/meta.json",
+      "content": {
+        "title": "Bug follow-up [relayfile writeback test 2026-06-11T00:00:00Z]",
+        "description": "Updated by relayfile conformance",
+        "state_event": "reopen"
+      },
+      "expectCall": {
+        "method": "PUT",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/issues/5",
+        "bodyIncludes": {
+          "title": "Bug follow-up [relayfile writeback test 2026-06-11T00:00:00Z]",
+          "description": "Updated by relayfile conformance",
+          "state_event": "reopen"
+        }
+      }
+    },
+    {
+      "action": "create-issue-note",
+      "source": "official:https://docs.gitlab.com/api/notes/#create-new-issue-note | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "filePath": "/gitlab/projects/acme/app/issues/5__bug/comments/draft@note.json",
+      "content": {
+        "body": "LGTM from relayfile"
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/issues/5/notes",
+        "bodyIncludes": {
+          "body": "LGTM from relayfile"
+        }
+      }
+    },
+    {
+      "action": "delete-issue-note",
+      "source": "official:https://docs.gitlab.com/api/notes/#delete-an-issue-note | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "fileAction": "file_delete",
+      "filePath": "/gitlab/projects/acme/app/issues/5__bug/comments/987.json",
+      "content": {},
+      "mockResponse": {
+        "status": 204,
+        "body": {}
+      },
+      "expectCall": {
+        "method": "DELETE",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/issues/5/notes/987"
+      }
+    },
+    {
+      "action": "update-merge-request",
+      "source": "official:https://docs.gitlab.com/api/merge_requests/#update-mr | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "filePath": "/gitlab/projects/acme/app/merge_requests/7__add-conformance/meta.json",
+      "content": {
+        "title": "Add conformance [relayfile writeback test 2026-06-11T00:00:00Z]",
+        "description": "Updated by relayfile conformance",
+        "state_event": "reopen"
+      },
+      "expectCall": {
+        "method": "PUT",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/merge_requests/7",
+        "bodyIncludes": {
+          "title": "Add conformance [relayfile writeback test 2026-06-11T00:00:00Z]",
+          "description": "Updated by relayfile conformance",
+          "state_event": "reopen"
+        }
+      }
+    },
+    {
+      "action": "create-merge-request-discussion",
+      "source": "official:https://docs.gitlab.com/api/discussions/#create-new-merge-request-thread | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "filePath": "/gitlab/projects/acme/app/merge_requests/7__add-conformance/discussions/draft@note.json",
+      "content": {
+        "body": "Discussion from relayfile conformance [relayfile writeback test 2026-06-11T00:00:00Z]"
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/merge_requests/7/discussions",
+        "bodyIncludes": {
+          "body": "Discussion from relayfile conformance [relayfile writeback test 2026-06-11T00:00:00Z]"
+        }
+      }
+    },
+    {
+      "action": "delete-merge-request-discussion-note",
+      "source": "official:https://docs.gitlab.com/api/discussions/#delete-a-merge-request-thread-note | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:relayfile-adapters/packages/gitlab/src/writeback.ts",
+      "fileAction": "file_delete",
+      "filePath": "/gitlab/projects/acme/app/merge_requests/7__add-conformance/discussions/disc_123/notes/note_456.json",
+      "content": {},
+      "mockResponse": {
+        "status": 204,
+        "body": {}
+      },
+      "expectCall": {
+        "method": "DELETE",
+        "endpointMatches": "/api/v4/projects/acme%2Fapp/merge_requests/7/discussions/disc_123/notes/note_456"
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "GitLabMergeRequest",
+      "syncName": "fetch-merge-requests",
+      "source": "official:https://docs.gitlab.com/user/project/integrations/webhook_events/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/gitlab | local:cloud/nango-integrations/gitlab-relay/syncs/fetch-merge-requests.ts",
+      "records": [
+        {
+          "id": 301,
+          "iid": 7,
+          "title": "Add conformance",
+          "state": "opened",
+          "project_path": "acme/app",
+          "web_url": "https://gitlab.com/acme/app/-/merge_requests/7"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/gitlab/projects/acme/app/merge_requests/7__add-conformance/meta.json",
+          "contentIncludes": [
+            "title",
+            "state"
+          ]
+        }
+      ]
+    }
+  ]
+}

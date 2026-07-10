@@ -1,0 +1,6 @@
+{
+  "source": "Recorded Nango auth webhook payload from production traffic, copied from the pre-existing acceptance baseline fixture.",
+  "captured_at": "2026-05-14T13:20:00Z",
+  "captured_by": "ws-integ-impl-239d7bb7",
+  "redaction_count": 2
+}

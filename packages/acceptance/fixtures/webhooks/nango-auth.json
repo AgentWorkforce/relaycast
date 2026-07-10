@@ -1,0 +1,11 @@
+{
+  "from": "notion",
+  "type": "auth",
+  "provider_config_key": "notion-relay",
+  "connection_id": "conn_[REDACTED:8]",
+  "operation": "creation",
+  "success": true,
+  "end_user": {
+    "id": "[REDACTED:36]"
+  }
+}

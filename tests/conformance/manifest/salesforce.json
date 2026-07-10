@@ -1,0 +1,39 @@
+{
+  "provider": "salesforce",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-salesforce",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "Account.updated",
+      "source": "official:https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_rest.htm | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/salesforce | local:relayfile-adapters/packages/salesforce/src/webhook-normalizer.ts",
+      "payload": {
+        "event": {
+          "type": "updated"
+        },
+        "sobject": {
+          "Id": "001xx000003DGbY",
+          "attributes": {
+            "type": "Account"
+          },
+          "Name": "Acme"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/salesforce/accounts/001xx000003DGbY.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

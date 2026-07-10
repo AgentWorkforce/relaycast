@@ -1,0 +1,92 @@
+{
+  "input": {
+    "method": "getMe",
+    "httpMethod": "GET"
+  },
+  "output": {
+    "ok": true,
+    "result": {
+      "id": 8975383999,
+      "is_bot": true,
+      "first_name": "InitialNangoTest",
+      "username": "initial_nango_test_bot",
+      "can_join_groups": true,
+      "can_read_all_group_messages": false,
+      "supports_inline_queries": false,
+      "supports_guest_queries": false,
+      "can_connect_to_business": false,
+      "has_main_web_app": false,
+      "has_topics_enabled": false,
+      "allows_users_to_create_topics": false,
+      "can_manage_bots": false,
+      "supports_join_request_queries": false
+    },
+    "raw": {
+      "ok": true,
+      "result": {
+        "id": 8975383999,
+        "is_bot": true,
+        "first_name": "InitialNangoTest",
+        "username": "initial_nango_test_bot",
+        "can_join_groups": true,
+        "can_read_all_group_messages": false,
+        "supports_inline_queries": false,
+        "supports_guest_queries": false,
+        "can_connect_to_business": false,
+        "has_main_web_app": false,
+        "has_topics_enabled": false,
+        "allows_users_to_create_topics": false,
+        "can_manage_bots": false,
+        "supports_join_request_queries": false
+      }
+    }
+  },
+  "nango": {},
+  "api": {
+    "get": {
+      "/getMe": {
+        "response": {
+          "ok": true,
+          "result": {
+            "id": 8975383999,
+            "is_bot": true,
+            "first_name": "InitialNangoTest",
+            "username": "initial_nango_test_bot",
+            "can_join_groups": true,
+            "can_read_all_group_messages": false,
+            "supports_inline_queries": false,
+            "supports_guest_queries": false,
+            "can_connect_to_business": false,
+            "has_main_web_app": false,
+            "has_topics_enabled": false,
+            "allows_users_to_create_topics": false,
+            "can_manage_bots": false,
+            "supports_join_request_queries": false
+          }
+        },
+        "status": 200,
+        "headers": {
+          "date": "Sat, 20 Jun 2026 15:18:27 GMT",
+          "content-type": "application/json",
+          "content-length": "426",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com https://*.plain.com wss://*.plain.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com https://*.plain.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com https://chat.cdn-plain.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "990",
+          "x-ratelimit-reset": "1781968725",
+          "etag": "W/\"1aa-9raS/YI8QxxKAWKNTtex2XcXJOY\""
+        },
+        "hash": "819482c82b500ba7e1ebbdd613b426c1bc3e7657",
+        "request": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "provider": "shopify",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-shopify",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "orders/create",
+      "source": "official:https://shopify.dev/docs/api/admin-rest | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/shopify | local:relayfile-adapters/packages/shopify/src/webhook-normalizer.ts",
+      "payload": {
+        "id": 1001,
+        "admin_graphql_api_id": "gid://shopify/Order/1001",
+        "email": "sam@example.com",
+        "total_price": "12.00"
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/shopify/orders/1001.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

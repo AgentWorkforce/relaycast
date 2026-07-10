@@ -1,0 +1,54 @@
+{
+  "provider": "reddit",
+  "nangoIntegration": "reddit-composio-relay",
+  "adapterPackage": "@relayfile/adapter-reddit",
+  "capabilities": {
+    "webhook": false,
+    "writeback": false,
+    "sync": true
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [
+    {
+      "model": "RedditPost",
+      "syncName": "fetch-posts",
+      "source": "official:https://www.reddit.com/dev/api/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/reddit | local:cloud/nango-integrations/reddit-composio-relay/syncs/fetch-posts.ts",
+      "records": [
+        {
+          "id": "relayfile/abc123",
+          "post_id": "abc123",
+          "thing_id": "t3_abc123",
+          "subreddit": "relayfile",
+          "subreddit_name_prefixed": "r/relayfile",
+          "title": "Integration proof",
+          "author": "fixture_author",
+          "url": "https://example.com/integration-proof",
+          "permalink": "/r/relayfile/comments/abc123/integration_proof/",
+          "created_utc": 1780300800,
+          "edited": false,
+          "score": 42,
+          "ups": 42,
+          "downs": 0,
+          "num_comments": 3,
+          "over_18": false,
+          "spoiler": false,
+          "stickied": false,
+          "locked": false,
+          "archived": false,
+          "removed_by_category": null,
+          "status": "active"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/reddit/subreddits/relayfile/posts/integration-proof__abc123.json",
+          "contentIncludes": [
+            "title",
+            "score"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "provider": "pipedrive",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-pipedrive",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "deal.updated",
+      "source": "official:https://developers.pipedrive.com/docs/api/v1 | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/pipedrive | local:relayfile-adapters/packages/pipedrive/src/webhook-normalizer.ts",
+      "payload": {
+        "meta": {
+          "action": "updated",
+          "object": "deal",
+          "id": 1
+        },
+        "current": {
+          "id": 1,
+          "title": "Fixture deal"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/pipedrive/deals/1.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

@@ -1,0 +1,69 @@
+{
+  "provider": "daytona",
+  "nangoIntegration": "daytona-relay",
+  "adapterPackage": null,
+  "capabilities": {
+    "webhook": true,
+    "writeback": false,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "usage.updated",
+      "source": "official:https://www.daytona.io/docs/api | nango-template:https://github.com/NangoHQ/integration-templates | local:cloud/nango-integrations/daytona-relay/on-events/setup.ts",
+      "payload": {
+        "event": "sandbox.state.updated",
+        "id": "sbx_123",
+        "organizationId": "org_123",
+        "timestamp": "2026-06-01T12:00:00.000Z",
+        "newState": "error"
+      },
+      "expect": {
+        "triggersWatch": [
+          {
+            "provider": "daytona",
+            "eventType": "incident",
+            "path": "/daytona/sandboxes/sbx_123"
+          }
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [
+    {
+      "model": "DaytonaUsage",
+      "syncName": "fetch-usage",
+      "source": "official:https://www.daytona.io/docs/api | nango-template:https://github.com/NangoHQ/integration-templates | local:cloud/nango-integrations/daytona-relay/syncs/fetch-usage.ts",
+      "records": [
+        {
+          "id": "org_123",
+          "organizationId": "org_123",
+          "totalSnapshotQuota": 100,
+          "currentSnapshotUsage": 12,
+          "totalVolumeQuota": 200,
+          "currentVolumeUsage": 24,
+          "regionUsage": [
+            {
+              "regionId": "us",
+              "totalCpuQuota": 10,
+              "currentCpuUsage": 2
+            }
+          ],
+          "capturedAt": "2026-06-01T12:00:00.000Z"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/daytona/usage/org_123.json",
+          "contentIncludes": [
+            "totalSnapshotQuota",
+            "capturedAt"
+          ]
+        }
+      ]
+    }
+  ],
+  "writebackProofLayer": "nango-action-only",
+  "writebackScope": "not-file-writeback"
+}

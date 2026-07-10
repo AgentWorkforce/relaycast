@@ -1,0 +1,14 @@
+{
+  "provider": "box",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/box",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

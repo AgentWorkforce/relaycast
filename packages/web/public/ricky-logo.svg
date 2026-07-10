@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Runner logo mark</title>
+  <desc id="desc">A stylized teal and navy roadrunner in front of a cloud outline.</desc>
+  <defs>
+    <linearGradient id="runnerCloud" x1="294" x2="734" y1="340" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f4ea1" />
+      <stop offset="0.44" stop-color="#10b8bb" />
+      <stop offset="1" stop-color="#2bd8bb" />
+    </linearGradient>
+    <linearGradient id="runnerTeal" x1="381" x2="688" y1="325" y2="556" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#45ffd6" />
+      <stop offset="0.48" stop-color="#10b8bb" />
+      <stop offset="1" stop-color="#273fa2" />
+    </linearGradient>
+    <linearGradient id="runnerWing" x1="386" x2="606" y1="430" y2="526" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#27f4d0" />
+      <stop offset="0.46" stop-color="#12bcc1" />
+      <stop offset="1" stop-color="#2849ab" />
+    </linearGradient>
+    <linearGradient id="runnerTail" x1="280" x2="470" y1="304" y2="505" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35efd2" />
+      <stop offset="0.58" stop-color="#169eb6" />
+      <stop offset="1" stop-color="#2844a3" />
+    </linearGradient>
+    <linearGradient id="runnerNeck" x1="570" x2="706" y1="321" y2="499" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#36f2cf" />
+      <stop offset="0.5" stop-color="#12adb8" />
+      <stop offset="1" stop-color="#2c43a2" />
+    </linearGradient>
+    <style>
+      .ink { fill: #082d55; }
+      .stroke { stroke: #082d55; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#ffffff" />
+
+  <g transform="translate(0 47)">
+    <g fill="none" stroke="url(#runnerCloud)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M304 434C288 458 287 491 304 517C320 542 347 554 378 548" />
+      <path d="M390 388C407 370 431 364 459 372C476 326 518 306 567 315C618 324 650 355 662 408" />
+      <path d="M690 412C722 423 741 452 738 486C735 522 707 547 670 548H600" />
+    </g>
+
+    <g>
+      <path
+        d="M274 292C265 332 273 371 300 405C323 433 357 452 439 491L469 460L274 292Z"
+        fill="url(#runnerTail)"
+        stroke="#082d55"
+        stroke-width="15"
+        stroke-linejoin="round" />
+      <path
+        d="M291 340C307 373 341 404 421 462"
+        fill="none"
+        stroke="#082d55"
+        stroke-width="13"
+        stroke-linecap="round" />
+      <path
+        d="M283 302C312 344 362 397 448 466"
+        fill="none"
+        stroke="#32eccc"
+        stroke-width="12"
+        stroke-linecap="round"
+        opacity="0.8" />
+      <path
+        d="M300 365C322 391 358 418 430 459"
+        fill="none"
+        stroke="#169fbb"
+        stroke-width="10"
+        stroke-linecap="round" />
+
+      <path
+        d="M381 525C431 451 520 406 580 420C615 428 627 454 606 482C571 529 488 548 381 525Z"
+        fill="url(#runnerTeal)"
+        stroke="#082d55"
+        stroke-width="16"
+        stroke-linejoin="round" />
+      <path
+        d="M396 518C458 476 521 444 587 430C550 466 489 501 406 530Z"
+        fill="#33f4ce"
+        opacity="0.74" />
+      <path
+        d="M394 526C467 489 532 457 594 433"
+        fill="none"
+        stroke="#082d55"
+        stroke-width="13"
+        stroke-linecap="round" />
+
+      <path
+        d="M476 526C520 510 562 493 600 470C580 515 535 550 478 565L448 590L466 540Z"
+        fill="url(#runnerWing)"
+        stroke="#082d55"
+        stroke-width="15"
+        stroke-linejoin="round" />
+      <path
+        d="M480 551C523 535 560 511 590 482"
+        fill="none"
+        stroke="#274aa7"
+        stroke-width="12"
+        stroke-linecap="round" />
+
+      <path
+        d="M581 421C620 379 640 322 661 307C680 294 708 307 716 330C703 365 683 412 646 470C630 495 609 512 579 522C600 485 608 452 581 421Z"
+        fill="url(#runnerNeck)"
+        stroke="#082d55"
+        stroke-width="16"
+        stroke-linejoin="round" />
+      <path
+        d="M634 443C660 400 680 359 696 322"
+        fill="none"
+        stroke="#32efcf"
+        stroke-width="12"
+        stroke-linecap="round"
+        opacity="0.86" />
+
+      <path
+        d="M648 306C671 293 702 293 724 306C737 314 744 323 750 336C727 333 708 333 692 338C674 344 663 355 651 374C635 361 630 326 648 306Z"
+        fill="#26e1c4"
+        stroke="#082d55"
+        stroke-width="15"
+        stroke-linejoin="round" />
+      <path
+        d="M705 326C730 324 756 330 775 342C746 340 723 340 694 348Z"
+        fill="#ffffff"
+        stroke="#082d55"
+        stroke-width="13"
+        stroke-linejoin="round" />
+      <path
+        d="M626 293C653 299 677 298 700 290C689 307 674 316 654 318C640 315 630 307 626 293Z"
+        class="ink" />
+      <path
+        d="M623 271C647 282 672 283 699 274C687 292 668 300 644 298C631 294 624 286 623 271Z"
+        class="ink" />
+      <circle cx="690" cy="331" r="9.5" class="ink" />
+
+      <path
+        d="M468 558L432 609L401 643"
+        fill="none"
+        class="stroke"
+        stroke-width="14" />
+      <path
+        d="M408 637L378 659L355 653"
+        fill="none"
+        class="stroke"
+        stroke-width="13" />
+      <path
+        d="M548 548L545 584L628 600L664 627"
+        fill="none"
+        class="stroke"
+        stroke-width="15" />
+      <path
+        d="M636 598L614 620"
+        fill="none"
+        class="stroke"
+        stroke-width="13" />
+      <path
+        d="M664 627L686 631"
+        fill="none"
+        class="stroke"
+        stroke-width="13" />
+    </g>
+  </g>
+</svg>

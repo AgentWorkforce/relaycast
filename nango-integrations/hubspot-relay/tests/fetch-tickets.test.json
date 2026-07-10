@@ -1,0 +1,453 @@
+{
+  "nango": {
+    "batchSave": {
+      "Ticket": [
+        {
+          "id": "417878668484",
+          "subject": "Relayfile Seed Ticket 1779365259819-14",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:08:36.884Z",
+          "updatedAt": "2026-05-21T12:08:48.954Z"
+        },
+        {
+          "id": "417889481935",
+          "subject": "Relayfile Seed Ticket 1779365259819-8",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:08:13.838Z",
+          "updatedAt": "2026-05-21T12:08:28.605Z"
+        },
+        {
+          "id": "417891226869",
+          "subject": "Relayfile Seed Ticket 1779365259819-10",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:08:21.171Z",
+          "updatedAt": "2026-05-21T12:08:40.504Z"
+        },
+        {
+          "id": "417894821076",
+          "subject": "Relayfile Seed Ticket 1779365259819-7",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:08:09.937Z",
+          "updatedAt": "2026-05-21T12:08:27.854Z"
+        },
+        {
+          "id": "417896682716",
+          "subject": "Relayfile Seed Ticket 1779365259819-9",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:08:17.680Z",
+          "updatedAt": "2026-05-21T12:08:36.999Z"
+        },
+        {
+          "id": "417908194549",
+          "subject": "Relayfile Seed Ticket 1779365259819-13",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:08:32.691Z",
+          "updatedAt": "2026-05-21T12:08:42.864Z"
+        },
+        {
+          "id": "417909995754",
+          "subject": "Relayfile Seed Ticket 1779365259819-6",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:08:06.535Z",
+          "updatedAt": "2026-05-21T12:08:33.569Z"
+        },
+        {
+          "id": "417913653486",
+          "subject": "Relayfile Seed Ticket 1779365259819-11",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:08:25.127Z",
+          "updatedAt": "2026-05-21T12:08:37.806Z"
+        },
+        {
+          "id": "417917242584",
+          "subject": "Relayfile Seed Ticket 1779365259819-5",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:08:02.985Z",
+          "updatedAt": "2026-05-21T12:08:28.166Z"
+        },
+        {
+          "id": "417926851797",
+          "subject": "Relayfile Seed Ticket 1779365259819-1",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:07:48.631Z",
+          "updatedAt": "2026-05-21T12:08:07.594Z"
+        },
+        {
+          "id": "417934063863",
+          "subject": "Relayfile Seed Ticket 1779365259819-12",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:08:28.803Z",
+          "updatedAt": "2026-05-21T12:08:45.742Z"
+        },
+        {
+          "id": "417943032025",
+          "subject": "Relayfile Seed Ticket 1779365259819-2",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:07:52.103Z",
+          "updatedAt": "2026-05-21T12:08:16.690Z"
+        },
+        {
+          "id": "417952044220",
+          "subject": "Relayfile Seed Ticket 1779365259819-0",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:07:44.555Z",
+          "updatedAt": "2026-05-21T12:08:07.894Z"
+        },
+        {
+          "id": "417952044223",
+          "subject": "Relayfile Seed Ticket 1779365259819-3",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "MEDIUM",
+          "createdAt": "2026-05-21T12:07:55.754Z",
+          "updatedAt": "2026-05-21T12:08:20.995Z"
+        },
+        {
+          "id": "417982781683",
+          "subject": "Relayfile Seed Ticket 1779365259819-4",
+          "pipeline": "0",
+          "stage": "1",
+          "priority": "HIGH",
+          "createdAt": "2026-05-21T12:07:59.184Z",
+          "updatedAt": "2026-05-21T12:08:17.643Z"
+        }
+      ]
+    },
+    "batchDelete": {
+      "Ticket": []
+    }
+  },
+  "api": {
+    "get": {
+      "/crm/v3/objects/tickets": {
+        "response": {
+          "results": [
+            {
+              "id": "417878668484",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:36.884Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:48.954Z",
+                "hs_object_id": "417878668484",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-14"
+              },
+              "createdAt": "2026-05-21T12:08:36.884Z",
+              "updatedAt": "2026-05-21T12:08:48.954Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417878668484"
+            },
+            {
+              "id": "417889481935",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:13.838Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:28.605Z",
+                "hs_object_id": "417889481935",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-8"
+              },
+              "createdAt": "2026-05-21T12:08:13.838Z",
+              "updatedAt": "2026-05-21T12:08:28.605Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417889481935"
+            },
+            {
+              "id": "417891226869",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:21.171Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:40.504Z",
+                "hs_object_id": "417891226869",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-10"
+              },
+              "createdAt": "2026-05-21T12:08:21.171Z",
+              "updatedAt": "2026-05-21T12:08:40.504Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417891226869"
+            },
+            {
+              "id": "417894821076",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:09.937Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:27.854Z",
+                "hs_object_id": "417894821076",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-7"
+              },
+              "createdAt": "2026-05-21T12:08:09.937Z",
+              "updatedAt": "2026-05-21T12:08:27.854Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417894821076"
+            },
+            {
+              "id": "417896682716",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:17.680Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:36.999Z",
+                "hs_object_id": "417896682716",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-9"
+              },
+              "createdAt": "2026-05-21T12:08:17.680Z",
+              "updatedAt": "2026-05-21T12:08:36.999Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417896682716"
+            },
+            {
+              "id": "417908194549",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:32.691Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:42.864Z",
+                "hs_object_id": "417908194549",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-13"
+              },
+              "createdAt": "2026-05-21T12:08:32.691Z",
+              "updatedAt": "2026-05-21T12:08:42.864Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417908194549"
+            },
+            {
+              "id": "417909995754",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:06.535Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:33.569Z",
+                "hs_object_id": "417909995754",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-6"
+              },
+              "createdAt": "2026-05-21T12:08:06.535Z",
+              "updatedAt": "2026-05-21T12:08:33.569Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417909995754"
+            },
+            {
+              "id": "417913653486",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:25.127Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:37.806Z",
+                "hs_object_id": "417913653486",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-11"
+              },
+              "createdAt": "2026-05-21T12:08:25.127Z",
+              "updatedAt": "2026-05-21T12:08:37.806Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417913653486"
+            },
+            {
+              "id": "417917242584",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:02.985Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:28.166Z",
+                "hs_object_id": "417917242584",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-5"
+              },
+              "createdAt": "2026-05-21T12:08:02.985Z",
+              "updatedAt": "2026-05-21T12:08:28.166Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417917242584"
+            },
+            {
+              "id": "417926851797",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:07:48.631Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:07.594Z",
+                "hs_object_id": "417926851797",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-1"
+              },
+              "createdAt": "2026-05-21T12:07:48.631Z",
+              "updatedAt": "2026-05-21T12:08:07.594Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417926851797"
+            },
+            {
+              "id": "417934063863",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:08:28.803Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:45.742Z",
+                "hs_object_id": "417934063863",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-12"
+              },
+              "createdAt": "2026-05-21T12:08:28.803Z",
+              "updatedAt": "2026-05-21T12:08:45.742Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417934063863"
+            },
+            {
+              "id": "417943032025",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:07:52.103Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:16.690Z",
+                "hs_object_id": "417943032025",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-2"
+              },
+              "createdAt": "2026-05-21T12:07:52.103Z",
+              "updatedAt": "2026-05-21T12:08:16.690Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417943032025"
+            },
+            {
+              "id": "417952044220",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:07:44.555Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:07.894Z",
+                "hs_object_id": "417952044220",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-0"
+              },
+              "createdAt": "2026-05-21T12:07:44.555Z",
+              "updatedAt": "2026-05-21T12:08:07.894Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417952044220"
+            },
+            {
+              "id": "417952044223",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:07:55.754Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:20.995Z",
+                "hs_object_id": "417952044223",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-3"
+              },
+              "createdAt": "2026-05-21T12:07:55.754Z",
+              "updatedAt": "2026-05-21T12:08:20.995Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417952044223"
+            },
+            {
+              "id": "417982781683",
+              "properties": {
+                "content": null,
+                "createdate": "2026-05-21T12:07:59.184Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:17.643Z",
+                "hs_object_id": "417982781683",
+                "hs_pipeline": "0",
+                "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "HIGH",
+                "hubspot_owner_id": null,
+                "subject": "Relayfile Seed Ticket 1779365259819-4"
+              },
+              "createdAt": "2026-05-21T12:07:59.184Z",
+              "updatedAt": "2026-05-21T12:08:17.643Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-5/417982781683"
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 12:37:27 GMT",
+          "content-type": "application/json;charset=utf-8",
+          "content-length": "7367",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "991",
+          "x-ratelimit-reset": "1779367086",
+          "etag": "W/\"1cc7-5444oK/dGNWrH/KRW4evax9ftys\""
+        },
+        "hash": "4d8da21cc63d4e60473780a682478be7a4711382",
+        "request": {
+          "params": {
+            "limit": "100",
+            "properties": "subject,content,hubspot_owner_id,hs_pipeline,hs_pipeline_stage,hs_category,hs_ticket_priority,createdate,hs_lastmodifieddate"
+          }
+        }
+      }
+    }
+  }
+}

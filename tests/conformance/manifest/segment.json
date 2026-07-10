@@ -1,0 +1,33 @@
+{
+  "provider": "segment",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-segment",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "track",
+      "source": "official:https://segment.com/docs/connections/sources/catalog/libraries/server/http-api/ | nango-template:none-found-in-NangoHQ/integration-templates | local:relayfile-adapters/packages/segment/src/webhook-normalizer.ts",
+      "payload": {
+        "type": "track",
+        "messageId": "msg_123",
+        "event": "Signed Up",
+        "userId": "user_1"
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/segment/events/msg_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

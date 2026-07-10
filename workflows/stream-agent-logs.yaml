@@ -1,0 +1,204 @@
+version: "1.0"
+name: stream-agent-logs
+description: >
+  Stream individual agent PTY logs to S3 in real-time, not just at workflow
+  completion. Currently runner.log streams every 10s but agent logs are only
+  uploaded after the workflow finishes. Users see no agent activity during
+  long-running steps. Fix by flushing each agent's PTY log to S3 periodically.
+
+swarm:
+  pattern: dag
+  channel: wf-stream-logs
+  maxConcurrency: 4
+  timeoutMs: 3600000
+
+agents:
+  - name: lead
+    cli: codex
+    role: Architect — designs the streaming approach, reviews implementation
+  - name: bootstrap-worker
+    cli: codex
+    role: Implements real-time agent log streaming in the bootstrap script
+    constraints:
+      idleThresholdSecs: 180
+  - name: api-worker
+    cli: codex
+    role: Updates the logs API to serve agent logs during execution
+    constraints:
+      idleThresholdSecs: 180
+
+workflows:
+  - name: stream-agent-logs-flow
+    steps:
+      - name: read-context
+        type: deterministic
+        command: |
+          echo "=== SCRIPT GENERATOR (log flusher + agent log upload) ===" &&
+          grep -n "LogStreamer\|logFlusher\|uploadAgentLogs\|runner.log\|agent.log\|worker-logs" packages/core/src/bootstrap/script-generator.ts &&
+          echo "=== FULL LOG FLUSHER SECTION ===" &&
+          sed -n '/Log flusher/,/^function /p' packages/core/src/bootstrap/script-generator.ts | head -60 &&
+          echo "=== FULL UPLOAD AGENT LOGS ===" &&
+          sed -n '/async function uploadAgentLogs/,/^}/p' packages/core/src/bootstrap/script-generator.ts &&
+          echo "=== LOGS API ROUTE ===" &&
+          cat "packages/web/app/api/v1/workflows/runs/[runId]/logs/route.ts" &&
+          echo "=== LOG STREAMER CLASS ===" &&
+          cat packages/core/src/storage/log-streamer.ts &&
+          echo "=== SCOPED S3 CLIENT (putObject) ===" &&
+          grep -A8 "async putObject" packages/core/src/storage/client.ts
+        captureOutput: true
+
+      - name: design
+        agent: lead
+        dependsOn: [read-context]
+        task: |
+          Design real-time agent log streaming.
+
+          Context:
+          {{steps.read-context.output}}
+
+          CURRENT BEHAVIOR:
+          - runner.log is flushed to S3 every 10s via startLogFlusher()
+          - Individual agent PTY logs are written to local files at
+            .agent-relay/team/worker-logs/{agentName}.log
+          - These are only uploaded to S3 AFTER the workflow completes
+            via uploadAgentLogs()
+          - The logs API can serve {sandboxId}/agent.log from S3
+          - Users see no agent activity during long-running steps
+
+          TARGET BEHAVIOR:
+          - Each agent's PTY log should stream to S3 every 10s
+          - The logs API already supports ?sandboxId= parameter
+          - Users can poll /logs?sandboxId={agentName} to see real-time output
+
+          DESIGN:
+          1. In the bootstrap script's initializeWorkflow or executeWorkflow,
+             after the WorkflowRunner starts executing, set up periodic
+             flushing of agent log files to S3.
+
+          2. The approach: similar to the runner.log flusher, start an interval
+             that scans .agent-relay/team/worker-logs/ for .log files and
+             uploads each to S3 at {agentName}/agent.log
+
+          3. The flusher should:
+             - Run every 10 seconds
+             - Track file sizes to avoid re-uploading unchanged content
+             - Upload each agent log to S3 at key: {agentName}/agent.log
+             - Continue until the workflow completes
+             - Do a final flush before the existing uploadAgentLogs()
+
+          4. The logs API already handles ?sandboxId={agentName} — it reads
+             from S3 at {userId}/{runId}/{sandboxId}/agent.log. So we just
+             need to make sure the bootstrap writes to the right S3 keys.
+
+          5. The key format: the runner writes logs as {agentName}.log locally.
+             The S3 key should be {agentName}/agent.log to match what the
+             logs API expects.
+
+          Write the design to shared/stream-logs-design.md
+          (create shared/ directory first with mkdir -p shared).
+        verification:
+          type: file_exists
+          value: shared/stream-logs-design.md
+
+      - name: impl-bootstrap
+        agent: bootstrap-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/stream-logs-design.md.
+
+          Update packages/core/src/bootstrap/script-generator.ts to add
+          real-time agent log streaming.
+
+          The generated bootstrap script needs a new function
+          startAgentLogFlusher(s3, brokerCwd) that:
+          - Runs every 10 seconds (like the existing runner.log flusher)
+          - Scans {brokerCwd}/.agent-relay/team/worker-logs/ for .log files
+          - Tracks each file's last uploaded size
+          - Uploads changed files to S3 at {agentName}/agent.log
+          - Returns a cleanup function to stop the interval
+
+          Wire it into the bootstrap:
+          - Start the agent log flusher after executeWorkflow begins
+            (or right after the broker starts)
+          - Stop it before the final uploadAgentLogs()
+          - Do a final flush in stopAgentLogFlusher
+
+          Keep the existing uploadAgentLogs() as a final catch-all.
+
+          IMPORTANT: This code goes in the GENERATED bootstrap script string
+          (inside the template literal), not as a regular function.
+
+          Write all changes to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-api
+        agent: api-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/stream-logs-design.md.
+
+          Verify and update the logs API at
+          packages/web/app/api/v1/workflows/runs/[runId]/logs/route.ts
+
+          The API already supports ?sandboxId= parameter to read agent-specific
+          logs from S3 at {userId}/{runId}/{sandboxId}/agent.log.
+
+          Verify:
+          1. The sandboxId query param is read correctly
+          2. The S3 key is constructed as {userId}/{runId}/{sandboxId}/agent.log
+          3. The offset-based pagination works for streaming
+          4. The done flag reflects whether the run is completed
+
+          Also update the CLI logs command at packages/cli/src/bootstrap.ts
+          to accept --agent flag that maps to sandboxId:
+          - Add --agent <name> option to the logs command
+          - Pass it as sandboxId to the getRunLogs() call
+
+          Write all changes to disk.
+        verification:
+          type: exit_code
+
+      - name: verify-files
+        type: deterministic
+        dependsOn: [impl-bootstrap, impl-api]
+        command: |
+          missing=0
+          grep -q "agentLogFlusher\|startAgentLog\|agent.*log.*flusher" packages/core/src/bootstrap/script-generator.ts || { echo "MISSING: agent log flusher in script generator"; missing=$((missing+1)); }
+          grep -q "\-\-agent" packages/cli/src/bootstrap.ts || { echo "MISSING: --agent flag in CLI"; missing=$((missing+1)); }
+          if [ $missing -gt 0 ]; then echo "$missing checks failed"; exit 1; fi
+          echo "All checks passed"
+        failOnError: true
+        captureOutput: true
+
+      - name: read-impl
+        type: deterministic
+        dependsOn: [verify-files]
+        command: |
+          echo "=== SCRIPT GENERATOR (agent flusher) ===" &&
+          grep -B5 -A30 "agentLogFlusher\|startAgentLog\|agent.*log.*flush" packages/core/src/bootstrap/script-generator.ts | head -80 &&
+          echo "=== CLI LOGS COMMAND ===" &&
+          grep -B5 -A10 "agent\|sandboxId" packages/cli/src/bootstrap.ts | head -40
+        captureOutput: true
+
+      - name: review
+        agent: lead
+        dependsOn: [read-impl]
+        task: |
+          Review all implementations:
+          {{steps.read-impl.output}}
+
+          Verify:
+          1. Agent log flusher runs every 10s inside the bootstrap
+          2. It scans worker-logs/ directory for .log files
+          3. Each file is uploaded to S3 at {agentName}/agent.log
+          4. File sizes are tracked to avoid redundant uploads
+          5. Flusher starts before/during workflow execution
+          6. Flusher stops gracefully, does final flush
+          7. CLI --agent flag passes sandboxId to the logs API
+          8. Code is inside the template literal (generated script), not outside
+
+          Fix any issues found directly in the files.
+
+errorHandling:
+  strategy: continue

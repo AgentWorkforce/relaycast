@@ -1,0 +1,75 @@
+{
+  "provider": "dropbox",
+  "nangoIntegration": "dropbox-relay",
+  "adapterPackage": "@relayfile/adapter-dropbox",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "files.changed",
+      "source": "official:https://www.dropbox.com/developers/documentation/http/documentation | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/dropbox | local:relayfile-adapters/packages/dropbox/src/webhook-normalizer.ts",
+      "payload": {
+        "list_folder": {
+          "accounts": [
+            "dbid:acct1"
+          ]
+        },
+        "delta": {
+          "users": [
+            "dbid:acct1"
+          ]
+        }
+      },
+      "expect": {
+        "triggersSync": [
+          {
+            "providerConfigKey": "dropbox-relay",
+            "syncName": "fetch-files"
+          },
+          {
+            "providerConfigKey": "dropbox-relay",
+            "syncName": "fetch-folders"
+          },
+          {
+            "providerConfigKey": "dropbox-relay",
+            "syncName": "fetch-shared-folders"
+          },
+          {
+            "providerConfigKey": "dropbox-relay",
+            "syncName": "fetch-shared-links"
+          }
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [
+    {
+      "model": "DropboxFile",
+      "syncName": "fetch-files",
+      "source": "official:https://www.dropbox.com/developers/documentation/http/documentation | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/dropbox | local:cloud/nango-integrations/dropbox-relay/syncs/fetch-files.ts",
+      "records": [
+        {
+          "id": "id:abc123",
+          "name": "spec.md",
+          "path_lower": "/project/spec.md",
+          "path_display": "/Project/spec.md",
+          ".tag": "file"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/dropbox/files/spec-md__id%3Aabc123.json",
+          "contentIncludes": [
+            "name",
+            "path_lower"
+          ]
+        }
+      ]
+    }
+  ],
+  "writebackScope": "not-cloud-bridged"
+}

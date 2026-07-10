@@ -1,0 +1,21 @@
+{
+  "type": "forward",
+  "from": "slack",
+  "connectionId": "conn-e2e",
+  "providerConfigKey": "slack-sage",
+  "payload": {
+    "type": "event_callback",
+    "team_id": "T0E2E000",
+    "event_id": "Ev_E2E_001",
+    "event_time": 1700000000,
+    "event": {
+      "type": "app_mention",
+      "user": "U-HUMAN",
+      "text": "<@U-BOT> hello",
+      "ts": "1700000000.000001",
+      "channel": "C-E2E",
+      "event_ts": "1700000000.000001",
+      "team": "T0E2E000"
+    }
+  }
+}

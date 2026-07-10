@@ -1,0 +1,21 @@
+{
+  "name": "@agentworkforce/credential-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/worker.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-relay/credential-proxy": "7.1.1",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@cloudflare/workers-types": "^4.20250312.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  }
+}

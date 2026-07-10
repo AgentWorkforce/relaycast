@@ -1,0 +1,26 @@
+{
+  "name": "@cloud/cataloging-agent-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@relayauth/sdk": "^0.2.15",
+    "@relayfile/core": "^0.10.9",
+    "@relayfile/sdk": "^0.10.9",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250312.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.1"
+  }
+}

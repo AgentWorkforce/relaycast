@@ -1,0 +1,46 @@
+name: tic-tac-toe
+version: "1.0"
+description: Two Codex agents play tic-tac-toe via relay messaging to verify shared credentials.
+swarm:
+  pattern: debate
+  maxConcurrency: 2
+  timeoutMs: 180000
+  channel: tic-tac-toe
+  idleNudge:
+    nudgeAfterMs: 30000
+    escalateAfterMs: 30000
+    maxNudges: 5
+agents:
+  - name: player-x
+    cli: codex
+    role: Plays tic-tac-toe as X (goes first)
+    constraints:
+      idleThresholdSecs: 120
+  - name: player-o
+    cli: codex
+    role: Plays tic-tac-toe as O (goes second)
+    constraints:
+      idleThresholdSecs: 120
+workflows:
+  - name: tic-tac-toe-game
+    steps:
+      - name: player-x-turn
+        type: agent
+        agent: player-x
+        task: |
+          You are playing tic-tac-toe. The board is a 3x3 grid with positions labeled row,col (0-indexed).
+          You are Player X. You go FIRST. Pick your opening move and send it to the
+          tic-tac-toe channel using relay_send. Format: MOVE row,col followed by the board state.
+          Then check relay_inbox for player-o's response. Keep alternating until someone wins or it's a draw.
+          When the game ends, call remove_agent(name: "player-x", reason: "game over") to exit.
+      - name: player-o-turn
+        type: agent
+        agent: player-o
+        task: |
+          You are playing tic-tac-toe. The board is a 3x3 grid with positions labeled row,col (0-indexed).
+          You are Player O. You go SECOND. Check relay_inbox for Player X's opening move.
+          Parse their move, update your board, then pick your move and send it to the
+          tic-tac-toe channel. Keep alternating until the game ends.
+          When the game ends, call remove_agent(name: "player-o", reason: "game over") to exit.
+errorHandling:
+  strategy: fail-fast

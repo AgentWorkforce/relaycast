@@ -1,0 +1,37 @@
+{
+  "provider": "intercom",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-intercom",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "conversation.created",
+      "source": "official:https://developers.intercom.com/docs/references/rest-api/api.intercom.io/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/intercom | local:relayfile-adapters/packages/intercom/src/webhook-normalizer.ts",
+      "payload": {
+        "type": "notification_event",
+        "topic": "conversation.created",
+        "data": {
+          "item": {
+            "id": "conv_123",
+            "type": "conversation"
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/intercom/conversations/conv_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

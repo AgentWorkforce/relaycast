@@ -1,0 +1,263 @@
+version: "1.0"
+name: code-sync-upload
+description: >
+  Implement code upload/sync so cloud-run workflows have access to the user's
+  project files. The CLI tars the local project, uploads to S3, and the
+  bootstrap downloads and extracts it in the sandbox at /project.
+
+swarm:
+  pattern: dag
+  channel: wf-code-sync
+  maxConcurrency: 4
+  timeoutMs: 3600000
+
+agents:
+  - name: lead
+    cli: claude
+    role: Architect — designs the upload flow, reviews implementations
+  - name: cli-worker
+    cli: codex
+    role: Implements CLI-side code upload
+    constraints:
+      idleThresholdSecs: 120
+  - name: server-worker
+    cli: codex
+    role: Implements server-side S3 upload endpoint and run route changes
+    constraints:
+      idleThresholdSecs: 120
+  - name: bootstrap-worker
+    cli: codex
+    role: Implements bootstrap code download and extraction
+    constraints:
+      idleThresholdSecs: 120
+
+workflows:
+  - name: code-sync-flow
+    steps:
+      - name: read-context
+        type: deterministic
+        command: |
+          echo "=== CLI runWorkflow function ===" &&
+          sed -n '/export async function runWorkflow/,/^}/p' packages/cli/src/workflows.ts &&
+          echo "=== RUN ROUTE ===" &&
+          cat packages/web/app/api/v1/workflows/run/route.ts &&
+          echo "=== LAUNCHER (env vars + s3CodeKey) ===" &&
+          grep -B2 -A5 "s3CodeKey\|S3_CODE_KEY\|credentialsToEnv" packages/core/src/bootstrap/launcher.ts &&
+          echo "=== SCRIPT GENERATOR (code download) ===" &&
+          grep -B2 -A10 "downloadAndExtractCode\|S3_CODE_KEY\|codeKey" packages/core/src/bootstrap/script-generator.ts &&
+          echo "=== CODE TRANSFER ===" &&
+          cat packages/core/src/storage/code-transfer.ts &&
+          echo "=== S3Credentials type ===" &&
+          grep -A8 "S3Credentials" packages/core/src/auth/credentials.ts | head -10 &&
+          echo "=== AUTH (requireAuthScope) ===" &&
+          grep -A5 "requireAuthScope\|requireSessionAuth" packages/web/lib/auth/request-auth.ts | head -20
+        captureOutput: true
+
+      - name: design
+        agent: lead
+        dependsOn: [read-context]
+        task: |
+          Design the code upload/sync feature for cloud workflows.
+
+          Context:
+          {{steps.read-context.output}}
+
+          PROBLEM: When a workflow runs in the cloud, the sandbox has no access to the
+          user's project files. The `read-context` step in workflows fails because
+          files like `packages/core/src/auth/sandbox-auth.ts` don't exist. Code-editing
+          workflows are useless without the source code.
+
+          SOLUTION: The CLI uploads the project code to S3 before submitting the run.
+          The bootstrap script downloads and extracts it.
+
+          The code-transfer module (packages/core/src/storage/code-transfer.ts) already
+          has `uploadCode()` and `downloadAndExtractCode()` — we just need to wire them up.
+
+          Design these changes:
+
+          1. CLI (`packages/cli/src/workflows.ts` — `runWorkflow` function):
+             - Before POST /run, tar the current working directory (respecting .gitignore)
+             - Upload the tarball to a pre-signed S3 URL or via a new upload endpoint
+             - Include the S3 key in the run request body
+
+             Option A: CLI gets temporary S3 credentials from a new endpoint, uploads directly
+             Option B: CLI uploads via a multipart POST to a new `/api/v1/workflows/upload` endpoint
+             Option C: CLI sends code inline in the run request (too large for most projects)
+
+             Recommend Option A — the server already mints scoped S3 creds via STS.
+             New endpoint: POST /api/v1/workflows/prepare returns { s3Credentials, runId, s3CodeKey }
+             Then CLI uploads to S3 using those creds and POSTs /run with the s3CodeKey.
+
+          2. Server (`packages/web/app/api/v1/workflows/run/route.ts`):
+             - Accept optional `s3CodeKey` in the request body
+             - Pass it through to the credential bundle so the bootstrap downloads it
+             - Restore the s3CodeKey in buildCredentialBundle (was removed)
+
+          3. Bootstrap (`packages/core/src/bootstrap/script-generator.ts`):
+             - The `downloadAndExtractCode` call already exists in initializeWorkflow
+             - It checks `env.S3_CODE_KEY` — just needs the env var set properly
+             - Verify the flow: download tar.gz → extract to /project → git init baseline
+
+          4. New endpoint: POST /api/v1/workflows/prepare
+             - Auth check (session or cli:auth)
+             - Generate runId
+             - Mint scoped S3 credentials for the run prefix
+             - Return { runId, s3Credentials: { accessKeyId, secretAccessKey, sessionToken, bucket, prefix }, s3CodeKey: "code.tar.gz" }
+
+          5. CLI changes:
+             - `runWorkflow` calls POST /prepare first
+             - Uses returned S3 creds to upload code tarball via @aws-sdk/client-s3
+             - Then POSTs /run with { workflow, fileType, runId, s3CodeKey }
+
+          6. Run route changes:
+             - Accept optional `runId` and `s3CodeKey` from the request
+             - If `runId` provided, use it (don't generate a new one)
+             - If `s3CodeKey` provided, pass to credentialBundle
+
+          Write the full design to /shared/code-sync-design.md with exact file paths
+          and function signatures.
+
+      - name: impl-prepare-endpoint
+        agent: server-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/code-sync-design.md.
+
+          Create the new prepare endpoint:
+          packages/web/app/api/v1/workflows/prepare/route.ts
+
+          This POST endpoint:
+          - Authenticates via resolveRequestAuth (allow session + cli:auth)
+          - Generates a runId (crypto.randomUUID)
+          - Reads roleArn and bucket from Resource.WorkflowStorage
+          - Calls mintS3Credentials({ userId, runId, roleArn, bucket })
+          - Returns JSON: { runId, s3Credentials, s3CodeKey: "code.tar.gz" }
+
+          Also update packages/web/app/api/v1/workflows/run/route.ts:
+          - Accept optional `runId` and `s3CodeKey` in the request body
+          - If `runId` provided, use it instead of generating a new one
+          - If `s3CodeKey` provided, add it to the credentialBundle
+
+          Import mintS3Credentials from @/lib/workflows.
+          Import requireAuthScope, resolveRequestAuth from @/lib/auth/request-auth.
+          Import Resource from sst.
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-cli-upload
+        agent: cli-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/code-sync-design.md.
+
+          Update packages/cli/src/workflows.ts — modify `runWorkflow`:
+
+          1. Add a `--sync-code` flag (default true for code-editing workflows)
+          2. Before POST /run, if sync-code is enabled:
+             a. POST /api/v1/workflows/prepare to get { runId, s3Credentials, s3CodeKey }
+             b. Use the returned S3 credentials to create an S3Client
+             c. Tar the current working directory (cwd), respecting .gitignore
+                - Use the `tar` and `ignore` npm packages
+                - Exclude: .git, node_modules, .sst, .next, .open-next
+             d. Upload the tarball to S3 at `{prefix}/code.tar.gz`
+             e. POST /run with { workflow, fileType, runId, s3CodeKey }
+          3. If sync-code is disabled, POST /run as before (no code upload)
+
+          Add necessary imports: S3Client, PutObjectCommand from @aws-sdk/client-s3,
+          tar (for packing), ignore (for .gitignore parsing).
+
+          Also update packages/cli/src/bootstrap.ts:
+          - Add --sync-code / --no-sync-code flag to the run command
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-bootstrap-verify
+        agent: bootstrap-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/code-sync-design.md.
+
+          Verify and fix the bootstrap code download flow in
+          packages/core/src/bootstrap/script-generator.ts.
+
+          The initializeWorkflow function already has:
+          ```
+          const codeKey = env.S3_CODE_KEY;
+          if (codeKey) {
+            await downloadAndExtractCode(s3, codeKey, sandboxFs, codeMountPath);
+          }
+          ```
+
+          Verify:
+          1. downloadAndExtractCode is imported from './lib/storage/code-transfer.js'
+          2. The ScopedS3Client is created with the right env vars
+          3. The code is extracted to codeMountPath (/project)
+          4. After extraction, git init + baseline commit runs on the extracted code
+
+          Also verify packages/core/src/storage/code-transfer.ts:
+          - downloadAndExtractCode(s3, s3Key, sandbox, targetDir) works correctly
+          - It downloads the tar.gz, extracts to targetDir
+
+          Also update packages/core/src/bootstrap/launcher.ts:
+          - In credentialsToEnv, make sure S3_CODE_KEY is passed through if present
+            in the credential bundle
+          - Check that the launcher passes s3CodeKey from options to the env vars
+
+          Fix any issues found. Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: verify-files
+        type: deterministic
+        dependsOn: [impl-prepare-endpoint, impl-cli-upload, impl-bootstrap-verify]
+        command: |
+          missing=0
+          test -f packages/web/app/api/v1/workflows/prepare/route.ts || { echo "MISSING: prepare endpoint"; missing=$((missing+1)); }
+          grep -q "s3CodeKey" packages/web/app/api/v1/workflows/run/route.ts || { echo "MISSING: s3CodeKey in run route"; missing=$((missing+1)); }
+          grep -q "prepare" packages/cli/src/workflows.ts || { echo "MISSING: prepare call in CLI"; missing=$((missing+1)); }
+          grep -q "S3_CODE_KEY" packages/core/src/bootstrap/launcher.ts || { echo "MISSING: S3_CODE_KEY in launcher env"; missing=$((missing+1)); }
+          if [ $missing -gt 0 ]; then echo "$missing checks failed"; exit 1; fi
+          echo "All checks passed"
+        failOnError: true
+        captureOutput: true
+
+      - name: read-impl
+        type: deterministic
+        dependsOn: [verify-files]
+        command: |
+          echo "=== PREPARE ENDPOINT ===" &&
+          cat packages/web/app/api/v1/workflows/prepare/route.ts &&
+          echo "=== RUN ROUTE (s3CodeKey changes) ===" &&
+          grep -B2 -A5 "s3CodeKey\|runId.*body\|optionalRunId" packages/web/app/api/v1/workflows/run/route.ts &&
+          echo "=== CLI WORKFLOWS (upload changes) ===" &&
+          cat packages/cli/src/workflows.ts &&
+          echo "=== LAUNCHER (S3_CODE_KEY) ===" &&
+          grep -B2 -A5 "S3_CODE_KEY\|s3CodeKey" packages/core/src/bootstrap/launcher.ts
+        captureOutput: true
+
+      - name: review
+        agent: lead
+        dependsOn: [read-impl]
+        task: |
+          Review all implementations:
+          {{steps.read-impl.output}}
+
+          Verify:
+          1. POST /prepare returns { runId, s3Credentials, s3CodeKey }
+          2. CLI calls /prepare, uploads tarball, then calls /run with runId + s3CodeKey
+          3. Run route accepts optional runId and s3CodeKey
+          4. s3CodeKey is passed through credential bundle to the bootstrap env
+          5. Bootstrap's downloadAndExtractCode extracts to /project
+          6. .gitignore is respected in the tar (no node_modules, .git, etc.)
+          7. Auth is consistent: both /prepare and /run accept cli:auth tokens
+          8. S3 credentials are properly scoped to the run prefix
+          9. No secrets leaked in responses
+
+          Fix any issues found directly in the files.
+
+errorHandling:
+  strategy: continue

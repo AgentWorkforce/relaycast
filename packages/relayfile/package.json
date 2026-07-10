@@ -1,0 +1,33 @@
+{
+  "name": "relayfile-cloud",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "lint": "node ../../node_modules/prettier/bin/prettier.cjs --check .",
+    "test": "node ../../node_modules/vitest/vitest.mjs run",
+    "test:watch": "node ../../node_modules/vitest/vitest.mjs",
+    "test:load": "node ../../node_modules/vitest/vitest.mjs run test/load",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit",
+    "check:do-unbounded-sql": "node scripts/check-do-unbounded-sql.mjs"
+  },
+  "dependencies": {
+    "@relayauth/sdk": "^0.2.15",
+    "@relayfile/adapter-confluence": "^0.2.13",
+    "@relayfile/adapter-github": "^0.3.18",
+    "@relayfile/adapter-jira": "^0.3.12",
+    "@relayfile/adapter-linear": "^0.3.22",
+    "@relayfile/adapter-notion": "^0.3.15",
+    "@relayfile/adapter-slack": "^0.4.0",
+    "@relayfile/core": "^0.10.9",
+    "@relayfile/sdk": "^0.10.9",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250312.0",
+    "@types/node": "^25.5.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.1"
+  }
+}

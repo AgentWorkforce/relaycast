@@ -1,0 +1,115 @@
+{
+  "provider": "slack",
+  "nangoIntegration": "slack-relay",
+  "adapterPackage": "@relayfile/adapter-slack",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "message.channels",
+      "source": "official:https://api.slack.com/events/message | proven-ref:cloud/packages/web/lib/integrations/nango-webhook-router.ts handleSlackRelayfileForward | path-convention:cloud/tests/record-buckets.test.ts",
+      "providerConfigKey": "slack-relay",
+      "payload": {
+        "type": "event_callback",
+        "team_id": "T024BE91L",
+        "event_id": "Ev0PV52K21",
+        "event": {
+          "type": "message",
+          "channel": "C024BE91L",
+          "user": "U2147483697",
+          "text": "hello relayfile",
+          "ts": "1780300800.000100"
+        }
+      },
+      "mockNango": [
+        {
+          "endpointMatches": "/conversations.info",
+          "body": {
+            "ok": true,
+            "channel": { "id": "C024BE91L", "name": "general" }
+          }
+        }
+      ],
+      "expect": {
+        "pathPatterns": [
+          "^/slack/channels/C024BE91L__general/messages/1780300800_000100/meta\\.json$"
+        ],
+        "contentIncludes": ["hello relayfile"]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "post_message",
+      "source": "official:https://api.slack.com/methods/chat.postMessage | proven-ref:relayfile-adapters/packages/slack/src/__tests__/writeback.test.ts",
+      "filePath": "/slack/channels/customer-success/messages/draft@message.json",
+      "content": "Hello team!",
+      "mockResponse": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "channel": "C01ABC1234",
+          "ts": "1780300800.009999",
+          "message": { "text": "Hello team!" }
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpoint": "/chat.postMessage",
+        "bodyIncludes": {
+          "channel": "#customer-success",
+          "text": "Hello team!"
+        }
+      }
+    },
+    {
+      "action": "reply_in_thread",
+      "source": "official:https://api.slack.com/methods/chat.postMessage (thread_ts) | proven-ref:relayfile-adapters/packages/slack/src/__tests__/writeback.test.ts",
+      "filePath": "/slack/channels/customer-success/messages/1762445678_001234/replies/draft@reply.json",
+      "content": "Following up here.",
+      "mockResponse": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "channel": "C01ABC1234",
+          "ts": "1762445678.009999",
+          "message": { "text": "Following up here." }
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpoint": "/chat.postMessage",
+        "bodyIncludes": {
+          "channel": "#customer-success",
+          "text": "Following up here.",
+          "thread_ts": "1762445678.001234"
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "SlackMessage",
+      "syncName": "fetch-channel-history",
+      "source": "nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/slack | path-convention:cloud/tests/record-buckets.test.ts",
+      "records": [
+        {
+          "channel": "C024BE91L",
+          "channelName": "general",
+          "user": "U2147483697",
+          "text": "hello relayfile",
+          "ts": "1780300800.000100"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/slack/channels/C024BE91L__general/messages/1780300800_000100/meta.json",
+          "contentIncludes": ["hello relayfile"]
+        }
+      ]
+    }
+  ]
+}

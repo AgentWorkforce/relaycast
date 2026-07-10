@@ -1,0 +1,191 @@
+{
+  "nango": {
+    "batchSave": {
+      "NotionUser": [
+        {
+          "id": "2f8d872b-594c-813c-b049-0002425f14a0",
+          "name": "Khaliq Gant",
+          "is_bot": false,
+          "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocKOAZyZbL_sLx_ePQ502jhJ7ljzoodwk7eDH5NaKO65Oymp=s100",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "2f8d872b-594c-81f5-84b2-0002c2f6babc",
+          "name": "Will Washburn",
+          "is_bot": false,
+          "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/678bbf0a-a991-4af9-82b4-12ae303a242c/wills-headshot.jpeg",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "30b6800c-1c90-81a0-ace7-0027de4e16d9",
+          "name": "Sage by Agent Relay",
+          "is_bot": true,
+          "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/389a2d45-5749-4208-9471-54e13b127950/1c4a9e8d-ec96-4855-96f7-e45ec38aef40png.png",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "3156800c-1c90-812d-9c26-0027c3d1fbb7",
+          "name": "Notion MCP",
+          "is_bot": true,
+          "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/71948896-b1ca-44ee-91c4-152f541964ab/notion-logo-block-main.svg",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "3276800c-1c90-813a-aefd-002785d752f6",
+          "name": "Openclaw",
+          "is_bot": true,
+          "avatar_url": null,
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "3586800c-1c90-81ec-8723-0027cf2c2ab5",
+          "name": "Composio",
+          "is_bot": true,
+          "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/b00d04c6-ef12-4ad3-ad9f-699ce83b1a21/eb16534a-eedc-4957-9a6c-b0b78c95f273png.png",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        },
+        {
+          "id": "3586800c-1c90-813e-ad66-00271ee7ee75",
+          "name": "File by Agent Relay",
+          "is_bot": true,
+          "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/cbbbf34c-6dbf-4659-8023-5634cd7b1ee2/04ff52ba-f523-4a6e-99b2-fc40c6f7f565png.png",
+          "last_edited_time": "2026-05-12T22:42:48.066Z"
+        }
+      ]
+    },
+    "batchDelete": {
+      "NotionUser": []
+    }
+  },
+  "api": {
+    "get": {
+      "/v1/users": {
+        "response": {
+          "object": "list",
+          "results": [
+            {
+              "object": "user",
+              "id": "2f8d872b-594c-813c-b049-0002425f14a0",
+              "name": "Khaliq Gant",
+              "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocKOAZyZbL_sLx_ePQ502jhJ7ljzoodwk7eDH5NaKO65Oymp=s100",
+              "type": "person",
+              "person": {
+                "email": "redacted@example.com"
+              }
+            },
+            {
+              "object": "user",
+              "id": "2f8d872b-594c-81f5-84b2-0002c2f6babc",
+              "name": "Will Washburn",
+              "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/678bbf0a-a991-4af9-82b4-12ae303a242c/wills-headshot.jpeg",
+              "type": "person",
+              "person": {
+                "email": "redacted-2@example.com"
+              }
+            },
+            {
+              "object": "user",
+              "id": "30b6800c-1c90-81a0-ace7-0027de4e16d9",
+              "name": "Sage by Agent Relay",
+              "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/389a2d45-5749-4208-9471-54e13b127950/1c4a9e8d-ec96-4855-96f7-e45ec38aef40png.png",
+              "type": "bot",
+              "bot": {}
+            },
+            {
+              "object": "user",
+              "id": "3156800c-1c90-812d-9c26-0027c3d1fbb7",
+              "name": "Notion MCP",
+              "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/71948896-b1ca-44ee-91c4-152f541964ab/notion-logo-block-main.svg",
+              "type": "bot",
+              "bot": {}
+            },
+            {
+              "object": "user",
+              "id": "3276800c-1c90-813a-aefd-002785d752f6",
+              "name": "Openclaw",
+              "avatar_url": null,
+              "type": "bot",
+              "bot": {}
+            },
+            {
+              "object": "user",
+              "id": "3586800c-1c90-81ec-8723-0027cf2c2ab5",
+              "name": "Composio",
+              "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/b00d04c6-ef12-4ad3-ad9f-699ce83b1a21/eb16534a-eedc-4957-9a6c-b0b78c95f273png.png",
+              "type": "bot",
+              "bot": {}
+            },
+            {
+              "object": "user",
+              "id": "3586800c-1c90-813e-ad66-00271ee7ee75",
+              "name": "File by Agent Relay",
+              "avatar_url": "https://s3-us-west-2.amazonaws.com/public.notion-static.com/cbbbf34c-6dbf-4659-8023-5634cd7b1ee2/04ff52ba-f523-4a6e-99b2-fc40c6f7f565png.png",
+              "type": "bot",
+              "bot": {
+                "owner": {
+                  "type": "user",
+                  "user": {
+                    "object": "user",
+                    "id": "2f8d872b-594c-813c-b049-0002425f14a0",
+                    "name": "Khaliq Gant",
+                    "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocKOAZyZbL_sLx_ePQ502jhJ7ljzoodwk7eDH5NaKO65Oymp=s100",
+                    "type": "person",
+                    "person": {
+                      "email": "redacted@example.com"
+                    }
+                  }
+                },
+                "workspace_name": "Agent Relay Space",
+                "workspace_id": "88b6800c-1c90-8102-a7d1-00035c8532b1",
+                "workspace_limits": {
+                  "max_file_upload_size_in_bytes": 5368709120
+                }
+              }
+            }
+          ],
+          "next_cursor": null,
+          "has_more": false,
+          "type": "user",
+          "user": {},
+          "request_id": "76a682f7-efba-4ab3-8a52-cd57dd71d1b4"
+        },
+        "status": 200,
+        "headers": {
+          "date": "Tue, 12 May 2026 22:42:48 GMT",
+          "content-type": "application/json; charset=utf-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "200",
+          "x-ratelimit-remaining": "187",
+          "x-ratelimit-reset": "1778625782",
+          "cf-ray": "9facf04e59c3cb90-PDX",
+          "cf-cache-status": "DYNAMIC",
+          "etag": "W/\"8d8-7SF3YaaQ5lSQ4M22meNmTTUAIhA\"",
+          "server": "cloudflare",
+          "vary": "Accept-Encoding",
+          "content-security-policy": "default-src 'none'",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-notion-request-id": "76a682f7-efba-4ab3-8a52-cd57dd71d1b4",
+          "x-permitted-cross-domain-policies": "none",
+          "set-cookie": "<redacted>",
+          "alt-svc": "h3=\":443\"; ma=86400"
+        },
+        "hash": "f7cff476da5d3d3bf676fd53d8a04afecc9b7a88",
+        "request": {
+          "params": {
+            "page_size": "100"
+          }
+        }
+      }
+    }
+  }
+}

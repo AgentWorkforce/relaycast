@@ -1,0 +1,229 @@
+version: "1.0"
+name: db-workflow-store
+description: >
+  Migrate the in-memory workflowStore to a Postgres-backed store.
+  This fixes: logs 404 across Lambda instances, dashboard flashing,
+  runs not surviving deploys, and cloud_agents table not populated on connect.
+
+swarm:
+  pattern: dag
+  channel: wf-db-store
+  maxConcurrency: 4
+  timeoutMs: 1_800_000
+
+agents:
+  - name: lead
+    cli: claude
+    role: Architect — designs schema, reviews implementations
+  - name: schema-worker
+    cli: codex
+    role: Implements DB schema migration and Drizzle model
+    constraints:
+      idleThresholdSecs: 120
+  - name: store-worker
+    cli: codex
+    role: Implements the DB-backed workflow store
+    constraints:
+      idleThresholdSecs: 120
+  - name: connect-worker
+    cli: codex
+    role: Implements cloud_agents population on connect
+    constraints:
+      idleThresholdSecs: 120
+
+workflows:
+  - name: db-workflow-store-flow
+    steps:
+      # ── Phase 1: Read context ──────────────────────────────────────
+      - name: read-context
+        type: deterministic
+        command: |
+          echo "=== CURRENT SCHEMA ===" &&
+          cat packages/web/lib/db/schema.ts &&
+          echo "=== CURRENT WORKFLOW STORE ===" &&
+          cat packages/web/lib/workflows.ts &&
+          echo "=== CURRENT DRIZZLE CONFIG ===" &&
+          cat drizzle.config.ts &&
+          echo "=== EXISTING MIGRATIONS ===" &&
+          ls packages/web/drizzle/*.sql 2>/dev/null | tail -5 &&
+          echo "=== DASHBOARD PAGE (first 100 lines) ===" &&
+          head -100 packages/web/app/dashboard/page.tsx &&
+          echo "=== CONNECT COMPLETE ROUTE ===" &&
+          cat packages/web/app/api/v1/cli/auth/complete/route.ts &&
+          echo "=== RUN ROUTE ===" &&
+          cat packages/web/app/api/v1/workflows/run/route.ts &&
+          echo "=== CALLBACK ROUTE ===" &&
+          cat packages/web/app/api/v1/workflows/callback/route.ts &&
+          echo "=== RUNS ROUTE ===" &&
+          cat packages/web/app/api/v1/workflows/runs/route.ts 2>/dev/null || echo "NO RUNS LIST ROUTE" &&
+          echo "=== RUN STATUS ROUTE ===" &&
+          cat "packages/web/app/api/v1/workflows/runs/[runId]/route.ts" &&
+          echo "=== LOGS ROUTE ===" &&
+          cat "packages/web/app/api/v1/workflows/runs/[runId]/logs/route.ts"
+        captureOutput: true
+
+      # ── Phase 1: Lead designs the migration ────────────────────────
+      - name: design
+        agent: lead
+        dependsOn: [read-context]
+        task: |
+          Design a DB-backed workflow store to replace the in-memory Map store.
+
+          Context from the codebase:
+          {{steps.read-context.output}}
+
+          Requirements:
+          1. Add a `workflow_runs` table to the Drizzle schema (packages/web/lib/db/schema.ts)
+             - id (uuid, primary key)
+             - sandbox_id (text)
+             - user_id (uuid, references users)
+             - workspace_id (uuid, references workspaces)
+             - workflow (text, the raw workflow content)
+             - file_type (text: yaml/ts/py)
+             - callback_token (text)
+             - status (text: pending/running/completed/failed)
+             - result (jsonb, nullable)
+             - error (text, nullable)
+             - created_at (timestamp)
+             - updated_at (timestamp)
+
+          2. Add a `workflow_steps` table for per-step metadata
+             - id (uuid, primary key)
+             - run_id (uuid, references workflow_runs)
+             - step_name, agent, preset, cli, sandbox_id (text fields)
+             - start_time, end_time (timestamp)
+             - duration_ms (integer)
+             - exit_code (integer)
+             - output_summary (text)
+             - error (text, nullable)
+
+          3. Populate `cloud_agents` table when `connect` completes successfully
+             - The table already exists in schema.ts — check its columns
+             - After storing credentials in S3, upsert into cloud_agents
+
+          4. Replace the in-memory workflowStore in packages/web/lib/workflows.ts
+             with a DB-backed implementation using the same interface:
+             - create(), get(), update(), listByUser(), replaceSteps(), listSteps()
+
+          5. Generate a Drizzle migration SQL file
+
+          Write the full design to /shared/db-store-design.md with exact file paths,
+          table DDL, and implementation approach for each file.
+
+      # ── Phase 2: Parallel implementation ───────────────────────────
+      - name: add-schema
+        agent: schema-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/db-store-design.md.
+
+          Add the `workflow_runs` and `workflow_steps` tables to
+          packages/web/lib/db/schema.ts following the existing patterns
+          (uuid primary keys, timestamps, etc.).
+
+          Also generate a Drizzle migration by running:
+          npx drizzle-kit generate --config drizzle.config.ts
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-store
+        agent: store-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/db-store-design.md.
+
+          Replace the in-memory Map store in packages/web/lib/workflows.ts
+          with a Postgres-backed implementation using Drizzle ORM.
+
+          The store must implement the same interface:
+          - create(input): insert into workflow_runs, return WorkflowRecord
+          - get(runId): select from workflow_runs by id
+          - update(runId, patch): update workflow_runs set status/result/error
+          - listByUser(userId): select from workflow_runs where user_id, order by created_at desc
+          - replaceSteps(runId, steps): delete existing + insert into workflow_steps
+          - listSteps(runId): select from workflow_steps where run_id, order by start_time
+
+          Import getDb() from @/lib/db and use the schema tables.
+          Remove the in-memory Map and dev seed data.
+          Keep all type exports (WorkflowRecord, WorkflowCreateInput, etc).
+
+          Write the file to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-connect-agents
+        agent: connect-worker
+        dependsOn: [design]
+        task: |
+          Read the design from /shared/db-store-design.md.
+
+          When `connect` completes successfully (packages/web/app/api/v1/cli/auth/complete/route.ts),
+          upsert into the `cloud_agents` table so the dashboard shows connected agents.
+
+          Check the existing cloud_agents schema columns in packages/web/lib/db/schema.ts
+          and populate: user_id, harness (the CLI name), display_name, status = "connected",
+          credential_stored_at = now(), last_authenticated_at = now().
+
+          Use an upsert pattern: if an agent with the same user_id + harness exists, update it.
+
+          Write the file to disk.
+        verification:
+          type: exit_code
+
+      # ── Phase 2: Verify files ──────────────────────────────────────
+      - name: verify-files
+        type: deterministic
+        dependsOn: [add-schema, impl-store, impl-connect-agents]
+        command: |
+          missing=0
+          for f in packages/web/lib/db/schema.ts packages/web/lib/workflows.ts packages/web/app/api/v1/cli/auth/complete/route.ts; do
+            if [ ! -f "$f" ]; then echo "MISSING: $f"; missing=$((missing+1)); fi
+          done
+          # Check that workflow_runs table exists in schema
+          grep -q "workflowRuns" packages/web/lib/db/schema.ts || { echo "MISSING: workflowRuns table in schema"; missing=$((missing+1)); }
+          grep -q "workflowSteps" packages/web/lib/db/schema.ts || { echo "MISSING: workflowSteps table in schema"; missing=$((missing+1)); }
+          # Check that store uses getDb
+          grep -q "getDb" packages/web/lib/workflows.ts || { echo "MISSING: getDb import in workflows.ts"; missing=$((missing+1)); }
+          if [ $missing -gt 0 ]; then echo "$missing checks failed"; exit 1; fi
+          echo "All checks passed"
+        failOnError: true
+        captureOutput: true
+
+      # ── Phase 3: Lead review ───────────────────────────────────────
+      - name: read-impl
+        type: deterministic
+        dependsOn: [verify-files]
+        command: |
+          echo "=== SCHEMA ===" &&
+          cat packages/web/lib/db/schema.ts &&
+          echo "=== WORKFLOW STORE ===" &&
+          cat packages/web/lib/workflows.ts &&
+          echo "=== CONNECT COMPLETE ===" &&
+          cat packages/web/app/api/v1/cli/auth/complete/route.ts
+        captureOutput: true
+
+      - name: review
+        agent: lead
+        dependsOn: [read-impl]
+        task: |
+          Review all implementations:
+          {{steps.read-impl.output}}
+
+          Verify:
+          1. workflow_runs table has all required columns (id, sandbox_id, user_id, etc.)
+          2. workflow_steps table references workflow_runs properly
+          3. workflowStore.create() inserts into DB, not Map
+          4. workflowStore.get() selects from DB
+          5. workflowStore.update() uses proper WHERE clause
+          6. workflowStore.listByUser() filters by userId and orders by created_at DESC
+          7. cloud_agents upsert uses proper conflict resolution
+          8. No in-memory Map remains in workflows.ts
+          9. All imports resolve correctly
+          10. Types are compatible with existing route handlers
+
+          If issues found, fix them directly. If all good, approve.
+
+errorHandling:
+  strategy: continue

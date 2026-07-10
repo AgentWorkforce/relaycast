@@ -1,0 +1,103 @@
+{
+  "provider": "jira",
+  "nangoIntegration": "jira-relay",
+  "adapterPackage": "@relayfile/adapter-jira",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "jira:issue_updated",
+      "source": "official:https://developer.atlassian.com/cloud/jira/platform/webhooks/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/jira | local:relayfile-adapters/packages/jira/src/webhook-normalizer.ts",
+      "payload": {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {
+          "id": "10001",
+          "key": "ENG-7",
+          "fields": {
+            "summary": "Fix relayfile",
+            "status": {
+              "name": "In Progress"
+            }
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "summary",
+          "status"
+        ],
+        "paths": [
+          "/jira/issues/fix-relayfile__10001.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "create-comment",
+      "source": "official:https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/#api-rest-api-3-issue-issueidorkey-comment-post | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/jira | local:relayfile-adapters/packages/jira/src/writeback.ts",
+      "filePath": "/jira/issues/ENG-7/comments/new.json",
+      "content": {
+        "body": "Investigating via relayfile"
+      },
+      "metadata": {
+        "connection_config": {
+          "cloudId": "cloud_jira_conformance"
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/ex/jira/cloud_jira_conformance/rest/api/3/issue/ENG-7/comment",
+        "bodyIncludes": {
+          "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Investigating via relayfile"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "JiraIssue",
+      "syncName": "fetch-issues",
+      "source": "official:https://developer.atlassian.com/cloud/jira/platform/webhooks/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/jira | local:cloud/nango-integrations/jira-relay/syncs/fetch-issues.ts",
+      "records": [
+        {
+          "id": "10001",
+          "key": "ENG-7",
+          "fields": {
+            "summary": "Fix relayfile",
+            "status": {
+              "name": "In Progress"
+            },
+            "updated": "2026-06-01T12:00:00.000+0000"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "/jira/issues/fix-relayfile__10001.json",
+          "contentIncludes": [
+            "fields",
+            "summary"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+-- Recovery for workflow_runs.paths and workflow_runs.pushed_to.
+--
+-- Why we need a SECOND ensure migration on top of #420 (0028):
+--
+-- drizzle-kit migrate filters which migrations to apply by comparing each
+-- journal entry's `when` (the `folderMillis` field) against the MAX
+-- `created_at` already stored in `__drizzle_migrations`:
+--
+--   if (lastDbMigration.created_at < migration.folderMillis) { apply }
+--
+-- 0025_workflow_repository_allowlists.sql was committed with
+-- `"when": 1778300000000` (2026-05-09 UTC) — about five days in the
+-- *future* relative to the surrounding entries. Once 0025 ran on prod,
+-- `__drizzle_migrations.created_at` for that row was 1778300000000.
+--
+-- 0026 / 0027 / 0028 were all committed with `when` values in the past
+-- (1776947413458 .. 1777891200000), so on prod the filter above
+-- evaluates `1778300000000 < <past>` → false and drizzle silently
+-- skips them. Each subsequent deploy reports "migrations applied
+-- successfully!" while applying zero migrations. That's why the
+-- `paths` and `pushed_to` columns are still missing on prod after the
+-- 0028 deploy.
+--
+-- 0029's `when` is set to 1778400000000 (~2026-05-10) — strictly
+-- greater than 0025's bad timestamp — so this migration is NOT
+-- skipped by the filter. The SQL is the same idempotent
+-- `ADD COLUMN IF NOT EXISTS` shape as 0028 so it's safe regardless of
+-- which prior migrations actually applied.
+
+ALTER TABLE "workflow_runs" ADD COLUMN IF NOT EXISTS "paths" jsonb;
+ALTER TABLE "workflow_runs" ADD COLUMN IF NOT EXISTS "pushed_to" jsonb;

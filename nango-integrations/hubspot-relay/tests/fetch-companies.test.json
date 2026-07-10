@@ -1,0 +1,583 @@
+{
+  "nango": {
+    "batchSave": {
+      "Company": [
+        {
+          "id": "430640664788",
+          "name": "Relayfile Seed Company 1779365259819-9",
+          "domain": "relayfile-seed-1779365259819-9.example.com",
+          "website": "relayfile-seed-1779365259819-9.example.com",
+          "createdAt": "2026-05-21T12:08:14.426Z",
+          "updatedAt": "2026-05-21T12:08:33.379Z"
+        },
+        {
+          "id": "430667400407",
+          "name": "Relayfile Seed Company 1779365259819-4",
+          "domain": "relayfile-seed-1779365259819-4.example.com",
+          "website": "relayfile-seed-1779365259819-4.example.com",
+          "createdAt": "2026-05-21T12:07:56.417Z",
+          "updatedAt": "2026-05-21T12:08:17.218Z"
+        },
+        {
+          "id": "430674457828",
+          "name": "Relayfile Seed Company 1779365259819-3",
+          "domain": "relayfile-seed-1779365259819-3.example.com",
+          "website": "relayfile-seed-1779365259819-3.example.com",
+          "createdAt": "2026-05-21T12:07:52.678Z",
+          "updatedAt": "2026-05-21T12:08:17.548Z"
+        },
+        {
+          "id": "430674457834",
+          "name": "Relayfile Seed Company 1779365259819-7",
+          "domain": "relayfile-seed-1779365259819-7.example.com",
+          "website": "relayfile-seed-1779365259819-7.example.com",
+          "createdAt": "2026-05-21T12:08:07.081Z",
+          "updatedAt": "2026-05-21T12:08:33.792Z"
+        },
+        {
+          "id": "430688815300",
+          "name": "HubSpot",
+          "domain": "hubspot.com",
+          "website": "hubspot.com",
+          "createdAt": "2026-05-21T10:56:32.595Z",
+          "updatedAt": "2026-05-21T10:57:43.861Z"
+        },
+        {
+          "id": "430701464820",
+          "name": "Relayfile Seed Company 1779365259819-1",
+          "domain": "relayfile-seed-1779365259819-1.example.com",
+          "website": "relayfile-seed-1779365259819-1.example.com",
+          "createdAt": "2026-05-21T12:07:45.186Z",
+          "updatedAt": "2026-05-21T12:08:04.119Z"
+        },
+        {
+          "id": "430701464825",
+          "name": "Relayfile Seed Company 1779365259819-5",
+          "domain": "relayfile-seed-1779365259819-5.example.com",
+          "website": "relayfile-seed-1779365259819-5.example.com",
+          "createdAt": "2026-05-21T12:07:59.792Z",
+          "updatedAt": "2026-05-21T12:08:17.189Z"
+        },
+        {
+          "id": "430706736337",
+          "name": "Relayfile Seed Company 1779365259819-10",
+          "domain": "relayfile-seed-1779365259819-10.example.com",
+          "website": "relayfile-seed-1779365259819-10.example.com",
+          "createdAt": "2026-05-21T12:08:18.325Z",
+          "updatedAt": "2026-05-21T12:08:36.387Z"
+        },
+        {
+          "id": "430714111162",
+          "name": "Relayfile Seed Company 1779365259819-12",
+          "domain": "relayfile-seed-1779365259819-12.example.com",
+          "website": "relayfile-seed-1779365259819-12.example.com",
+          "createdAt": "2026-05-21T12:08:25.745Z",
+          "updatedAt": "2026-05-21T12:08:42.902Z"
+        },
+        {
+          "id": "430727239869",
+          "name": "Relayfile Seed Company 1779365259819-2",
+          "domain": "relayfile-seed-1779365259819-2.example.com",
+          "website": "relayfile-seed-1779365259819-2.example.com",
+          "createdAt": "2026-05-21T12:07:49.223Z",
+          "updatedAt": "2026-05-21T12:08:06.179Z"
+        },
+        {
+          "id": "430779231418",
+          "name": "Relayfile Seed Company 1779365259819-8",
+          "domain": "relayfile-seed-1779365259819-8.example.com",
+          "website": "relayfile-seed-1779365259819-8.example.com",
+          "createdAt": "2026-05-21T12:08:10.610Z",
+          "updatedAt": "2026-05-21T12:08:27.559Z"
+        },
+        {
+          "id": "430839811304",
+          "name": "Relayfile Seed Company 1779365259819-14",
+          "domain": "relayfile-seed-1779365259819-14.example.com",
+          "website": "relayfile-seed-1779365259819-14.example.com",
+          "createdAt": "2026-05-21T12:08:33.248Z",
+          "updatedAt": "2026-05-21T12:08:43.608Z"
+        },
+        {
+          "id": "430840091884",
+          "name": "Relayfile Seed Company 1779365239995-0",
+          "domain": "relayfile-seed-1779365239995-0.example.com",
+          "website": "relayfile-seed-1779365239995-0.example.com",
+          "createdAt": "2026-05-21T12:07:21.551Z",
+          "updatedAt": "2026-05-21T12:07:36.761Z"
+        },
+        {
+          "id": "430840816889",
+          "name": "Relayfile Seed Company 1779365259819-13",
+          "domain": "relayfile-seed-1779365259819-13.example.com",
+          "website": "relayfile-seed-1779365259819-13.example.com",
+          "createdAt": "2026-05-21T12:08:29.391Z",
+          "updatedAt": "2026-05-21T12:08:45.774Z"
+        },
+        {
+          "id": "430843132152",
+          "name": "Relayfile Seed Company 1779365259819-11",
+          "domain": "relayfile-seed-1779365259819-11.example.com",
+          "website": "relayfile-seed-1779365259819-11.example.com",
+          "createdAt": "2026-05-21T12:08:21.761Z",
+          "updatedAt": "2026-05-21T12:08:41.375Z"
+        },
+        {
+          "id": "430843247851",
+          "domain": "example.com",
+          "website": "example.com",
+          "createdAt": "2026-05-21T12:07:22.872Z",
+          "updatedAt": "2026-05-21T12:08:36.184Z"
+        },
+        {
+          "id": "430843669729",
+          "name": "Relayfile Seed Company 1779365259819-6",
+          "domain": "relayfile-seed-1779365259819-6.example.com",
+          "website": "relayfile-seed-1779365259819-6.example.com",
+          "createdAt": "2026-05-21T12:08:03.525Z",
+          "updatedAt": "2026-05-21T12:08:26.291Z"
+        },
+        {
+          "id": "430844085447",
+          "name": "Relayfile Seed Company 1779365259819-0",
+          "domain": "relayfile-seed-1779365259819-0.example.com",
+          "website": "relayfile-seed-1779365259819-0.example.com",
+          "createdAt": "2026-05-21T12:07:41.638Z",
+          "updatedAt": "2026-05-21T12:08:08.863Z"
+        }
+      ]
+    },
+    "batchDelete": {
+      "Company": []
+    }
+  },
+  "api": {
+    "get": {
+      "/crm/v3/objects/companies": {
+        "response": {
+          "results": [
+            {
+              "id": "430640664788",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:14.426Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-9.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:33.379Z",
+                "hs_object_id": "430640664788",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-9",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-9.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:14.426Z",
+              "updatedAt": "2026-05-21T12:08:33.379Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430640664788"
+            },
+            {
+              "id": "430667400407",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:56.417Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-4.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:17.218Z",
+                "hs_object_id": "430667400407",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-4",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-4.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:56.417Z",
+              "updatedAt": "2026-05-21T12:08:17.218Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430667400407"
+            },
+            {
+              "id": "430674457828",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:52.678Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-3.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:17.548Z",
+                "hs_object_id": "430674457828",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-3",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-3.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:52.678Z",
+              "updatedAt": "2026-05-21T12:08:17.548Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430674457828"
+            },
+            {
+              "id": "430674457834",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:07.081Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-7.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:33.792Z",
+                "hs_object_id": "430674457834",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-7",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-7.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:07.081Z",
+              "updatedAt": "2026-05-21T12:08:33.792Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430674457834"
+            },
+            {
+              "id": "430688815300",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T10:56:32.595Z",
+                "description": null,
+                "domain": "hubspot.com",
+                "hs_lastmodifieddate": "2026-05-21T10:57:43.861Z",
+                "hs_object_id": "430688815300",
+                "industry": null,
+                "name": "HubSpot",
+                "phone": null,
+                "state": null,
+                "website": "hubspot.com"
+              },
+              "createdAt": "2026-05-21T10:56:32.595Z",
+              "updatedAt": "2026-05-21T10:57:43.861Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430688815300"
+            },
+            {
+              "id": "430701464820",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:45.186Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-1.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:04.119Z",
+                "hs_object_id": "430701464820",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-1",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-1.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:45.186Z",
+              "updatedAt": "2026-05-21T12:08:04.119Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430701464820"
+            },
+            {
+              "id": "430701464825",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:59.792Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-5.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:17.189Z",
+                "hs_object_id": "430701464825",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-5",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-5.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:59.792Z",
+              "updatedAt": "2026-05-21T12:08:17.189Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430701464825"
+            },
+            {
+              "id": "430706736337",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:18.325Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-10.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:36.387Z",
+                "hs_object_id": "430706736337",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-10",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-10.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:18.325Z",
+              "updatedAt": "2026-05-21T12:08:36.387Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430706736337"
+            },
+            {
+              "id": "430714111162",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:25.745Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-12.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:42.902Z",
+                "hs_object_id": "430714111162",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-12",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-12.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:25.745Z",
+              "updatedAt": "2026-05-21T12:08:42.902Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430714111162"
+            },
+            {
+              "id": "430727239869",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:49.223Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-2.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:06.179Z",
+                "hs_object_id": "430727239869",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-2",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-2.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:49.223Z",
+              "updatedAt": "2026-05-21T12:08:06.179Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430727239869"
+            },
+            {
+              "id": "430779231418",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:10.610Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-8.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:27.559Z",
+                "hs_object_id": "430779231418",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-8",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-8.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:10.610Z",
+              "updatedAt": "2026-05-21T12:08:27.559Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430779231418"
+            },
+            {
+              "id": "430839811304",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:33.248Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-14.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:43.608Z",
+                "hs_object_id": "430839811304",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-14",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-14.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:33.248Z",
+              "updatedAt": "2026-05-21T12:08:43.608Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430839811304"
+            },
+            {
+              "id": "430840091884",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:21.551Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365239995-0.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:07:36.761Z",
+                "hs_object_id": "430840091884",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365239995-0",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365239995-0.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:21.551Z",
+              "updatedAt": "2026-05-21T12:07:36.761Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430840091884"
+            },
+            {
+              "id": "430840816889",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:29.391Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-13.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:45.774Z",
+                "hs_object_id": "430840816889",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-13",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-13.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:29.391Z",
+              "updatedAt": "2026-05-21T12:08:45.774Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430840816889"
+            },
+            {
+              "id": "430843132152",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:21.761Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-11.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:41.375Z",
+                "hs_object_id": "430843132152",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-11",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-11.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:21.761Z",
+              "updatedAt": "2026-05-21T12:08:41.375Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430843132152"
+            },
+            {
+              "id": "430843247851",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:22.872Z",
+                "description": null,
+                "domain": "example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:36.184Z",
+                "hs_object_id": "430843247851",
+                "industry": null,
+                "name": null,
+                "phone": null,
+                "state": null,
+                "website": "example.com"
+              },
+              "createdAt": "2026-05-21T12:07:22.872Z",
+              "updatedAt": "2026-05-21T12:08:36.184Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430843247851"
+            },
+            {
+              "id": "430843669729",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:08:03.525Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-6.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:26.291Z",
+                "hs_object_id": "430843669729",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-6",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-6.example.com"
+              },
+              "createdAt": "2026-05-21T12:08:03.525Z",
+              "updatedAt": "2026-05-21T12:08:26.291Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430843669729"
+            },
+            {
+              "id": "430844085447",
+              "properties": {
+                "city": null,
+                "country": null,
+                "createdate": "2026-05-21T12:07:41.638Z",
+                "description": null,
+                "domain": "relayfile-seed-1779365259819-0.example.com",
+                "hs_lastmodifieddate": "2026-05-21T12:08:08.863Z",
+                "hs_object_id": "430844085447",
+                "industry": null,
+                "name": "Relayfile Seed Company 1779365259819-0",
+                "phone": null,
+                "state": null,
+                "website": "relayfile-seed-1779365259819-0.example.com"
+              },
+              "createdAt": "2026-05-21T12:07:41.638Z",
+              "updatedAt": "2026-05-21T12:08:08.863Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-2/430844085447"
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 12:34:37 GMT",
+          "content-type": "application/json;charset=utf-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "990",
+          "x-ratelimit-reset": "1779366897",
+          "cf-ray": "9ff39dc66d4fbd22-PDX",
+          "cf-cache-status": "DYNAMIC",
+          "server": "cloudflare",
+          "vary": "origin, accept-encoding",
+          "access-control-allow-credentials": "false",
+          "server-timing": "hcid;desc=\"6a0efbdd-0000-0000-74f0-85213a75bd83\", cfr;desc=\"9ff39dc675bfbd22-FRA\"",
+          "x-hubspot-correlation-id": "6a0efbdd-0000-0000-74f0-85213a75bd83",
+          "x-hubspot-ratelimit-interval-milliseconds": "10000",
+          "x-hubspot-ratelimit-max": "110",
+          "x-hubspot-ratelimit-remaining": "109",
+          "x-hubspot-ratelimit-secondly": "11",
+          "x-hubspot-ratelimit-secondly-remaining": "10",
+          "set-cookie": "__cf_bm=CCcX1WlpWkEl8UV9EzuF9MbAX2O9VUa1KmNgxIA0H_k-1779366877.1846485-1.0.1.1-SuqJVf1JWgVgyQdLQUQTdl1agQrbRycD8O0Lovb2BQBqeSOqhmaM0ipg7XG3AWAWaw6v7rTcOrdwTm8T4_5COQJc0jjUjVgQ4qalZyOXStTcLKeFeKTG9NWSgECLWihB; HttpOnly; SameSite=None; Secure; Path=/; Domain=hubapi.com; Expires=Thu, 21 May 2026 13:04:37 GMT",
+          "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=w62OG5InMzvA3ljWi%2Bb3haR8wxiOTj9fvTxZdglkiPT60aFBCXqCnFZnN%2BPQvQY8A6%2Fgjp7XghhHWtTLhxRsFcTsdEJ3fOj%2Bo5jyM0QZ4D1r20TtiTgLlTTg%2Fr4J1DJJ\"}]}",
+          "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}"
+        },
+        "hash": "d661057cdad59286d044578ae95abc4faa6cd2bb",
+        "request": {
+          "params": {
+            "limit": "100",
+            "properties": "name,domain,industry,city,state,country,phone,website,description,createdate,hs_lastmodifieddate"
+          }
+        }
+      }
+    }
+  }
+}

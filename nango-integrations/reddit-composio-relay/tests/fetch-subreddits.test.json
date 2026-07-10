@@ -1,0 +1,745 @@
+{
+  "nango": {
+    "getConnection": {},
+    "getMetadata": {
+      "backend": "composio",
+      "composio": {
+        "status": "ACTIVE",
+        "toolkitSlug": "reddit",
+        "authConfigId": "ac_TT632RyMS42A",
+        "integrationId": null,
+        "connectedAccountId": "ca_ZeoDRmViRoFu"
+      },
+      "nangoBridge": {
+        "syncs": [],
+        "providerConfigKey": "reddit-composio-relay"
+      }
+    },
+    "batchSave": {
+      "RedditTrackedSubreddit": [
+        {
+          "id": "tech",
+          "name": "tech",
+          "title": "tech",
+          "display_name_prefixed": "r/tech",
+          "subscribers": 689268,
+          "over18": false,
+          "icon_img": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=140&amp;height=93&amp;auto=webp&amp;s=77da7e72ebc44182ba5635dda4f6a6f96d0402ad",
+          "tracked": true
+        },
+        {
+          "id": "claudecode",
+          "name": "claudecode",
+          "title": "ClaudeCode",
+          "display_name_prefixed": "r/claudecode",
+          "subscribers": 294168,
+          "over18": false,
+          "icon_img": "self",
+          "tracked": true
+        },
+        {
+          "id": "ai_agents",
+          "name": "ai_agents",
+          "title": "AI_Agents",
+          "display_name_prefixed": "r/ai_agents",
+          "subscribers": 371996,
+          "over18": false,
+          "icon_img": "self",
+          "tracked": true
+        }
+      ]
+    },
+    "batchDelete": {
+      "RedditTrackedSubreddit": []
+    }
+  },
+  "api": {
+    "get": {
+      "//environment-variables": {
+        "response": [
+          {
+            "name": "GOOGLE_MAIL_WATCH_TOPIC_NAME",
+            "value": "projects/file-by-agent-relay/topics/gmail-listener"
+          },
+          {
+            "name": "GOOGLE_MAIL_PUBSUB_AUTO_PROVISION",
+            "value": "false"
+          },
+          {
+            "name": "COMPOSIO_API_KEY",
+            "value": "ak_PraPJWT7LkffEYifPSRj"
+          }
+        ],
+        "status": 200,
+        "headers": {
+          "date": "Fri, 29 May 2026 15:10:36 GMT",
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "225",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "985",
+          "x-ratelimit-reset": "1780067439",
+          "etag": "W/\"e1-3GMi37ZaXJH4dDM2iChI9BQhCDk\""
+        },
+        "hash": "e634370608c8098ced5e951be2d0da35432934f9",
+        "request": {}
+      },
+      "//records/": {
+        "response": {
+          "next_cursor": null,
+          "records": []
+        },
+        "status": 200,
+        "headers": {
+          "date": "Fri, 29 May 2026 15:10:41 GMT",
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "33",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "998",
+          "x-ratelimit-reset": "1780067500",
+          "etag": "W/\"21-LyKJWmJ05P9VPa/TxU7jo5F5rcg\""
+        },
+        "hash": "fe582eff799b01f541eef2e9d1b9dd4d05f7e839",
+        "request": {
+          "params": {
+            "model": "RedditTrackedSubreddit"
+          }
+        }
+      }
+    },
+    "post": {
+      "/api/v3/tools/execute/REDDIT_RETRIEVE_REDDIT_POST": [
+        {
+          "response": {
+            "data": {
+              "posts_list": [
+                {
+                  "data": {
+                    "all_awardings": [],
+                    "allow_live_comments": false,
+                    "approved_at_utc": null,
+                    "approved_by": null,
+                    "archived": false,
+                    "author": "AdSpecialist6598",
+                    "author_flair_background_color": null,
+                    "author_flair_css_class": null,
+                    "author_flair_richtext": [],
+                    "author_flair_template_id": null,
+                    "author_flair_text": null,
+                    "author_flair_text_color": null,
+                    "author_flair_type": "text",
+                    "author_fullname": "t2_cc0n0rs5",
+                    "author_is_blocked": false,
+                    "author_patreon_flair": false,
+                    "author_premium": false,
+                    "awarders": [],
+                    "banned_at_utc": null,
+                    "banned_by": null,
+                    "can_gild": false,
+                    "can_mod_post": false,
+                    "category": null,
+                    "clicked": false,
+                    "content_categories": null,
+                    "contest_mode": false,
+                    "created": 1780057078,
+                    "created_utc": 1780057078,
+                    "discussion_type": null,
+                    "distinguished": null,
+                    "domain": "news.mit.edu",
+                    "downs": 0,
+                    "edited": false,
+                    "gilded": 0,
+                    "gildings": {},
+                    "hidden": false,
+                    "hide_score": false,
+                    "id": "1tr02os",
+                    "is_created_from_ads_ui": false,
+                    "is_crosspostable": true,
+                    "is_meta": false,
+                    "is_original_content": false,
+                    "is_reddit_media_domain": false,
+                    "is_robot_indexable": true,
+                    "is_self": false,
+                    "is_video": false,
+                    "likes": null,
+                    "link_flair_background_color": "",
+                    "link_flair_css_class": null,
+                    "link_flair_richtext": [],
+                    "link_flair_text": null,
+                    "link_flair_text_color": "dark",
+                    "link_flair_type": "text",
+                    "locked": false,
+                    "media": null,
+                    "media_embed": {},
+                    "media_only": false,
+                    "mod_note": null,
+                    "mod_reason_by": null,
+                    "mod_reason_title": null,
+                    "mod_reports": [],
+                    "name": "t3_1tr02os",
+                    "no_follow": false,
+                    "num_comments": 14,
+                    "num_crossposts": 0,
+                    "num_reports": null,
+                    "over_18": false,
+                    "permalink": "/r/tech/comments/1tr02os/mit_researchers_develop_a_lowcost_technique_to/",
+                    "pinned": false,
+                    "post_hint": "link",
+                    "preview": {
+                      "enabled": false,
+                      "images": [
+                        {
+                          "id": "7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y",
+                          "resolutions": [
+                            {
+                              "height": 72,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=108&amp;crop=smart&amp;auto=webp&amp;s=af4e7ebc8714571590f032fc82258ce3205cbd7a",
+                              "width": 108
+                            },
+                            {
+                              "height": 144,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=216&amp;crop=smart&amp;auto=webp&amp;s=a2aedd0b9c149ad8307a1c85f222960ab1840b45",
+                              "width": 216
+                            },
+                            {
+                              "height": 213,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=320&amp;crop=smart&amp;auto=webp&amp;s=0ae4c6431835ffe4ca2418e55e05b4597686eef7",
+                              "width": 320
+                            },
+                            {
+                              "height": 426,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=640&amp;crop=smart&amp;auto=webp&amp;s=30aaf55d8fe90d47a42dd49bcb866ae549cd4066",
+                              "width": 640
+                            },
+                            {
+                              "height": 640,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=960&amp;crop=smart&amp;auto=webp&amp;s=0d2e0071285e6dc2cfdfb841790462d025e10ec3",
+                              "width": 960
+                            },
+                            {
+                              "height": 720,
+                              "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=1080&amp;crop=smart&amp;auto=webp&amp;s=923e3fda6aef8d90058ad908b8b564abcd5ea52d",
+                              "width": 1080
+                            }
+                          ],
+                          "source": {
+                            "height": 2000,
+                            "url": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?auto=webp&amp;s=7bed5384c75d9786f2ed5f708bd081a4c8c9d780",
+                            "width": 3000
+                          },
+                          "variants": {}
+                        }
+                      ]
+                    },
+                    "pwls": 6,
+                    "quarantine": false,
+                    "removal_reason": null,
+                    "removed_by": null,
+                    "removed_by_category": null,
+                    "report_reasons": null,
+                    "saved": false,
+                    "score": 115,
+                    "secure_media": null,
+                    "secure_media_embed": {},
+                    "selftext": "",
+                    "selftext_html": null,
+                    "send_replies": true,
+                    "spoiler": false,
+                    "stickied": false,
+                    "subreddit": "tech",
+                    "subreddit_id": "t5_2qh48",
+                    "subreddit_name_prefixed": "r/tech",
+                    "subreddit_subscribers": 689268,
+                    "subreddit_type": "public",
+                    "suggested_sort": null,
+                    "thumbnail": "https://external-preview.redd.it/7GEMb5biGWW-a5vvUij490Qy-DCzIwMUKtXMtlQrw6Y.jpeg?width=140&amp;height=93&amp;auto=webp&amp;s=77da7e72ebc44182ba5635dda4f6a6f96d0402ad",
+                    "thumbnail_height": 93,
+                    "thumbnail_width": 140,
+                    "title": "MIT researchers develop a low-cost technique to get lithium out of rocks",
+                    "top_awarded_type": null,
+                    "total_awards_received": 0,
+                    "treatment_tags": [],
+                    "ups": 115,
+                    "upvote_ratio": 0.97,
+                    "url": "https://news.mit.edu/2026/mit-researchers-develop-low-cost-technique-lithium-from-rocks-0528",
+                    "url_overridden_by_dest": "https://news.mit.edu/2026/mit-researchers-develop-low-cost-technique-lithium-from-rocks-0528",
+                    "user_reports": [],
+                    "view_count": null,
+                    "visited": false,
+                    "wls": 6
+                  },
+                  "kind": "t3"
+                }
+              ]
+            },
+            "successful": true,
+            "error": null,
+            "log_id": "log_UxUq7YxDoQn0"
+          },
+          "status": 200,
+          "headers": {
+            "date": "Fri, 29 May 2026 15:10:37 GMT",
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=63072000",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "1996",
+            "x-ratelimit-reset": "1780067439",
+            "cf-ray": "a0366d4a6b3d758f-PDX",
+            "cf-cache-status": "DYNAMIC",
+            "cache-control": "public, max-age=0, must-revalidate",
+            "server": "cloudflare",
+            "vary": "Origin, accept-encoding",
+            "access-control-allow-credentials": "true",
+            "x-matched-path": "/api/v3/tools/execute/[tool_slug]",
+            "x-powered-by": "composio tech team",
+            "x-ratelimit": "2000",
+            "x-ratelimit-window-size": "60s",
+            "x-request-id": "f42322d1-ed2e-41aa-aa81-e2cc4b4951f1",
+            "x-span-id": "bcf654b214e1bdf1",
+            "x-trace-id": "000000000000000021885e4f2fce51b7",
+            "x-vercel-cache": "MISS",
+            "x-vercel-id": "pdx1::iad1::qfq9w-1780067437200-2a34ba24e20c"
+          },
+          "hash": "90b02b930bd5376e0121f067d4bc501a6303a970",
+          "request": {
+            "headers": {
+              "x-api-key": "ak_PraPJWT7LkffEYifPSRj"
+            },
+            "data": {
+              "connected_account_id": "ca_ZeoDRmViRoFu",
+              "user_id": "rw_ec3c51c0",
+              "arguments": {
+                "subreddit": "tech",
+                "size": 1
+              }
+            }
+          }
+        },
+        {
+          "response": {
+            "data": {
+              "posts_list": [
+                {
+                  "data": {
+                    "all_awardings": [],
+                    "allow_live_comments": false,
+                    "approved_at_utc": null,
+                    "approved_by": null,
+                    "archived": false,
+                    "author": "Waste_Net7628",
+                    "author_flair_background_color": "#bf4040",
+                    "author_flair_css_class": null,
+                    "author_flair_richtext": [
+                      {
+                        "e": "text",
+                        "t": "P R O M P S T I T U T E"
+                      }
+                    ],
+                    "author_flair_template_id": "8da003e2-b28d-11f0-bf5b-9ee5b37c843e",
+                    "author_flair_text": "P R O M P S T I T U T E",
+                    "author_flair_text_color": "dark",
+                    "author_flair_type": "richtext",
+                    "author_fullname": "t2_78nu6609",
+                    "author_is_blocked": false,
+                    "author_patreon_flair": false,
+                    "author_premium": false,
+                    "awarders": [],
+                    "banned_at_utc": null,
+                    "banned_by": null,
+                    "can_gild": false,
+                    "can_mod_post": false,
+                    "category": null,
+                    "clicked": false,
+                    "content_categories": null,
+                    "contest_mode": false,
+                    "created": 1761291696,
+                    "created_utc": 1761291696,
+                    "discussion_type": null,
+                    "distinguished": "moderator",
+                    "domain": "self.ClaudeCode",
+                    "downs": 0,
+                    "edited": false,
+                    "gilded": 0,
+                    "gildings": {},
+                    "hidden": false,
+                    "hide_score": false,
+                    "id": "1oerk1z",
+                    "is_created_from_ads_ui": false,
+                    "is_crosspostable": true,
+                    "is_meta": false,
+                    "is_original_content": false,
+                    "is_reddit_media_domain": false,
+                    "is_robot_indexable": true,
+                    "is_self": true,
+                    "is_video": false,
+                    "likes": null,
+                    "link_flair_background_color": "#b34732",
+                    "link_flair_css_class": "",
+                    "link_flair_richtext": [
+                      {
+                        "e": "text",
+                        "t": "📌 Megathread"
+                      }
+                    ],
+                    "link_flair_template_id": "9c781f44-95f0-11f0-9d39-4ad0b1aa8b08",
+                    "link_flair_text": "📌 Megathread",
+                    "link_flair_text_color": "light",
+                    "link_flair_type": "richtext",
+                    "locked": false,
+                    "media": null,
+                    "media_embed": {},
+                    "media_only": false,
+                    "mod_note": null,
+                    "mod_reason_by": null,
+                    "mod_reason_title": null,
+                    "mod_reports": [],
+                    "name": "t3_1oerk1z",
+                    "no_follow": false,
+                    "num_comments": 266,
+                    "num_crossposts": 0,
+                    "num_reports": null,
+                    "over_18": false,
+                    "permalink": "/r/ClaudeCode/comments/1oerk1z/community_feedback/",
+                    "pinned": false,
+                    "pwls": 6,
+                    "quarantine": false,
+                    "removal_reason": null,
+                    "removed_by": null,
+                    "removed_by_category": null,
+                    "report_reasons": null,
+                    "saved": false,
+                    "score": 39,
+                    "secure_media": null,
+                    "secure_media_embed": {},
+                    "selftext": "hey guys, so we're actively working on making this community super transparent and open, but we want to make sure we're doing it right. would love to get your honest feedback on what you'd like to see from us, what information you think would be helpful, and if there's anything we're currently doing that you feel like we should just get rid of. really want to hear your thoughts on this.\n\nthanks.",
+                    "selftext_html": "&lt;!-- SC_OFF --&gt;&lt;div class=\"md\"&gt;&lt;p&gt;hey guys, so we&amp;#39;re actively working on making this community super transparent and open, but we want to make sure we&amp;#39;re doing it right. would love to get your honest feedback on what you&amp;#39;d like to see from us, what information you think would be helpful, and if there&amp;#39;s anything we&amp;#39;re currently doing that you feel like we should just get rid of. really want to hear your thoughts on this.&lt;/p&gt;\n\n&lt;p&gt;thanks.&lt;/p&gt;\n&lt;/div&gt;&lt;!-- SC_ON --&gt;",
+                    "send_replies": true,
+                    "spoiler": false,
+                    "stickied": true,
+                    "subreddit": "ClaudeCode",
+                    "subreddit_id": "t5_dp6k3k",
+                    "subreddit_name_prefixed": "r/ClaudeCode",
+                    "subreddit_subscribers": 294168,
+                    "subreddit_type": "public",
+                    "suggested_sort": null,
+                    "thumbnail": "self",
+                    "thumbnail_height": null,
+                    "thumbnail_width": null,
+                    "title": "Community Feedback",
+                    "top_awarded_type": null,
+                    "total_awards_received": 0,
+                    "treatment_tags": [],
+                    "ups": 39,
+                    "upvote_ratio": 0.91,
+                    "url": "https://www.reddit.com/r/ClaudeCode/comments/1oerk1z/community_feedback/",
+                    "user_reports": [],
+                    "view_count": null,
+                    "visited": false,
+                    "wls": 6
+                  },
+                  "kind": "t3"
+                }
+              ]
+            },
+            "successful": true,
+            "error": null,
+            "log_id": "log_B_R8uhjBhdCc"
+          },
+          "status": 200,
+          "headers": {
+            "date": "Fri, 29 May 2026 15:10:39 GMT",
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=63072000",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "1995",
+            "x-ratelimit-reset": "1780067439",
+            "cf-ray": "a0366d527caed106-PDX",
+            "cf-cache-status": "DYNAMIC",
+            "cache-control": "public, max-age=0, must-revalidate",
+            "server": "cloudflare",
+            "vary": "Origin, accept-encoding",
+            "access-control-allow-credentials": "true",
+            "x-matched-path": "/api/v3/tools/execute/[tool_slug]",
+            "x-powered-by": "composio tech team",
+            "x-ratelimit": "2000",
+            "x-ratelimit-window-size": "60s",
+            "x-request-id": "35eb1d7f-3f17-4b99-a596-581f0bd0f65d",
+            "x-span-id": "10dd7662ea1c72de",
+            "x-trace-id": "00000000000000000d332c90f6f6fcd1",
+            "x-vercel-cache": "MISS",
+            "x-vercel-id": "pdx1::iad1::nr2ld-1780067438487-cdbfba688905"
+          },
+          "hash": "7e7c6e6ff0aa3c89b0c69cf18ab5d646142d067e",
+          "request": {
+            "headers": {
+              "x-api-key": "ak_PraPJWT7LkffEYifPSRj"
+            },
+            "data": {
+              "connected_account_id": "ca_ZeoDRmViRoFu",
+              "user_id": "rw_ec3c51c0",
+              "arguments": {
+                "subreddit": "claudecode",
+                "size": 1
+              }
+            }
+          }
+        },
+        {
+          "response": {
+            "data": {
+              "posts_list": [
+                {
+                  "data": {
+                    "all_awardings": [],
+                    "allow_live_comments": false,
+                    "approved_at_utc": null,
+                    "approved_by": null,
+                    "archived": false,
+                    "author": "help-me-grow",
+                    "author_cakeday": true,
+                    "author_flair_background_color": "transparent",
+                    "author_flair_css_class": null,
+                    "author_flair_richtext": [],
+                    "author_flair_template_id": "33450d8a-948d-11ef-9ed2-beb9853a9026",
+                    "author_flair_text": "Industry Professional",
+                    "author_flair_text_color": "dark",
+                    "author_flair_type": "text",
+                    "author_fullname": "t2_3uu0e75j",
+                    "author_is_blocked": false,
+                    "author_patreon_flair": false,
+                    "author_premium": false,
+                    "awarders": [],
+                    "banned_at_utc": null,
+                    "banned_by": null,
+                    "can_gild": false,
+                    "can_mod_post": false,
+                    "category": null,
+                    "clicked": false,
+                    "content_categories": null,
+                    "contest_mode": false,
+                    "created": 1779897619,
+                    "created_utc": 1779897619,
+                    "discussion_type": null,
+                    "distinguished": null,
+                    "domain": "self.AI_Agents",
+                    "downs": 0,
+                    "edited": false,
+                    "gilded": 0,
+                    "gildings": {},
+                    "hidden": false,
+                    "hide_score": false,
+                    "id": "1tp9vnp",
+                    "is_created_from_ads_ui": false,
+                    "is_crosspostable": true,
+                    "is_meta": false,
+                    "is_original_content": false,
+                    "is_reddit_media_domain": false,
+                    "is_robot_indexable": true,
+                    "is_self": true,
+                    "is_video": false,
+                    "likes": null,
+                    "link_flair_background_color": "",
+                    "link_flair_css_class": null,
+                    "link_flair_richtext": [],
+                    "link_flair_text": null,
+                    "link_flair_text_color": "dark",
+                    "link_flair_type": "text",
+                    "locked": false,
+                    "media": null,
+                    "media_embed": {},
+                    "media_only": false,
+                    "mod_note": null,
+                    "mod_reason_by": null,
+                    "mod_reason_title": null,
+                    "mod_reports": [],
+                    "name": "t3_1tp9vnp",
+                    "no_follow": true,
+                    "num_comments": 12,
+                    "num_crossposts": 0,
+                    "num_reports": null,
+                    "over_18": false,
+                    "permalink": "/r/AI_Agents/comments/1tp9vnp/weekly_thread_project_display/",
+                    "pinned": false,
+                    "post_hint": "self",
+                    "preview": {
+                      "enabled": false,
+                      "images": [
+                        {
+                          "id": "xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ",
+                          "resolutions": [
+                            {
+                              "height": 108,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=108&amp;crop=smart&amp;auto=webp&amp;s=90e2e22330e97188eeb778b365db7f1db7def435",
+                              "width": 108
+                            },
+                            {
+                              "height": 216,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=216&amp;crop=smart&amp;auto=webp&amp;s=9044d926b18c52ec536d59d288090c1698dfbf55",
+                              "width": 216
+                            },
+                            {
+                              "height": 320,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=320&amp;crop=smart&amp;auto=webp&amp;s=2f0341c4ad3e9f26a618599cec85b7d5b8eb7cd1",
+                              "width": 320
+                            },
+                            {
+                              "height": 640,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=640&amp;crop=smart&amp;auto=webp&amp;s=046a3c9d358b141992ee39663b2c518c8d37ee5e",
+                              "width": 640
+                            },
+                            {
+                              "height": 960,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=960&amp;crop=smart&amp;auto=webp&amp;s=9cdfc938a187716e26e57448a4944c3417a73986",
+                              "width": 960
+                            },
+                            {
+                              "height": 1080,
+                              "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?width=1080&amp;crop=smart&amp;auto=webp&amp;s=0a82da70f8aeba5eaac11e0adaa5ee640f1e7fc1",
+                              "width": 1080
+                            }
+                          ],
+                          "source": {
+                            "height": 1200,
+                            "url": "https://external-preview.redd.it/xqpMxEDIyGDfFJbI7SahfM9WF3BZ_ciuYxpoisj3ieQ.jpeg?auto=webp&amp;s=0607018930847ca1c66720c333c03448cfbdc619",
+                            "width": 1200
+                          },
+                          "variants": {}
+                        }
+                      ]
+                    },
+                    "pwls": 6,
+                    "quarantine": false,
+                    "removal_reason": null,
+                    "removed_by": null,
+                    "removed_by_category": null,
+                    "report_reasons": null,
+                    "saved": false,
+                    "score": 1,
+                    "secure_media": null,
+                    "secure_media_embed": {},
+                    "selftext": "Weekly thread to show off your AI Agents and LLM Apps! Top voted projects will be featured in our weekly [newsletter](http://ai-agents-weekly.beehiiv.com).",
+                    "selftext_html": "&lt;!-- SC_OFF --&gt;&lt;div class=\"md\"&gt;&lt;p&gt;Weekly thread to show off your AI Agents and LLM Apps! Top voted projects will be featured in our weekly &lt;a href=\"http://ai-agents-weekly.beehiiv.com\"&gt;newsletter&lt;/a&gt;.&lt;/p&gt;\n&lt;/div&gt;&lt;!-- SC_ON --&gt;",
+                    "send_replies": true,
+                    "spoiler": false,
+                    "stickied": true,
+                    "subreddit": "AI_Agents",
+                    "subreddit_id": "t5_8b5cvj",
+                    "subreddit_name_prefixed": "r/AI_Agents",
+                    "subreddit_subscribers": 371996,
+                    "subreddit_type": "public",
+                    "suggested_sort": null,
+                    "thumbnail": "self",
+                    "thumbnail_height": null,
+                    "thumbnail_width": null,
+                    "title": "Weekly Thread: Project Display",
+                    "top_awarded_type": null,
+                    "total_awards_received": 0,
+                    "treatment_tags": [],
+                    "ups": 1,
+                    "upvote_ratio": 1,
+                    "url": "https://www.reddit.com/r/AI_Agents/comments/1tp9vnp/weekly_thread_project_display/",
+                    "user_reports": [],
+                    "view_count": null,
+                    "visited": false,
+                    "wls": 6
+                  },
+                  "kind": "t3"
+                }
+              ]
+            },
+            "successful": true,
+            "error": null,
+            "log_id": "log_Ry-WqljtEHpX"
+          },
+          "status": 200,
+          "headers": {
+            "date": "Fri, 29 May 2026 15:10:41 GMT",
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=63072000",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "1994",
+            "x-ratelimit-reset": "1780067500",
+            "cf-ray": "a0366d5cbd746c17-PDX",
+            "cf-cache-status": "DYNAMIC",
+            "cache-control": "public, max-age=0, must-revalidate",
+            "server": "cloudflare",
+            "vary": "Origin, accept-encoding",
+            "access-control-allow-credentials": "true",
+            "x-matched-path": "/api/v3/tools/execute/[tool_slug]",
+            "x-powered-by": "composio tech team",
+            "x-ratelimit": "2000",
+            "x-ratelimit-window-size": "60s",
+            "x-request-id": "c6e7f927-f6b3-46e4-8903-539835cfa1d8",
+            "x-span-id": "d7302c1e1226fbbe",
+            "x-trace-id": "00000000000000004a9581f6e7eafd51",
+            "x-vercel-cache": "MISS",
+            "x-vercel-id": "pdx1::iad1::74mcd-1780067440133-235be0b41370"
+          },
+          "hash": "d698d00b8333b4cdc9bd8ccda0ba3d2dc751540a",
+          "request": {
+            "headers": {
+              "x-api-key": "ak_PraPJWT7LkffEYifPSRj"
+            },
+            "data": {
+              "connected_account_id": "ca_ZeoDRmViRoFu",
+              "user_id": "rw_ec3c51c0",
+              "arguments": {
+                "subreddit": "ai_agents",
+                "size": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

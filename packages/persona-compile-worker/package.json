@@ -1,0 +1,15 @@
+{
+  "name": "@cloud/persona-compile-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "esbuild-wasm": "^0.28.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260511.1",
+    "typescript": "^5.7.0"
+  }
+}

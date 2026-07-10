@@ -1,0 +1,44 @@
+{
+  "body": {
+    "json_paths": []
+  },
+  "headers": {
+    "json_paths": [
+      {
+        "path": "*",
+        "method": "*",
+        "field": "header.date",
+        "kind": "ignore",
+        "reason": "The origin date header changes on every replay and does not affect response semantics."
+      },
+      {
+        "path": "*",
+        "method": "*",
+        "field": "header.x-request-id",
+        "kind": "ignore",
+        "reason": "Request identifiers are regenerated per invocation and are not semantically stable."
+      },
+      {
+        "path": "*",
+        "method": "*",
+        "field": "header.x-served-by",
+        "kind": "ignore",
+        "reason": "The serving node header varies by deployment edge and is not part of the contract."
+      },
+      {
+        "path": "*",
+        "method": "*",
+        "field": "header.cf-ray",
+        "kind": "ignore",
+        "reason": "Cloudflare ray IDs are unique per request and should not force a replay divergence."
+      },
+      {
+        "path": "*",
+        "method": "*",
+        "field": "header.server",
+        "kind": "ignore",
+        "reason": "Server implementation headers can differ across runtimes without changing behavior."
+      }
+    ]
+  }
+}

@@ -1,0 +1,385 @@
+{
+  "confluence": {
+    "pages": [
+      {
+        "params": [],
+        "path": "/confluence/pages"
+      },
+      {
+        "params": [
+          "spaceIdOrKey"
+        ],
+        "path": "/confluence/spaces/{spaceIdOrKey}/pages"
+      }
+    ]
+  },
+  "dropbox": {
+    "cursors": [
+      {
+        "params": [],
+        "path": "/dropbox/cursors"
+      }
+    ],
+    "files": [
+      {
+        "params": [],
+        "path": "/dropbox/files"
+      }
+    ],
+    "folders": [
+      {
+        "params": [],
+        "path": "/dropbox/folders"
+      }
+    ],
+    "shared-folders": [
+      {
+        "params": [],
+        "path": "/dropbox/shared-folders"
+      }
+    ],
+    "shared-links": [
+      {
+        "params": [],
+        "path": "/dropbox/shared-links"
+      }
+    ]
+  },
+  "github": {
+    "issue-comments": [
+      {
+        "params": [
+          "owner",
+          "repo",
+          "issueNumber"
+        ],
+        "path": "/github/repos/{owner}/{repo}/issues/{issueNumber}/comments"
+      }
+    ],
+    "issues": [
+      {
+        "params": [
+          "owner",
+          "repo"
+        ],
+        "path": "/github/repos/{owner}/{repo}/issues"
+      }
+    ],
+    "merge": [
+      {
+        "params": [
+          "owner",
+          "repo",
+          "pullNumber"
+        ],
+        "path": "/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge.json"
+      }
+    ],
+    "replies": [
+      {
+        "params": [
+          "owner",
+          "repo",
+          "pullNumber",
+          "commentId"
+        ],
+        "path": "/github/repos/{owner}/{repo}/pulls/{pullNumber}/review-comments/{commentId}/replies"
+      }
+    ],
+    "reviews": [
+      {
+        "params": [
+          "owner",
+          "repo",
+          "pullNumber"
+        ],
+        "path": "/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews"
+      }
+    ]
+  },
+  "gitlab": {
+    "comments": [
+      {
+        "params": [
+          "projectPath",
+          "issueIid",
+          "slug"
+        ],
+        "path": "/gitlab/projects/{projectPath}/issues/{issueIid}__{slug}/comments"
+      }
+    ],
+    "discussions": [
+      {
+        "params": [
+          "projectPath",
+          "mergeRequestIid",
+          "slug"
+        ],
+        "path": "/gitlab/projects/{projectPath}/merge_requests/{mergeRequestIid}__{slug}/discussions"
+      }
+    ]
+  },
+  "google-calendar": {
+    "events": [
+      {
+        "params": [
+          "calendarId"
+        ],
+        "path": "/google-calendar/calendars/{calendarId}/events"
+      }
+    ]
+  },
+  "hubspot": {
+    "companies": [
+      {
+        "params": [],
+        "path": "/hubspot/companies"
+      }
+    ],
+    "contacts": [
+      {
+        "params": [],
+        "path": "/hubspot/contacts"
+      }
+    ],
+    "deals": [
+      {
+        "params": [],
+        "path": "/hubspot/deals"
+      }
+    ],
+    "tickets": [
+      {
+        "params": [],
+        "path": "/hubspot/tickets"
+      }
+    ]
+  },
+  "jira": {
+    "comments": [
+      {
+        "params": [
+          "issueIdOrKey"
+        ],
+        "path": "/jira/issues/{issueIdOrKey}/comments"
+      }
+    ],
+    "issues": [
+      {
+        "params": [],
+        "path": "/jira/issues"
+      }
+    ],
+    "projects": [
+      {
+        "params": [],
+        "path": "/jira/projects"
+      }
+    ],
+    "transitions": [
+      {
+        "params": [
+          "issueIdOrKey"
+        ],
+        "path": "/jira/issues/{issueIdOrKey}/transitions"
+      }
+    ]
+  },
+  "linear": {
+    "agent-activities": [
+      {
+        "params": [
+          "sessionId"
+        ],
+        "path": "/linear/agent-sessions/{sessionId}/activities"
+      }
+    ],
+    "comments": [
+      {
+        "params": [
+          "issueId"
+        ],
+        "path": "/linear/issues/{issueId}/comments"
+      }
+    ],
+    "issues": [
+      {
+        "params": [],
+        "path": "/linear/issues"
+      }
+    ],
+    "labels": [
+      {
+        "params": [],
+        "path": "/linear/labels"
+      }
+    ],
+    "project-issue-assignments": [
+      {
+        "params": [
+          "projectId"
+        ],
+        "path": "/linear/projects/{projectId}/add-issues.json"
+      }
+    ],
+    "projects": [
+      {
+        "params": [],
+        "path": "/linear/projects"
+      },
+      {
+        "params": [
+          "projectId"
+        ],
+        "path": "/linear/projects/{projectId}/meta.json"
+      }
+    ]
+  },
+  "notion": {
+    "comments": [
+      {
+        "params": [
+          "databaseId",
+          "pageId"
+        ],
+        "path": "/notion/databases/{databaseId}/pages/{pageId}/comments.json"
+      },
+      {
+        "params": [
+          "pageId"
+        ],
+        "path": "/notion/pages/{pageId}/comments.json"
+      }
+    ],
+    "content": [
+      {
+        "params": [
+          "databaseId",
+          "pageId"
+        ],
+        "path": "/notion/databases/{databaseId}/pages/{pageId}/content.md"
+      },
+      {
+        "params": [
+          "pageId"
+        ],
+        "path": "/notion/pages/{pageId}/content.md"
+      }
+    ],
+    "pages": [
+      {
+        "params": [
+          "databaseId"
+        ],
+        "path": "/notion/databases/{databaseId}/pages"
+      },
+      {
+        "params": [
+          "databaseId",
+          "pageId"
+        ],
+        "path": "/notion/databases/{databaseId}/pages/{pageId}/meta.json"
+      },
+      {
+        "params": [
+          "pageId"
+        ],
+        "path": "/notion/pages/{pageId}/meta.json"
+      }
+    ],
+    "properties": [
+      {
+        "params": [
+          "databaseId",
+          "pageId"
+        ],
+        "path": "/notion/databases/{databaseId}/pages/{pageId}/properties.json"
+      },
+      {
+        "params": [
+          "pageId"
+        ],
+        "path": "/notion/pages/{pageId}/properties.json"
+      }
+    ]
+  },
+  "slack": {
+    "direct-messages": [
+      {
+        "params": [
+          "userId"
+        ],
+        "path": "/slack/users/{userId}/messages"
+      }
+    ],
+    "messages": [
+      {
+        "params": [
+          "channelId"
+        ],
+        "path": "/slack/channels/{channelId}/messages"
+      }
+    ],
+    "reactions": [
+      {
+        "params": [
+          "channelId",
+          "messageTs"
+        ],
+        "path": "/slack/channels/{channelId}/messages/{messageTs}/reactions"
+      }
+    ],
+    "replies": [
+      {
+        "params": [
+          "channelId",
+          "messageTs"
+        ],
+        "path": "/slack/channels/{channelId}/messages/{messageTs}/replies"
+      }
+    ]
+  },
+  "telegram": {
+    "callback-queries": [
+      {
+        "params": [],
+        "path": "/telegram/callback-queries"
+      }
+    ],
+    "commands": [
+      {
+        "params": [],
+        "path": "/telegram/bot/commands"
+      }
+    ],
+    "inline-queries": [
+      {
+        "params": [],
+        "path": "/telegram/inline-queries"
+      }
+    ],
+    "menu-button": [
+      {
+        "params": [],
+        "path": "/telegram/bot/menu-button"
+      }
+    ],
+    "messages": [
+      {
+        "params": [
+          "chatId"
+        ],
+        "path": "/telegram/chats/{chatId}/messages"
+      }
+    ],
+    "reactions": [
+      {
+        "params": [
+          "chatId",
+          "messageId"
+        ],
+        "path": "/telegram/chats/{chatId}/messages/{messageId}/reactions"
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "provider": "asana",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-asana",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "task.changed",
+      "source": "official:https://developers.asana.com/docs/webhooks | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/asana | local:relayfile-adapters/packages/asana/src/webhook-normalizer.ts",
+      "payload": {
+        "events": [
+          {
+            "action": "changed",
+            "type": "task",
+            "resource": {
+              "gid": "1200",
+              "resource_type": "task",
+              "name": "Fixture task"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/asana/tasks/1200.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

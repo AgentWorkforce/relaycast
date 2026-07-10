@@ -1,0 +1,23 @@
+{
+  "name": "relayauth-server",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "dependencies": {
+    "@relayauth/core": "^0.2.16",
+    "@relayauth/migrate": "^0.2.16",
+    "@relayauth/sdk": "^0.2.16",
+    "@relayauth/server": "0.2.17",
+    "@relayauth/types": "^0.2.16"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx src/__tests__/*.test.ts src/__tests__/e2e/*.test.ts"
+  }
+}

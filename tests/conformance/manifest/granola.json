@@ -1,0 +1,62 @@
+{
+  "provider": "granola",
+  "nangoIntegration": "granola-relay",
+  "adapterPackage": "@relayfile/adapter-granola",
+  "capabilities": {
+    "webhook": true,
+    "writeback": false,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "note.updated",
+      "source": "official:https://docs.granola.ai/ | nango-template:https://github.com/NangoHQ/integration-templates | local:relayfile-adapters/packages/granola/src/webhook-normalizer.ts",
+      "payload": {
+        "type": "note.updated",
+        "note": {
+          "id": "note_123",
+          "title": "Customer call",
+          "updated_at": "2026-06-01T12:00:00Z"
+        }
+      },
+      "expect": {
+        "triggersSync": [
+          {
+            "providerConfigKey": "granola-relay",
+            "syncName": "fetch-notes"
+          },
+          {
+            "providerConfigKey": "granola-relay",
+            "syncName": "fetch-folders"
+          }
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [
+    {
+      "model": "GranolaNote",
+      "syncName": "fetch-notes",
+      "source": "official:https://docs.granola.ai/ | nango-template:https://github.com/NangoHQ/integration-templates | local:cloud/nango-integrations/granola-relay/syncs/fetch-notes.ts",
+      "records": [
+        {
+          "id": "note_123",
+          "title": "Customer call",
+          "created_at": "2026-06-01T11:00:00Z",
+          "updated_at": "2026-06-01T12:00:00Z",
+          "folder_id": "folder_1"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/granola/notes/note_123.json",
+          "contentIncludes": [
+            "title",
+            "folder_id"
+          ]
+        }
+      ]
+    }
+  ]
+}

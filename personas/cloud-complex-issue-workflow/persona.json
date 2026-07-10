@@ -1,0 +1,30 @@
+{
+  "id": "cloud-complex-issue-workflow",
+  "intent": "review",
+  "slug": "cloud-complex-issue-workflow",
+  "cloud": true,
+  "onEvent": "./agent.ts",
+  "description": "Picks up AgentWorkforce/cloud issues labeled `complex`, posts a handoff to Slack #proj-cloud (relayfile writeback), claims the issue with a comment (relayfile writeback), then spawns the cloud-complex-issue-workflow MULTI-STAGE workflow inside the persona sandbox (plan via claude → implement via codex → review via claude → bounded repair → open-pr) to draft a PR whose body carries the plan and the review verdict.",
+  "tags": ["planning", "implementation", "review"],
+  "skills": [],
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Handle the proactive event.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 1800 },
+  "inputs": {
+    "SLACK_CHANNEL": {
+      "type": "string",
+      "default": "proj-cloud",
+      "description": "Slack channel name to post handoff messages to."
+    }
+  },
+  "integrations": {
+    "github": {
+      "source": { "kind": "workspace" }
+    },
+    "slack": {
+      "source": { "kind": "workspace" },
+      "scope": { "channel": "proj-cloud" }
+    }
+  }
+}

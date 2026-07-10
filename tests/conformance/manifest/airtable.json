@@ -1,0 +1,41 @@
+{
+  "provider": "airtable",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-airtable",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "record.created",
+      "source": "official:https://airtable.com/developers/web/api/introduction | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/airtable | local:relayfile-adapters/packages/airtable/src/webhook-normalizer.ts",
+      "payload": {
+        "base": {
+          "id": "app123"
+        },
+        "table": {
+          "id": "tbl123"
+        },
+        "record": {
+          "id": "rec123",
+          "fields": {
+            "Name": "Fixture"
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/airtable/bases/app123/tables/tbl123/records/rec123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

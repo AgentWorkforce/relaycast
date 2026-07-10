@@ -1,0 +1,49 @@
+version: "1.0"
+name: volume-cleanup
+description: >
+  Deletes stale Daytona volumes to stay under the 100-volume limit.
+  Targets workflow code volumes (name prefix "code-") that haven't been
+  used in MAX_AGE_DAYS (default: 2). Run this after a batch of workflows
+  or on a schedule whenever volume count approaches the limit.
+
+  Run via:
+    DAYTONA_API_KEY=xxx agent-relay run workflows/volume-cleanup.yaml
+    DAYTONA_API_KEY=xxx DRY_RUN=1 agent-relay run workflows/volume-cleanup.yaml
+    npx sst shell --stage khaliqgant -- node_modules/.bin/agent-relay run workflows/volume-cleanup.yaml
+
+swarm:
+  pattern: pipeline
+  maxConcurrency: 2
+  timeoutMs: 120000
+
+workflows:
+  - name: cleanup-flow
+    steps:
+
+      - name: dry-run-check
+        type: deterministic
+        command: |
+          echo "=== Daytona Volume Dry Run ===" && \
+          DAYTONA_API_KEY="${DAYTONA_API_KEY}" \
+          MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}" \
+          DRY_RUN=1 \
+          INCLUDE_ALL_VOLUMES="${INCLUDE_ALL_VOLUMES:-0}" \
+          node scripts/cleanup-volumes.mjs
+        captureOutput: true
+        failOnError: true
+
+      - name: delete-volumes
+        type: deterministic
+        dependsOn: [dry-run-check]
+        command: |
+          echo "=== Deleting stale volumes ===" && \
+          DAYTONA_API_KEY="${DAYTONA_API_KEY}" \
+          MAX_AGE_DAYS="${MAX_AGE_DAYS:-2}" \
+          DRY_RUN="${DRY_RUN:-0}" \
+          INCLUDE_ALL_VOLUMES="${INCLUDE_ALL_VOLUMES:-0}" \
+          node scripts/cleanup-volumes.mjs
+        captureOutput: true
+        failOnError: true
+
+errorHandling:
+  strategy: fail-fast

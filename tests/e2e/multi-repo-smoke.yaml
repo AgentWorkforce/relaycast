@@ -1,0 +1,36 @@
+name: multi-repo-cloud-smoke
+description: |
+  Exercises the multi-repo cloud workflow surface end-to-end. Two declared
+  paths (alpha + beta), each writes a unique heartbeat file. After the run
+  completes, Phase C push-back should open one PR per repo against the
+  resolved default branch.
+
+  Driven by scripts/smoke-multi-repo-cloud.sh — see that script for env
+  vars and prereqs.
+
+paths:
+  - { name: alpha, path: ../scratch-alpha }
+  - { name: beta,  path: ../scratch-beta }
+
+agents:
+  alpha-bumper:
+    workdir: alpha
+    steps:
+      - run: |
+          set -e
+          ts="$(date -u +%FT%TZ)"
+          mkdir -p .relay-smoke
+          printf 'run=%s ts=%s repo=alpha\n' "${RELAY_RUN_ID:-unknown}" "$ts" \
+            > .relay-smoke/heartbeat.txt
+          git add .relay-smoke/heartbeat.txt
+
+  beta-bumper:
+    workdir: beta
+    steps:
+      - run: |
+          set -e
+          ts="$(date -u +%FT%TZ)"
+          mkdir -p .relay-smoke
+          printf 'run=%s ts=%s repo=beta\n' "${RELAY_RUN_ID:-unknown}" "$ts" \
+            > .relay-smoke/heartbeat.txt
+          git add .relay-smoke/heartbeat.txt

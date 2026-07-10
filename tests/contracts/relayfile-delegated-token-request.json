@@ -1,0 +1,19 @@
+{
+  "source": "relayfile CLI delegatedRelayfileTokenViaCloud",
+  "shippedCliCoarse": {
+    "agentName": "relayfile-cli",
+    "scopes": ["fs:read", "fs:write"]
+  },
+  "shippedCliCoarsePathScoped": {
+    "_comment": "Relayfile CLI v0.8.30+ `relayfile writeback push` builds scopes via writebackPushJoinScopes(remotePath) at relayfile/cmd/relayfile-cli/main.go:3290. The cloud contract must normalize fs:<action>:/<path> to relayfile:fs:<action>:/<path>; regression for AR-272 CLI 400 wedge.",
+    "agentName": "relayfile-cli",
+    "scopes": ["fs:write:/linear/**", "ops:read"]
+  },
+  "factoryGranular": {
+    "agentName": "pear-factory-sdk",
+    "scopes": [
+      "relayfile:fs:read:/linear/issues/**",
+      "relayfile:fs:write:/linear/issues/**"
+    ]
+  }
+}

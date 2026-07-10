@@ -1,0 +1,10 @@
+SANDBOX_PROVIDER=local
+LOCAL_SANDBOX_URL=http://127.0.0.1:3001
+RELAYFILE_URL=http://127.0.0.1:9090
+RELAYAUTH_URL=http://127.0.0.1:9091
+RELAYCRON_URL=http://127.0.0.1:7528
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/cloud
+WORKFLOW_STORAGE_BUCKET=local-workflow-storage
+CREDENTIAL_ENCRYPTION_KEY=dev-credential-encryption-key-32b
+BROKER_KEY_SECRET=dev-broker-key-secret
+DAYTONA_API_KEY=local-dev-unused

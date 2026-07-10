@@ -1,0 +1,82 @@
+{
+  "provider": "x",
+  "nangoIntegration": "x-relay",
+  "adapterPackage": "@relayfile/adapter-x",
+  "capabilities": {
+    "webhook": false,
+    "writeback": false,
+    "sync": true
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [
+    {
+      "model": "XSearchBundle",
+      "syncName": "fetch-searches",
+      "source": "official:https://docs.x.com/x-api/introduction | nango-template:https://github.com/NangoHQ/integration-templates | local:cloud/nango-integrations/x-relay/syncs/fetch-searches.ts",
+      "records": [
+        {
+          "id": "search_123",
+          "run": {
+            "id": "search_123",
+            "title": "relayfile",
+            "query": "relayfile",
+            "mode": "recent",
+            "requestedAt": "2026-06-01T12:00:00.000Z",
+            "resultCount": 1,
+            "costEstimate": {
+              "posts": 1,
+              "users": 1,
+              "postReadUnitUsd": 0.005,
+              "userReadUnitUsd": 0.01,
+              "estimatedUsd": 0.015,
+              "cappedByBudget": false,
+              "cappedByMaxResults": false
+            },
+            "budgetUsd": 1,
+            "source": {
+              "provider": "x",
+              "endpoint": "/2/tweets/search/recent",
+              "docs": "https://docs.x.com/x-api/posts/search/introduction"
+            }
+          },
+          "posts": [
+            {
+              "id": "tweet_1",
+              "text": "relayfile update",
+              "author_id": "user_1",
+              "created_at": "2026-06-01T12:00:01.000Z"
+            }
+          ],
+          "users": [
+            {
+              "id": "user_1",
+              "username": "relayfile",
+              "name": "Relayfile"
+            }
+          ],
+          "results": [
+            {
+              "id": "search_123:tweet_1",
+              "searchId": "search_123",
+              "postId": "tweet_1",
+              "rank": 1,
+              "matchedAt": "2026-06-01T12:00:01.000Z",
+              "query": "relayfile"
+            }
+          ],
+          "rawResponses": []
+        }
+      ],
+      "expect": [
+        {
+          "path": "/x/searches/search_123__relayfile/meta.json",
+          "contentIncludes": [
+            "run",
+            "results"
+          ]
+        }
+      ]
+    }
+  ]
+}

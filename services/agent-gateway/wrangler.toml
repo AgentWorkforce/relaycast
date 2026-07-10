@@ -1,0 +1,27 @@
+name = "agent-gateway"
+main = "src/worker.ts"
+compatibility_date = "2026-05-11"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "WORKSPACE_GATEWAY_DO"
+class_name = "WorkspaceGatewayDO"
+
+[[services]]
+binding = "CLOUD_WEB_WORKER"
+service = "cloud-web-staging"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["WorkspaceGatewayDO"]
+
+[vars]
+RELAY_AGENT_AUDIENCE = "agent-gateway"
+RELAYAUTH_URL = ""
+RELAYFILE_URL = ""
+RELAYCAST_URL = ""
+AGENT_GATEWAY_BASE_URL = ""
+AGENT_GATEWAY_INTERNAL_SECRET = ""
+RELAYFILE_INTERNAL_HMAC_SECRET = ""
+RELAYCRON_URL = ""
+RELAYCRON_API_KEY = ""

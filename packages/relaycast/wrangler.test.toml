@@ -1,0 +1,69 @@
+# Test-only wrangler config for the relaycast gateway integration suite.
+#
+# This is NOT the deploy config (SST owns deploys via infra/relaycast.ts). It
+# exists solely so `@cloudflare/vitest-pool-workers` can boot the REAL worker
+# entrypoint — engine routes + all five Durable Objects + D1 + KV + R2 + Queues —
+# inside workerd, and drive it over `SELF.fetch`. Bindings mirror
+# infra/relaycast.ts so the test environment matches production wiring.
+name = "relaycast-gateway-test"
+main = "src/entrypoints/cloudflare.ts"
+# Must match infra/relaycast.ts (relaycastNodeCompatibilityDate) — @relaycast/engine
+# needs nodejs_compat (its auth provider imports node builtins).
+compatibility_date = "2026-05-11"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "relaycast-gateway-test"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "relaycast-gateway-test-kv"
+
+[[r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "relaycast-gateway-test-files"
+
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "relaycast-gateway-test-webhooks"
+
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "relaycast-gateway-test-notifications"
+
+# All five DOs back the engine's realtime/presence/rate-limit/workspace-stream
+# ports. They use classic key-value storage (state.storage.get/put), so the
+# migration tag is `new_classes` (not `new_sqlite_classes`).
+[durable_objects]
+bindings = [
+  { name = "CHANNEL_DO", class_name = "ChannelDO" },
+  { name = "AGENT_DO", class_name = "AgentDO" },
+  { name = "PRESENCE_DO", class_name = "PresenceDO" },
+  { name = "WORKSPACE_STREAM_DO", class_name = "WorkspaceStreamDO" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimitDO" },
+  { name = "NODE_DO", class_name = "NodeDO" },
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = [
+  "ChannelDO",
+  "AgentDO",
+  "PresenceDO",
+  "WorkspaceStreamDO",
+  "RateLimitDO",
+  "NodeDO",
+]
+
+[vars]
+ENVIRONMENT = "test"
+# R2 presign config — required for the files adapter to construct. File flows
+# aren't exercised by the suite; these are harmless placeholders.
+CF_ACCOUNT_ID = "test-account"
+R2_ACCESS_KEY_ID = "test-access-key"
+R2_SECRET_ACCESS_KEY = "test-secret-key"
+FILES_BUCKET_NAME = "relaycast-gateway-test-files"
+# POSTHOG_API_KEY intentionally unset → telemetry sink no-ops, so the suite
+# makes no outbound network calls.

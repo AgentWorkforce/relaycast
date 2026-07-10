@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "lastUpdated": "2026-04-13T19:07:21.403Z",
+  "trajectories": {
+    "traj_vstekhqn08ct": {
+      "title": "Add GitHub integration to dashboard integrations page",
+      "status": "completed",
+      "startedAt": "2026-04-13T19:07:20.966Z",
+      "completedAt": "2026-04-13T19:07:21.325Z",
+      "path": "<workspace>/packages/web/.trajectories/completed/2026-04/traj_vstekhqn08ct.json"
+    }
+  }
+}

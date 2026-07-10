@@ -1,0 +1,34 @@
+{
+  "provider": "calendly",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-calendly",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "invitee.created",
+      "source": "official:https://developer.calendly.com/api-docs | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/calendly | local:relayfile-adapters/packages/calendly/src/webhook-normalizer.ts",
+      "payload": {
+        "event": "invitee.created",
+        "payload": {
+          "event": "https://api.calendly.com/scheduled_events/evt_123",
+          "email": "sam@example.com"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/calendly/events/evt_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

@@ -1,0 +1,103 @@
+{
+  "provider": "hubspot",
+  "nangoIntegration": "hubspot-relay",
+  "adapterPackage": "@relayfile/adapter-hubspot",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "contact.propertyChange",
+      "source": "official:https://developers.hubspot.com/docs/api/webhooks | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/hubspot | local:relayfile-adapters/packages/hubspot/src/webhook-normalizer.ts",
+      "payload": [
+        {
+          "objectTypeId": "0-1",
+          "objectId": 101,
+          "subscriptionType": "object.propertyChange",
+          "propertyName": "email",
+          "propertyValue": "sam@example.com",
+          "occurredAt": 1717200000000
+        }
+      ],
+      "mockNango": [
+        {
+          "method": "GET",
+          "endpointMatches": "/crm/v3/objects/contacts/101",
+          "body": {
+            "id": "101",
+            "properties": {
+              "firstname": "Sam",
+              "email": "sam@example.com",
+              "lastmodifieddate": "2026-06-02T12:00:00.000Z"
+            },
+            "createdAt": "2026-06-01T12:00:00.000Z",
+            "updatedAt": "2026-06-02T12:00:00.000Z",
+            "archived": false
+          }
+        }
+      ],
+      "expect": {
+        "contentIncludes": [
+          "email",
+          "sam@example.com"
+        ],
+        "paths": [
+          "/hubspot/contacts/101.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "update_contact",
+      "source": "official:https://developers.hubspot.com/docs/api-reference/crm-contacts-v3/basic/patch-crm-v3-objects-contacts-contact-id | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/hubspot | local:relayfile-adapters/packages/hubspot/src/writeback.ts",
+      "filePath": "/hubspot/contacts/101.json",
+      "content": {
+        "properties": {
+          "firstname": "Sam",
+          "email": "sam@example.com"
+        }
+      },
+      "expectCall": {
+        "method": "PATCH",
+        "endpointMatches": "/crm/v3/objects/contacts/101",
+        "bodyIncludes": {
+          "properties": {
+            "firstname": "Sam",
+            "email": "sam@example.com"
+          }
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "Contact",
+      "syncName": "fetch-contacts",
+      "source": "official:https://developers.hubspot.com/docs/api/webhooks | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/hubspot | local:cloud/nango-integrations/hubspot-relay/syncs/fetch-contacts.ts",
+      "records": [
+        {
+          "id": "101",
+          "properties": {
+            "firstname": "Sam",
+            "email": "sam@example.com"
+          },
+          "createdAt": "2026-06-01T12:00:00.000Z",
+          "updatedAt": "2026-06-02T12:00:00.000Z",
+          "archived": false
+        }
+      ],
+      "expect": [
+        {
+          "path": "/hubspot/contacts/101.json",
+          "contentIncludes": [
+            "properties",
+            "email"
+          ]
+        }
+      ]
+    }
+  ]
+}

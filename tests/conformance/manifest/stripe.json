@@ -1,0 +1,39 @@
+{
+  "provider": "stripe",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-stripe",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "payment_intent.succeeded",
+      "source": "official:https://docs.stripe.com/webhooks | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/stripe | local:relayfile-adapters/packages/stripe/src/webhook-normalizer.ts",
+      "payload": {
+        "id": "evt_123",
+        "type": "payment_intent.succeeded",
+        "data": {
+          "object": {
+            "id": "pi_123",
+            "object": "payment_intent",
+            "amount": 1200,
+            "status": "succeeded"
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/stripe/payment_intents/pi_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

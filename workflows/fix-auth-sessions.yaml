@@ -1,0 +1,227 @@
+version: "1.0"
+name: fix-auth-sessions
+description: >
+  Persist CLI auth sessions to the database so the connect flow survives
+  Lambda instance changes. Currently sessions are stored in a Map in
+  sandbox-auth.ts — when the complete call hits a different Lambda, the
+  session is gone. Fix by storing session metadata in a DB table and
+  reconstructing the Daytona sandbox reference on completion.
+
+swarm:
+  pattern: dag
+  channel: wf-fix-auth-sessions
+  maxConcurrency: 4
+  timeoutMs: 3600000
+
+agents:
+  - name: lead
+    cli: codex
+    role: Architect — designs the solution, reviews implementations
+  - name: schema-worker
+    cli: codex
+    role: Adds the auth_sessions DB table and migration
+    constraints:
+      idleThresholdSecs: 120
+  - name: impl-worker
+    cli: codex
+    role: Implements the DB-backed session store in sandbox-auth.ts
+    constraints:
+      idleThresholdSecs: 120
+
+workflows:
+  - name: fix-auth-sessions-flow
+    steps:
+      - name: read-context
+        type: deterministic
+        command: |
+          echo "=== SANDBOX AUTH ===" &&
+          cat packages/core/src/auth/sandbox-auth.ts &&
+          echo "=== CLI AUTH COMPLETE ROUTE ===" &&
+          cat packages/web/app/api/v1/cli/auth/complete/route.ts &&
+          echo "=== CLI AUTH CREATE ROUTE ===" &&
+          cat packages/web/app/api/v1/cli/auth/route.ts &&
+          echo "=== DB SCHEMA ===" &&
+          cat packages/web/lib/db/schema.ts &&
+          echo "=== CREDENTIALS TYPES ===" &&
+          grep -A20 "DaytonaAuthCredentials\|ResolvedDaytona" packages/core/src/auth/credentials.ts
+        captureOutput: true
+
+      - name: design
+        agent: lead
+        dependsOn: [read-context]
+        task: |
+          Design a fix for the in-memory auth session problem.
+
+          Context:
+          {{steps.read-context.output}}
+
+          PROBLEM: sandbox-auth.ts stores sessions in `const sessions = new Map()`.
+          When `createAuthSandbox` runs on Lambda instance A and `completeAuthSession`
+          hits Lambda instance B, the session is lost → "Session not found" error.
+
+          SOLUTION: Store session metadata in a DB table. On completion, reconstruct
+          the Daytona sandbox reference from the stored sandboxId.
+
+          Design:
+          1. Add `cli_auth_sessions` table to packages/web/lib/db/schema.ts:
+             - id (text, primary key — the sessionId)
+             - sandbox_id (text)
+             - provider (text)
+             - language (text)
+             - home (text — home dir path in sandbox)
+             - user_id (uuid)
+             - daytona_api_key (text, nullable — encrypted or from env)
+             - daytona_jwt_token (text, nullable)
+             - daytona_organization_id (text, nullable)
+             - ssh_token (text — for revoking SSH access on cleanup)
+             - created_at (timestamp)
+             - expires_at (timestamp)
+
+          2. Modify packages/core/src/auth/sandbox-auth.ts:
+             - createAuthSandbox: after creating the sandbox and SSH access, store
+               the session in the DB instead of the Map. The route handler needs to
+               pass a `db` instance or a `storeSession` callback.
+             - completeAuthSession: read the session from DB instead of Map. Use
+               `new Daytona(daytonaAuth)` + `daytona.get(sandboxId)` to reconstruct
+               the sandbox reference. Then proceed as before (download creds, encrypt, store).
+             - Remove the in-memory Map and TTL cleanup interval.
+
+          3. The tricky part: sandbox-auth.ts is in packages/core (not web), so it
+             can't import from @/lib/db directly. Options:
+             a) Pass a session store interface (create/get/delete functions) from the route
+             b) Move the DB logic to the route handlers, keep sandbox-auth.ts stateless
+             c) Accept a db connection in the function params
+
+             Option (a) is cleanest — define a SessionStore interface in sandbox-auth.ts,
+             implement it in the web package using Drizzle, pass it to create/complete.
+
+          Write the full design to shared/auth-session-design.md
+          (create the shared/ directory first with mkdir -p shared).
+        verification:
+          type: file_exists
+          value: shared/auth-session-design.md
+
+      - name: add-schema
+        agent: schema-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/auth-session-design.md.
+
+          1. Add a `cliAuthSessions` table to packages/web/lib/db/schema.ts
+             following the existing patterns (pgTable, uuid/text columns, timestamps).
+             Check the design for exact columns.
+
+          2. Create a Drizzle migration SQL file at packages/web/drizzle/0004_cli_auth_sessions.sql
+             with the CREATE TABLE statement.
+
+          3. Create packages/web/lib/auth/session-store.ts that implements the
+             SessionStore interface from the design. It should:
+             - createSession(session): insert into cliAuthSessions
+             - getSession(sessionId): select by id, check expiry
+             - deleteSession(sessionId): delete by id
+             - Use getDb() from @/lib/db
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-sandbox-auth
+        agent: impl-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/auth-session-design.md.
+
+          Modify packages/core/src/auth/sandbox-auth.ts:
+
+          1. Define a SessionStore interface:
+             ```
+             interface SessionStore {
+               create(session: SessionData): Promise<void>;
+               get(sessionId: string): Promise<SessionData | null>;
+               delete(sessionId: string): Promise<void>;
+             }
+             ```
+             Where SessionData has: sessionId, sandboxId, sshToken, provider,
+             language, home, userId, daytonaAuth (the resolved creds), createdAt, expiresAt.
+
+          2. Add `sessionStore` parameter to CreateAuthSandboxOptions and
+             CompleteAuthSessionOptions.
+
+          3. In createAuthSandbox: replace `sessions.set(sessionId, ...)` with
+             `await options.sessionStore.create(...)`. Store the daytona auth
+             credentials so they can be reconstructed on completion.
+
+          4. In completeAuthSession: replace `sessions.get(sessionId)` with
+             `await options.sessionStore.get(sessionId)`. Reconstruct the sandbox:
+             `const daytona = new Daytona(session.daytonaAuth); const sandbox = await daytona.get(session.sandboxId);`
+             Then proceed with credential download/encrypt/store as before.
+             After completion, `await options.sessionStore.delete(sessionId)`.
+
+          5. Remove the in-memory Map and setInterval cleanup.
+
+          6. Update the route handlers:
+             - packages/web/app/api/v1/cli/auth/route.ts: import the session store,
+               pass it to createAuthSandbox
+             - packages/web/app/api/v1/cli/auth/complete/route.ts: import the session
+               store, pass it to completeAuthSession
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: verify-files
+        type: deterministic
+        dependsOn: [add-schema, impl-sandbox-auth]
+        command: |
+          missing=0
+          grep -q "cliAuthSessions" packages/web/lib/db/schema.ts || { echo "MISSING: cliAuthSessions table"; missing=$((missing+1)); }
+          test -f packages/web/lib/auth/session-store.ts || { echo "MISSING: session-store.ts"; missing=$((missing+1)); }
+          grep -q "SessionStore" packages/core/src/auth/sandbox-auth.ts || { echo "MISSING: SessionStore interface"; missing=$((missing+1)); }
+          grep -q "sessionStore" packages/web/app/api/v1/cli/auth/route.ts || { echo "MISSING: sessionStore in create route"; missing=$((missing+1)); }
+          grep -q "sessionStore" packages/web/app/api/v1/cli/auth/complete/route.ts || { echo "MISSING: sessionStore in complete route"; missing=$((missing+1)); }
+          # Verify in-memory Map is removed
+          grep -q "new Map" packages/core/src/auth/sandbox-auth.ts && { echo "FAIL: in-memory Map still present"; missing=$((missing+1)); } || true
+          if [ $missing -gt 0 ]; then echo "$missing checks failed"; exit 1; fi
+          echo "All checks passed"
+        failOnError: true
+        captureOutput: true
+
+      - name: read-impl
+        type: deterministic
+        dependsOn: [verify-files]
+        command: |
+          echo "=== SANDBOX AUTH ===" &&
+          cat packages/core/src/auth/sandbox-auth.ts &&
+          echo "=== SESSION STORE ===" &&
+          cat packages/web/lib/auth/session-store.ts &&
+          echo "=== SCHEMA (cliAuthSessions) ===" &&
+          grep -A30 "cliAuthSessions" packages/web/lib/db/schema.ts &&
+          echo "=== CREATE ROUTE ===" &&
+          cat packages/web/app/api/v1/cli/auth/route.ts &&
+          echo "=== COMPLETE ROUTE ===" &&
+          cat packages/web/app/api/v1/cli/auth/complete/route.ts
+        captureOutput: true
+
+      - name: review
+        agent: lead
+        dependsOn: [read-impl]
+        task: |
+          Review all implementations:
+          {{steps.read-impl.output}}
+
+          Verify:
+          1. SessionStore interface is clean and minimal
+          2. createAuthSandbox stores to DB via sessionStore.create()
+          3. completeAuthSession reads from DB, reconstructs sandbox via daytona.get()
+          4. In-memory Map and setInterval cleanup are removed
+          5. SSH token is stored so it can be revoked on cleanup
+          6. Daytona auth credentials are stored so sandbox can be reconstructed
+          7. Session expiry is checked on get()
+          8. Route handlers pass the session store correctly
+          9. cloud_agents upsert still works after completion
+          10. No circular imports between core and web packages
+
+          Fix any issues found directly in the files.
+
+errorHandling:
+  strategy: continue

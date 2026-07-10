@@ -1,0 +1,14 @@
+{
+  "provider": "redis",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/redis",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

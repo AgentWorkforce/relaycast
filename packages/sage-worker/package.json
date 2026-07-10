@@ -1,0 +1,9 @@
+{
+  "name": "@cloud/sage-worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agent-assistant/harness": "^0.6.5",
+    "@agentworkforce/sage": "1.5.41"
+  }
+}

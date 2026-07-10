@@ -1,0 +1,4376 @@
+{
+  "nango": {
+    "getConnection": {},
+    "batchSave": {
+      "SlackMessage": [
+        {
+          "id": "C0B4VBJ0NRH-1779279776.175319",
+          "channel": "C0B4VBJ0NRH",
+          "channel_name": "test-agent",
+          "channel_is_private": false,
+          "user": "U0ADJH4P83T",
+          "user_name": "khaliq",
+          "user_real_name": "Khaliq Gant",
+          "user_display_name": "",
+          "user_email": "khaliq@agent-relay.com",
+          "user_is_bot": false,
+          "text": "<@U0B2596R7EZ>",
+          "ts": "1779279776.175319",
+          "thread_ts": null,
+          "is_thread_parent": false,
+          "reply_count": 0,
+          "reply_users_count": 0,
+          "edited_ts": null,
+          "permalink": "https://agentrelayworkspace.slack.com/archives/C0B4VBJ0NRH/p1779279776175319",
+          "has_files": false,
+          "file_count": 0,
+          "reactions_json": "[]",
+          "mentions_json": "{\"users\":[\"U0B2596R7EZ\"],\"channels\":[]}"
+        },
+        {
+          "id": "C0B4VBJ0NRH-1779279720.235789",
+          "channel": "C0B4VBJ0NRH",
+          "channel_name": "test-agent",
+          "channel_is_private": false,
+          "user": "U0ADJH4P83T",
+          "user_name": "khaliq",
+          "user_real_name": "Khaliq Gant",
+          "user_display_name": "",
+          "user_email": "khaliq@agent-relay.com",
+          "user_is_bot": false,
+          "text": "<@U0B2596R7EZ> hi",
+          "ts": "1779279720.235789",
+          "thread_ts": null,
+          "is_thread_parent": false,
+          "reply_count": 0,
+          "reply_users_count": 0,
+          "edited_ts": null,
+          "permalink": "https://agentrelayworkspace.slack.com/archives/C0B4VBJ0NRH/p1779279720235789",
+          "has_files": false,
+          "file_count": 0,
+          "reactions_json": "[]",
+          "mentions_json": "{\"users\":[\"U0B2596R7EZ\"],\"channels\":[]}"
+        },
+        {
+          "id": "C0B4VBJ0NRH-1779279662.782209",
+          "channel": "C0B4VBJ0NRH",
+          "channel_name": "test-agent",
+          "channel_is_private": false,
+          "user": "U0ADJH4P83T",
+          "user_name": "khaliq",
+          "user_real_name": "Khaliq Gant",
+          "user_display_name": "",
+          "user_email": "khaliq@agent-relay.com",
+          "user_is_bot": false,
+          "text": "<@U0B2596R7EZ> you there?",
+          "ts": "1779279662.782209",
+          "thread_ts": null,
+          "is_thread_parent": false,
+          "reply_count": 0,
+          "reply_users_count": 0,
+          "edited_ts": null,
+          "permalink": "https://agentrelayworkspace.slack.com/archives/C0B4VBJ0NRH/p1779279662782209",
+          "has_files": false,
+          "file_count": 0,
+          "reactions_json": "[]",
+          "mentions_json": "{\"users\":[\"U0B2596R7EZ\"],\"channels\":[]}"
+        },
+        {
+          "id": "C0B4VBJ0NRH-1779279652.521019",
+          "channel": "C0B4VBJ0NRH",
+          "channel_name": "test-agent",
+          "channel_is_private": false,
+          "user": "U0ADJH4P83T",
+          "user_name": "khaliq",
+          "user_real_name": "Khaliq Gant",
+          "user_display_name": "",
+          "user_email": "khaliq@agent-relay.com",
+          "user_is_bot": false,
+          "text": "<@U0B2596R7EZ>",
+          "ts": "1779279652.521019",
+          "thread_ts": null,
+          "is_thread_parent": false,
+          "reply_count": 0,
+          "reply_users_count": 0,
+          "edited_ts": null,
+          "permalink": "https://agentrelayworkspace.slack.com/archives/C0B4VBJ0NRH/p1779279652521019",
+          "has_files": false,
+          "file_count": 0,
+          "reactions_json": "[]",
+          "mentions_json": "{\"users\":[\"U0B2596R7EZ\"],\"channels\":[]}"
+        }
+      ]
+    },
+    "batchDelete": {
+      "SlackMessage": []
+    }
+  },
+  "api": {
+    "get": {
+      "//records/": [
+        {
+          "response": {
+            "next_cursor": null,
+            "records": [
+              {
+                "id": "U0ADJH4P83T",
+                "team_id": "T0AD97QUZDJ",
+                "name": "khaliq",
+                "real_name": "Khaliq Gant",
+                "display_name": "",
+                "email": "khaliq@agent-relay.com",
+                "title": "",
+                "is_bot": false,
+                "is_admin": true,
+                "is_deleted": false,
+                "timezone": "Europe/Amsterdam",
+                "updated": 1779302656,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:57.428821+00:00",
+                  "last_modified_at": "2026-05-21T10:09:57.428821+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ny40Mjg4MjErMDA6MDB8fDkwYzVkN2YzLTE4N2UtNTYxYi1hYjZiLWY3NTAzZGQ4ODJmZg=="
+                }
+              }
+            ]
+          },
+          "status": 200,
+          "headers": {
+            "date": "Thu, 21 May 2026 10:56:21 GMT",
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "572",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=5184000; includeSubDomains",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "992",
+            "x-ratelimit-reset": "1779361015",
+            "etag": "W/\"23c-NpV1UOpUxp6wp7vvQLPgjyHTWXs\""
+          },
+          "hash": "9229a767695f38533ff361110035ccb999e783cd",
+          "request": {
+            "params": {
+              "model": "SlackUser"
+            }
+          }
+        },
+        {
+          "response": {
+            "next_cursor": null,
+            "records": [
+              {
+                "id": "C0B24SJGYSH",
+                "name": "agent-relay-odins",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1778151744,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDA1OGI4ZmFhLTljYWItNWE5NS04NWE4LTM0NWI4OWNmZmU0YQ=="
+                }
+              },
+              {
+                "id": "C0AD8BVMXJN",
+                "name": "proj-relay-core",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770307954,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDA4ZmZiZDc5LTAyYmYtNWRmYy1hNzQyLWFkZmVmYjcyNmFlYQ=="
+                }
+              },
+              {
+                "id": "C0AE344AY9K",
+                "name": "ops-travel",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770745905,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDBmODcxOGNmLTk2NWUtNTA2NC1hZDMyLTA3OTIwZjVmZmFmNw=="
+                }
+              },
+              {
+                "id": "C0ALPSX68FM",
+                "name": "proj-pear",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1773675283,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDE1MDM5ZTNhLWViY2ItNTI2Yy1iNzQzLWU5MTI1MzQxNzNhNw=="
+                }
+              },
+              {
+                "id": "C0ADZTL8QN8",
+                "name": "gtm-design",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770648513,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDE1ODU2NjgwLTZhNDEtNTUzMC1hYzFlLTk5NTM1YjY5YmQ4Yw=="
+                }
+              },
+              {
+                "id": "C0ADKKD1SAG",
+                "name": "ops-hiring",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770387822,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDI0OTQxN2Y1LTU1ZGEtNWYyMy04M2I0LTFhOWQ1MDMzZTg3ZQ=="
+                }
+              },
+              {
+                "id": "C0AHAGY6PFZ",
+                "name": "eng-open-claws",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1772295704,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDI0YjYxZmI3LTg1ZGItNTNlMi04NmY0LTViMzU3ZjhmNDA2Nw=="
+                }
+              },
+              {
+                "id": "C0AHX79DZ9D",
+                "name": "proj-workflows",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1772579609,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDI4NTE2OTdhLWU0YjUtNWY4NS05MWY2LWY1ZmZjY2I1NWM0Yw=="
+                }
+              },
+              {
+                "id": "C0AMG5GQMNZ",
+                "name": "ops-daily",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1773909174,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDM5Y2RkNzBlLWY2MjktNWQ4NC1hM2Q4LTlkMDk1YTg3MjczNg=="
+                }
+              },
+              {
+                "id": "C0ANC5J4H0A",
+                "name": "ext-e2b-agent-relay",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "UJC3J1B37",
+                "created": 1774295483,
+                "member_count": 7,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDNkNWUyNjc2LWVmNDgtNTRjMC05NTZlLWRiYWVkY2IzMTBhZA=="
+                }
+              },
+              {
+                "id": "C0AE5M12QFK",
+                "name": "proj-relay-broker",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770611510,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDQ2YjNmYzY3LWVkMzMtNTQ2Ni05YzliLTBkN2I0ZDVlMjMzMg=="
+                }
+              },
+              {
+                "id": "C0AFEQGPGQ1",
+                "name": "research-ideas",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1771080110,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDQ3YTU0ZjY2LTAyMjgtNTYxYy1hM2NmLTJjYTRmNGYwOTg5YQ=="
+                }
+              },
+              {
+                "id": "C0AKY69JMFU",
+                "name": "agent-relay-watchdog",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1773239169,
+                "member_count": 6,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDRlMjhiODExLTViNzgtNWYxMi05NzkzLWViYTdhNzhkYzNlMg=="
+                }
+              },
+              {
+                "id": "C0AD7UU0J1G",
+                "name": "proj-cloud",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770305178,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDY2OGFhY2ViLTZiNDAtNWRhYy1iOTlhLTRmZjRiNjljMGYzNQ=="
+                }
+              },
+              {
+                "id": "C0ANFJ6QUFQ",
+                "name": "proj-relayauth",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1774358211,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDZkYWM3NWVmLTZmMDMtNTYyNC05YTYyLTc4ZWNmMDRiZjFiNQ=="
+                }
+              },
+              {
+                "id": "C0B0Y7Y2ENS",
+                "name": "agent-relay-actual-ai",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1777585348,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDZmNThjMGQ1LWQ2OTctNTc3YS04ZDQ2LWQzMjZlNDIwNWU1ZA=="
+                }
+              },
+              {
+                "id": "C0AE9NR8555",
+                "name": "agent-relay-kieran",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770932264,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDczYjljZjhmLTAzMmUtNWE0YS04ZTBlLTA1MWU3MjkxNmQ3MQ=="
+                }
+              },
+              {
+                "id": "C0ADTPL6MEZ",
+                "name": "proj-relaycast",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770654604,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDc3ODRkYWFlLTAzNTItNTY2OC04MTM0LWZmN2NkNjY2OWEwYw=="
+                }
+              },
+              {
+                "id": "C0AG2TDRYAW",
+                "name": "gtm-feature-launches",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "New launches in the Agent Workforce universe",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1771553404,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDc3Y2Q5NDdmLTEzYzAtNWY4Yy04YjVlLTQwMDg2N2VhNDZkNA=="
+                }
+              },
+              {
+                "id": "C0ACZ8AFCM9",
+                "name": "proj-sage",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "This channel is for everything #new-channel. Hold meetings, share docs, and make decisions together with your team.",
+                "creator": "U0ADJH4P83T",
+                "created": 1770285255,
+                "member_count": 6,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDdlNDllZWMzLTViYWUtNTBiOS04YjNhLTMxMTU3ZWM5MDNlOQ=="
+                }
+              },
+              {
+                "id": "C0ALLPGK83A",
+                "name": "agent-relay-dataleap",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1773175850,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDdlODdkMzhhLTNlZTgtNTdlMi04ODk0LWU4ZDg4MGI4OGJjMQ=="
+                }
+              },
+              {
+                "id": "C0AL3B3M8CF",
+                "name": "agent-relay-roocode",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1773437313,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDgwODlhOThjLTU4ZDQtNTdhYy1iNzk2LTRkOTE4NTM3MjE2MQ=="
+                }
+              },
+              {
+                "id": "C0AJ0MWH83F",
+                "name": "research-market",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1772495935,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDg0ZDBhOTljLTcxYTUtNTc0OS1iYjA0LTExM2NiMjY2Y2M1MA=="
+                }
+              },
+              {
+                "id": "C0ATBR4DCBF",
+                "name": "gtm-feedback",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1776362352,
+                "member_count": 2,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDg3ZjQ1YzI3LWQ0YTMtNWFkNy04OGU4LTllNGZmY2I1ZmFiNA=="
+                }
+              },
+              {
+                "id": "C0AK3NCDPFC",
+                "name": "research-design",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "Place to share designs and other inspiration we might use for Agent Relay",
+                "creator": "U0ACZ88DB51",
+                "created": 1772833724,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDg5NjJlMzE1LTdiNDctNTEyMi1hNWM1LTM3NmExN2Y4MWJiOQ=="
+                }
+              },
+              {
+                "id": "C0AG4MG39AL",
+                "name": "proj-relayfile",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "<https://github.com/AgentWorkforce/relayfile>",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1771262006,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDhmYjE4MmQ2LWJiZGEtNTIwYS1iZTM0LTA2NjAwZTY5ZDhiNg=="
+                }
+              },
+              {
+                "id": "C0ASVB5VCHH",
+                "name": "research-slack-apps",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1776250007,
+                "member_count": 9,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fDllYmM1MGYzLWYzZDYtNTc4MC04Mzk4LWIxM2VmYzZkZjY0Yg=="
+                }
+              },
+              {
+                "id": "C0AQ1PZNFT6",
+                "name": "agent-relay-loudcrowd",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1774949251,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGExNTJhMDlkLTUwOGQtNWUxZi1iYzRkLTAwMDQ3ZTQ4YTkwMA=="
+                }
+              },
+              {
+                "id": "C0ADJH54N3T",
+                "name": "gtm-social",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "Other channels are for work. This one’s just for fun. Get to know your teammates and show your lighter side. 🎈",
+                "creator": "U0ADJH4P83T",
+                "created": 1770285120,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGExZDAyZDAwLWRjMDgtNWJmNy1hNjUyLTY4YjRjOWJmNThmNA=="
+                }
+              },
+              {
+                "id": "C0AEKP4JKJQ",
+                "name": "agent-relay-concourse",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "<https://www.concourse.co/>",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770843278,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGEyMjdkODFkLTMwN2QtNTQ2OS1hNmQ0LWFjZGU3ZTNhYzQzMg=="
+                }
+              },
+              {
+                "id": "C0AF4JELP1S",
+                "name": "research-news",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1771053439,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGEzODJhMTI0LWJhNWUtNTg0Zi04OGNlLTU1OWE1NzEyMGE0Nw=="
+                }
+              },
+              {
+                "id": "C0AJMAG603U",
+                "name": "gtm-events",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1772666117,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGE1MGViY2NhLWQyZTItNTk2Ny1iMmNkLThlNzdmNzAxMjRhMg=="
+                }
+              },
+              {
+                "id": "C0AEKNLDNKW",
+                "name": "agent-relay-ryan",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770843114,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGE1NDcxM2ViLTlhZGMtNTY0MS05ZDIxLTNhYzBmMmFmNzAzZA=="
+                }
+              },
+              {
+                "id": "C0B4VBJ0NRH",
+                "name": "test-agent",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": true,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1779279643,
+                "member_count": 2,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGE4ZTVlNjYwLWY4OTgtNWIyMi04MjAzLWQ3MmE1ZmExMWYyMg=="
+                }
+              },
+              {
+                "id": "C0ATQEV33EX",
+                "name": "eng-deploys",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1776625568,
+                "member_count": 2,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGE5MDQwYzJkLWE3YjctNTg1Yi05MDA0LWM1OTA4OWZmYTllNA=="
+                }
+              },
+              {
+                "id": "C0ADGNB3Y4C",
+                "name": "gtm-partners",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770357260,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGFiNzJiYTllLWMyOTctNTM1MS1iNjdmLTM4MmFhZTZlYzM1NA=="
+                }
+              },
+              {
+                "id": "C0AV5H98U67",
+                "name": "ops-finances",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1777208919,
+                "member_count": 2,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGI0NDc0MWU1LTFhOTYtNTQ3Ny05N2FiLWYwYTdiZmE0YmQ3ZQ=="
+                }
+              },
+              {
+                "id": "C0AE573CW72",
+                "name": "eng-bugs",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770327917,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGI4MjFjOWMwLTY2YTUtNWM4Mi04OWZlLTE2NjRjMTY1ZWE1NA=="
+                }
+              },
+              {
+                "id": "C0ALQ06AAUT",
+                "name": "proj-my-senior-dev",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1773675920,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGJmYWUyYmI1LTkyNjQtNThlOC1hNWU3LWRiODdhZTI4NWZmZg=="
+                }
+              },
+              {
+                "id": "C0AHUEDPU7P",
+                "name": "nango-agent-relay",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U03HVGHB9J5",
+                "created": 1772441001,
+                "member_count": 17,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGMyNDcwNDQ0LTViOWItNWVlMy04NmZhLTNmMTJjNjgyOThlYQ=="
+                }
+              },
+              {
+                "id": "C0ADCHSKV45",
+                "name": "gtm-marketing",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1770387656,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGNmNjVlNjlmLTM0ZjAtNThjZC1iNjJlLTRhMzljMWNkYTk5YQ=="
+                }
+              },
+              {
+                "id": "C0B04238GE4",
+                "name": "proj-workforce",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1776900311,
+                "member_count": 2,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGRhOWY2M2QxLTEzNjYtNTU0OS05NDA4LWEyNzEyMmNiYWQ1Mg=="
+                }
+              },
+              {
+                "id": "C0ARERF1LBC",
+                "name": "proj-docs",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1775594835,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGRhZjgxNWFhLWVhYWItNWQ0ZS1iMDc2LWQzZTFhYWY3NWQzOA=="
+                }
+              },
+              {
+                "id": "C0ADZTVPHTJ",
+                "name": "general",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "Share announcements and updates about company news, upcoming events, or teammates who deserve some kudos. ⭐",
+                "creator": "U0ADJH4P83T",
+                "created": 1770285119,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGRiNTZmM2VmLTRjNTYtNWFkNy04YjI1LWQ4NDIxM2ZiNWEzZA=="
+                }
+              },
+              {
+                "id": "C0AR7MG2S14",
+                "name": "agent-relay-overviewai",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1775553295,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGUyYjE2MDMxLTUwZjgtNWI2OS1hODkzLTgyMjgyN2ZkY2U0OQ=="
+                }
+              },
+              {
+                "id": "C0ASMJBH1KK",
+                "name": "eng-models",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1775893754,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGU5MDJiYWJjLWE0Y2ItNTgxZi1hNjllLTg2MTY5NDk1MWZiYw=="
+                }
+              },
+              {
+                "id": "C0AQSHBCENL",
+                "name": "agent-relay-finlens",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1774950041,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGVhZDMyYzZlLWJiNGItNTBiYy05ZGUwLTJlOWQxZTUzOTYyMA=="
+                }
+              },
+              {
+                "id": "C0ADXMU6QKU",
+                "name": "ops-investors",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770658248,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGVjNjVjM2I5LTIxMDYtNWM2MC1hMDVkLTM5ODc2Mjk0OTI1Mg=="
+                }
+              },
+              {
+                "id": "C0APXNTUGAU",
+                "name": "proj-relaycron",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "relaycron.dev",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1774542202,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGYyMTU3NjE4LTJiMzctNTMxYi04NjliLTY1NzYyMjM5ZWM3YQ=="
+                }
+              },
+              {
+                "id": "C0ATNRKAPC7",
+                "name": "proj-relayburn",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ACZ88DB51",
+                "created": 1776710691,
+                "member_count": 3,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGY2OWJmMzZiLWNjODYtNWJmMy1iYjQ3LTI1ZmY2ZDViNjYyMg=="
+                }
+              },
+              {
+                "id": "C0ADE9B71CN",
+                "name": "gtm-prospects",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": true,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770390146,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGY5MmRjMzY3LTFjZWUtNWFlZS05ZjgzLTFhMWVkMGQ1ZjM1Yw=="
+                }
+              },
+              {
+                "id": "C0ADPB5CGNQ",
+                "name": "daytona-agent-relay",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": true,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0533TK74CX",
+                "created": 1770420003,
+                "member_count": 17,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGZiM2MxOTM2LTJmODgtNWQwNC04OTZhLTEzZDZjZTJhMzNiNg=="
+                }
+              },
+              {
+                "id": "C0AEM2VLL2D",
+                "name": "proj-trajectories",
+                "is_private": false,
+                "is_archived": false,
+                "is_shared": false,
+                "is_member": false,
+                "topic": "",
+                "purpose": "",
+                "creator": "U0ADJH4P83T",
+                "created": 1770759310,
+                "member_count": 4,
+                "_nango_metadata": {
+                  "first_seen_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_modified_at": "2026-05-21T10:09:56.883565+00:00",
+                  "last_action": "ADDED",
+                  "deleted_at": null,
+                  "pruned_at": null,
+                  "cursor": "MjAyNi0wNS0yMVQxMDowOTo1Ni44ODM1NjUrMDA6MDB8fGZkOTY0YzNhLWZjMTMtNWYwYi1iZDJjLWJmMWQxN2FkNjNiMQ=="
+                }
+              }
+            ]
+          },
+          "status": 200,
+          "headers": {
+            "date": "Thu, 21 May 2026 10:56:21 GMT",
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "26869",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=5184000; includeSubDomains",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "991",
+            "x-ratelimit-reset": "1779361015",
+            "etag": "W/\"68f5-LSIzLJd2oKU/q4xmr/jqqk0/fOY\""
+          },
+          "hash": "0f6bbaf3f925a6e614587e7a6e453f780d2ad518",
+          "request": {
+            "params": {
+              "model": "SlackChannel"
+            }
+          }
+        }
+      ],
+      "/auth.test": {
+        "response": {
+          "ok": true,
+          "url": "https://agentrelayworkspace.slack.com/",
+          "team": "Agent Relay",
+          "user": "file_by_agent_relay",
+          "team_id": "T0AD97QUZDJ",
+          "user_id": "U0B2596R7EZ",
+          "bot_id": "B0B28LVBUSE",
+          "expires_in": 5026,
+          "is_enterprise_install": false
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 10:56:22 GMT",
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "230",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "990",
+          "x-ratelimit-reset": "1779361015",
+          "etag": "W/\"e6-pD7aF3SMFu4FVZh6+zF3+Jzd38w\""
+        },
+        "hash": "2dd3a333e1ad96318638e1ee9f98cc5ed45f4dba",
+        "request": {}
+      },
+      "/conversations.list": {
+        "response": {
+          "ok": true,
+          "channels": [
+            {
+              "id": "C0ACZ8AFCM9",
+              "created": 1770285255,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1777646006418,
+              "name": "proj-sage",
+              "name_normalized": "proj-sage",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "This channel is for everything #new-channel. Hold meetings, share docs, and make decisions together with your team.",
+                "creator": "U0ADJH4P83T",
+                "last_set": 1770285255
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 6,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ],
+                "use_case": "project"
+              },
+              "previous_names": [
+                "proj-slack-app-testing",
+                "slack-app-testing",
+                "new-channel"
+              ]
+            },
+            {
+              "id": "C0AD7UU0J1G",
+              "created": 1770305178,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898348031,
+              "name": "proj-cloud",
+              "name_normalized": "proj-cloud",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  },
+                  {
+                    "id": "Ct0AEXG36NG0",
+                    "label": "Bookmarks",
+                    "type": "folder",
+                    "data": {
+                      "folder_bookmark_id": "Bk0AE6RG1620"
+                    }
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  },
+                  {
+                    "id": "Ct0AEXG36NG0",
+                    "label": "Bookmarks",
+                    "type": "folder",
+                    "data": {
+                      "folder_bookmark_id": "Bk0AE6RG1620"
+                    }
+                  }
+                ]
+              },
+              "previous_names": [
+                "cloud"
+              ]
+            },
+            {
+              "id": "C0AD8BVMXJN",
+              "created": 1770307954,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776900050830,
+              "name": "proj-relay-core",
+              "name_normalized": "proj-relay-core",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "id": "Ct0AD724JYE7",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0ADA11BW5B",
+                      "shared_ts": "1770361342.337909"
+                    },
+                    "label": ""
+                  },
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "id": "Ct0AD724JYE7",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0ADA11BW5B",
+                      "shared_ts": "1770361342.337909"
+                    }
+                  },
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "proj-relay",
+                "cli"
+              ]
+            },
+            {
+              "id": "C0ADCHSKV45",
+              "created": 1770387656,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898731325,
+              "name": "gtm-marketing",
+              "name_normalized": "gtm-marketing",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "marketing",
+                "squid-games"
+              ]
+            },
+            {
+              "id": "C0ADE9B71CN",
+              "created": 1770390146,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899519500,
+              "name": "gtm-prospects",
+              "name_normalized": "gtm-prospects",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": true,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "prospects"
+              ]
+            },
+            {
+              "id": "C0ADGNB3Y4C",
+              "created": 1770357260,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898657399,
+              "name": "gtm-partners",
+              "name_normalized": "gtm-partners",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "partners"
+              ]
+            },
+            {
+              "id": "C0ADJH54N3T",
+              "created": 1770285120,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899798868,
+              "name": "gtm-social",
+              "name_normalized": "gtm-social",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "Other channels are for work. This one’s just for fun. Get to know your teammates and show your lighter side. 🎈",
+                "creator": "U0ADJH4P83T",
+                "last_set": 1770285120
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ],
+                "use_case": "random"
+              },
+              "previous_names": [
+                "social"
+              ]
+            },
+            {
+              "id": "C0ADKKD1SAG",
+              "created": 1770387822,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776986285510,
+              "name": "ops-hiring",
+              "name_normalized": "ops-hiring",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "hiring"
+              ]
+            },
+            {
+              "id": "C0ADTPL6MEZ",
+              "created": 1770654604,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899653660,
+              "name": "proj-relaycast",
+              "name_normalized": "proj-relaycast",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "bookmarks",
+                    "label": "",
+                    "id": "bookmarks"
+                  },
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "bookmarks"
+                  },
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "relaycast"
+              ]
+            },
+            {
+              "id": "C0ADXMU6QKU",
+              "created": 1770658248,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898691255,
+              "name": "ops-investors",
+              "name_normalized": "ops-investors",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "investors"
+              ]
+            },
+            {
+              "id": "C0ADZTL8QN8",
+              "created": 1770648513,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898488666,
+              "name": "gtm-design",
+              "name_normalized": "gtm-design",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "design",
+                "designer"
+              ]
+            },
+            {
+              "id": "C0ADZTVPHTJ",
+              "created": 1770285119,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1770822960072,
+              "name": "general",
+              "name_normalized": "general",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": true,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "Share announcements and updates about company news, upcoming events, or teammates who deserve some kudos. ⭐",
+                "creator": "U0ADJH4P83T",
+                "last_set": 1770285119
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  },
+                  {
+                    "id": "Ct0AE7311X51",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0AEA20V4R3",
+                      "shared_ts": "1770822959.983729"
+                    },
+                    "label": ""
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  },
+                  {
+                    "id": "Ct0AE7311X51",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0AEA20V4R3",
+                      "shared_ts": "1770822959.983729"
+                    }
+                  }
+                ],
+                "use_case": "welcome"
+              },
+              "previous_names": [
+                "all-agent-relay"
+              ]
+            },
+            {
+              "id": "C0AE344AY9K",
+              "created": 1770745905,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899860291,
+              "name": "ops-travel",
+              "name_normalized": "ops-travel",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "travel"
+              ]
+            },
+            {
+              "id": "C0AE573CW72",
+              "created": 1770327917,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898307977,
+              "name": "eng-bugs",
+              "name_normalized": "eng-bugs",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "bugs"
+              ]
+            },
+            {
+              "id": "C0AE5M12QFK",
+              "created": 1770611510,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899599016,
+              "name": "proj-relay-broker",
+              "name_normalized": "proj-relay-broker",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "relay-broker"
+              ]
+            },
+            {
+              "id": "C0AE9NR8555",
+              "created": 1770932264,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898705885,
+              "name": "agent-relay-kieran",
+              "name_normalized": "agent-relay-kieran",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": [
+                "kieran-agent-relay"
+              ]
+            },
+            {
+              "id": "C0AEKNLDNKW",
+              "created": 1770843114,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1773436411726,
+              "name": "agent-relay-ryan",
+              "name_normalized": "agent-relay-ryan",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AEKP4JKJQ",
+              "created": 1770843278,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1773436031121,
+              "name": "agent-relay-concourse",
+              "name_normalized": "agent-relay-concourse",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "<https://www.concourse.co/>",
+                "creator": "U0ADJH4P83T",
+                "last_set": 1770843650
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AEM2VLL2D",
+              "created": 1770759310,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899849061,
+              "name": "proj-trajectories",
+              "name_normalized": "proj-trajectories",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  },
+                  {
+                    "id": "Ct0AGA96LPJ5",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0AFR04EAHZ",
+                      "shared_ts": "1771502860.432159"
+                    },
+                    "label": ""
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  },
+                  {
+                    "id": "Ct0AGA96LPJ5",
+                    "type": "canvas",
+                    "data": {
+                      "file_id": "F0AFR04EAHZ",
+                      "shared_ts": "1771502860.432159"
+                    }
+                  }
+                ]
+              },
+              "previous_names": [
+                "trajectories"
+              ]
+            },
+            {
+              "id": "C0AF4JELP1S",
+              "created": 1771053439,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899945363,
+              "name": "research-news",
+              "name_normalized": "research-news",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "previous_names": [
+                "news"
+              ]
+            },
+            {
+              "id": "C0AFEQGPGQ1",
+              "created": 1771080110,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899689091,
+              "name": "research-ideas",
+              "name_normalized": "research-ideas",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "res-ideas",
+                "ideas"
+              ]
+            },
+            {
+              "id": "C0AG2TDRYAW",
+              "created": 1771553404,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898545396,
+              "name": "gtm-feature-launches",
+              "name_normalized": "gtm-feature-launches",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "New launches in the Agent Workforce universe",
+                "creator": "U0ACZ88DB51",
+                "last_set": 1771553745
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "feature-launch"
+              ]
+            },
+            {
+              "id": "C0AG4MG39AL",
+              "created": 1771262006,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899666197,
+              "name": "proj-relayfile",
+              "name_normalized": "proj-relayfile",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "<https://github.com/AgentWorkforce/relayfile>",
+                "creator": "U0ADJH4P83T",
+                "last_set": 1771339953
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "relayfile"
+              ]
+            },
+            {
+              "id": "C0AHAGY6PFZ",
+              "created": 1772295704,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899559541,
+              "name": "eng-open-claws",
+              "name_normalized": "eng-open-claws",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "open-claw"
+              ]
+            },
+            {
+              "id": "C0AHX79DZ9D",
+              "created": 1772579609,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899872750,
+              "name": "proj-workflows",
+              "name_normalized": "proj-workflows",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "workflows"
+              ]
+            },
+            {
+              "id": "C0AJ0MWH83F",
+              "created": 1772495935,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776900520767,
+              "name": "research-market",
+              "name_normalized": "research-market",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "research-competitors",
+                "research"
+              ]
+            },
+            {
+              "id": "C0AJMAG603U",
+              "created": 1772666117,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898508663,
+              "name": "gtm-events",
+              "name_normalized": "gtm-events",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "previous_names": [
+                "events"
+              ]
+            },
+            {
+              "id": "C0AK3NCDPFC",
+              "created": 1772833724,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899835892,
+              "name": "research-design",
+              "name_normalized": "research-design",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "Place to share designs and other inspiration we might use for Agent Relay",
+                "creator": "U0ACZ88DB51",
+                "last_set": 1776899835
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "previous_names": [
+                "swipe"
+              ]
+            },
+            {
+              "id": "C0AKY69JMFU",
+              "created": 1773239169,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1778880018180,
+              "name": "agent-relay-watchdog",
+              "name_normalized": "agent-relay-watchdog",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 6,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AL3B3M8CF",
+              "created": 1773437313,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776029759856,
+              "name": "agent-relay-roocode",
+              "name_normalized": "agent-relay-roocode",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0ALLPGK83A",
+              "created": 1773175850,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1779309230425,
+              "name": "agent-relay-dataleap",
+              "name_normalized": "agent-relay-dataleap",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ],
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0ALPSX68FM",
+              "created": 1773675283,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899575790,
+              "name": "proj-pear",
+              "name_normalized": "proj-pear",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "pear"
+              ]
+            },
+            {
+              "id": "C0ALQ06AAUT",
+              "created": 1773675920,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899501690,
+              "name": "proj-my-senior-dev",
+              "name_normalized": "proj-my-senior-dev",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 4,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "my-senior-dev"
+              ]
+            },
+            {
+              "id": "C0AMG5GQMNZ",
+              "created": 1773909174,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898416156,
+              "name": "ops-daily",
+              "name_normalized": "ops-daily",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "daily"
+              ]
+            },
+            {
+              "id": "C0ANFJ6QUFQ",
+              "created": 1774358211,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899622767,
+              "name": "proj-relayauth",
+              "name_normalized": "proj-relayauth",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "relayauth"
+              ]
+            },
+            {
+              "id": "C0APXNTUGAU",
+              "created": 1774542202,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776900087082,
+              "name": "proj-relaycron",
+              "name_normalized": "proj-relaycron",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "relaycron.dev",
+                "creator": "U0ACZ88DB51",
+                "last_set": 1774542273
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "proj-relayschedule",
+                "proj-relay-schedule",
+                "relay-schedule"
+              ]
+            },
+            {
+              "id": "C0AQ1PZNFT6",
+              "created": 1774949251,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1777551247543,
+              "name": "agent-relay-loudcrowd",
+              "name_normalized": "agent-relay-loudcrowd",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AQSHBCENL",
+              "created": 1774950041,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1777551248155,
+              "name": "agent-relay-finlens",
+              "name_normalized": "agent-relay-finlens",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AR7MG2S14",
+              "created": 1775553295,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1778145689533,
+              "name": "agent-relay-overviewai",
+              "name_normalized": "agent-relay-overviewai",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0ARERF1LBC",
+              "created": 1775594835,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898460786,
+              "name": "proj-docs",
+              "name_normalized": "proj-docs",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "previous_names": [
+                "docs"
+              ]
+            },
+            {
+              "id": "C0ASMJBH1KK",
+              "created": 1775893754,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898758191,
+              "name": "eng-models",
+              "name_normalized": "eng-models",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "previous_names": [
+                "models"
+              ]
+            },
+            {
+              "id": "C0ASVB5VCHH",
+              "created": 1776250007,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899761545,
+              "name": "research-slack-apps",
+              "name_normalized": "research-slack-apps",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 9,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "slack-apps"
+              ]
+            },
+            {
+              "id": "C0ATBR4DCBF",
+              "created": 1776362352,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898590910,
+              "name": "gtm-feedback",
+              "name_normalized": "gtm-feedback",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 2,
+              "previous_names": [
+                "feedback"
+              ]
+            },
+            {
+              "id": "C0ATNRKAPC7",
+              "created": 1776710691,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776899635363,
+              "name": "proj-relayburn",
+              "name_normalized": "proj-relayburn",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": [
+                "relayburn"
+              ]
+            },
+            {
+              "id": "C0ATQEV33EX",
+              "created": 1776625568,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1776898440750,
+              "name": "eng-deploys",
+              "name_normalized": "eng-deploys",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 2,
+              "previous_names": [
+                "deploys"
+              ]
+            },
+            {
+              "id": "C0AV5H98U67",
+              "created": 1777208919,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1777208919903,
+              "name": "ops-finances",
+              "name_normalized": "ops-finances",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 2,
+              "previous_names": []
+            },
+            {
+              "id": "C0B04238GE4",
+              "created": 1776900311,
+              "creator": "U0ACZ88DB51",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1779307828912,
+              "name": "proj-workforce",
+              "name_normalized": "proj-workforce",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 2,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ]
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0B0Y7Y2ENS",
+              "created": 1777585348,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1777585441615,
+              "name": "agent-relay-actual-ai",
+              "name_normalized": "agent-relay-actual-ai",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0B24SJGYSH",
+              "created": 1778151744,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1778151855320,
+              "name": "agent-relay-odins",
+              "name_normalized": "agent-relay-odins",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T0AD97QUZDJ",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 3,
+              "properties": {
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0B4VBJ0NRH",
+              "created": 1779279643,
+              "creator": "U0ADJH4P83T",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1779279643960,
+              "name": "test-agent",
+              "name_normalized": "test-agent",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": false,
+              "is_ext_shared": false,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "shared_team_ids": [
+                "T0AD97QUZDJ"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": true,
+              "num_members": 2,
+              "previous_names": []
+            },
+            {
+              "id": "C0ADPB5CGNQ",
+              "created": 1770420003,
+              "creator": "U0533TK74CX",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1775819800641,
+              "name": "daytona-agent-relay",
+              "name_normalized": "daytona-agent-relay",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T053JA2KTA7",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 17,
+              "properties": {
+                "tabs": [
+                  {
+                    "id": "Ct0ADPB51CVA",
+                    "type": "folder",
+                    "label": ""
+                  }
+                ],
+                "tabz": [
+                  {
+                    "id": "Ct0ADPB51CVA",
+                    "type": "folder"
+                  }
+                ],
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0AHUEDPU7P",
+              "created": 1772441001,
+              "creator": "U03HVGHB9J5",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1775639715141,
+              "name": "nango-agent-relay",
+              "name_normalized": "nango-agent-relay",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "T02LWFGTCDV",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 17,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ],
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            },
+            {
+              "id": "C0ANC5J4H0A",
+              "created": 1774295483,
+              "creator": "UJC3J1B37",
+              "is_org_shared": false,
+              "is_im": false,
+              "context_team_id": "T0AD97QUZDJ",
+              "updated": 1779273589415,
+              "name": "ext-e2b-agent-relay",
+              "name_normalized": "ext-e2b-agent-relay",
+              "is_channel": true,
+              "is_group": false,
+              "is_mpim": false,
+              "is_private": false,
+              "is_archived": false,
+              "is_general": false,
+              "is_shared": true,
+              "is_ext_shared": true,
+              "unlinked": 0,
+              "is_pending_ext_shared": false,
+              "pending_shared": [],
+              "parent_conversation": null,
+              "conversation_host_id": "TJDV3KYCX",
+              "purpose": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "topic": {
+                "value": "",
+                "creator": "",
+                "last_set": 0
+              },
+              "pending_connected_team_ids": [],
+              "is_member": false,
+              "num_members": 7,
+              "properties": {
+                "tabs": [
+                  {
+                    "type": "files",
+                    "label": "",
+                    "id": "files"
+                  }
+                ],
+                "tabz": [
+                  {
+                    "type": "files"
+                  }
+                ],
+                "is_dormant": true,
+                "has_slack_connect_invite_created": true
+              },
+              "previous_names": []
+            }
+          ],
+          "response_metadata": {
+            "next_cursor": ""
+          }
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 10:56:23 GMT",
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "41986",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "989",
+          "x-ratelimit-reset": "1779361015",
+          "etag": "W/\"a402-mjnbgNDZizhUcK22COGuf+8dTyA\""
+        },
+        "hash": "a5a0f6e4da91f0444dbbbc92aa1b7362dbc6fc94",
+        "request": {
+          "params": {
+            "exclude_archived": "true",
+            "limit": "200",
+            "types": "public_channel,private_channel"
+          }
+        }
+      },
+      "/conversations.history": [
+        {
+          "response": {
+            "ok": true,
+            "oldest": "1778756181.000000",
+            "messages": [],
+            "has_more": false,
+            "pin_count": 0,
+            "channel_actions_ts": null,
+            "channel_actions_count": 0
+          },
+          "status": 200,
+          "headers": {
+            "date": "Thu, 21 May 2026 10:56:23 GMT",
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "137",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=5184000; includeSubDomains",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "988",
+            "x-ratelimit-reset": "1779361015",
+            "etag": "W/\"89-dnzX5zPyHDXGs5qxZSIpoZt06fE\""
+          },
+          "hash": "5fcf7a5ca8a13f253e1b948004949fc9d14d5de5",
+          "request": {
+            "params": {
+              "channel": "C0ADE9B71CN",
+              "limit": "200",
+              "oldest": "1778756181"
+            }
+          }
+        },
+        {
+          "response": {
+            "ok": true,
+            "oldest": "1778756181.000000",
+            "messages": [
+              {
+                "user": "U0ADJH4P83T",
+                "type": "message",
+                "ts": "1779279776.175319",
+                "client_msg_id": "0aaca876-2c4f-436b-b251-b2dc67b79c43",
+                "text": "<@U0B2596R7EZ>",
+                "team": "T0AD97QUZDJ",
+                "blocks": [
+                  {
+                    "type": "rich_text",
+                    "block_id": "iKzPj",
+                    "elements": [
+                      {
+                        "type": "rich_text_section",
+                        "elements": [
+                          {
+                            "type": "user",
+                            "user_id": "U0B2596R7EZ"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "user": "U0ADJH4P83T",
+                "type": "message",
+                "ts": "1779279720.235789",
+                "client_msg_id": "11135f02-5ef9-4e0b-bc6f-f9dfbbda91aa",
+                "text": "<@U0B2596R7EZ> hi",
+                "team": "T0AD97QUZDJ",
+                "blocks": [
+                  {
+                    "type": "rich_text",
+                    "block_id": "dPZrL",
+                    "elements": [
+                      {
+                        "type": "rich_text_section",
+                        "elements": [
+                          {
+                            "type": "user",
+                            "user_id": "U0B2596R7EZ"
+                          },
+                          {
+                            "type": "text",
+                            "text": " hi"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "user": "U0ADJH4P83T",
+                "type": "message",
+                "ts": "1779279662.782209",
+                "client_msg_id": "66b29ca9-2268-4bc4-9f4f-7fd0af3e2597",
+                "text": "<@U0B2596R7EZ> you there?",
+                "team": "T0AD97QUZDJ",
+                "blocks": [
+                  {
+                    "type": "rich_text",
+                    "block_id": "xNCse",
+                    "elements": [
+                      {
+                        "type": "rich_text_section",
+                        "elements": [
+                          {
+                            "type": "user",
+                            "user_id": "U0B2596R7EZ"
+                          },
+                          {
+                            "type": "text",
+                            "text": " you there?"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "subtype": "channel_join",
+                "user": "U0B2596R7EZ",
+                "text": "<@U0B2596R7EZ> has joined the channel",
+                "inviter": "U0ADJH4P83T",
+                "type": "message",
+                "ts": "1779279655.274529"
+              },
+              {
+                "user": "U0ADJH4P83T",
+                "type": "message",
+                "ts": "1779279652.521019",
+                "client_msg_id": "dd02bf0b-73f8-4e0d-9fde-5cf3edfefb2a",
+                "text": "<@U0B2596R7EZ>",
+                "team": "T0AD97QUZDJ",
+                "blocks": [
+                  {
+                    "type": "rich_text",
+                    "block_id": "iKzPj",
+                    "elements": [
+                      {
+                        "type": "rich_text_section",
+                        "elements": [
+                          {
+                            "type": "user",
+                            "user_id": "U0B2596R7EZ"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "subtype": "channel_join",
+                "user": "U0ADJH4P83T",
+                "text": "<@U0ADJH4P83T> has joined the channel",
+                "type": "message",
+                "ts": "1779279644.133299"
+              }
+            ],
+            "has_more": false,
+            "pin_count": 0,
+            "channel_actions_ts": null,
+            "channel_actions_count": 0
+          },
+          "status": 200,
+          "headers": {
+            "date": "Thu, 21 May 2026 10:56:24 GMT",
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1758",
+            "connection": "keep-alive",
+            "x-xss-protection": "0",
+            "x-content-type-options": "nosniff",
+            "x-download-options": "noopen",
+            "x-frame-options": "SAMEORIGIN",
+            "x-dns-prefetch-control": "off",
+            "strict-transport-security": "max-age=5184000; includeSubDomains",
+            "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+            "access-control-allow-origin": "*",
+            "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+            "x-ratelimit-limit": "1000",
+            "x-ratelimit-remaining": "987",
+            "x-ratelimit-reset": "1779361015",
+            "etag": "W/\"6de-6GrSKYnVWsrtblaED+zoA/oq4nc\""
+          },
+          "hash": "e2dfa8750e3d6fe00fcfd99ecb77f705e882fdd4",
+          "request": {
+            "params": {
+              "channel": "C0B4VBJ0NRH",
+              "limit": "200",
+              "oldest": "1778756181"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

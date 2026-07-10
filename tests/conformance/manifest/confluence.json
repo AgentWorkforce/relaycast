@@ -1,0 +1,89 @@
+{
+  "provider": "confluence",
+  "nangoIntegration": "confluence-relay",
+  "adapterPackage": "@relayfile/adapter-confluence",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "page_updated",
+      "source": "official:https://developer.atlassian.com/cloud/confluence/rest/v2/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/confluence | local:relayfile-adapters/packages/confluence/src/webhook-normalizer.ts",
+      "payload": {
+        "event": "page_updated",
+        "page": {
+          "id": "98765",
+          "title": "Runbook",
+          "spaceId": "OPS",
+          "version": {
+            "number": 3
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "title",
+          "version"
+        ],
+        "paths": [
+          "/confluence/spaces/OPS/pages/runbook__98765.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "create-page",
+      "source": "official:https://developer.atlassian.com/cloud/confluence/rest/v2/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/confluence | local:relayfile-adapters/packages/confluence/src/writeback.ts",
+      "filePath": "/confluence/spaces/OPS/pages/new.json",
+      "content": {
+        "title": "Incident Notes",
+        "body": {
+          "representation": "storage",
+          "value": "<p>Notes</p>"
+        }
+      },
+      "metadata": {
+        "connection_config": {
+          "cloudId": "cloud_confluence_conformance"
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/ex/confluence/cloud_confluence_conformance/wiki/api/v2/pages",
+        "bodyIncludes": {
+          "title": "Incident Notes"
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "ConfluencePage",
+      "syncName": "fetch-pages",
+      "source": "official:https://developer.atlassian.com/cloud/confluence/rest/v2/ | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/confluence | local:cloud/nango-integrations/confluence-relay/syncs/fetch-pages.ts",
+      "records": [
+        {
+          "id": "98765",
+          "title": "Runbook",
+          "spaceId": "OPS",
+          "status": "current",
+          "version": {
+            "number": 3
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "/confluence/spaces/OPS/pages/runbook__98765.json",
+          "contentIncludes": [
+            "title",
+            "spaceId"
+          ]
+        }
+      ]
+    }
+  ]
+}

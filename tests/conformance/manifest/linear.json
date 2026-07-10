@@ -1,0 +1,123 @@
+{
+  "provider": "linear",
+  "nangoIntegration": "linear-relay",
+  "adapterPackage": "@relayfile/adapter-linear",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "Issue.update",
+      "source": "official:https://developers.linear.app/docs/graphql/webhooks | proven-ref:cloud/tests/nango-webhook-router-github-linear-forward.test.ts (hasCompleteLinearForwardData gate) | path-convention:cloud/tests/nango-sync-record-writer.test.ts",
+      "providerConfigKey": "linear-relay",
+      "payload": {
+        "action": "update",
+        "type": "Issue",
+        "data": {
+          "id": "lin_123",
+          "identifier": "ENG-17",
+          "title": "Fixture issue",
+          "state": { "id": "s1", "name": "Started" },
+          "priority": 2,
+          "url": "https://linear.app/relayfile/issue/ENG-17",
+          "createdAt": "2026-05-12T00:00:00.000Z",
+          "updatedAt": "2026-05-12T00:01:00.000Z",
+          "team": { "key": "ENG" }
+        }
+      },
+      "expect": {
+        "pathPatterns": ["^/linear/issues/ENG-17__lin_123\\.json$"],
+        "contentIncludes": ["ENG-17", "Fixture issue"]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "create_comment",
+      "source": "official:https://developers.linear.app/docs/graphql/working-with-the-graphql-api (commentCreate mutation) | proven-ref:relayfile-adapters/packages/linear/src/writeback.test.ts",
+      "filePath": "/linear/issues/auth-refactor--2fd6800c1c9080ea9ec8fe4a0daa66b8/comments/review-note.json",
+      "content": "looks good, ship it",
+      "mockResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "commentCreate": {
+              "success": true,
+              "comment": {
+                "id": "comment-1",
+                "url": "https://linear.app/relayfile/issue/ENG-17#comment-comment-1"
+              }
+            }
+          }
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpoint": "/graphql",
+        "bodyIncludes": {
+          "variables": {
+            "input": {
+              "issueId": "2fd6800c-1c90-80ea-9ec8-fe4a0daa66b8",
+              "body": "looks good, ship it"
+            }
+          }
+        }
+      }
+    },
+    {
+      "action": "update_issue",
+      "source": "official:https://developers.linear.app/docs/graphql/working-with-the-graphql-api (issueUpdate mutation) | proven-ref:relayfile-adapters/packages/linear/src/writeback.test.ts",
+      "filePath": "/linear/issues/auth-refactor__2fd6800c1c9080ea9ec8fe4a0daa66b8.json",
+      "content": { "title": "New title", "description": "New description" },
+      "mockResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "issueUpdate": {
+              "success": true,
+              "issue": {
+                "id": "2fd6800c-1c90-80ea-9ec8-fe4a0daa66b8",
+                "identifier": "ENG-17",
+                "url": "https://linear.app/relayfile/issue/ENG-17"
+              }
+            }
+          }
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpoint": "/graphql",
+        "bodyIncludes": {
+          "variables": {
+            "id": "2fd6800c-1c90-80ea-9ec8-fe4a0daa66b8",
+            "input": { "title": "New title", "description": "New description" }
+          }
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "LinearIssue",
+      "syncName": "fetch-active-issues",
+      "source": "nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/linear | path-convention:cloud/tests/nango-sync-record-writer.test.ts",
+      "records": [
+        {
+          "id": "issue-1",
+          "identifier": "AGENT-12",
+          "title": "Fix login bug",
+          "state_name": "In Progress",
+          "updated_at": "2026-05-11T10:00:00.000Z"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/linear/issues/AGENT-12__issue-1.json",
+          "contentIncludes": ["AGENT-12", "Fix login bug"]
+        }
+      ]
+    }
+  ]
+}

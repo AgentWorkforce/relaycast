@@ -1,0 +1,21 @@
+{
+  "name": "@cloud/specialist-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cd ../.. && node node_modules/vitest/vitest.mjs run --config vitest.config.ts packages/specialist-worker/src/specialist/github-api-fallback.test.ts packages/specialist-worker/tests/github-api-client.test.ts packages/specialist-worker/src/routes.test.ts packages/specialist-worker/tests/a2a-rpc.test.ts"
+  },
+  "dependencies": {
+    "@agent-assistant/harness": "^0.6.5",
+    "@agent-assistant/specialists": "^0.4.7",
+    "@agent-assistant/vfs": "^0.3.3",
+    "@relayauth/sdk": "^0.2.15",
+    "@relaycast/a2a": "5.0.5",
+    "@relayfile/adapter-github": "^0.3.18",
+    "@relayfile/adapter-linear": "^0.3.22",
+    "@relayfile/adapter-notion": "^0.3.15",
+    "@relayfile/core": "^0.10.9",
+    "@relayfile/sdk": "^0.10.9",
+    "hono": "4.12.14"
+  }
+}

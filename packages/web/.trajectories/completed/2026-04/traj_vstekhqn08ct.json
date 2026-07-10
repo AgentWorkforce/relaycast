@@ -1,0 +1,53 @@
+{
+  "id": "traj_vstekhqn08ct",
+  "version": 1,
+  "task": {
+    "title": "Add GitHub integration to dashboard integrations page"
+  },
+  "status": "completed",
+  "startedAt": "2026-04-13T19:07:20.966Z",
+  "completedAt": "2026-04-13T19:07:21.325Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-04-13T19:07:21.155Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2su0z02t0tmk",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-04-13T19:07:21.155Z",
+      "endedAt": "2026-04-13T19:07:21.325Z",
+      "events": [
+        {
+          "ts": 1776107241156,
+          "type": "decision",
+          "content": "Used github-app-oauth as the provider config key for GitHub integration: Used github-app-oauth as the provider config key for GitHub integration",
+          "raw": {
+            "question": "Used github-app-oauth as the provider config key for GitHub integration",
+            "chosen": "Used github-app-oauth as the provider config key for GitHub integration",
+            "alternatives": [],
+            "reasoning": "User specified this exact key; matches the Nango provider config name for the GitHub App OAuth flow"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added GitHub as a second integration on the integrations page. Updated DEFAULT_PROVIDER_CONFIG_KEYS to use github-app-oauth. Added GitHub panel with connect/disconnect controls mirroring the Slack panel. Both integrations are fetched in parallel on page load.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "<workspace>/packages/web",
+  "tags": [],
+  "_trace": {
+    "startRef": "6382dd36372fdc404a7434e57f7536d8821bf5fb",
+    "endRef": "6382dd36372fdc404a7434e57f7536d8821bf5fb"
+  }
+}

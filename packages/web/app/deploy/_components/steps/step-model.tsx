@@ -1,0 +1,303 @@
+"use client";
+
+import { useEffect, useState, type KeyboardEvent } from "react";
+import type { LucideIcon } from "lucide-react";
+import { AlertTriangle, CreditCard, KeyRound, Loader2, ShieldCheck, UserRound } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/app/components/ui/badge";
+import { Button } from "@/app/components/ui/button";
+import { Input } from "@/app/components/ui/input";
+import { connectAnthropicSetupToken } from "../../_lib/deploy-client";
+import type { HarnessSource, PersonaSummary } from "../../_lib/types";
+
+type StepModelProps = {
+  persona: PersonaSummary;
+  harnessSource: HarnessSource | null;
+  byokKey: string;
+  workspaceId?: string | null;
+  subscriptionCredentialMessage?: string | null;
+  subscriptionCredentialChecking?: boolean;
+  onSourceChange: (source: HarnessSource) => void;
+  onByokKeyChange: (value: string) => void;
+  onSubscriptionCredentialConnected?: () => void;
+};
+
+type ModelOption = {
+  source: HarnessSource;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  disabled?: boolean;
+  disabledLabel?: string;
+};
+
+function providerLabel(provider: string | undefined) {
+  if (!provider) return "model provider";
+  if (provider === "openai") return "OpenAI";
+  if (provider === "anthropic") return "Anthropic";
+  return provider[0]?.toUpperCase() + provider.slice(1);
+}
+
+function subscriptionOption(provider: string | undefined): ModelOption {
+  if (provider === "anthropic") {
+    return {
+      source: "oauth",
+      title: "Claude subscription",
+      description:
+        "Connect a Claude subscription with a setup-token generated on your machine.",
+      icon: UserRound,
+    };
+  }
+
+  if (provider === "openai") {
+    return {
+      source: "oauth",
+      title: "ChatGPT subscription",
+      description:
+        "Use your active ChatGPT/Codex subscription credential for this deployment.",
+      icon: UserRound,
+    };
+  }
+
+  return {
+    source: "oauth",
+    title: "Subscription",
+    description:
+      "Subscription connection is not available for this model provider yet. Use BYOK for now.",
+    icon: UserRound,
+    disabled: true,
+    disabledLabel: "Unavailable",
+  };
+}
+
+export function StepModel({
+  persona,
+  harnessSource,
+  byokKey,
+  workspaceId = null,
+  subscriptionCredentialMessage,
+  subscriptionCredentialChecking = false,
+  onSourceChange,
+  onByokKeyChange,
+  onSubscriptionCredentialConnected,
+}: StepModelProps) {
+  const [setupToken, setSetupToken] = useState("");
+  const [setupTokenConnecting, setSetupTokenConnecting] = useState(false);
+  const [setupTokenError, setSetupTokenError] = useState<string | null>(null);
+  const [setupTokenConnected, setSetupTokenConnected] = useState(false);
+  const provider = providerLabel(persona.modelProvider);
+  const options: ModelOption[] = [
+    ...(persona.useSubscription
+      ? [subscriptionOption(persona.modelProvider)]
+      : [
+          {
+            source: "plan" as const,
+            title: "Plan",
+            description: "Use Workforce-billed model usage for this deployment.",
+            icon: CreditCard,
+          },
+        ]),
+    ...(persona.useSubscription && persona.modelProvider === "openai"
+      ? [
+          {
+            source: "managed" as const,
+            title: "Managed key",
+            description: "Use the Workforce-managed OpenAI key for this agent.",
+            icon: ShieldCheck,
+          },
+        ]
+      : []),
+    {
+      source: "byok",
+      title: "BYOK",
+      description: `Use your own ${provider} API key for this agent.`,
+      icon: KeyRound,
+    },
+  ];
+  const enabledOptions = options.filter((option) => !option.disabled);
+  const selectedSource = enabledOptions.some((option) => option.source === harnessSource)
+    ? harnessSource
+    : (enabledOptions[0]?.source ?? null);
+  const selectedIndex = Math.max(
+    enabledOptions.findIndex((option) => option.source === selectedSource),
+    0,
+  );
+
+  useEffect(() => {
+    if (selectedSource && selectedSource !== harnessSource) {
+      onSourceChange(selectedSource);
+    }
+  }, [harnessSource, onSourceChange, selectedSource]);
+
+  function handleRadioGroupKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (
+      !["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key) ||
+      enabledOptions.length === 0
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex = (selectedIndex + direction + enabledOptions.length) % enabledOptions.length;
+    onSourceChange(enabledOptions[nextIndex].source);
+  }
+
+  async function connectSetupToken() {
+    if (!workspaceId) {
+      setSetupTokenError("Choose a workspace before connecting a Claude setup-token.");
+      return;
+    }
+    if (!setupToken.trim()) {
+      setSetupTokenError("Paste the token generated by `claude setup-token`.");
+      return;
+    }
+
+    setSetupTokenConnecting(true);
+    setSetupTokenError(null);
+    try {
+      await connectAnthropicSetupToken({
+        workspaceId,
+        token: setupToken,
+        label: `${persona.name} Claude setup token`,
+      });
+      setSetupToken("");
+      setSetupTokenConnected(true);
+      onSubscriptionCredentialConnected?.();
+    } catch (error) {
+      setSetupTokenConnected(false);
+      setSetupTokenError(error instanceof Error ? error.message : "Failed to connect Claude setup-token.");
+    } finally {
+      setSetupTokenConnecting(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <h2 className="text-2xl font-semibold text-foreground">Connect {provider}</h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          {persona.name} runs on {persona.model ?? persona.harness ?? "the configured model"}.
+        </p>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label={`Choose ${provider} model credential source`}
+        className={cn("grid gap-3", options.length >= 3 ? "lg:grid-cols-3" : "lg:grid-cols-2")}
+        onKeyDown={handleRadioGroupKeyDown}
+      >
+        {options.map((option) => {
+          const Icon = option.icon;
+          const selected = selectedSource === option.source;
+
+          return (
+            <button
+              key={option.source}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-disabled={option.disabled ? true : undefined}
+              onClick={() => {
+                if (!option.disabled) onSourceChange(option.source);
+              }}
+              className={cn(
+                "flex min-h-44 flex-col gap-4 rounded-2xl border bg-[var(--surface-soft)] p-5 text-left transition-colors",
+                option.disabled ? "cursor-not-allowed opacity-75" : null,
+                selected
+                  ? "border-primary shadow-[0_0_0_3px_rgba(125,145,255,0.18)]"
+                  : "border-[var(--border-default)]",
+                !option.disabled && !selected ? "hover:border-[var(--border-strong)]" : null,
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex size-11 items-center justify-center rounded-2xl bg-background text-primary">
+                  <Icon aria-hidden="true" />
+                </div>
+                {selected ? <Badge variant="info">Selected</Badge> : null}
+                {!selected && option.disabledLabel ? <Badge>{option.disabledLabel}</Badge> : null}
+              </div>
+              <div>
+                <p className="font-medium text-foreground">{option.title}</p>
+                <p className="mt-2 text-sm leading-5 text-muted-foreground">{option.description}</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {selectedSource === "byok" ? (
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-soft)] p-5">
+          <label className="text-sm font-medium text-foreground" htmlFor="byok-key">
+            {provider} API key
+          </label>
+          <Input
+            id="byok-key"
+            className="mt-3"
+            type="password"
+            value={byokKey}
+            placeholder="sk-..."
+            onChange={(event) => onByokKeyChange(event.target.value)}
+          />
+        </div>
+      ) : null}
+      {selectedSource === "oauth" && persona.modelProvider === "anthropic" ? (
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-soft)] p-5">
+          <p className="text-sm font-medium text-foreground">Connect a Claude setup-token</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Run <code>claude setup-token</code> on your machine, then paste the generated token here.
+          </p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Setup-tokens are long-lived and are not refreshed automatically. If yours expires, generate and paste a new one.
+          </p>
+          <label className="mt-4 block text-sm font-medium text-foreground" htmlFor="claude-setup-token">
+            Claude setup-token
+          </label>
+          <Input
+            id="claude-setup-token"
+            className="mt-3"
+            type="password"
+            value={setupToken}
+            placeholder="Paste setup-token"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => {
+              setSetupToken(event.target.value);
+              setSetupTokenError(null);
+              setSetupTokenConnected(false);
+            }}
+          />
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              disabled={setupTokenConnecting || !setupToken.trim() || !workspaceId}
+              onClick={() => void connectSetupToken()}
+            >
+              {setupTokenConnecting ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
+              {setupTokenConnecting ? "Connecting…" : "Connect"}
+            </Button>
+            {setupTokenConnected ? (
+              <span className="text-sm text-[var(--status-success)]" role="status">
+                Claude setup-token connected.
+              </span>
+            ) : null}
+          </div>
+          {setupTokenError ? (
+            <p className="mt-3 text-sm leading-6 text-[var(--status-danger)]" role="alert">
+              {setupTokenError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {selectedSource === "oauth" && subscriptionCredentialChecking ? (
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-soft)] p-4 text-sm text-muted-foreground">
+          Checking active subscription credentials…
+        </div>
+      ) : null}
+      {selectedSource === "oauth" && subscriptionCredentialMessage ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-[var(--status-warning)] bg-[var(--status-warning-soft)] p-4 text-sm leading-6 text-[var(--status-warning)]">
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>{subscriptionCredentialMessage}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}

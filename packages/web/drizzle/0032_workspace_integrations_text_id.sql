@@ -1,0 +1,13 @@
+-- workspace_integrations.workspace_id was uuid, but the productized
+-- cloud-mount registry (CloudWorkspaceRegistry, shipped in #406/#436)
+-- generates `rw_<8hex>` IDs (see packages/core/src/workspace/id.ts).
+-- pg rejected those at insert/select with `22P02 invalid input syntax
+-- for type uuid`, breaking every setup-wizard user (Nango webhook +
+-- GET /workspaces/{id}/integrations both 500'd).
+--
+-- Other workspace_id columns in this schema (cloud_agents, sandboxes,
+-- workflow_runs, ricky_runs, slack_channel_configs, api_token_sessions,
+-- worker_enrollment_tokens, cloud_agent_auth_sessions) still type
+-- workspace_id as uuid; widening them is the follow-up unification
+-- pass tracked separately.
+ALTER TABLE "workspace_integrations" ALTER COLUMN "workspace_id" SET DATA TYPE text;

@@ -1,0 +1,16 @@
+{
+  "id": "cloud-team-issue",
+  "lead": "cloud-team-issue",
+  "members": [
+    {
+      "name": "cloud-team-issue-n1",
+      "persona": {
+        "slug": "cloud-team-issue"
+      },
+      "role": "implementer"
+    }
+  ],
+  "delegation": [],
+  "tokenBudget": 400000,
+  "timeBudgetSeconds": 1800
+}

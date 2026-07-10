@@ -1,0 +1,32 @@
+{
+  "provider": "clickup",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-clickup",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "taskCreated",
+      "source": "official:https://clickup.com/api/developer-portal/webhooks | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/clickup | local:relayfile-adapters/packages/clickup/src/webhook-normalizer.ts",
+      "payload": {
+        "event": "taskCreated",
+        "task_id": "task_123",
+        "list_id": "list_1"
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/clickup/tasks/task_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

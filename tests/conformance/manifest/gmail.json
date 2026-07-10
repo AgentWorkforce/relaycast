@@ -1,0 +1,145 @@
+{
+  "provider": "google-mail",
+  "nangoIntegration": "google-mail-relay",
+  "adapterPackage": "@relayfile/gmail",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "message.changed",
+      "source": "official:https://developers.google.com/gmail/api/guides/push | official:https://developers.google.com/gmail/api/reference/rest/v1/users.history/list | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-mail | local:cloud/packages/web/lib/integrations/nango-webhook-router.ts",
+      "connectionId": "conn_inbound_conformance",
+      "metadata": {
+        "gmailForwardHistoryId": "100"
+      },
+      "payload": {
+        "message": {
+          "data": "eyJlbWFpbEFkZHJlc3MiOiJtZUBleGFtcGxlLmNvbSIsImhpc3RvcnlJZCI6IjEwNSJ9"
+        }
+      },
+      "mockNango": [
+        {
+          "method": "GET",
+          "endpointMatches": "^/gmail/v1/users/me/history$",
+          "body": {
+            "historyId": "105",
+            "history": [
+              {
+                "id": "101",
+                "messagesAdded": [
+                  {
+                    "message": {
+                      "id": "msg_1",
+                      "threadId": "thr_1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "endpointMatches": "^/gmail/v1/users/me/messages/msg_1$",
+          "body": {
+            "id": "msg_1",
+            "threadId": "thr_1",
+            "historyId": "105",
+            "internalDate": "1780300800000",
+            "labelIds": [
+              "INBOX"
+            ],
+            "snippet": "Hello from Gmail inbound replay"
+          }
+        },
+        {
+          "method": "GET",
+          "endpointMatches": "^/gmail/v1/users/me/threads/thr_1$",
+          "body": {
+            "id": "thr_1",
+            "historyId": "105",
+            "messages": [
+              {
+                "id": "msg_1",
+                "threadId": "thr_1",
+                "historyId": "105",
+                "internalDate": "1780300800000",
+                "labelIds": [
+                  "INBOX"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "paths": [
+          "/google-mail/messages/msg_1.json",
+          "/google-mail/threads/thr_1.json"
+        ],
+        "contentIncludes": [
+          "Hello from Gmail inbound replay",
+          "messageCount"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "modify-message",
+      "source": "official:https://developers.google.com/gmail/api/reference/rest | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-mail | local:relayfile-adapters/packages/gmail/src/writeback.ts",
+      "filePath": "/google-mail/messages/msg_123.json",
+      "content": {
+        "id": "msg_123",
+        "addLabelIds": [
+          "STARRED"
+        ],
+        "removeLabelIds": [
+          "UNREAD"
+        ]
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/gmail/v1/users/me/messages/msg_123/modify",
+        "bodyIncludes": {
+          "addLabelIds": [
+            "STARRED"
+          ],
+          "removeLabelIds": [
+            "UNREAD"
+          ]
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "GoogleMailMessage",
+      "syncName": "fetch-messages",
+      "source": "official:https://developers.google.com/gmail/api/reference/rest | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-mail | local:cloud/nango-integrations/google-mail-relay/syncs/fetch-messages.ts",
+      "records": [
+        {
+          "id": "msg_123",
+          "threadId": "thr_123",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "Hello",
+          "internalDate": "1780300800000"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/google-mail/messages/msg_123.json",
+          "contentIncludes": [
+            "threadId",
+            "labelIds"
+          ]
+        }
+      ]
+    }
+  ]
+}

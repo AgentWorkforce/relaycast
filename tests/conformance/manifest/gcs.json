@@ -1,0 +1,14 @@
+{
+  "provider": "gcs",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/gcs",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

@@ -1,0 +1,35 @@
+{
+  "provider": "sendgrid",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-sendgrid",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "delivered",
+      "source": "official:https://www.twilio.com/docs/sendgrid/api-reference | nango-template:none-found-in-NangoHQ/integration-templates | local:relayfile-adapters/packages/sendgrid/src/webhook-normalizer.ts",
+      "payload": [
+        {
+          "email": "sam@example.com",
+          "event": "delivered",
+          "sg_event_id": "event_123",
+          "timestamp": 1780300800
+        }
+      ],
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/sendgrid/events/event_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

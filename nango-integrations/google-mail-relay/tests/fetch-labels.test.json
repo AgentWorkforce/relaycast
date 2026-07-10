@@ -1,0 +1,4026 @@
+{
+  "nango": {
+    "batchSave": {
+      "GoogleMailLabel": [
+        {
+          "id": "CHAT",
+          "name": "CHAT",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"CHAT\",\"name\":\"CHAT\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "SENT",
+          "name": "SENT",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"SENT\",\"name\":\"SENT\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "INBOX",
+          "name": "INBOX",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"INBOX\",\"name\":\"INBOX\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "IMPORTANT",
+          "name": "IMPORTANT",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"IMPORTANT\",\"name\":\"IMPORTANT\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "TRASH",
+          "name": "TRASH",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"TRASH\",\"name\":\"TRASH\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "DRAFT",
+          "name": "DRAFT",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"DRAFT\",\"name\":\"DRAFT\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "SPAM",
+          "name": "SPAM",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"SPAM\",\"name\":\"SPAM\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "CATEGORY_FORUMS",
+          "name": "CATEGORY_FORUMS",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"CATEGORY_FORUMS\",\"name\":\"CATEGORY_FORUMS\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "CATEGORY_UPDATES",
+          "name": "CATEGORY_UPDATES",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"CATEGORY_UPDATES\",\"name\":\"CATEGORY_UPDATES\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "CATEGORY_PERSONAL",
+          "name": "CATEGORY_PERSONAL",
+          "type": "system",
+          "raw_json": "{\"id\":\"CATEGORY_PERSONAL\",\"name\":\"CATEGORY_PERSONAL\",\"type\":\"system\"}"
+        },
+        {
+          "id": "CATEGORY_PROMOTIONS",
+          "name": "CATEGORY_PROMOTIONS",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"CATEGORY_PROMOTIONS\",\"name\":\"CATEGORY_PROMOTIONS\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "CATEGORY_SOCIAL",
+          "name": "CATEGORY_SOCIAL",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"CATEGORY_SOCIAL\",\"name\":\"CATEGORY_SOCIAL\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "BLUE_CIRCLE",
+          "name": "BLUE_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"BLUE_CIRCLE\",\"name\":\"BLUE_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "GREEN_CIRCLE",
+          "name": "GREEN_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"GREEN_CIRCLE\",\"name\":\"GREEN_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "ORANGE_CIRCLE",
+          "name": "ORANGE_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"ORANGE_CIRCLE\",\"name\":\"ORANGE_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "PURPLE_CIRCLE",
+          "name": "PURPLE_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"PURPLE_CIRCLE\",\"name\":\"PURPLE_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "RED_CIRCLE",
+          "name": "RED_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"RED_CIRCLE\",\"name\":\"RED_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "YELLOW_CIRCLE",
+          "name": "YELLOW_CIRCLE",
+          "type": "system",
+          "raw_json": "{\"id\":\"YELLOW_CIRCLE\",\"name\":\"YELLOW_CIRCLE\",\"type\":\"system\"}"
+        },
+        {
+          "id": "BLUE_STAR",
+          "name": "BLUE_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"BLUE_STAR\",\"name\":\"BLUE_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "GREEN_STAR",
+          "name": "GREEN_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"GREEN_STAR\",\"name\":\"GREEN_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "ORANGE_STAR",
+          "name": "ORANGE_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"ORANGE_STAR\",\"name\":\"ORANGE_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "PURPLE_STAR",
+          "name": "PURPLE_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"PURPLE_STAR\",\"name\":\"PURPLE_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "RED_STAR",
+          "name": "RED_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"RED_STAR\",\"name\":\"RED_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "YELLOW_STAR",
+          "name": "YELLOW_STAR",
+          "type": "system",
+          "raw_json": "{\"id\":\"YELLOW_STAR\",\"name\":\"YELLOW_STAR\",\"type\":\"system\"}"
+        },
+        {
+          "id": "STARRED",
+          "name": "STARRED",
+          "type": "system",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"STARRED\",\"name\":\"STARRED\",\"type\":\"system\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "UNREAD",
+          "name": "UNREAD",
+          "type": "system",
+          "raw_json": "{\"id\":\"UNREAD\",\"name\":\"UNREAD\",\"type\":\"system\"}"
+        },
+        {
+          "id": "Label_1",
+          "name": "@Take Care Of",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_1\",\"name\":\"@Take Care Of\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_10",
+          "name": "Cornell/Syracuse Bus",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_10\",\"name\":\"Cornell/Syracuse Bus\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_100",
+          "name": "Personal/Education/Student Loans",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_100\",\"name\":\"Personal/Education/Student Loans\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_101",
+          "name": "[Gmail]Trash",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_101\",\"name\":\"[Gmail]Trash\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_102",
+          "name": "Money Management/Taxes/2015",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_102\",\"name\":\"Money Management/Taxes/2015\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_103",
+          "name": "Personal/Coding/Development",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_103\",\"name\":\"Personal/Coding/Development\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_104",
+          "name": "Personal/Social",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_104\",\"name\":\"Personal/Social\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_105",
+          "name": "Personal/Social/IVY",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_105\",\"name\":\"Personal/Social/IVY\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_106",
+          "name": "Computer/AWS",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_106\",\"name\":\"Computer/AWS\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_107",
+          "name": "Boomerang",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_107\",\"name\":\"Boomerang\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_108",
+          "name": "Boomerang-Returned",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_108\",\"name\":\"Boomerang-Returned\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_109",
+          "name": "Boomerang-Outbox/Cancelled",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_109\",\"name\":\"Boomerang-Outbox/Cancelled\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_11",
+          "name": "Cornell/The Link",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_11\",\"name\":\"Cornell/The Link\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_110",
+          "name": "Relationships/Ingrid Magnus/Norway Move",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_110\",\"name\":\"Relationships/Ingrid Magnus/Norway Move\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_111",
+          "name": "Jobs/Laboremus",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#000000",
+          "backgroundColor": "#fad165",
+          "raw_json": "{\"id\":\"Label_111\",\"name\":\"Jobs/Laboremus\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#000000\",\"backgroundColor\":\"#fad165\"}}"
+        },
+        {
+          "id": "Label_112",
+          "name": "Personal/Education/UIO",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_112\",\"name\":\"Personal/Education/UIO\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_113",
+          "name": "Jobs/Vector Media Group/Norway",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_113\",\"name\":\"Jobs/Vector Media Group/Norway\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_114",
+          "name": "Money Management/Taxes/2016",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_114\",\"name\":\"Money Management/Taxes/2016\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_115",
+          "name": "Money Management/Norway",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_115\",\"name\":\"Money Management/Norway\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_116",
+          "name": "Money Management/Taxes/2017",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_116\",\"name\":\"Money Management/Taxes/2017\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_117",
+          "name": "Money Management/Taxes/2018",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_117\",\"name\":\"Money Management/Taxes/2018\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_118",
+          "name": "Relationships/Ingrid Magnus/Diplomatic Travel",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_118\",\"name\":\"Relationships/Ingrid Magnus/Diplomatic Travel\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_119",
+          "name": "Relationships/Ingrid Magnus/Diplomatic Travel/France",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#711a36",
+          "backgroundColor": "#fbd3e0",
+          "raw_json": "{\"id\":\"Label_119\",\"name\":\"Relationships/Ingrid Magnus/Diplomatic Travel/France\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#711a36\",\"backgroundColor\":\"#fbd3e0\"}}"
+        },
+        {
+          "id": "Label_12",
+          "name": "Cornell/Volunteer",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_12\",\"name\":\"Cornell/Volunteer\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_120",
+          "name": "Personal/Coding/Tech Talks",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_120\",\"name\":\"Personal/Coding/Tech Talks\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_121",
+          "name": "Jobs/Side Projects/Brecco",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#4986e7",
+          "raw_json": "{\"id\":\"Label_121\",\"name\":\"Jobs/Side Projects/Brecco\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#4986e7\"}}"
+        },
+        {
+          "id": "Label_122",
+          "name": "Relationships/Family/Hana",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3b44",
+          "backgroundColor": "#98d7e4",
+          "raw_json": "{\"id\":\"Label_122\",\"name\":\"Relationships/Family/Hana\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3b44\",\"backgroundColor\":\"#98d7e4\"}}"
+        },
+        {
+          "id": "Label_123",
+          "name": "[Superhuman]/Is Snoozed",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_123\",\"name\":\"[Superhuman]/Is Snoozed\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_124",
+          "name": "[Superhuman]",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_124\",\"name\":\"[Superhuman]\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_125",
+          "name": "[Superhuman]/ru",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_125\",\"name\":\"[Superhuman]/ru\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_126",
+          "name": "[Superhuman]/Muted",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_126\",\"name\":\"[Superhuman]/Muted\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_1347464767914519340",
+          "name": "prpm",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_1347464767914519340\",\"name\":\"prpm\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_1435443946878494179",
+          "name": "Jobs/Side Projects/Gem Fire Sprinkler",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_1435443946878494179\",\"name\":\"Jobs/Side Projects/Gem Fire Sprinkler\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_15",
+          "name": "Google SMS Texts",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_15\",\"name\":\"Google SMS Texts\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_155",
+          "name": "Travel/Marius & Bjorg Wedding",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_155\",\"name\":\"Travel/Marius & Bjorg Wedding\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_16",
+          "name": "Health",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#16a765",
+          "raw_json": "{\"id\":\"Label_16\",\"name\":\"Health\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#16a765\"}}"
+        },
+        {
+          "id": "Label_17",
+          "name": "Health/Reading",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_17\",\"name\":\"Health/Reading\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_1711270338407247813",
+          "name": "Personal/Khaliq Gant LLC/Projects",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_1711270338407247813\",\"name\":\"Personal/Khaliq Gant LLC/Projects\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_18",
+          "name": "Money Management",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_18\",\"name\":\"Money Management\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_19",
+          "name": "Money Management/Purchases",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_19\",\"name\":\"Money Management/Purchases\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_20",
+          "name": "Money Management/Purchases/Groupon",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#d9ead3",
+          "backgroundColor": "#a64d79",
+          "raw_json": "{\"id\":\"Label_20\",\"name\":\"Money Management/Purchases/Groupon\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#d9ead3\",\"backgroundColor\":\"#a64d79\"}}"
+        },
+        {
+          "id": "Label_21",
+          "name": "Music",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_21\",\"name\":\"Music\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_22",
+          "name": "Music/Aurea (Archived)",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_22\",\"name\":\"Music/Aurea (Archived)\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_23",
+          "name": "My Book",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_23\",\"name\":\"My Book\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_24",
+          "name": "Notes",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_24\",\"name\":\"Notes\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_256135771163034445",
+          "name": "Verbling",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_256135771163034445\",\"name\":\"Verbling\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_26",
+          "name": "Jobs",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_26\",\"name\":\"Jobs\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_2658053060762708415",
+          "name": "Personal/Khaliq Gant LLC",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_2658053060762708415\",\"name\":\"Personal/Khaliq Gant LLC\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_27",
+          "name": "Jobs/EJ Gallo",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_27\",\"name\":\"Jobs/EJ Gallo\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_28",
+          "name": "Jobs/Goldman Sachs",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_28\",\"name\":\"Jobs/Goldman Sachs\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_2812757791594501820",
+          "name": "Computer/Apple Proof of Coverage",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_2812757791594501820\",\"name\":\"Computer/Apple Proof of Coverage\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_29",
+          "name": "Personal",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#4986e7",
+          "raw_json": "{\"id\":\"Label_29\",\"name\":\"Personal\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#4986e7\"}}"
+        },
+        {
+          "id": "Label_3",
+          "name": "Apartments",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_3\",\"name\":\"Apartments\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_30",
+          "name": "Relationships",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_30\",\"name\":\"Relationships\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_31",
+          "name": "Relationships/Close Friends",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_31\",\"name\":\"Relationships/Close Friends\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_3162589246245976334",
+          "name": "Jobs/Side Projects/Global City Guide",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#7a2e0b",
+          "backgroundColor": "#ffc8af",
+          "raw_json": "{\"id\":\"Label_3162589246245976334\",\"name\":\"Jobs/Side Projects/Global City Guide\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#7a2e0b\",\"backgroundColor\":\"#ffc8af\"}}"
+        },
+        {
+          "id": "Label_32",
+          "name": "Relationships/Family",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_32\",\"name\":\"Relationships/Family\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_33",
+          "name": "Relationships/Ingrid Magnus",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#8a1c0a",
+          "backgroundColor": "#f2b2a8",
+          "raw_json": "{\"id\":\"Label_33\",\"name\":\"Relationships/Ingrid Magnus\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#8a1c0a\",\"backgroundColor\":\"#f2b2a8\"}}"
+        },
+        {
+          "id": "Label_34",
+          "name": "Relationships/Will Washburn Emails",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_34\",\"name\":\"Relationships/Will Washburn Emails\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_3448987434755444861",
+          "name": "Tel Aviv/Purchases",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_3448987434755444861\",\"name\":\"Tel Aviv/Purchases\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_36",
+          "name": "Social Blendr",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_36\",\"name\":\"Social Blendr\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_37",
+          "name": "Social Blendr/Competitors",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_37\",\"name\":\"Social Blendr/Competitors\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_38",
+          "name": "Social Blendr/Events",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#000000",
+          "backgroundColor": "#fad165",
+          "raw_json": "{\"id\":\"Label_38\",\"name\":\"Social Blendr/Events\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#000000\",\"backgroundColor\":\"#fad165\"}}"
+        },
+        {
+          "id": "Label_3801274050861840172",
+          "name": "Jobs/Side Projects/Laid Back VJ",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_3801274050861840172\",\"name\":\"Jobs/Side Projects/Laid Back VJ\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_39",
+          "name": "Social Blendr/Git",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#aa8831",
+          "backgroundColor": "#fef1d1",
+          "raw_json": "{\"id\":\"Label_39\",\"name\":\"Social Blendr/Git\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#aa8831\",\"backgroundColor\":\"#fef1d1\"}}"
+        },
+        {
+          "id": "Label_4",
+          "name": "Boomerang-Outbox",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_4\",\"name\":\"Boomerang-Outbox\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_40",
+          "name": "Social Blendr/Incubators",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#16a765",
+          "raw_json": "{\"id\":\"Label_40\",\"name\":\"Social Blendr/Incubators\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#16a765\"}}"
+        },
+        {
+          "id": "Label_4002173163658149827",
+          "name": "Jobs/Side Projects/Debt Pricing Tool (Mike)",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#2da2bb",
+          "raw_json": "{\"id\":\"Label_4002173163658149827\",\"name\":\"Jobs/Side Projects/Debt Pricing Tool (Mike)\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#2da2bb\"}}"
+        },
+        {
+          "id": "Label_41",
+          "name": "Social Blendr/Investors",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_41\",\"name\":\"Social Blendr/Investors\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_4112845909735741647",
+          "name": "Money Management/Taxes/2020",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_4112845909735741647\",\"name\":\"Money Management/Taxes/2020\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_42",
+          "name": "Social Blendr/Leads",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#094228",
+          "backgroundColor": "#42d692",
+          "raw_json": "{\"id\":\"Label_42\",\"name\":\"Social Blendr/Leads\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#094228\",\"backgroundColor\":\"#42d692\"}}"
+        },
+        {
+          "id": "Label_43",
+          "name": "Social Blendr/List Serves",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#464646",
+          "backgroundColor": "#e7e7e7",
+          "raw_json": "{\"id\":\"Label_43\",\"name\":\"Social Blendr/List Serves\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#464646\",\"backgroundColor\":\"#e7e7e7\"}}"
+        },
+        {
+          "id": "Label_44",
+          "name": "Social Blendr/Member Emails",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#04502e",
+          "backgroundColor": "#a2dcc1",
+          "raw_json": "{\"id\":\"Label_44\",\"name\":\"Social Blendr/Member Emails\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#04502e\",\"backgroundColor\":\"#a2dcc1\"}}"
+        },
+        {
+          "id": "Label_45",
+          "name": "Social Blendr/Mentors",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3b44",
+          "backgroundColor": "#98d7e4",
+          "raw_json": "{\"id\":\"Label_45\",\"name\":\"Social Blendr/Mentors\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3b44\",\"backgroundColor\":\"#98d7e4\"}}"
+        },
+        {
+          "id": "Label_46",
+          "name": "Social Blendr/Partnerships",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#4a86e8",
+          "raw_json": "{\"id\":\"Label_46\",\"name\":\"Social Blendr/Partnerships\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#4a86e8\"}}"
+        },
+        {
+          "id": "Label_47",
+          "name": "Social Blendr/Promoting",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_47\",\"name\":\"Social Blendr/Promoting\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_48",
+          "name": "Social Blendr/Tech Contacts",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#efefef",
+          "backgroundColor": "#b694e8",
+          "raw_json": "{\"id\":\"Label_48\",\"name\":\"Social Blendr/Tech Contacts\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#efefef\",\"backgroundColor\":\"#b694e8\"}}"
+        },
+        {
+          "id": "Label_49",
+          "name": "Social Blendr/Hiring",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#ff7537",
+          "raw_json": "{\"id\":\"Label_49\",\"name\":\"Social Blendr/Hiring\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#ff7537\"}}"
+        },
+        {
+          "id": "Label_50",
+          "name": "Social Networks",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_50\",\"name\":\"Social Networks\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_51",
+          "name": "Social Networks/Facebook",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_51\",\"name\":\"Social Networks/Facebook\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_5164556243262699327",
+          "name": "Immigration",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#2da2bb",
+          "raw_json": "{\"id\":\"Label_5164556243262699327\",\"name\":\"Immigration\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#2da2bb\"}}"
+        },
+        {
+          "id": "Label_52",
+          "name": "Social Networks/Linked In",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_52\",\"name\":\"Social Networks/Linked In\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_5278757666224727680",
+          "name": "Jobs/Side Projects/Crypto",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_5278757666224727680\",\"name\":\"Jobs/Side Projects/Crypto\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_53",
+          "name": "Social Networks/Path Messages",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_53\",\"name\":\"Social Networks/Path Messages\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_54",
+          "name": "Social Networks/Twitter",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_54\",\"name\":\"Social Networks/Twitter\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_55",
+          "name": "Supernova (Oliver)",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#f4cccc",
+          "backgroundColor": "#000000",
+          "raw_json": "{\"id\":\"Label_55\",\"name\":\"Supernova (Oliver)\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#f4cccc\",\"backgroundColor\":\"#000000\"}}"
+        },
+        {
+          "id": "Label_5508846700607630782",
+          "name": "Jobs/Side Projects/Designers",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_5508846700607630782\",\"name\":\"Jobs/Side Projects/Designers\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_56",
+          "name": "T-Pain",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_56\",\"name\":\"T-Pain\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_5666133266299693426",
+          "name": "Money Management/Taxes/2019",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_5666133266299693426\",\"name\":\"Money Management/Taxes/2019\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_57",
+          "name": "Tabor",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#f4cccc",
+          "backgroundColor": "#660000",
+          "raw_json": "{\"id\":\"Label_57\",\"name\":\"Tabor\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#f4cccc\",\"backgroundColor\":\"#660000\"}}"
+        },
+        {
+          "id": "Label_5745099062336468522",
+          "name": "Jobs/Side Projects/Dev Diaries/Submissions",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_5745099062336468522\",\"name\":\"Jobs/Side Projects/Dev Diaries/Submissions\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_58",
+          "name": "Things To Do/Look At",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_58\",\"name\":\"Things To Do/Look At\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_59",
+          "name": "Travel",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_59\",\"name\":\"Travel\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_6",
+          "name": "Computer",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "raw_json": "{\"id\":\"Label_6\",\"name\":\"Computer\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\"}"
+        },
+        {
+          "id": "Label_60",
+          "name": "Travel/Airlines",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_60\",\"name\":\"Travel/Airlines\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_61",
+          "name": "WilliGant",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_61\",\"name\":\"WilliGant\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_62",
+          "name": "Personal/Coding",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_62\",\"name\":\"Personal/Coding\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_63",
+          "name": "WilliGant/Connected Greek",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_63\",\"name\":\"WilliGant/Connected Greek\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_64",
+          "name": "WilliGant/Date Director",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#660000",
+          "backgroundColor": "#ea9999",
+          "raw_json": "{\"id\":\"Label_64\",\"name\":\"WilliGant/Date Director\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#660000\",\"backgroundColor\":\"#ea9999\"}}"
+        },
+        {
+          "id": "Label_65",
+          "name": "WilliGant/Fine Wines",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_65\",\"name\":\"WilliGant/Fine Wines\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_66",
+          "name": "WilliGant/Sketch Alert",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#000000",
+          "backgroundColor": "#ffff00",
+          "raw_json": "{\"id\":\"Label_66\",\"name\":\"WilliGant/Sketch Alert\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#000000\",\"backgroundColor\":\"#ffff00\"}}"
+        },
+        {
+          "id": "Label_67",
+          "name": "WilliGant/V Neck Nation",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_67\",\"name\":\"WilliGant/V Neck Nation\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_68",
+          "name": "WilliGant/XXI Roman Rum",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#000000",
+          "raw_json": "{\"id\":\"Label_68\",\"name\":\"WilliGant/XXI Roman Rum\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#000000\"}}"
+        },
+        {
+          "id": "Label_69",
+          "name": "Word of The Day",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#222222",
+          "backgroundColor": "#eeeeee",
+          "raw_json": "{\"id\":\"Label_69\",\"name\":\"Word of The Day\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#222222\",\"backgroundColor\":\"#eeeeee\"}}"
+        },
+        {
+          "id": "Label_6927593681498511348",
+          "name": "Personal/Khaliq Gant LLC/Projects/LI Pipe Redesign",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0b4f30",
+          "backgroundColor": "#b3efd3",
+          "raw_json": "{\"id\":\"Label_6927593681498511348\",\"name\":\"Personal/Khaliq Gant LLC/Projects/LI Pipe Redesign\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0b4f30\",\"backgroundColor\":\"#b3efd3\"}}"
+        },
+        {
+          "id": "Label_697",
+          "name": "Jobs/Side Projects/Tailwind",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_697\",\"name\":\"Jobs/Side Projects/Tailwind\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_698",
+          "name": "Dean Gant",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_698\",\"name\":\"Dean Gant\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_699",
+          "name": "Money Management/Taxex/2021",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_699\",\"name\":\"Money Management/Taxex/2021\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_7",
+          "name": "Cornell",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_7\",\"name\":\"Cornell\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_70",
+          "name": "Money Management/Bills to Pay",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#16a765",
+          "raw_json": "{\"id\":\"Label_70\",\"name\":\"Money Management/Bills to Pay\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#16a765\"}}"
+        },
+        {
+          "id": "Label_700",
+          "name": "Jobs/Titl",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_700\",\"name\":\"Jobs/Titl\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_701",
+          "name": "Jobs/AbstractOps",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_701\",\"name\":\"Jobs/AbstractOps\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_702",
+          "name": "Money Management/Investments/Merrill Lynch",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_702\",\"name\":\"Money Management/Investments/Merrill Lynch\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_703",
+          "name": "Data Security",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_703\",\"name\":\"Data Security\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_704",
+          "name": "jobs/RoundRobin",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_704\",\"name\":\"jobs/RoundRobin\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_705",
+          "name": "Jobs/Alternativ",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_705\",\"name\":\"Jobs/Alternativ\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_706",
+          "name": "Jobs/Overview",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_706\",\"name\":\"Jobs/Overview\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_707",
+          "name": "Money Management/Investments/Personal Capital",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_707\",\"name\":\"Money Management/Investments/Personal Capital\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_708",
+          "name": "France/Secondment",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_708\",\"name\":\"France/Secondment\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_709",
+          "name": "Legal Settlements",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_709\",\"name\":\"Legal Settlements\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_71",
+          "name": "WilliGant/Apps",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#d9ead3",
+          "backgroundColor": "#a64d79",
+          "raw_json": "{\"id\":\"Label_71\",\"name\":\"WilliGant/Apps\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#d9ead3\",\"backgroundColor\":\"#a64d79\"}}"
+        },
+        {
+          "id": "Label_710",
+          "name": "France/Company",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_710\",\"name\":\"France/Company\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_711",
+          "name": "Norway/Taxes",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_711\",\"name\":\"Norway/Taxes\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_712",
+          "name": "France/Taxes",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_712\",\"name\":\"France/Taxes\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_713",
+          "name": "Sites/Analytics",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_713\",\"name\":\"Sites/Analytics\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_714",
+          "name": "Money Management/Taxes 2022",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_714\",\"name\":\"Money Management/Taxes 2022\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_715",
+          "name": "Tel Aviv/Daycare",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_715\",\"name\":\"Tel Aviv/Daycare\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_716",
+          "name": "Relationships/Ingrid Magnus/Diplomatic Travel/Tel Aviv",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_716\",\"name\":\"Relationships/Ingrid Magnus/Diplomatic Travel/Tel Aviv\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_717",
+          "name": "Tel Aviv/Taxes",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_717\",\"name\":\"Tel Aviv/Taxes\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_718",
+          "name": "Tel Aviv/Cars",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_718\",\"name\":\"Tel Aviv/Cars\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_719",
+          "name": "Money Management/Taxes/Norway",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_719\",\"name\":\"Money Management/Taxes/Norway\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_72",
+          "name": "WilliGant/Hack-A-Thons",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#ff7537",
+          "raw_json": "{\"id\":\"Label_72\",\"name\":\"WilliGant/Hack-A-Thons\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#ff7537\"}}"
+        },
+        {
+          "id": "Label_720",
+          "name": "Tel Aviv/Babysitters",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_720\",\"name\":\"Tel Aviv/Babysitters\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_721",
+          "name": "Tel Aviv/Babysitters/Backups",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_721\",\"name\":\"Tel Aviv/Babysitters/Backups\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_722",
+          "name": "Tel Aviv/Wonder School",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_722\",\"name\":\"Tel Aviv/Wonder School\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_723",
+          "name": "Tel Aviv/Chiropractor",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_723\",\"name\":\"Tel Aviv/Chiropractor\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_724",
+          "name": "Health/Physical Therapy",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_724\",\"name\":\"Health/Physical Therapy\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_725",
+          "name": "Health/Insurance",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_725\",\"name\":\"Health/Insurance\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_726",
+          "name": "Tel Aviv/WeWork",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_726\",\"name\":\"Tel Aviv/WeWork\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_727",
+          "name": "Tel Aviv/Beit Micha",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_727\",\"name\":\"Tel Aviv/Beit Micha\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_728",
+          "name": "Personal/Education/Hebrew",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_728\",\"name\":\"Personal/Education/Hebrew\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_729",
+          "name": "Soho House",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_729\",\"name\":\"Soho House\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_73",
+          "name": "Personal/Productivity",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_73\",\"name\":\"Personal/Productivity\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_730",
+          "name": "Tel Aviv/Apartment",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_730\",\"name\":\"Tel Aviv/Apartment\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_731",
+          "name": "Tel Aviv/Doctor",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_731\",\"name\":\"Tel Aviv/Doctor\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_732",
+          "name": "Health/Dentist",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_732\",\"name\":\"Health/Dentist\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_733",
+          "name": "Health/Insurance/Foyer",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_733\",\"name\":\"Health/Insurance/Foyer\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_734",
+          "name": "Relationships/Family/Sophia Magnus Gant/ASL",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_734\",\"name\":\"Relationships/Family/Sophia Magnus Gant/ASL\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_735",
+          "name": "Jobs/Namecheap",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_735\",\"name\":\"Jobs/Namecheap\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_736",
+          "name": "Relationships/Family/Maya Magnus Gant",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_736\",\"name\":\"Relationships/Family/Maya Magnus Gant\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_737",
+          "name": "Jobs/Nango",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_737\",\"name\":\"Jobs/Nango\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_738",
+          "name": "Money Management/Taxes 2023",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_738\",\"name\":\"Money Management/Taxes 2023\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_739",
+          "name": "Norway/Citizenship",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_739\",\"name\":\"Norway/Citizenship\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_74",
+          "name": "WilliGant/Craigslist",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#594c05",
+          "backgroundColor": "#fbe983",
+          "raw_json": "{\"id\":\"Label_74\",\"name\":\"WilliGant/Craigslist\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#594c05\",\"backgroundColor\":\"#fbe983\"}}"
+        },
+        {
+          "id": "Label_740",
+          "name": "Money Management/Taxes 2024",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_740\",\"name\":\"Money Management/Taxes 2024\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_741",
+          "name": "Money Management/Taxes 2023 (Norway(",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_741\",\"name\":\"Money Management/Taxes 2023 (Norway(\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_742",
+          "name": "Relationships/Family/Sophia Magnus Gant/Summer Camp",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_742\",\"name\":\"Relationships/Family/Sophia Magnus Gant/Summer Camp\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_743",
+          "name": "Jobs/Nango/Equity",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_743\",\"name\":\"Jobs/Nango/Equity\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_744",
+          "name": "Travel/Summer 2024",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_744\",\"name\":\"Travel/Summer 2024\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_745",
+          "name": "Tel Aviv/Physiotherapy",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_745\",\"name\":\"Tel Aviv/Physiotherapy\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_746",
+          "name": "Money Management/Taxes 2025",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_746\",\"name\":\"Money Management/Taxes 2025\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_747",
+          "name": "[Superhuman]/AI/Respond",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_747\",\"name\":\"[Superhuman]/AI/Respond\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_748",
+          "name": "[Superhuman]/AI/Waiting",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_748\",\"name\":\"[Superhuman]/AI/Waiting\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_749",
+          "name": "[Superhuman]/AI/Meeting",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_749\",\"name\":\"[Superhuman]/AI/Meeting\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_750",
+          "name": "[Superhuman]/AI/News",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_750\",\"name\":\"[Superhuman]/AI/News\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_751",
+          "name": "[Superhuman]/AI/Social",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_751\",\"name\":\"[Superhuman]/AI/Social\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_752",
+          "name": "[Superhuman]/AI/Pitch",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_752\",\"name\":\"[Superhuman]/AI/Pitch\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_753",
+          "name": "[Superhuman]/AI/Marketing",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_753\",\"name\":\"[Superhuman]/AI/Marketing\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_754",
+          "name": "Health/Moves Method",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_754\",\"name\":\"Health/Moves Method\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_755",
+          "name": "[Superhuman]/AI/AutoArchived",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelHide",
+          "raw_json": "{\"id\":\"Label_755\",\"name\":\"[Superhuman]/AI/AutoArchived\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelHide\"}"
+        },
+        {
+          "id": "Label_756",
+          "name": "Norway/Housing",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_756\",\"name\":\"Norway/Housing\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_757",
+          "name": "Norway/Housing/Hellerudveien 5",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_757\",\"name\":\"Norway/Housing/Hellerudveien 5\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_758",
+          "name": "Ingliq",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_758\",\"name\":\"Ingliq\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_759",
+          "name": "Norway/Car",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_759\",\"name\":\"Norway/Car\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_76",
+          "name": "Personal/Web",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0b4f30",
+          "backgroundColor": "#b3efd3",
+          "raw_json": "{\"id\":\"Label_76\",\"name\":\"Personal/Web\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0b4f30\",\"backgroundColor\":\"#b3efd3\"}}"
+        },
+        {
+          "id": "Label_760",
+          "name": "Health/Scoliosis",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_760\",\"name\":\"Health/Scoliosis\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_761",
+          "name": "Personal/Khaliq Gant AS",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_761\",\"name\":\"Personal/Khaliq Gant AS\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_762",
+          "name": "Projects/My Senior Dev",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_762\",\"name\":\"Projects/My Senior Dev\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_763",
+          "name": "Agentworkforce",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_763\",\"name\":\"Agentworkforce\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_764",
+          "name": "Lindy",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#f2c960",
+          "raw_json": "{\"id\":\"Label_764\",\"name\":\"Lindy\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#f2c960\"}}"
+        },
+        {
+          "id": "Label_765",
+          "name": "Notifications",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#4a86e8",
+          "raw_json": "{\"id\":\"Label_765\",\"name\":\"Notifications\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#4a86e8\"}}"
+        },
+        {
+          "id": "Label_766",
+          "name": "Comments",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#42d692",
+          "raw_json": "{\"id\":\"Label_766\",\"name\":\"Comments\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#42d692\"}}"
+        },
+        {
+          "id": "Label_767",
+          "name": "Newsletters",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#b694e8",
+          "raw_json": "{\"id\":\"Label_767\",\"name\":\"Newsletters\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#b694e8\"}}"
+        },
+        {
+          "id": "Label_768",
+          "name": "Promotions",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#f691b3",
+          "raw_json": "{\"id\":\"Label_768\",\"name\":\"Promotions\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#f691b3\"}}"
+        },
+        {
+          "id": "Label_769",
+          "name": "FYI",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#42d692",
+          "raw_json": "{\"id\":\"Label_769\",\"name\":\"FYI\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#42d692\"}}"
+        },
+        {
+          "id": "Label_770",
+          "name": "Invoices",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#ffad47",
+          "raw_json": "{\"id\":\"Label_770\",\"name\":\"Invoices\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#ffad47\"}}"
+        },
+        {
+          "id": "Label_771",
+          "name": "To Respond",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#e66550",
+          "raw_json": "{\"id\":\"Label_771\",\"name\":\"To Respond\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#e66550\"}}"
+        },
+        {
+          "id": "Label_772",
+          "name": "Calendar",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#434343",
+          "backgroundColor": "#4a86e8",
+          "raw_json": "{\"id\":\"Label_772\",\"name\":\"Calendar\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#434343\",\"backgroundColor\":\"#4a86e8\"}}"
+        },
+        {
+          "id": "Label_78",
+          "name": "Jobs/Bindo",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_78\",\"name\":\"Jobs/Bindo\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_79",
+          "name": "Jobs/SmallKnot",
+          "type": "user",
+          "messageListVisibility": "hide",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#16a765",
+          "raw_json": "{\"id\":\"Label_79\",\"name\":\"Jobs/SmallKnot\",\"type\":\"user\",\"messageListVisibility\":\"hide\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#16a765\"}}"
+        },
+        {
+          "id": "Label_8",
+          "name": "Cornell/Big Red Bulletin",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_8\",\"name\":\"Cornell/Big Red Bulletin\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_8002806719635494619",
+          "name": "Projects/Avinor/Horizon",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_8002806719635494619\",\"name\":\"Projects/Avinor/Horizon\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_81",
+          "name": "Jobs/Vector Media Group",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#ff7537",
+          "raw_json": "{\"id\":\"Label_81\",\"name\":\"Jobs/Vector Media Group\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#ff7537\"}}"
+        },
+        {
+          "id": "Label_82",
+          "name": "Money Management/Investments",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_82\",\"name\":\"Money Management/Investments\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_83",
+          "name": "[Mailbox]",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_83\",\"name\":\"[Mailbox]\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_8322367779163355126",
+          "name": "Jobs/Side Projects/Dev Diaries",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_8322367779163355126\",\"name\":\"Jobs/Side Projects/Dev Diaries\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_84",
+          "name": "[Mailbox]/To Buy",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_84\",\"name\":\"[Mailbox]/To Buy\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_85",
+          "name": "[Mailbox]/To Read",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_85\",\"name\":\"[Mailbox]/To Read\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_86",
+          "name": "[Mailbox]/To Watch",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_86\",\"name\":\"[Mailbox]/To Watch\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_87",
+          "name": "[Mailbox]/Later",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_87\",\"name\":\"[Mailbox]/Later\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_8707194349819758092",
+          "name": "Relationships/Family/Sophia Magnus Gant",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_8707194349819758092\",\"name\":\"Relationships/Family/Sophia Magnus Gant\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_88",
+          "name": "[Mailbox]/To Follow Up On",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_88\",\"name\":\"[Mailbox]/To Follow Up On\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_89",
+          "name": "Money Management/Taxes",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#f6c5be",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_89\",\"name\":\"Money Management/Taxes\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#f6c5be\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_9",
+          "name": "Cornell/Sphinx Head",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShowIfUnread",
+          "textColor": "#ffffff",
+          "backgroundColor": "#fb4c2f",
+          "raw_json": "{\"id\":\"Label_9\",\"name\":\"Cornell/Sphinx Head\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShowIfUnread\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#fb4c2f\"}}"
+        },
+        {
+          "id": "Label_90",
+          "name": "Jobs/Side Projects",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_90\",\"name\":\"Jobs/Side Projects\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_91",
+          "name": "Travel/Foote/AT West Coast Trip",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_91\",\"name\":\"Travel/Foote/AT West Coast Trip\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_9137367368632102506",
+          "name": "Personal/Education/French Class",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#ffffff",
+          "backgroundColor": "#4986e7",
+          "raw_json": "{\"id\":\"Label_9137367368632102506\",\"name\":\"Personal/Education/French Class\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#ffffff\",\"backgroundColor\":\"#4986e7\"}}"
+        },
+        {
+          "id": "Label_92",
+          "name": "Relationships/Ingrid Magnus/Travel",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_92\",\"name\":\"Relationships/Ingrid Magnus/Travel\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_93",
+          "name": "Unroll.me",
+          "type": "user",
+          "raw_json": "{\"id\":\"Label_93\",\"name\":\"Unroll.me\",\"type\":\"user\"}"
+        },
+        {
+          "id": "Label_94",
+          "name": "Personal/Education",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_94\",\"name\":\"Personal/Education\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_95",
+          "name": "Personal/Education/Columbia",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "textColor": "#0d3472",
+          "backgroundColor": "#b6cff5",
+          "raw_json": "{\"id\":\"Label_95\",\"name\":\"Personal/Education/Columbia\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\",\"color\":{\"textColor\":\"#0d3472\",\"backgroundColor\":\"#b6cff5\"}}"
+        },
+        {
+          "id": "Label_96",
+          "name": "Personal/Education/NYU",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_96\",\"name\":\"Personal/Education/NYU\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_97",
+          "name": "Travel/Airlines/Upcoming",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_97\",\"name\":\"Travel/Airlines/Upcoming\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_98",
+          "name": "Money Management/Taxes/2013",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_98\",\"name\":\"Money Management/Taxes/2013\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        },
+        {
+          "id": "Label_99",
+          "name": "Money Management/Taxes/2014",
+          "type": "user",
+          "messageListVisibility": "show",
+          "labelListVisibility": "labelShow",
+          "raw_json": "{\"id\":\"Label_99\",\"name\":\"Money Management/Taxes/2014\",\"type\":\"user\",\"messageListVisibility\":\"show\",\"labelListVisibility\":\"labelShow\"}"
+        }
+      ]
+    },
+    "batchDelete": {
+      "GoogleMailLabel": []
+    }
+  },
+  "api": {
+    "get": {
+      "/gmail/v1/users/me/labels": {
+        "response": {
+          "labels": [
+            {
+              "id": "CHAT",
+              "name": "CHAT",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "system"
+            },
+            {
+              "id": "SENT",
+              "name": "SENT",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "INBOX",
+              "name": "INBOX",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "IMPORTANT",
+              "name": "IMPORTANT",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "system"
+            },
+            {
+              "id": "TRASH",
+              "name": "TRASH",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "system"
+            },
+            {
+              "id": "DRAFT",
+              "name": "DRAFT",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "SPAM",
+              "name": "SPAM",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "system"
+            },
+            {
+              "id": "CATEGORY_FORUMS",
+              "name": "CATEGORY_FORUMS",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "CATEGORY_UPDATES",
+              "name": "CATEGORY_UPDATES",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "CATEGORY_PERSONAL",
+              "name": "CATEGORY_PERSONAL",
+              "type": "system"
+            },
+            {
+              "id": "CATEGORY_PROMOTIONS",
+              "name": "CATEGORY_PROMOTIONS",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "CATEGORY_SOCIAL",
+              "name": "CATEGORY_SOCIAL",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "system"
+            },
+            {
+              "id": "BLUE_CIRCLE",
+              "name": "BLUE_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "GREEN_CIRCLE",
+              "name": "GREEN_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "ORANGE_CIRCLE",
+              "name": "ORANGE_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "PURPLE_CIRCLE",
+              "name": "PURPLE_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "RED_CIRCLE",
+              "name": "RED_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "YELLOW_CIRCLE",
+              "name": "YELLOW_CIRCLE",
+              "type": "system"
+            },
+            {
+              "id": "BLUE_STAR",
+              "name": "BLUE_STAR",
+              "type": "system"
+            },
+            {
+              "id": "GREEN_STAR",
+              "name": "GREEN_STAR",
+              "type": "system"
+            },
+            {
+              "id": "ORANGE_STAR",
+              "name": "ORANGE_STAR",
+              "type": "system"
+            },
+            {
+              "id": "PURPLE_STAR",
+              "name": "PURPLE_STAR",
+              "type": "system"
+            },
+            {
+              "id": "RED_STAR",
+              "name": "RED_STAR",
+              "type": "system"
+            },
+            {
+              "id": "YELLOW_STAR",
+              "name": "YELLOW_STAR",
+              "type": "system"
+            },
+            {
+              "id": "STARRED",
+              "name": "STARRED",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "system"
+            },
+            {
+              "id": "UNREAD",
+              "name": "UNREAD",
+              "type": "system"
+            },
+            {
+              "id": "Label_1",
+              "name": "@Take Care Of",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_10",
+              "name": "Cornell/Syracuse Bus",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_100",
+              "name": "Personal/Education/Student Loans",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_101",
+              "name": "[Gmail]Trash",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_102",
+              "name": "Money Management/Taxes/2015",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_103",
+              "name": "Personal/Coding/Development",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_104",
+              "name": "Personal/Social",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_105",
+              "name": "Personal/Social/IVY",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_106",
+              "name": "Computer/AWS",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_107",
+              "name": "Boomerang",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_108",
+              "name": "Boomerang-Returned",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_109",
+              "name": "Boomerang-Outbox/Cancelled",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_11",
+              "name": "Cornell/The Link",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_110",
+              "name": "Relationships/Ingrid Magnus/Norway Move",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_111",
+              "name": "Jobs/Laboremus",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#000000",
+                "backgroundColor": "#fad165"
+              }
+            },
+            {
+              "id": "Label_112",
+              "name": "Personal/Education/UIO",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_113",
+              "name": "Jobs/Vector Media Group/Norway",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_114",
+              "name": "Money Management/Taxes/2016",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_115",
+              "name": "Money Management/Norway",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_116",
+              "name": "Money Management/Taxes/2017",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_117",
+              "name": "Money Management/Taxes/2018",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_118",
+              "name": "Relationships/Ingrid Magnus/Diplomatic Travel",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_119",
+              "name": "Relationships/Ingrid Magnus/Diplomatic Travel/France",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#711a36",
+                "backgroundColor": "#fbd3e0"
+              }
+            },
+            {
+              "id": "Label_12",
+              "name": "Cornell/Volunteer",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_120",
+              "name": "Personal/Coding/Tech Talks",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_121",
+              "name": "Jobs/Side Projects/Brecco",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#4986e7"
+              }
+            },
+            {
+              "id": "Label_122",
+              "name": "Relationships/Family/Hana",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3b44",
+                "backgroundColor": "#98d7e4"
+              }
+            },
+            {
+              "id": "Label_123",
+              "name": "[Superhuman]/Is Snoozed",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_124",
+              "name": "[Superhuman]",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_125",
+              "name": "[Superhuman]/ru",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_126",
+              "name": "[Superhuman]/Muted",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_1347464767914519340",
+              "name": "prpm",
+              "type": "user"
+            },
+            {
+              "id": "Label_1435443946878494179",
+              "name": "Jobs/Side Projects/Gem Fire Sprinkler",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_15",
+              "name": "Google SMS Texts",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_155",
+              "name": "Travel/Marius & Bjorg Wedding",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_16",
+              "name": "Health",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#16a765"
+              }
+            },
+            {
+              "id": "Label_17",
+              "name": "Health/Reading",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_1711270338407247813",
+              "name": "Personal/Khaliq Gant LLC/Projects",
+              "type": "user"
+            },
+            {
+              "id": "Label_18",
+              "name": "Money Management",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_19",
+              "name": "Money Management/Purchases",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_20",
+              "name": "Money Management/Purchases/Groupon",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#d9ead3",
+                "backgroundColor": "#a64d79"
+              }
+            },
+            {
+              "id": "Label_21",
+              "name": "Music",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_22",
+              "name": "Music/Aurea (Archived)",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_23",
+              "name": "My Book",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_24",
+              "name": "Notes",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_256135771163034445",
+              "name": "Verbling",
+              "type": "user"
+            },
+            {
+              "id": "Label_26",
+              "name": "Jobs",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_2658053060762708415",
+              "name": "Personal/Khaliq Gant LLC",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_27",
+              "name": "Jobs/EJ Gallo",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_28",
+              "name": "Jobs/Goldman Sachs",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_2812757791594501820",
+              "name": "Computer/Apple Proof of Coverage",
+              "type": "user"
+            },
+            {
+              "id": "Label_29",
+              "name": "Personal",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#4986e7"
+              }
+            },
+            {
+              "id": "Label_3",
+              "name": "Apartments",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_30",
+              "name": "Relationships",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_31",
+              "name": "Relationships/Close Friends",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_3162589246245976334",
+              "name": "Jobs/Side Projects/Global City Guide",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#7a2e0b",
+                "backgroundColor": "#ffc8af"
+              }
+            },
+            {
+              "id": "Label_32",
+              "name": "Relationships/Family",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_33",
+              "name": "Relationships/Ingrid Magnus",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#8a1c0a",
+                "backgroundColor": "#f2b2a8"
+              }
+            },
+            {
+              "id": "Label_34",
+              "name": "Relationships/Will Washburn Emails",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_3448987434755444861",
+              "name": "Tel Aviv/Purchases",
+              "type": "user"
+            },
+            {
+              "id": "Label_36",
+              "name": "Social Blendr",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_37",
+              "name": "Social Blendr/Competitors",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_38",
+              "name": "Social Blendr/Events",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#000000",
+                "backgroundColor": "#fad165"
+              }
+            },
+            {
+              "id": "Label_3801274050861840172",
+              "name": "Jobs/Side Projects/Laid Back VJ",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_39",
+              "name": "Social Blendr/Git",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#aa8831",
+                "backgroundColor": "#fef1d1"
+              }
+            },
+            {
+              "id": "Label_4",
+              "name": "Boomerang-Outbox",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_40",
+              "name": "Social Blendr/Incubators",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#16a765"
+              }
+            },
+            {
+              "id": "Label_4002173163658149827",
+              "name": "Jobs/Side Projects/Debt Pricing Tool (Mike)",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#2da2bb"
+              }
+            },
+            {
+              "id": "Label_41",
+              "name": "Social Blendr/Investors",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_4112845909735741647",
+              "name": "Money Management/Taxes/2020",
+              "type": "user"
+            },
+            {
+              "id": "Label_42",
+              "name": "Social Blendr/Leads",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#094228",
+                "backgroundColor": "#42d692"
+              }
+            },
+            {
+              "id": "Label_43",
+              "name": "Social Blendr/List Serves",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#464646",
+                "backgroundColor": "#e7e7e7"
+              }
+            },
+            {
+              "id": "Label_44",
+              "name": "Social Blendr/Member Emails",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#04502e",
+                "backgroundColor": "#a2dcc1"
+              }
+            },
+            {
+              "id": "Label_45",
+              "name": "Social Blendr/Mentors",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3b44",
+                "backgroundColor": "#98d7e4"
+              }
+            },
+            {
+              "id": "Label_46",
+              "name": "Social Blendr/Partnerships",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#4a86e8"
+              }
+            },
+            {
+              "id": "Label_47",
+              "name": "Social Blendr/Promoting",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_48",
+              "name": "Social Blendr/Tech Contacts",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#efefef",
+                "backgroundColor": "#b694e8"
+              }
+            },
+            {
+              "id": "Label_49",
+              "name": "Social Blendr/Hiring",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#ff7537"
+              }
+            },
+            {
+              "id": "Label_50",
+              "name": "Social Networks",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_51",
+              "name": "Social Networks/Facebook",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_5164556243262699327",
+              "name": "Immigration",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#2da2bb"
+              }
+            },
+            {
+              "id": "Label_52",
+              "name": "Social Networks/Linked In",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_5278757666224727680",
+              "name": "Jobs/Side Projects/Crypto",
+              "type": "user"
+            },
+            {
+              "id": "Label_53",
+              "name": "Social Networks/Path Messages",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_54",
+              "name": "Social Networks/Twitter",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_55",
+              "name": "Supernova (Oliver)",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#f4cccc",
+                "backgroundColor": "#000000"
+              }
+            },
+            {
+              "id": "Label_5508846700607630782",
+              "name": "Jobs/Side Projects/Designers",
+              "type": "user"
+            },
+            {
+              "id": "Label_56",
+              "name": "T-Pain",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_5666133266299693426",
+              "name": "Money Management/Taxes/2019",
+              "type": "user"
+            },
+            {
+              "id": "Label_57",
+              "name": "Tabor",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#f4cccc",
+                "backgroundColor": "#660000"
+              }
+            },
+            {
+              "id": "Label_5745099062336468522",
+              "name": "Jobs/Side Projects/Dev Diaries/Submissions",
+              "type": "user"
+            },
+            {
+              "id": "Label_58",
+              "name": "Things To Do/Look At",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_59",
+              "name": "Travel",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_6",
+              "name": "Computer",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user"
+            },
+            {
+              "id": "Label_60",
+              "name": "Travel/Airlines",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_61",
+              "name": "WilliGant",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_62",
+              "name": "Personal/Coding",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_63",
+              "name": "WilliGant/Connected Greek",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_64",
+              "name": "WilliGant/Date Director",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#660000",
+                "backgroundColor": "#ea9999"
+              }
+            },
+            {
+              "id": "Label_65",
+              "name": "WilliGant/Fine Wines",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_66",
+              "name": "WilliGant/Sketch Alert",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#000000",
+                "backgroundColor": "#ffff00"
+              }
+            },
+            {
+              "id": "Label_67",
+              "name": "WilliGant/V Neck Nation",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_68",
+              "name": "WilliGant/XXI Roman Rum",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#000000"
+              }
+            },
+            {
+              "id": "Label_69",
+              "name": "Word of The Day",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#222222",
+                "backgroundColor": "#eeeeee"
+              }
+            },
+            {
+              "id": "Label_6927593681498511348",
+              "name": "Personal/Khaliq Gant LLC/Projects/LI Pipe Redesign",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0b4f30",
+                "backgroundColor": "#b3efd3"
+              }
+            },
+            {
+              "id": "Label_697",
+              "name": "Jobs/Side Projects/Tailwind",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_698",
+              "name": "Dean Gant",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_699",
+              "name": "Money Management/Taxex/2021",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_7",
+              "name": "Cornell",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_70",
+              "name": "Money Management/Bills to Pay",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#16a765"
+              }
+            },
+            {
+              "id": "Label_700",
+              "name": "Jobs/Titl",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_701",
+              "name": "Jobs/AbstractOps",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_702",
+              "name": "Money Management/Investments/Merrill Lynch",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_703",
+              "name": "Data Security",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_704",
+              "name": "jobs/RoundRobin",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_705",
+              "name": "Jobs/Alternativ",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_706",
+              "name": "Jobs/Overview",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_707",
+              "name": "Money Management/Investments/Personal Capital",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_708",
+              "name": "France/Secondment",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_709",
+              "name": "Legal Settlements",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_71",
+              "name": "WilliGant/Apps",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#d9ead3",
+                "backgroundColor": "#a64d79"
+              }
+            },
+            {
+              "id": "Label_710",
+              "name": "France/Company",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_711",
+              "name": "Norway/Taxes",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_712",
+              "name": "France/Taxes",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_713",
+              "name": "Sites/Analytics",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_714",
+              "name": "Money Management/Taxes 2022",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_715",
+              "name": "Tel Aviv/Daycare",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_716",
+              "name": "Relationships/Ingrid Magnus/Diplomatic Travel/Tel Aviv",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_717",
+              "name": "Tel Aviv/Taxes",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_718",
+              "name": "Tel Aviv/Cars",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_719",
+              "name": "Money Management/Taxes/Norway",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_72",
+              "name": "WilliGant/Hack-A-Thons",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#ff7537"
+              }
+            },
+            {
+              "id": "Label_720",
+              "name": "Tel Aviv/Babysitters",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_721",
+              "name": "Tel Aviv/Babysitters/Backups",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_722",
+              "name": "Tel Aviv/Wonder School",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_723",
+              "name": "Tel Aviv/Chiropractor",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_724",
+              "name": "Health/Physical Therapy",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_725",
+              "name": "Health/Insurance",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_726",
+              "name": "Tel Aviv/WeWork",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_727",
+              "name": "Tel Aviv/Beit Micha",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_728",
+              "name": "Personal/Education/Hebrew",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_729",
+              "name": "Soho House",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_73",
+              "name": "Personal/Productivity",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_730",
+              "name": "Tel Aviv/Apartment",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_731",
+              "name": "Tel Aviv/Doctor",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_732",
+              "name": "Health/Dentist",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_733",
+              "name": "Health/Insurance/Foyer",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_734",
+              "name": "Relationships/Family/Sophia Magnus Gant/ASL",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_735",
+              "name": "Jobs/Namecheap",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_736",
+              "name": "Relationships/Family/Maya Magnus Gant",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_737",
+              "name": "Jobs/Nango",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_738",
+              "name": "Money Management/Taxes 2023",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_739",
+              "name": "Norway/Citizenship",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_74",
+              "name": "WilliGant/Craigslist",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#594c05",
+                "backgroundColor": "#fbe983"
+              }
+            },
+            {
+              "id": "Label_740",
+              "name": "Money Management/Taxes 2024",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_741",
+              "name": "Money Management/Taxes 2023 (Norway(",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_742",
+              "name": "Relationships/Family/Sophia Magnus Gant/Summer Camp",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_743",
+              "name": "Jobs/Nango/Equity",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_744",
+              "name": "Travel/Summer 2024",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_745",
+              "name": "Tel Aviv/Physiotherapy",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_746",
+              "name": "Money Management/Taxes 2025",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_747",
+              "name": "[Superhuman]/AI/Respond",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_748",
+              "name": "[Superhuman]/AI/Waiting",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_749",
+              "name": "[Superhuman]/AI/Meeting",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_750",
+              "name": "[Superhuman]/AI/News",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_751",
+              "name": "[Superhuman]/AI/Social",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_752",
+              "name": "[Superhuman]/AI/Pitch",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_753",
+              "name": "[Superhuman]/AI/Marketing",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_754",
+              "name": "Health/Moves Method",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_755",
+              "name": "[Superhuman]/AI/AutoArchived",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelHide",
+              "type": "user"
+            },
+            {
+              "id": "Label_756",
+              "name": "Norway/Housing",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_757",
+              "name": "Norway/Housing/Hellerudveien 5",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_758",
+              "name": "Ingliq",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_759",
+              "name": "Norway/Car",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_76",
+              "name": "Personal/Web",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0b4f30",
+                "backgroundColor": "#b3efd3"
+              }
+            },
+            {
+              "id": "Label_760",
+              "name": "Health/Scoliosis",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_761",
+              "name": "Personal/Khaliq Gant AS",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_762",
+              "name": "Projects/My Senior Dev",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_763",
+              "name": "Agentworkforce",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_764",
+              "name": "Lindy",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#f2c960"
+              }
+            },
+            {
+              "id": "Label_765",
+              "name": "Notifications",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#4a86e8"
+              }
+            },
+            {
+              "id": "Label_766",
+              "name": "Comments",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#42d692"
+              }
+            },
+            {
+              "id": "Label_767",
+              "name": "Newsletters",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#b694e8"
+              }
+            },
+            {
+              "id": "Label_768",
+              "name": "Promotions",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#f691b3"
+              }
+            },
+            {
+              "id": "Label_769",
+              "name": "FYI",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#42d692"
+              }
+            },
+            {
+              "id": "Label_770",
+              "name": "Invoices",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#ffad47"
+              }
+            },
+            {
+              "id": "Label_771",
+              "name": "To Respond",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#e66550"
+              }
+            },
+            {
+              "id": "Label_772",
+              "name": "Calendar",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#434343",
+                "backgroundColor": "#4a86e8"
+              }
+            },
+            {
+              "id": "Label_78",
+              "name": "Jobs/Bindo",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_79",
+              "name": "Jobs/SmallKnot",
+              "messageListVisibility": "hide",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#16a765"
+              }
+            },
+            {
+              "id": "Label_8",
+              "name": "Cornell/Big Red Bulletin",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_8002806719635494619",
+              "name": "Projects/Avinor/Horizon",
+              "type": "user"
+            },
+            {
+              "id": "Label_81",
+              "name": "Jobs/Vector Media Group",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#ff7537"
+              }
+            },
+            {
+              "id": "Label_82",
+              "name": "Money Management/Investments",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_83",
+              "name": "[Mailbox]",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_8322367779163355126",
+              "name": "Jobs/Side Projects/Dev Diaries",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_84",
+              "name": "[Mailbox]/To Buy",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_85",
+              "name": "[Mailbox]/To Read",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_86",
+              "name": "[Mailbox]/To Watch",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_87",
+              "name": "[Mailbox]/Later",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_8707194349819758092",
+              "name": "Relationships/Family/Sophia Magnus Gant",
+              "type": "user"
+            },
+            {
+              "id": "Label_88",
+              "name": "[Mailbox]/To Follow Up On",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_89",
+              "name": "Money Management/Taxes",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#f6c5be",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_9",
+              "name": "Cornell/Sphinx Head",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShowIfUnread",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#fb4c2f"
+              }
+            },
+            {
+              "id": "Label_90",
+              "name": "Jobs/Side Projects",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_91",
+              "name": "Travel/Foote/AT West Coast Trip",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_9137367368632102506",
+              "name": "Personal/Education/French Class",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#ffffff",
+                "backgroundColor": "#4986e7"
+              }
+            },
+            {
+              "id": "Label_92",
+              "name": "Relationships/Ingrid Magnus/Travel",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_93",
+              "name": "Unroll.me",
+              "type": "user"
+            },
+            {
+              "id": "Label_94",
+              "name": "Personal/Education",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_95",
+              "name": "Personal/Education/Columbia",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user",
+              "color": {
+                "textColor": "#0d3472",
+                "backgroundColor": "#b6cff5"
+              }
+            },
+            {
+              "id": "Label_96",
+              "name": "Personal/Education/NYU",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_97",
+              "name": "Travel/Airlines/Upcoming",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_98",
+              "name": "Money Management/Taxes/2013",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            },
+            {
+              "id": "Label_99",
+              "name": "Money Management/Taxes/2014",
+              "messageListVisibility": "show",
+              "labelListVisibility": "labelShow",
+              "type": "user"
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Tue, 19 May 2026 12:18:40 GMT",
+          "content-type": "application/json; charset=UTF-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "994",
+          "x-ratelimit-reset": "1779193170",
+          "vary": "Origin, X-Origin, Referer",
+          "server": "ESF",
+          "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+        },
+        "hash": "5c64622e6c45f753b3244d320662ddedcd01e3c0",
+        "request": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "provider": "google-drive",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/google-drive",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

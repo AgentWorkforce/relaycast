@@ -1,0 +1,120 @@
+# Production Wrangler config for the fast-path cloud-web Worker deploy.
+#
+# Source of truth for bindings and static env remains `infra/web-worker.ts`.
+# This file mirrors the production values for direct `wrangler deploy`; keep it
+# in sync with `infra/web-worker.ts` and `.github/scripts/production-sst-resources.json`.
+# KV namespace IDs are resolved by `.github/scripts/deploy-web-worker-fast.sh`
+# before Wrangler runs.
+
+name = "cloud-web-worker"
+main = ".open-next-cf/sst-bundle/worker.js"
+compatibility_date = "2026-05-14"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
+[assets]
+directory = ".open-next-cf/assets"
+binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "ROUTER_CONFIG"
+id = "__ROUTER_CONFIG_KV_ID__"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_COUNTERS"
+id = "__RATE_LIMIT_COUNTERS_KV_ID__"
+
+[[r2_buckets]]
+binding = "WORKFLOW_STORAGE_R2"
+bucket_name = "workflow-storage"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "cloud-web-worker"
+
+[[services]]
+binding = "AGENT_GATEWAY_DEDUPE_BROKER"
+service = "agent-gateway"
+
+[[services]]
+binding = "PERSONA_COMPILE_WORKER"
+service = "persona-compile-worker"
+
+[[services]]
+binding = "PROACTIVE_RUNTIME_WORKER"
+service = "proactive-runtime-worker"
+
+[[queues.producers]]
+binding = "CLOUD_AGENT_WARM_QUEUE"
+queue = "cloud-agent-warm"
+
+# Producer binding for the webhook-events queue so the integration-watch
+# dispatcher (#2530) and deployments-list health redrive (#2533) can enqueue
+# durable delivery-drain jobs. Mirrors infra/web-worker.ts appendWorkerBindings;
+# the fast-path deploy (deploy-web-worker-fast.sh) reads this file, so without
+# this entry a fast-path prod deploy leaves env.WEBHOOK_QUEUE undefined and the
+# durable drain silently no-ops.
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "webhook-events"
+
+[[workflows]]
+binding = "NANGO_SYNC_WORKFLOW"
+name = "nango-sync"
+class_name = "NangoSyncWorkflow"
+script_name = "nango-sync-workflow"
+
+[vars]
+NEXT_PUBLIC_APP_URL = "https://agentrelay.com/cloud"
+NEXT_PUBLIC_POSTHOG_HOST = "https://i.agentrelay.com"
+NEXT_PUBLIC_POSTHOG_KEY = "phc_2uDu01GtnLABJpVkWw4ri1OgScLU90aEmXmDjufGdqr"
+NEXT_PUBLIC_SST_STAGE = "production"
+NEXT_PUBLIC_LAUNCH_AGENT_LIVE = "true"
+SESSION_COOKIE_DOMAIN = ".agentrelay.com"
+
+RelayauthUrl = "https://api.relayauth.dev"
+RELAYAUTH_URL = "https://api.relayauth.dev"
+WEB_RELAYAUTH_URL = "https://api.relayauth.dev"
+RelayfileUrl = "https://file.agentrelay.com"
+RELAYFILE_URL = "https://file.agentrelay.com"
+RELAY_LLM_PROXY = "https://api.relayllm.dev"
+RELAY_LLM_PROXY_URL = "https://api.relayllm.dev"
+CREDENTIAL_PROXY_URL = "https://api.relayllm.dev"
+
+RELAYCRON_URL = "https://api.relaycron.dev"
+AGENT_GATEWAY_BASE_URL = "https://api.agentgateway.dev"
+NEXT_PUBLIC_AGENT_GATEWAY_BASE_URL = "https://api.agentgateway.dev"
+SAGE_WEBHOOK_URL = "https://sage.agentrelay.com"
+
+S3_BUCKET = "__WORKFLOW_STORAGE_BUCKET__"
+WORKFLOW_STORAGE_BUCKET = "__WORKFLOW_STORAGE_BUCKET__"
+WORKFLOW_STORAGE_BACKEND = "r2"
+WORKFLOW_STORAGE_R2_BUCKET = "workflow-storage"
+
+WEBHOOK_MSD_BACKEND_URL = "https://api.myseniordev.com/api/v1/webhooks/fanout"
+PROACTIVE_ISSUE_RESOLVER_URL = ""
+WORKFLOW_LAUNCH_QUEUE_ENABLED = "true"
+RELAY_SANDBOX_SNAPSHOT = "relay-orchestrator-sdk-8.7.2-relayfile-v0.10.0-runtime-4.0.1"
+RELAY_SANDBOX_LITE_SNAPSHOT = "relay-sandbox-lite-sdk-8.7.2-relayfile-v0.10.0-runtime-4.0.1"
+CLOUD_AGENT_WARM_VIA_QUEUE = "true"
+
+# Set by wrangler secret bulk in `.github/scripts/deploy-web-worker-fast.sh`:
+# BROKER_URL, BROKER_HMAC_SECRET, QUEUE_BRIDGE_URL,
+# QUEUE_BRIDGE_HMAC_SECRET, RELAYCRON_API_KEY, AGENT_GATEWAY_INTERNAL_SECRET,
+# WEBHOOK_CONSUMERS_JSON, WEBHOOK_MSD_BACKEND_TOKEN,
+# PROACTIVE_ISSUE_RESOLVER_TOKEN, and every SST_RESOURCE_* compatibility
+# binding emitted by generate-sst-secrets-json.py.

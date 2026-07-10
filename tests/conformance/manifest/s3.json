@@ -1,0 +1,14 @@
+{
+  "provider": "s3",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/s3",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

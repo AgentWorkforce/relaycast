@@ -1,0 +1,14 @@
+{
+  "provider": "postgres",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/postgres",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

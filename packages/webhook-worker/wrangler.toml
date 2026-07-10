@@ -1,0 +1,36 @@
+name = "webhook-worker"
+main = "src/index.ts"
+compatibility_date = "2026-05-14"
+compatibility_flags = ["nodejs_compat"]
+
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "webhook-events"
+
+[[d1_databases]]
+binding = "NANGO_SYNC_DEDUP"
+database_name = "webhook-worker-dedup-test"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "src/db/migrations"
+
+# The webhook worker verifies HMAC and enqueues to the CF Queue. Its deployed
+# SST resource links NeonDatabaseUrl for the queue consumer path, but local
+# wrangler smoke tests should provide DATABASE_URL through `.dev.vars` when DB
+# access is needed. There is no Hyperdrive binding; the app connects to Neon
+# directly.
+
+[vars]
+ENVIRONMENT = "production"
+# Optional dogfood telemetry evidence emission. Leave unset/empty for no-op.
+NIGHTCTO_EVIDENCE_URL = ""
+NIGHTCTO_EVIDENCE_TOKEN = ""
+DEPLOY_VERSION = ""
+DEPLOY_ID = ""
+# Optional OTel tracing. Disabled unless RELAY_OTEL_ENABLED or an OTLP endpoint/header is set.
+OTEL_SERVICE_NAME = "webhook-worker"
+RELAY_OTEL_ENABLED = ""
+RELAY_OTEL_EXPORTER = ""
+OTEL_EXPORTER_OTLP_ENDPOINT = ""
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = ""
+OTEL_EXPORTER_OTLP_HEADERS = ""
+OTEL_EXPORTER_OTLP_TRACES_HEADERS = ""

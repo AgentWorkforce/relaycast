@@ -1,0 +1,66 @@
+{
+  "provider": "notion",
+  "nangoIntegration": "notion-relay",
+  "adapterPackage": "@relayfile/adapter-notion",
+  "capabilities": {
+    "webhook": false,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [],
+  "writeback": [
+    {
+      "action": "update-page",
+      "source": "official:https://developers.notion.com/reference/intro | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/notion | local:relayfile-adapters/packages/notion/src/writeback.ts",
+      "filePath": "/notion/pages/customer-notes__0123456789abcdef0123456789abcdef.json",
+      "content": {
+        "properties": {
+          "Status": {
+            "select": {
+              "name": "Done"
+            }
+          }
+        }
+      },
+      "expectCall": {
+        "method": "PATCH",
+        "endpointMatches": "/v1/pages/01234567-89ab-cdef-0123-456789abcdef",
+        "bodyIncludes": {
+          "properties": {
+            "Status": {
+              "select": {
+                "name": "Done"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "NotionPage",
+      "syncName": "fetch-pages",
+      "source": "official:https://developers.notion.com/reference/intro | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/notion | local:cloud/nango-integrations/notion-relay/syncs/fetch-pages.ts",
+      "records": [
+        {
+          "id": "page_123",
+          "path": "/notion/pages/page_123.json",
+          "title": "Fixture Page",
+          "last_modified": "2026-06-01T12:00:00Z",
+          "parent_id": "database_1",
+          "meta": {}
+        }
+      ],
+      "expect": [
+        {
+          "path": "/notion/pages/page_123.json",
+          "contentIncludes": [
+            "title",
+            "last_modified"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "cloud-team-issue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentworkforce/runtime": "^3.0.32"
+  }
+}

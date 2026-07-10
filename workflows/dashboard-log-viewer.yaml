@@ -1,0 +1,236 @@
+version: "1.0"
+name: dashboard-log-viewer
+description: >
+  Add a real-time log viewer to the dashboard. Shows runner logs and
+  per-agent PTY logs with ANSI rendering, auto-scroll, and status badges.
+  Users can click a run to see live output from all agents.
+
+swarm:
+  pattern: dag
+  channel: wf-dashboard-logs
+  maxConcurrency: 4
+  timeoutMs: 3600000
+
+agents:
+  - name: lead
+    cli: codex
+    role: Architect — designs the log viewer UI and reviews implementations
+  - name: component-worker
+    cli: codex
+    role: Implements the React log viewer components
+    constraints:
+      idleThresholdSecs: 180
+  - name: api-worker
+    cli: codex
+    role: Implements API endpoints for listing agents and streaming logs
+    constraints:
+      idleThresholdSecs: 180
+
+workflows:
+  - name: dashboard-log-viewer-flow
+    steps:
+      - name: read-context
+        type: deterministic
+        command: |
+          echo "=== DASHBOARD PAGE ===" &&
+          cat packages/web/app/dashboard/page.tsx &&
+          echo "=== LOGS API ===" &&
+          cat "packages/web/app/api/v1/workflows/runs/[runId]/logs/route.ts" &&
+          echo "=== RUN STATUS API ===" &&
+          cat "packages/web/app/api/v1/workflows/runs/[runId]/route.ts" &&
+          echo "=== EXISTING UI COMPONENTS ===" &&
+          ls packages/web/app/components/ui/ 2>/dev/null &&
+          echo "=== PACKAGE.JSON (check for xterm) ===" &&
+          grep -E "xterm|ansi" packages/web/package.json 2>/dev/null || echo "No xterm deps" &&
+          echo "=== WORKFLOW TYPES ===" &&
+          grep -A20 "WorkflowRun\|WorkflowRecord" packages/web/app/dashboard/page.tsx | head -30
+        captureOutput: true
+
+      - name: design
+        agent: lead
+        dependsOn: [read-context]
+        task: |
+          Design a real-time log viewer for the dashboard.
+
+          Context:
+          {{steps.read-context.output}}
+
+          CURRENT STATE:
+          - Dashboard at packages/web/app/dashboard/page.tsx shows workflow runs
+            in a table with status badges
+          - Logs API at /api/v1/workflows/runs/{runId}/logs supports:
+            - offset-based pagination (query: offset)
+            - per-agent logs (query: sandboxId={agentName})
+            - Returns: { content, offset, totalSize, done }
+          - No log viewer UI exists yet
+
+          DESIGN:
+          1. RunLogViewer component (packages/web/app/components/RunLogViewer.tsx):
+             - Full-page or modal view showing logs for a selected run
+             - Two sections:
+               a) Runner log (main workflow output) — auto-polls /logs every 2s
+               b) Agent log tabs — one tab per agent, polls /logs?sandboxId={name}
+             - Each log section:
+               - Monospace font, dark background
+               - Auto-scrolls to bottom (unless user scrolled up)
+               - Shows ANSI colors (use a simple ANSI-to-HTML converter or raw text)
+               - Loading spinner while waiting for first content
+             - Status badge at top (pending/running/completed/failed)
+             - Close button to return to run list
+
+          2. Agent list — need to know which agents exist for a run:
+             - Option A: Parse agent names from the runner.log output
+               (lines like "[spawned] design-xxx (pty)")
+             - Option B: New API endpoint that lists S3 keys under {userId}/{runId}/
+               to find {agentName}/agent.log files
+             - Option C: Use the workflow config from the run record to get agent names
+             - Recommend Option C — the run record has the workflow config JSON,
+               parse it client-side to get agent names
+
+          3. Integration into dashboard page:
+             - Add a "View Logs" button on each run row
+             - Clicking opens the RunLogViewer for that run
+             - Or: clicking the run row expands to show logs inline
+
+          4. Log polling hook (useLogStream):
+             - Custom React hook that polls the logs endpoint
+             - Tracks offset, appends new content
+             - Stops when done=true
+             - Returns { content, isLoading, isDone, error }
+
+          5. Keep it simple:
+             - Plain pre/code element for log display (no xterm.js dependency)
+             - CSS white-space: pre-wrap for line wrapping
+             - Simple ANSI strip (or keep raw — most terminals handle it)
+             - Tailwind for styling, consistent with existing dashboard
+
+          Write the design to shared/dashboard-logs-design.md
+          (create shared/ directory first with mkdir -p shared).
+        verification:
+          type: file_exists
+          value: shared/dashboard-logs-design.md
+
+      - name: impl-components
+        agent: component-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/dashboard-logs-design.md.
+
+          Implement the log viewer React components:
+
+          1. packages/web/app/components/RunLogViewer.tsx
+             - Props: { runId, workflowConfig, status, onClose }
+             - Shows runner log + agent log tabs
+             - Uses the useLogStream hook for polling
+             - Status badge at top
+             - Auto-scroll behavior
+             - Dark monospace log display area
+             - Close button
+
+          2. packages/web/app/components/useLogStream.ts (custom hook)
+             - useLogStream(runId, sandboxId?, pollIntervalMs?)
+             - Fetches /api/v1/workflows/runs/{runId}/logs with offset
+             - Accumulates content string
+             - Returns { content, isLoading, isDone, error }
+             - Stops polling when done=true
+             - Cleans up interval on unmount
+
+          3. packages/web/app/components/LogDisplay.tsx
+             - Simple component that renders log text in a scrollable container
+             - Props: { content, isLoading, isDone, autoScroll? }
+             - Monospace font, dark bg, Tailwind styling
+             - Strip ANSI escape codes for clean display
+             - Auto-scroll to bottom unless user has scrolled up
+
+          4. Update packages/web/app/dashboard/page.tsx
+             - Add "View Logs" button to each run row
+             - When clicked, show RunLogViewer (modal or expanded section)
+             - Pass the run's workflow config for agent name extraction
+
+          Use existing UI components from packages/web/app/components/ui/ where
+          possible (Button, Badge, Card, etc).
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: impl-api
+        agent: api-worker
+        dependsOn: [design]
+        task: |
+          Read the design from shared/dashboard-logs-design.md.
+
+          Implement any API changes needed:
+
+          1. Verify /api/v1/workflows/runs/{runId}/logs works for both
+             runner logs and per-agent logs (sandboxId parameter)
+
+          2. Add GET /api/v1/workflows/runs/{runId}/agents endpoint
+             (packages/web/app/api/v1/workflows/runs/[runId]/agents/route.ts)
+             that returns a list of agent names for a run:
+             - Read the run's workflow config from the DB
+             - Parse the JSON to extract agent names
+             - Also scan S3 for {userId}/{runId}/*/agent.log to find
+               agents that actually produced logs
+             - Return: { agents: [{ name, hasLogs }] }
+
+          3. Add a client-side helper in the dashboard to fetch agents:
+             packages/web/app/components/useRunAgents.ts
+             - Fetches /api/v1/workflows/runs/{runId}/agents
+             - Returns { agents, isLoading }
+
+          Write all files to disk.
+        verification:
+          type: exit_code
+
+      - name: verify-files
+        type: deterministic
+        dependsOn: [impl-components, impl-api]
+        command: |
+          missing=0
+          test -f packages/web/app/components/RunLogViewer.tsx || { echo "MISSING: RunLogViewer.tsx"; missing=$((missing+1)); }
+          test -f packages/web/app/components/useLogStream.ts || { echo "MISSING: useLogStream.ts"; missing=$((missing+1)); }
+          test -f packages/web/app/components/LogDisplay.tsx || { echo "MISSING: LogDisplay.tsx"; missing=$((missing+1)); }
+          grep -q "View Logs\|RunLogViewer\|logViewer" packages/web/app/dashboard/page.tsx || { echo "MISSING: log viewer integration in dashboard"; missing=$((missing+1)); }
+          if [ $missing -gt 0 ]; then echo "$missing checks failed"; exit 1; fi
+          echo "All checks passed"
+        failOnError: true
+        captureOutput: true
+
+      - name: read-impl
+        type: deterministic
+        dependsOn: [verify-files]
+        command: |
+          echo "=== RunLogViewer ===" &&
+          cat packages/web/app/components/RunLogViewer.tsx &&
+          echo "=== useLogStream ===" &&
+          cat packages/web/app/components/useLogStream.ts &&
+          echo "=== LogDisplay ===" &&
+          cat packages/web/app/components/LogDisplay.tsx &&
+          echo "=== Dashboard changes ===" &&
+          grep -B5 -A15 "RunLogViewer\|View Logs\|logViewer\|selectedRun" packages/web/app/dashboard/page.tsx | head -60
+        captureOutput: true
+
+      - name: review
+        agent: lead
+        dependsOn: [read-impl]
+        task: |
+          Review all implementations:
+          {{steps.read-impl.output}}
+
+          Verify:
+          1. useLogStream polls /logs with offset and accumulates content
+          2. Polling stops when done=true
+          3. Cleanup on unmount (clearInterval)
+          4. RunLogViewer shows runner log + agent tabs
+          5. Agent names extracted from workflow config or API
+          6. LogDisplay auto-scrolls unless user scrolled up
+          7. ANSI codes stripped or handled
+          8. Status badge updates with run status
+          9. Dashboard has View Logs button integrated
+          10. Consistent with existing Tailwind/UI component style
+
+          Fix any issues found directly in the files.
+
+errorHandling:
+  strategy: continue

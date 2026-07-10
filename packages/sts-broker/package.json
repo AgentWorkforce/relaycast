@@ -1,0 +1,25 @@
+{
+  "name": "@cloud/sts-broker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AWS Lambda STS broker that mints scoped S3 credentials for the Cloudflare Worker (Phase 3 cutover).",
+  "main": "src/handler.ts",
+  "exports": {
+    "./handler.js": "./src/handler.ts",
+    "./hmac.js": "./src/hmac.ts",
+    "./hmac-node.js": "./src/hmac-node.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx test/*.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sts": "^3.1004.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.161",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
+  }
+}

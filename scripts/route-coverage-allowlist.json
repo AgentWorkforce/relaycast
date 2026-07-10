@@ -1,0 +1,140 @@
+[
+  {
+    "route": "/api/v1/github/clone",
+    "method": "POST",
+    "reason": "Covered by tests/github-clone-runner.contract.test.ts (node:test runner). The handler suite uses vitest, so this contract test is invisible to it. Runs separately via `npm run github:validate`.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/v1/agents/deploy",
+    "method": "POST",
+    "reason": "Covered by tests/proactive-runtime/deploy-routes.test.ts (node:test runner). Runs via `npm run orchestrator:test`. Needs a vitest handler equivalent before the handler gate can hold it.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/secrets",
+    "method": "GET",
+    "reason": "Covered by tests/proactive-runtime/workspace-secrets-routes.test.ts (node:test runner). Same story as above.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/secrets",
+    "method": "POST",
+    "reason": "Covered by tests/proactive-runtime/workspace-secrets-routes.test.ts (node:test runner). Same story as above.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/secrets/[secretName]",
+    "method": "GET",
+    "reason": "Covered by tests/proactive-runtime/workspace-secrets-routes.test.ts (node:test runner). Same story as above.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/secrets/[secretName]",
+    "method": "DELETE",
+    "reason": "Covered by tests/proactive-runtime/workspace-secrets-routes.test.ts (node:test runner). Same story as above.",
+    "issue": "#638"
+  },
+  {
+    "route": "/api/internal/relayfile/audit",
+    "method": "POST",
+    "reason": "Internal Relayfile audit endpoint added after Phase 0 acceptance suite was authored. No acceptance test yet — needs an unauthenticated 401 contract test at minimum.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/internal/relayfile/writeback/batch",
+    "method": "POST",
+    "reason": "Internal Relayfile writeback batch endpoint added after Phase 0 acceptance suite was authored. No acceptance test yet.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/digest-functions/[digestFunctionId]/disable",
+    "method": "POST",
+    "reason": "Custom digest functions API added after Phase 0 acceptance suite was authored (PR #613). Needs acceptance coverage.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/digest-functions/[digestFunctionId]/logs",
+    "method": "GET",
+    "reason": "Custom digest functions API added after Phase 0 acceptance suite was authored (PR #613). Needs acceptance coverage.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/digest-functions/[digestFunctionId]",
+    "method": "GET",
+    "reason": "Custom digest functions API added after Phase 0 acceptance suite was authored (PR #613). Needs acceptance coverage.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/digest-functions",
+    "method": "POST",
+    "reason": "Custom digest functions API added after Phase 0 acceptance suite was authored (PR #613). Needs acceptance coverage.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/digest-functions",
+    "method": "GET",
+    "reason": "Custom digest functions API added after Phase 0 acceptance suite was authored (PR #613). Needs acceptance coverage.",
+    "issue": "#639"
+  },
+  {
+    "route": "/api/v1/personas/register",
+    "method": "POST",
+    "reason": "Covered by packages/web/app/api/v1/personas/register/route.test.ts (vitest, sibling to the route file). The acceptance suite under packages/acceptance/src/api/personas-register.acceptance.test.ts will land in a follow-up alongside the PR-1.3 first-time agent-row creation flow (which the acceptance test needs to exercise registered → unchanged → rejected transitions end-to-end).",
+    "issue": "#1019"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/deployments/[agentId]/runs/[runId]/envelope",
+    "method": "GET",
+    "reason": "New route (cloud#1841 envelope capture) — Phase 0 acceptance runs against PROD, where this route is not yet deployed (unauth probe would 404, not 401). Swap this entry for real acceptance contracts in packages/acceptance/src/workspaces/workspaces-deployment-runs.test.ts once the route is live (same lifecycle as #1783 -> #1811).",
+    "issue": "#1841"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/deployments/[agentId]/trigger",
+    "method": "POST",
+    "reason": "New route (trigger-now, operator manual fire) — Phase 0 acceptance runs against PROD where it is not yet deployed. Handler contracts covered by the adjacent route.test.ts (9 cases incl. auth parity + double-fire control). Swap for acceptance contracts once live, same lifecycle as #1783 -> #1811.",
+    "issue": "#1783"
+  },
+  {
+    "route": "/api/v1/cli/auth/daytona/credential",
+    "method": "POST",
+    "reason": "New route (Daytona local credential upload) — Phase 0 acceptance runs against PROD where this route is not yet deployed. Handler contracts are covered by the adjacent route.test.ts; swap for acceptance contracts once the route is live.",
+    "issue": "#2101"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/resolve",
+    "method": "GET",
+    "reason": "New route for cloud#2108 active workspace descriptor resolution. Phase 0 acceptance can run against PROD before this route is deployed; handler contracts are covered by the adjacent route.test.ts and should be swapped for acceptance coverage once live.",
+    "issue": "#2108"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/relayfile/delegated-token",
+    "method": "POST",
+    "reason": "New route for cloud#2121 Relayfile delegated TokenPair direct-HTTP local bootstrap. Phase 0 acceptance can run against PROD before this route is deployed; handler contracts are covered by the adjacent route.test.ts and should be swapped for acceptance coverage once live.",
+    "issue": "#2121"
+  },
+  {
+    "route": "/api/v1/workspaces/[workspaceId]/integrations/github/join",
+    "method": "GET",
+    "reason": "New list endpoint for org owners/admins to view pending GitHub join requests (dashboard/settings approval UI). Org-scoped + authority-gated; the listGithubJoinRequests handler is covered by github-installation-membership.test.ts (admin-sees + non-admin-forbidden). Swap for acceptance coverage once the route is live in PROD.",
+    "issue": "#2055"
+  },
+  {
+    "route": "/api/v1/fleet/enrollment-tokens",
+    "method": "POST",
+    "reason": "New fleet node-enrollment route (cloud#2090), shipping behind the default-OFF per-workspace fleet flag (engine 4.0 fleet-nodes-enabled KV). Phase 0 acceptance runs against PROD where fleet is not yet enabled; the enrollment-token mint/claim handler is covered by packages/web/lib/fleet/nodes.test.ts. Swap for acceptance coverage once fleet is live in PROD.",
+    "issue": "#2090"
+  },
+  {
+    "route": "/api/v1/fleet/nodes",
+    "method": "GET",
+    "reason": "New fleet node-listing route (cloud#2090), shipping behind the default-OFF per-workspace fleet flag (engine 4.0 fleet-nodes-enabled KV). Phase 0 acceptance runs against PROD where fleet is not yet enabled; the node-listing handler is covered by packages/web/lib/fleet/nodes.test.ts. Swap for acceptance coverage once fleet is live in PROD.",
+    "issue": "#2090"
+  },
+  {
+    "route": "/api/v1/fleet/register",
+    "method": "POST",
+    "reason": "New fleet node-registration (token-claim) route (cloud#2090), shipping behind the default-OFF per-workspace fleet flag (engine 4.0 fleet-nodes-enabled KV). Phase 0 acceptance runs against PROD where fleet is not yet enabled; the claim/registration handler is covered by packages/web/lib/fleet/nodes.test.ts. Swap for acceptance coverage once fleet is live in PROD.",
+    "issue": "#2090"
+  }
+]

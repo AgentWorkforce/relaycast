@@ -1,0 +1,63 @@
+{
+  "provider": "docker-hub",
+  "nangoIntegration": "docker_hub-composio-relay",
+  "adapterPackage": "@relayfile/adapter-docker-hub",
+  "capabilities": {
+    "webhook": true,
+    "writeback": false,
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "push",
+      "source": "official:https://docs.docker.com/docker-hub/repos/manage/webhooks/ | nango-template:https://github.com/NangoHQ/integration-templates | local:relayfile-adapters/packages/docker-hub/src/webhook-normalizer.ts",
+      "payload": {
+        "push_data": {
+          "pushed_at": 1780300800,
+          "images": [
+            "sha256:abc123"
+          ],
+          "pusher": "sam"
+        },
+        "repository": {
+          "repo_name": "api",
+          "namespace": "acme",
+          "name": "acme/api",
+          "repo_url": "https://hub.docker.com/r/acme/api"
+        },
+        "callback_url": "https://hub.docker.com/api/audit/v1/action/abc/"
+      },
+      "expect": {
+        "contentIncludes": [
+          "push_data",
+          "repository"
+        ],
+        "paths": [
+          "/docker-hub/repositories/acme/api/tags/latest.json"
+        ]
+      }
+    },
+    {
+      "event": "push.repository-only-fallback",
+      "source": "official:https://docs.docker.com/docker-hub/repos/manage/webhooks/ | nango-template:https://github.com/NangoHQ/integration-templates | local:relayfile-adapters/packages/docker-hub/src/webhook-normalizer.ts",
+      "payload": {
+        "repository": {
+          "repo_name": "api",
+          "namespace": "acme",
+          "name": "acme/api",
+          "repo_url": "https://hub.docker.com/r/acme/api"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "repository"
+        ],
+        "paths": [
+          "/docker-hub/repositories/acme/api.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": []
+}

@@ -1,0 +1,1701 @@
+{
+  "nango": {
+    "batchSave": {
+      "GoogleMailFilter": [
+        {
+          "id": "ANe1BmhWFe9wecfRA1lT8oGFq14UA2bNZ4tpTg",
+          "from": "pageonce",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1BmhKLm8ZKTBj6NyiSQ0a76sDEWH0Sj3NJQ",
+          "from": "dictionary.com",
+          "addLabelIds": [
+            "Label_69"
+          ]
+        },
+        {
+          "id": "ANe1BmjbADz9PuQcoGO_i2pQ-rrAfh8MgqvAog",
+          "from": "schwab",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1BmiaKY7tikB99UCl8QzvkY1a6DR8_mIegg",
+          "from": "discover",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1Bmh3-T9E-1UmjPx_Gk_QHkN8nmf7eBHKkA",
+          "subject": "national grid",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1BmhLqFmAdQzYkw5nk7J4VgIp_6Wzs3lCFQ",
+          "from": "american express",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1BmhKiTb4Nd2Xs1Ra3j5ZZMiLC-pTnLddww",
+          "to": "music@khaliqgant.com",
+          "addLabelIds": [
+            "Label_21"
+          ]
+        },
+        {
+          "id": "ANe1BmizQIjuYogoberUaLeWESLFAb73Z287Dw",
+          "from": "oc@esmoke.net",
+          "addLabelIds": [
+            "Label_55"
+          ]
+        },
+        {
+          "id": "ANe1BmhVbnh1l0keWk9OUcVcynTMk5ughR2MGg",
+          "to": "khaliq@socialblendr.com",
+          "addLabelIds": [
+            "Label_36"
+          ]
+        },
+        {
+          "id": "ANe1Bmi1GJUqAog7MAD1-XyxdtIIHj_BS7NeMA",
+          "to": "exec@socialblendr.com",
+          "addLabelIds": [
+            "Label_36"
+          ]
+        },
+        {
+          "id": "ANe1BmjbBfyYmN1R8dzygvfO5cVsLrYwfAAiHw",
+          "to": "khaliq@willigant.com",
+          "addLabelIds": [
+            "Label_61"
+          ]
+        },
+        {
+          "id": "ANe1Bmh55ycMKOhidHIIfhSwk8OUefSg3ldk0A",
+          "query": "I Am T-Pain by Smule",
+          "addLabelIds": [
+            "Label_56"
+          ]
+        },
+        {
+          "id": "ANe1Bmgn-YETN7lK8Zhzmigj-HZlv7CeyBGZQQ",
+          "from": "noreply@reverbnation.com",
+          "addLabelIds": [
+            "Label_21"
+          ]
+        },
+        {
+          "id": "ANe1BmjH22IqjUfKqWIz9s5OFz3Y0jQEEVL2cw",
+          "from": "social blendr",
+          "addLabelIds": [
+            "Label_36"
+          ]
+        },
+        {
+          "id": "ANe1Bmh8-cX4g45huyxoBc77HREayfDPsKFXSw",
+          "to": "socialblendr@gmail.com",
+          "addLabelIds": [
+            "Label_36"
+          ],
+          "removeLabelIds": [
+            "SPAM"
+          ]
+        },
+        {
+          "id": "ANe1BmjU2utbx6J0GVTKgA7pWoJtA4y2DkyZWg",
+          "from": "jeremy@socialightent.com",
+          "addLabelIds": [
+            "Label_47"
+          ]
+        },
+        {
+          "id": "ANe1Bmiw1dKV86N9WWnZvyHwlnZcyF1-NH3hYg",
+          "subject": "SMS from",
+          "addLabelIds": [
+            "Label_15"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmjZyhAcn22jrBeGSdDYrszDW55zuyvIHg",
+          "from": "twitter",
+          "query": "list:(<exec.willigant.com>)",
+          "removeLabelIds": [
+            "UNREAD",
+            "IMPORTANT",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmhttX9z5TutN4lqp3tZnuWJriddNYan8A",
+          "from": "postmaster@e-statements.ezpassnj.com",
+          "addLabelIds": [
+            "Label_18"
+          ]
+        },
+        {
+          "id": "ANe1Bmh_oeqYfeUbsfz_6dEg72JaoPuFHmJGdg",
+          "from": "@facebookmail.com",
+          "addLabelIds": [
+            "Label_51"
+          ],
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmjtX1EdmMFueh-lz4VStR-3wpA7dTdhNQ",
+          "from": "noreply@path.com",
+          "addLabelIds": [
+            "Label_53"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmjTobC63RM0aEesbqrpa_CliKw0TGVZAQ",
+          "from": "twitter",
+          "addLabelIds": [
+            "Label_54"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmgY_rXebE0wCOB2JqN3H0oethM5h7jwkg",
+          "from": "klout",
+          "addLabelIds": [
+            "Label_54"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmgI6B4Bf2v5-EvA7bz3mI70aeWVZA17-g",
+          "from": "magnusingrid@gmail.com",
+          "addLabelIds": [
+            "IMPORTANT",
+            "Label_33"
+          ]
+        },
+        {
+          "id": "ANe1BmhKkqTWAaLGw7ONdyYqZYKNfd3eC9x6wg",
+          "from": "iam2@cornell.edu",
+          "addLabelIds": [
+            "IMPORTANT",
+            "Label_33"
+          ]
+        },
+        {
+          "id": "ANe1BmjyjgSk8YK6dMOspyBkktoeZFhnYqcEKQ",
+          "from": "jbf95@cornell.edu",
+          "addLabelIds": [
+            "Label_31"
+          ]
+        },
+        {
+          "id": "ANe1Bmg1vxbkS7DQwl102IiqmKBWnIvHj3DKpw",
+          "from": "cjm66@cornell.edu",
+          "addLabelIds": [
+            "Label_31"
+          ]
+        },
+        {
+          "id": "ANe1Bmg8fJWiXIzK8PY6R-ld3wwxdrPX7eLvCQ",
+          "from": "socialight@socialightent.com",
+          "addLabelIds": [
+            "Label_43"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmg4FpgcWkvvbn2jicxiIPeN9sYHLmHwsQ",
+          "from": "pulsd",
+          "subject": "pulsd",
+          "query": "list:(<exec.willigant.com>)",
+          "addLabelIds": [
+            "Label_43"
+          ],
+          "removeLabelIds": [
+            "UNREAD"
+          ]
+        },
+        {
+          "id": "ANe1BmjNtZ6d934VZYWNGFB_m81UBBWlakU0og",
+          "from": "aurea",
+          "addLabelIds": [
+            "Label_22"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmgq7ed2n6me_S7g8yk73qJPZRz4evfGHg",
+          "to": "thoth09@yahoogroups.com",
+          "addLabelIds": [
+            "Label_9"
+          ]
+        },
+        {
+          "id": "ANe1BmgLhmjznGud66HIAdhzBPO0IlsAw6QWEg",
+          "from": "groupon",
+          "addLabelIds": [
+            "Label_20"
+          ]
+        },
+        {
+          "id": "ANe1BmiCAU5B0PaVXRS3Oto-1Wowm89DrRawUA",
+          "subject": "new sketch",
+          "addLabelIds": [
+            "Label_66"
+          ]
+        },
+        {
+          "id": "ANe1Bmgx6e1IzuQiZX1JDjhfo5IzfKLr13tCzA",
+          "to": "khaliq@datedirector.com",
+          "addLabelIds": [
+            "Label_64"
+          ]
+        },
+        {
+          "id": "ANe1Bmgsv773twm005O5V1AcYT8_SEfr-Toy0Q",
+          "subject": "V Neck",
+          "query": "V neck",
+          "addLabelIds": [
+            "Label_67"
+          ]
+        },
+        {
+          "id": "ANe1BmjV9HBOD8hy44c9bfEtauw7KCAEjaDalg",
+          "subject": "syracuse",
+          "addLabelIds": [
+            "Label_10"
+          ]
+        },
+        {
+          "id": "ANe1Bmg4j5YwlC-tIkmt603GjWUdi4AQd66sVg",
+          "subject": "big_red_bulletin",
+          "addLabelIds": [
+            "Label_8"
+          ]
+        },
+        {
+          "id": "ANe1BmgtJOWf-3HiN_y6aWy76A3n6TkXpDJ-gg",
+          "from": "danaj99@yahoo.com",
+          "addLabelIds": [
+            "Label_32"
+          ]
+        },
+        {
+          "id": "ANe1Bmjb-FBR1Erfz3n-fwxaJo_GUra0_6jr-g",
+          "from": "sirgant@gmail.com",
+          "addLabelIds": [
+            "Label_32"
+          ]
+        },
+        {
+          "id": "ANe1BmitVIPhuLEPNYmNsfDz3gaXUzuh-ZVt3A",
+          "from": "danagant11@gmail.com",
+          "addLabelIds": [
+            "Label_32"
+          ]
+        },
+        {
+          "id": "ANe1BmiEwKN4f8rCq5Mmhctult4pq3ZOH1jU-A",
+          "to": "@willigant.com",
+          "query": "wine",
+          "addLabelIds": [
+            "Label_65"
+          ]
+        },
+        {
+          "id": "ANe1Bmg72zGZUFrkwy5aQBXXuYILbdBbR0drdA",
+          "from": "charlie.odonnell@gmail.com",
+          "addLabelIds": [
+            "Label_43"
+          ]
+        },
+        {
+          "id": "ANe1BmjkiMEPOPB-RgbTCfzd5b6Pdix2dhiEyw",
+          "from": "frank.denbow",
+          "addLabelIds": [
+            "Label_43"
+          ]
+        },
+        {
+          "id": "ANe1BmhKK2B6Of_jQfAx22NUCwZkq18XYiDe6A",
+          "from": "sprouter.com",
+          "addLabelIds": [
+            "Label_43"
+          ]
+        },
+        {
+          "id": "ANe1Bmg1NIzuhbi3cvopZJ1cXdvIVK5U-yvpfQ",
+          "from": "ksaltonstall",
+          "addLabelIds": [
+            "Label_57"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmh0A1GjuoSaRgDUZ6QrATxBIo2YCBlgSA",
+          "from": "urbandaddy.com",
+          "addLabelIds": [
+            "Label_43"
+          ]
+        },
+        {
+          "id": "ANe1BmicTItExfsqTpwErSrSDqDyOntIFZ2P4Q",
+          "from": "events@goldstar.com",
+          "addLabelIds": [
+            "Label_43"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmgUQEU9pG0lmSxe_t4uVUnZPS8tJXw7Wg",
+          "from": "support@veri.com",
+          "addLabelIds": [
+            "Label_50"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmgYqfQ73A6HAc9MP3KkQ5KJixeXRIm3sQ",
+          "from": "voice-noreply@google.com",
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmi4GT5c2XjtVe8Nk1eyCl9eqJnIV17XPA",
+          "from": "google",
+          "query": "list:(<exec.willigant.com>)",
+          "addLabelIds": [
+            "Label_36"
+          ]
+        },
+        {
+          "id": "ANe1BmhD00l1V0uxhmobsI2JJ0oKvHvBSIWE9Q",
+          "from": "info@myopenbar.com",
+          "addLabelIds": [
+            "Label_43"
+          ]
+        },
+        {
+          "id": "ANe1BmiZNliXWh0LODSv-jlEiYEROoPFSG_ErQ",
+          "query": "TechStars",
+          "addLabelIds": [
+            "Label_40"
+          ]
+        },
+        {
+          "id": "ANe1BmiUeUTNl5c7X9jIzbo9vT9IjTC-7RYGtg",
+          "from": "mint.com",
+          "addLabelIds": [
+            "Label_18"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmjcJQRkktHS1Q5lmMrIuDuv25tdkcPFgg",
+          "from": "thrillist",
+          "addLabelIds": [
+            "Label_43"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmiqI3lJ_Mpp_WCZfW5eJxGTRFI6LjYzjg",
+          "from": "Airtran",
+          "addLabelIds": [
+            "Label_60",
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmhE_6LeeK3q_O4pYzFenjpRpk1tXzA-fw",
+          "subject": "linkedin",
+          "addLabelIds": [
+            "Label_52"
+          ],
+          "removeLabelIds": [
+            "UNREAD",
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmheetkuxyvbpOQBrgpoZiDoic393UeT3A",
+          "subject": "[thelink-l]",
+          "addLabelIds": [
+            "Label_11",
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmjKFy6_179N_zAQEyOkLP17ZcsE79A28A",
+          "to": "link-l@cornell.edu",
+          "addLabelIds": [
+            "Label_11",
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmhuzPoR4XU3zsUlZgR6c9eZtsPWukHaAA",
+          "from": "reverbnation@reverbnation.com",
+          "addLabelIds": [
+            "Label_21"
+          ],
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmh8wIWkWuAnxmgu8Jg7oc7o-RAsOAz8nQ",
+          "from": "notifications@unfuddle.com",
+          "addLabelIds": [
+            "Label_39"
+          ]
+        },
+        {
+          "id": "ANe1Bmjuh9EXrHgLApDU29ap5miJy7E48P-hNQ",
+          "from": "noreply@paper.li",
+          "addLabelIds": [
+            "Label_43"
+          ],
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1Bmj3cckYvJMUuHAdm0V7fc6gB4042eTvug",
+          "from": "no-reply@tiporskip.com",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmichP8oT6JF26LO0hXqU5wK_JqqYeihJQ",
+          "from": "noreply@rescuetime.com",
+          "addLabelIds": [
+            "Label_73"
+          ]
+        },
+        {
+          "id": "ANe1BmjxmuamuZAGNsz9_MUOlJvDKY-uPh8hKw",
+          "query": "list:\"<craigslist.willigant.com>\"",
+          "addLabelIds": [
+            "Label_74"
+          ]
+        },
+        {
+          "id": "ANe1Bmi770BuoezUPrU2DrwRhyIuIdEG8G3O-Q",
+          "from": "@ejgallo.com",
+          "addLabelIds": [
+            "Label_27"
+          ]
+        },
+        {
+          "id": "ANe1BmhVToo6TEklMwJoRg5nut94zGIukIV5Vg",
+          "query": "@gs.com",
+          "addLabelIds": [
+            "Label_28"
+          ]
+        },
+        {
+          "id": "ANe1Bmi4Qp7YwVYhN7JTP_EwYYV-AdtUqupLRw",
+          "from": "ben@smallknot.com",
+          "addLabelIds": [
+            "Label_79"
+          ]
+        },
+        {
+          "id": "ANe1Bmit__lZokKsE6o-LTZ-uMCLCzh_GZko2g",
+          "from": "vectormediagroup",
+          "addLabelIds": [
+            "Label_81"
+          ]
+        },
+        {
+          "id": "ANe1BmiIhStQdaf1YtX9QWyqqYd3pksIY4XbiA",
+          "from": "help@sendgrid.com",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1Bmi6qh6VLhSLmCwxG3EJSKF8bP7xXtMVUg",
+          "from": "pulsd",
+          "query": "list:(<exec.willigant.com>)",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmhpbBrP947dcPrOryBYNadSHfhYHtrhKw",
+          "query": "category:promotions",
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmiArP84MP99NQcuQgH992ESd8nLHgZZCg",
+          "query": "intimateparty",
+          "addLabelIds": [
+            "Label_29"
+          ],
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmhvubqKrc0ioIZWIb3E1kYyGYaRs_E1bQ",
+          "from": "14049158499.16783605444.2s64mw_kn3@txt.voice.google.com",
+          "removeLabelIds": [
+            "INBOX"
+          ]
+        },
+        {
+          "id": "ANe1BmjW1or5Rm13ZuALSgjHTrF21hB3ZN1uUQ",
+          "query": "list:email.superhuman.com",
+          "addLabelIds": [
+            "IMPORTANT",
+            "CATEGORY_PERSONAL"
+          ],
+          "removeLabelIds": [
+            "SPAM"
+          ]
+        },
+        {
+          "id": "ANe1BmguBjs3SZBpdW-2LkNgK8D1emN1ovVOKQ",
+          "from": "noreply@scm.eng.hmhco.com",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1Bmgdr7QoTteV_HQF6PHB3Sn9mwgyS_GFBA",
+          "from": "\"oliviahugo182@gmail.com\"",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1Bmg3PNltUdwXFCLO-qmasyuv90lL7AXjyg",
+          "from": "\"lnrtgeuhrichbumt.de\"",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1Bmhe1tMijZCzIVqtKkpv7UiVhAeRD0kSbA",
+          "from": "\"riddleseptember@gmail.com\"",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        },
+        {
+          "id": "ANe1BmjqAFjGZxuoiqVS27d4vtJO_Hr_mGhpAg",
+          "from": "*@superhuman.com -sharing@superhuman.com",
+          "addLabelIds": [
+            "IMPORTANT",
+            "CATEGORY_PERSONAL"
+          ],
+          "removeLabelIds": [
+            "SPAM"
+          ]
+        },
+        {
+          "id": "ANe1BmgO-x-dallw7hPv1CtHx-PG-__p0ysZZSrcj63emnWCV0LsAwIQK2IKfqKtFi2LulWhdQ",
+          "to": "md@dev-diaries.com",
+          "addLabelIds": [
+            "Label_8322367779163355126"
+          ]
+        },
+        {
+          "id": "ANe1Bmj3sGz9SA6JkMmOasWJk27cFEqsA1pnY9_-MFAdYxTBu55aF6G0Xemuo3jJO7a1Y9hJGA",
+          "from": "submissions@formspree.io",
+          "to": "md@dev-diaries.com",
+          "addLabelIds": [
+            "Label_5745099062336468522"
+          ]
+        },
+        {
+          "id": "ANe1BmgiHl-dj2rqVqUxRzt3Azu8VUDGIracgbP_wZ5d3aRTFgFYCl3g4t6HmktpVnZ1Dnu5Iw",
+          "query": "list:(amp.ui.Ed-Learning.scm.eng.hmhco.com)",
+          "addLabelIds": [
+            "TRASH"
+          ]
+        }
+      ]
+    },
+    "batchDelete": {
+      "GoogleMailFilter": []
+    }
+  },
+  "api": {
+    "get": {
+      "/gmail/v1/users/me/settings/filters": {
+        "response": {
+          "filter": [
+            {
+              "id": "ANe1BmhWFe9wecfRA1lT8oGFq14UA2bNZ4tpTg",
+              "criteria": {
+                "from": "pageonce"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhKLm8ZKTBj6NyiSQ0a76sDEWH0Sj3NJQ",
+              "criteria": {
+                "from": "dictionary.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_69"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjbADz9PuQcoGO_i2pQ-rrAfh8MgqvAog",
+              "criteria": {
+                "from": "schwab"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiaKY7tikB99UCl8QzvkY1a6DR8_mIegg",
+              "criteria": {
+                "from": "discover"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh3-T9E-1UmjPx_Gk_QHkN8nmf7eBHKkA",
+              "criteria": {
+                "subject": "national grid"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhLqFmAdQzYkw5nk7J4VgIp_6Wzs3lCFQ",
+              "criteria": {
+                "from": "american express"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhKiTb4Nd2Xs1Ra3j5ZZMiLC-pTnLddww",
+              "criteria": {
+                "to": "music@khaliqgant.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_21"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmizQIjuYogoberUaLeWESLFAb73Z287Dw",
+              "criteria": {
+                "from": "oc@esmoke.net"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_55"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhVbnh1l0keWk9OUcVcynTMk5ughR2MGg",
+              "criteria": {
+                "to": "khaliq@socialblendr.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_36"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmi1GJUqAog7MAD1-XyxdtIIHj_BS7NeMA",
+              "criteria": {
+                "to": "exec@socialblendr.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_36"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjbBfyYmN1R8dzygvfO5cVsLrYwfAAiHw",
+              "criteria": {
+                "to": "khaliq@willigant.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_61"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh55ycMKOhidHIIfhSwk8OUefSg3ldk0A",
+              "criteria": {
+                "query": "I Am T-Pain by Smule"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_56"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmgn-YETN7lK8Zhzmigj-HZlv7CeyBGZQQ",
+              "criteria": {
+                "from": "noreply@reverbnation.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_21"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjH22IqjUfKqWIz9s5OFz3Y0jQEEVL2cw",
+              "criteria": {
+                "from": "social blendr"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_36"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh8-cX4g45huyxoBc77HREayfDPsKFXSw",
+              "criteria": {
+                "to": "socialblendr@gmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_36"
+                ],
+                "removeLabelIds": [
+                  "SPAM"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjU2utbx6J0GVTKgA7pWoJtA4y2DkyZWg",
+              "criteria": {
+                "from": "jeremy@socialightent.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_47"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmiw1dKV86N9WWnZvyHwlnZcyF1-NH3hYg",
+              "criteria": {
+                "subject": "SMS from"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_15"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjZyhAcn22jrBeGSdDYrszDW55zuyvIHg",
+              "criteria": {
+                "from": "twitter",
+                "query": "list:(<exec.willigant.com>)"
+              },
+              "action": {
+                "removeLabelIds": [
+                  "UNREAD",
+                  "IMPORTANT",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhttX9z5TutN4lqp3tZnuWJriddNYan8A",
+              "criteria": {
+                "from": "postmaster@e-statements.ezpassnj.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh_oeqYfeUbsfz_6dEg72JaoPuFHmJGdg",
+              "criteria": {
+                "from": "@facebookmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_51"
+                ],
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjtX1EdmMFueh-lz4VStR-3wpA7dTdhNQ",
+              "criteria": {
+                "from": "noreply@path.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_53"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjTobC63RM0aEesbqrpa_CliKw0TGVZAQ",
+              "criteria": {
+                "from": "twitter"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_54"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgY_rXebE0wCOB2JqN3H0oethM5h7jwkg",
+              "criteria": {
+                "from": "klout"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_54"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgI6B4Bf2v5-EvA7bz3mI70aeWVZA17-g",
+              "criteria": {
+                "from": "magnusingrid@gmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "IMPORTANT",
+                  "Label_33"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhKkqTWAaLGw7ONdyYqZYKNfd3eC9x6wg",
+              "criteria": {
+                "from": "iam2@cornell.edu"
+              },
+              "action": {
+                "addLabelIds": [
+                  "IMPORTANT",
+                  "Label_33"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjyjgSk8YK6dMOspyBkktoeZFhnYqcEKQ",
+              "criteria": {
+                "from": "jbf95@cornell.edu"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_31"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg1vxbkS7DQwl102IiqmKBWnIvHj3DKpw",
+              "criteria": {
+                "from": "cjm66@cornell.edu"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_31"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg8fJWiXIzK8PY6R-ld3wwxdrPX7eLvCQ",
+              "criteria": {
+                "from": "socialight@socialightent.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg4FpgcWkvvbn2jicxiIPeN9sYHLmHwsQ",
+              "criteria": {
+                "from": "pulsd",
+                "subject": "pulsd",
+                "query": "list:(<exec.willigant.com>)"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ],
+                "removeLabelIds": [
+                  "UNREAD"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjNtZ6d934VZYWNGFB_m81UBBWlakU0og",
+              "criteria": {
+                "from": "aurea"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_22"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmgq7ed2n6me_S7g8yk73qJPZRz4evfGHg",
+              "criteria": {
+                "to": "thoth09@yahoogroups.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_9"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgLhmjznGud66HIAdhzBPO0IlsAw6QWEg",
+              "criteria": {
+                "from": "groupon"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_20"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiCAU5B0PaVXRS3Oto-1Wowm89DrRawUA",
+              "criteria": {
+                "subject": "new sketch"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_66"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmgx6e1IzuQiZX1JDjhfo5IzfKLr13tCzA",
+              "criteria": {
+                "to": "khaliq@datedirector.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_64"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmgsv773twm005O5V1AcYT8_SEfr-Toy0Q",
+              "criteria": {
+                "subject": "V Neck",
+                "query": "V neck"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_67"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjV9HBOD8hy44c9bfEtauw7KCAEjaDalg",
+              "criteria": {
+                "subject": "syracuse"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_10"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg4j5YwlC-tIkmt603GjWUdi4AQd66sVg",
+              "criteria": {
+                "subject": "big_red_bulletin"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_8"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgtJOWf-3HiN_y6aWy76A3n6TkXpDJ-gg",
+              "criteria": {
+                "from": "danaj99@yahoo.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_32"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmjb-FBR1Erfz3n-fwxaJo_GUra0_6jr-g",
+              "criteria": {
+                "from": "sirgant@gmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_32"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmitVIPhuLEPNYmNsfDz3gaXUzuh-ZVt3A",
+              "criteria": {
+                "from": "danagant11@gmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_32"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiEwKN4f8rCq5Mmhctult4pq3ZOH1jU-A",
+              "criteria": {
+                "to": "@willigant.com",
+                "query": "wine"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_65"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg72zGZUFrkwy5aQBXXuYILbdBbR0drdA",
+              "criteria": {
+                "from": "charlie.odonnell@gmail.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjkiMEPOPB-RgbTCfzd5b6Pdix2dhiEyw",
+              "criteria": {
+                "from": "frank.denbow"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhKK2B6Of_jQfAx22NUCwZkq18XYiDe6A",
+              "criteria": {
+                "from": "sprouter.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg1NIzuhbi3cvopZJ1cXdvIVK5U-yvpfQ",
+              "criteria": {
+                "from": "ksaltonstall"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_57"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh0A1GjuoSaRgDUZ6QrATxBIo2YCBlgSA",
+              "criteria": {
+                "from": "urbandaddy.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmicTItExfsqTpwErSrSDqDyOntIFZ2P4Q",
+              "criteria": {
+                "from": "events@goldstar.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgUQEU9pG0lmSxe_t4uVUnZPS8tJXw7Wg",
+              "criteria": {
+                "from": "support@veri.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_50"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgYqfQ73A6HAc9MP3KkQ5KJixeXRIm3sQ",
+              "criteria": {
+                "from": "voice-noreply@google.com"
+              },
+              "action": {
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmi4GT5c2XjtVe8Nk1eyCl9eqJnIV17XPA",
+              "criteria": {
+                "from": "google",
+                "query": "list:(<exec.willigant.com>)"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_36"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhD00l1V0uxhmobsI2JJ0oKvHvBSIWE9Q",
+              "criteria": {
+                "from": "info@myopenbar.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiZNliXWh0LODSv-jlEiYEROoPFSG_ErQ",
+              "criteria": {
+                "query": "TechStars"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_40"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiUeUTNl5c7X9jIzbo9vT9IjTC-7RYGtg",
+              "criteria": {
+                "from": "mint.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_18"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjcJQRkktHS1Q5lmMrIuDuv25tdkcPFgg",
+              "criteria": {
+                "from": "thrillist"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiqI3lJ_Mpp_WCZfW5eJxGTRFI6LjYzjg",
+              "criteria": {
+                "from": "Airtran"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_60",
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhE_6LeeK3q_O4pYzFenjpRpk1tXzA-fw",
+              "criteria": {
+                "subject": "linkedin"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_52"
+                ],
+                "removeLabelIds": [
+                  "UNREAD",
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmheetkuxyvbpOQBrgpoZiDoic393UeT3A",
+              "criteria": {
+                "subject": "[thelink-l]"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_11",
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjKFy6_179N_zAQEyOkLP17ZcsE79A28A",
+              "criteria": {
+                "to": "link-l@cornell.edu"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_11",
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhuzPoR4XU3zsUlZgR6c9eZtsPWukHaAA",
+              "criteria": {
+                "from": "reverbnation@reverbnation.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_21"
+                ],
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmh8wIWkWuAnxmgu8Jg7oc7o-RAsOAz8nQ",
+              "criteria": {
+                "from": "notifications@unfuddle.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_39"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmjuh9EXrHgLApDU29ap5miJy7E48P-hNQ",
+              "criteria": {
+                "from": "noreply@paper.li"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_43"
+                ],
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmj3cckYvJMUuHAdm0V7fc6gB4042eTvug",
+              "criteria": {
+                "from": "no-reply@tiporskip.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmichP8oT6JF26LO0hXqU5wK_JqqYeihJQ",
+              "criteria": {
+                "from": "noreply@rescuetime.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_73"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjxmuamuZAGNsz9_MUOlJvDKY-uPh8hKw",
+              "criteria": {
+                "query": "list:\"<craigslist.willigant.com>\""
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_74"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmi770BuoezUPrU2DrwRhyIuIdEG8G3O-Q",
+              "criteria": {
+                "from": "@ejgallo.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_27"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhVToo6TEklMwJoRg5nut94zGIukIV5Vg",
+              "criteria": {
+                "query": "@gs.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_28"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmi4Qp7YwVYhN7JTP_EwYYV-AdtUqupLRw",
+              "criteria": {
+                "from": "ben@smallknot.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_79"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmit__lZokKsE6o-LTZ-uMCLCzh_GZko2g",
+              "criteria": {
+                "from": "vectormediagroup"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_81"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiIhStQdaf1YtX9QWyqqYd3pksIY4XbiA",
+              "criteria": {
+                "from": "help@sendgrid.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmi6qh6VLhSLmCwxG3EJSKF8bP7xXtMVUg",
+              "criteria": {
+                "from": "pulsd",
+                "query": "list:(<exec.willigant.com>)"
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhpbBrP947dcPrOryBYNadSHfhYHtrhKw",
+              "criteria": {
+                "query": "category:promotions"
+              },
+              "action": {
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmiArP84MP99NQcuQgH992ESd8nLHgZZCg",
+              "criteria": {
+                "query": "intimateparty"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_29"
+                ],
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmhvubqKrc0ioIZWIb3E1kYyGYaRs_E1bQ",
+              "criteria": {
+                "from": "14049158499.16783605444.2s64mw_kn3@txt.voice.google.com"
+              },
+              "action": {
+                "removeLabelIds": [
+                  "INBOX"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjW1or5Rm13ZuALSgjHTrF21hB3ZN1uUQ",
+              "criteria": {
+                "query": "list:email.superhuman.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "IMPORTANT",
+                  "CATEGORY_PERSONAL"
+                ],
+                "removeLabelIds": [
+                  "SPAM"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmguBjs3SZBpdW-2LkNgK8D1emN1ovVOKQ",
+              "criteria": {
+                "from": "noreply@scm.eng.hmhco.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmgdr7QoTteV_HQF6PHB3Sn9mwgyS_GFBA",
+              "criteria": {
+                "from": "\"oliviahugo182@gmail.com\""
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmg3PNltUdwXFCLO-qmasyuv90lL7AXjyg",
+              "criteria": {
+                "from": "\"lnrtgeuhrichbumt.de\""
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmhe1tMijZCzIVqtKkpv7UiVhAeRD0kSbA",
+              "criteria": {
+                "from": "\"riddleseptember@gmail.com\""
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmjqAFjGZxuoiqVS27d4vtJO_Hr_mGhpAg",
+              "criteria": {
+                "from": "*@superhuman.com -sharing@superhuman.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "IMPORTANT",
+                  "CATEGORY_PERSONAL"
+                ],
+                "removeLabelIds": [
+                  "SPAM"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgO-x-dallw7hPv1CtHx-PG-__p0ysZZSrcj63emnWCV0LsAwIQK2IKfqKtFi2LulWhdQ",
+              "criteria": {
+                "to": "md@dev-diaries.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_8322367779163355126"
+                ]
+              }
+            },
+            {
+              "id": "ANe1Bmj3sGz9SA6JkMmOasWJk27cFEqsA1pnY9_-MFAdYxTBu55aF6G0Xemuo3jJO7a1Y9hJGA",
+              "criteria": {
+                "from": "submissions@formspree.io",
+                "to": "md@dev-diaries.com"
+              },
+              "action": {
+                "addLabelIds": [
+                  "Label_5745099062336468522"
+                ]
+              }
+            },
+            {
+              "id": "ANe1BmgiHl-dj2rqVqUxRzt3Azu8VUDGIracgbP_wZ5d3aRTFgFYCl3g4t6HmktpVnZ1Dnu5Iw",
+              "criteria": {
+                "query": "list:(amp.ui.Ed-Learning.scm.eng.hmhco.com)"
+              },
+              "action": {
+                "addLabelIds": [
+                  "TRASH"
+                ]
+              }
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Tue, 19 May 2026 12:19:00 GMT",
+          "content-type": "application/json; charset=UTF-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "988",
+          "x-ratelimit-reset": "1779193170",
+          "vary": "Origin, X-Origin, Referer",
+          "server": "ESF",
+          "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+        },
+        "hash": "4b390c50fb1e6a0d9c0badfcce07edd818cad2ea",
+        "request": {}
+      }
+    }
+  }
+}

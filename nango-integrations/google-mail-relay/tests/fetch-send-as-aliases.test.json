@@ -1,0 +1,368 @@
+{
+  "nango": {
+    "batchSave": {
+      "GoogleMailSendAsAlias": [
+        {
+          "id": "khaliqgant@gmail.com",
+          "sendAsEmail": "khaliqgant@gmail.com",
+          "displayName": "",
+          "replyToAddress": "",
+          "signature": "",
+          "isPrimary": true,
+          "isDefault": true
+        },
+        {
+          "id": "founders@socialblendr.com",
+          "sendAsEmail": "founders@socialblendr.com",
+          "displayName": "Social Blendr",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "khaliq@willigant.com",
+          "sendAsEmail": "khaliq@willigant.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "kjg27@cornell.edu",
+          "sendAsEmail": "kjg27@cornell.edu",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "secure@tweet-wise.com",
+          "sendAsEmail": "secure@tweet-wise.com",
+          "displayName": "Tweet Wise",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true,
+          "smtpMsa": {
+            "host": "smtp.mailgun.org",
+            "port": 587,
+            "securityMode": "starttls"
+          }
+        },
+        {
+          "id": "khaliq@socialblendr.com",
+          "sendAsEmail": "khaliq@socialblendr.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "khaliq@khaliqgant.com",
+          "sendAsEmail": "khaliq@khaliqgant.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "music@khaliqgant.com",
+          "sendAsEmail": "music@khaliqgant.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "khaliq11@yahoo.com",
+          "sendAsEmail": "khaliq11@yahoo.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "kjg@laidbackvj.com",
+          "sendAsEmail": "kjg@laidbackvj.com",
+          "displayName": "Laid Back VJ",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true,
+          "smtpMsa": {
+            "host": "mxb.mailgun.org",
+            "port": 587,
+            "securityMode": "starttls"
+          }
+        },
+        {
+          "id": "md@dev-diaries.com",
+          "sendAsEmail": "md@dev-diaries.com",
+          "displayName": "Dev Diaries",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true,
+          "smtpMsa": {
+            "host": "smtp.mailgun.org",
+            "port": 587,
+            "securityMode": "starttls"
+          }
+        },
+        {
+          "id": "khaliq@datedirector.com",
+          "sendAsEmail": "khaliq@datedirector.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "postmaster@laidbackvj.com",
+          "sendAsEmail": "postmaster@laidbackvj.com",
+          "displayName": "Laid Back VJ",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true,
+          "smtpMsa": {
+            "host": "mxb.mailgun.org",
+            "port": 587,
+            "securityMode": "starttls"
+          }
+        },
+        {
+          "id": "khaliq@connectedgreek.com",
+          "sendAsEmail": "khaliq@connectedgreek.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "<span style=\"font-family:arial,sans-serif;font-size:13px;border-collapse:collapse\"><div>Khaliq Gant<br>Account Manager</div><div><font color=\"#006600\"><font color=\"#000000\"><b>Connected</b></font><b>Greek</b></font></div>\r\n</span>\r\n<br>",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        },
+        {
+          "id": "khaliq.gant@gmail.com",
+          "sendAsEmail": "khaliq.gant@gmail.com",
+          "displayName": "Khaliq Gant",
+          "replyToAddress": "",
+          "signature": "",
+          "isDefault": false,
+          "verificationStatus": "accepted",
+          "treatAsAlias": true
+        }
+      ]
+    },
+    "batchDelete": {
+      "GoogleMailSendAsAlias": []
+    }
+  },
+  "api": {
+    "get": {
+      "/gmail/v1/users/me/settings/sendAs": {
+        "response": {
+          "sendAs": [
+            {
+              "sendAsEmail": "khaliqgant@gmail.com",
+              "displayName": "",
+              "replyToAddress": "",
+              "signature": "",
+              "isPrimary": true,
+              "isDefault": true
+            },
+            {
+              "sendAsEmail": "founders@socialblendr.com",
+              "displayName": "Social Blendr",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq@willigant.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "kjg27@cornell.edu",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "secure@tweet-wise.com",
+              "displayName": "Tweet Wise",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "smtpMsa": {
+                "host": "smtp.mailgun.org",
+                "port": 587,
+                "securityMode": "starttls"
+              },
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq@socialblendr.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq@khaliqgant.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "music@khaliqgant.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq11@yahoo.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "kjg@laidbackvj.com",
+              "displayName": "Laid Back VJ",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "smtpMsa": {
+                "host": "mxb.mailgun.org",
+                "port": 587,
+                "securityMode": "starttls"
+              },
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "md@dev-diaries.com",
+              "displayName": "Dev Diaries",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "smtpMsa": {
+                "host": "smtp.mailgun.org",
+                "port": 587,
+                "securityMode": "starttls"
+              },
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq@datedirector.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "postmaster@laidbackvj.com",
+              "displayName": "Laid Back VJ",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "smtpMsa": {
+                "host": "mxb.mailgun.org",
+                "port": 587,
+                "securityMode": "starttls"
+              },
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq@connectedgreek.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "<span style=\"font-family:arial,sans-serif;font-size:13px;border-collapse:collapse\"><div>Khaliq Gant<br>Account Manager</div><div><font color=\"#006600\"><font color=\"#000000\"><b>Connected</b></font><b>Greek</b></font></div>\r\n</span>\r\n<br>",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            },
+            {
+              "sendAsEmail": "khaliq.gant@gmail.com",
+              "displayName": "Khaliq Gant",
+              "replyToAddress": "",
+              "signature": "",
+              "treatAsAlias": true,
+              "verificationStatus": "accepted",
+              "isDefault": false
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Tue, 19 May 2026 12:19:13 GMT",
+          "content-type": "application/json; charset=UTF-8",
+          "transfer-encoding": "chunked",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "982",
+          "x-ratelimit-reset": "1779193170",
+          "vary": "Origin, X-Origin, Referer",
+          "server": "ESF",
+          "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+        },
+        "hash": "a82b50ae211b88ce304cd61e6b75e1d8d90063d2",
+        "request": {}
+      }
+    }
+  }
+}

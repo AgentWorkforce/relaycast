@@ -1,0 +1,37 @@
+{
+  "provider": "mailgun",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-mailgun",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "delivered",
+      "source": "official:https://documentation.mailgun.com/docs/mailgun/api-reference/openapi-final/tag/Webhooks/ | nango-template:none-found-in-NangoHQ/integration-templates | local:relayfile-adapters/packages/mailgun/src/webhook-normalizer.ts",
+      "payload": {
+        "event": "delivered",
+        "id": "event_123",
+        "recipient": "sam@example.com",
+        "message": {
+          "headers": {
+            "message-id": "msg_123"
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/mailgun/events/event_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

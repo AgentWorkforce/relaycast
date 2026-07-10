@@ -1,0 +1,378 @@
+{
+  "nango": {
+    "batchSave": {
+      "Order": [
+        {
+          "id": "1229268373736",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:36.365Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:36.875Z",
+            "hs_object_id": "1229268373736"
+          },
+          "createdAt": "2026-05-21T12:08:36.365Z",
+          "updatedAt": "2026-05-21T12:08:36.875Z"
+        },
+        {
+          "id": "1229292824775",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:07:44.013Z",
+            "hs_lastmodifieddate": "2026-05-21T12:07:44.754Z",
+            "hs_object_id": "1229292824775"
+          },
+          "createdAt": "2026-05-21T12:07:44.013Z",
+          "updatedAt": "2026-05-21T12:07:44.754Z"
+        },
+        {
+          "id": "1229292833996",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:20.654Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:21.261Z",
+            "hs_object_id": "1229292833996"
+          },
+          "createdAt": "2026-05-21T12:08:20.654Z",
+          "updatedAt": "2026-05-21T12:08:21.261Z"
+        },
+        {
+          "id": "1229309080802",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:07:55.160Z",
+            "hs_lastmodifieddate": "2026-05-21T12:07:55.345Z",
+            "hs_object_id": "1229309080802"
+          },
+          "createdAt": "2026-05-21T12:07:55.160Z",
+          "updatedAt": "2026-05-21T12:07:55.345Z"
+        },
+        {
+          "id": "1229311071459",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:07:48.025Z",
+            "hs_lastmodifieddate": "2026-05-21T12:07:48.637Z",
+            "hs_object_id": "1229311071459"
+          },
+          "createdAt": "2026-05-21T12:07:48.025Z",
+          "updatedAt": "2026-05-21T12:07:48.637Z"
+        },
+        {
+          "id": "1229313332464",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:13.196Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:13.949Z",
+            "hs_object_id": "1229313332464"
+          },
+          "createdAt": "2026-05-21T12:08:13.196Z",
+          "updatedAt": "2026-05-21T12:08:13.949Z"
+        },
+        {
+          "id": "1229313334486",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:24.408Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:24.894Z",
+            "hs_object_id": "1229313334486"
+          },
+          "createdAt": "2026-05-21T12:08:24.408Z",
+          "updatedAt": "2026-05-21T12:08:24.894Z"
+        },
+        {
+          "id": "1229318765778",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:02.461Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:03.108Z",
+            "hs_object_id": "1229318765778"
+          },
+          "createdAt": "2026-05-21T12:08:02.461Z",
+          "updatedAt": "2026-05-21T12:08:03.108Z"
+        },
+        {
+          "id": "1229319489774",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:07:58.628Z",
+            "hs_lastmodifieddate": "2026-05-21T12:07:58.864Z",
+            "hs_object_id": "1229319489774"
+          },
+          "createdAt": "2026-05-21T12:07:58.628Z",
+          "updatedAt": "2026-05-21T12:07:58.864Z"
+        },
+        {
+          "id": "1229319492830",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:17.121Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:17.488Z",
+            "hs_object_id": "1229319492830"
+          },
+          "createdAt": "2026-05-21T12:08:17.121Z",
+          "updatedAt": "2026-05-21T12:08:17.488Z"
+        },
+        {
+          "id": "1229337273544",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:06.003Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:06.534Z",
+            "hs_object_id": "1229337273544"
+          },
+          "createdAt": "2026-05-21T12:08:06.003Z",
+          "updatedAt": "2026-05-21T12:08:06.534Z"
+        },
+        {
+          "id": "1229337275624",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:09.421Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:09.890Z",
+            "hs_object_id": "1229337275624"
+          },
+          "createdAt": "2026-05-21T12:08:09.421Z",
+          "updatedAt": "2026-05-21T12:08:09.890Z"
+        },
+        {
+          "id": "1229337652417",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:28.156Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:28.537Z",
+            "hs_object_id": "1229337652417"
+          },
+          "createdAt": "2026-05-21T12:08:28.156Z",
+          "updatedAt": "2026-05-21T12:08:28.537Z"
+        },
+        {
+          "id": "1229343494343",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:08:32.073Z",
+            "hs_lastmodifieddate": "2026-05-21T12:08:32.478Z",
+            "hs_object_id": "1229343494343"
+          },
+          "createdAt": "2026-05-21T12:08:32.073Z",
+          "updatedAt": "2026-05-21T12:08:32.478Z"
+        },
+        {
+          "id": "1229343963337",
+          "properties": {
+            "hs_createdate": "2026-05-21T12:07:51.518Z",
+            "hs_lastmodifieddate": "2026-05-21T12:07:51.707Z",
+            "hs_object_id": "1229343963337"
+          },
+          "createdAt": "2026-05-21T12:07:51.518Z",
+          "updatedAt": "2026-05-21T12:07:51.707Z"
+        }
+      ]
+    },
+    "batchDelete": {
+      "Order": []
+    }
+  },
+  "api": {
+    "get": {
+      "/crm/v3/objects/orders": {
+        "response": {
+          "results": [
+            {
+              "id": "1229268373736",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:36.365Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:36.875Z",
+                "hs_object_id": "1229268373736"
+              },
+              "createdAt": "2026-05-21T12:08:36.365Z",
+              "updatedAt": "2026-05-21T12:08:36.875Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229268373736"
+            },
+            {
+              "id": "1229292824775",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:07:44.013Z",
+                "hs_lastmodifieddate": "2026-05-21T12:07:44.754Z",
+                "hs_object_id": "1229292824775"
+              },
+              "createdAt": "2026-05-21T12:07:44.013Z",
+              "updatedAt": "2026-05-21T12:07:44.754Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229292824775"
+            },
+            {
+              "id": "1229292833996",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:20.654Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:21.261Z",
+                "hs_object_id": "1229292833996"
+              },
+              "createdAt": "2026-05-21T12:08:20.654Z",
+              "updatedAt": "2026-05-21T12:08:21.261Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229292833996"
+            },
+            {
+              "id": "1229309080802",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:07:55.160Z",
+                "hs_lastmodifieddate": "2026-05-21T12:07:55.345Z",
+                "hs_object_id": "1229309080802"
+              },
+              "createdAt": "2026-05-21T12:07:55.160Z",
+              "updatedAt": "2026-05-21T12:07:55.345Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229309080802"
+            },
+            {
+              "id": "1229311071459",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:07:48.025Z",
+                "hs_lastmodifieddate": "2026-05-21T12:07:48.637Z",
+                "hs_object_id": "1229311071459"
+              },
+              "createdAt": "2026-05-21T12:07:48.025Z",
+              "updatedAt": "2026-05-21T12:07:48.637Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229311071459"
+            },
+            {
+              "id": "1229313332464",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:13.196Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:13.949Z",
+                "hs_object_id": "1229313332464"
+              },
+              "createdAt": "2026-05-21T12:08:13.196Z",
+              "updatedAt": "2026-05-21T12:08:13.949Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229313332464"
+            },
+            {
+              "id": "1229313334486",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:24.408Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:24.894Z",
+                "hs_object_id": "1229313334486"
+              },
+              "createdAt": "2026-05-21T12:08:24.408Z",
+              "updatedAt": "2026-05-21T12:08:24.894Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229313334486"
+            },
+            {
+              "id": "1229318765778",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:02.461Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:03.108Z",
+                "hs_object_id": "1229318765778"
+              },
+              "createdAt": "2026-05-21T12:08:02.461Z",
+              "updatedAt": "2026-05-21T12:08:03.108Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229318765778"
+            },
+            {
+              "id": "1229319489774",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:07:58.628Z",
+                "hs_lastmodifieddate": "2026-05-21T12:07:58.864Z",
+                "hs_object_id": "1229319489774"
+              },
+              "createdAt": "2026-05-21T12:07:58.628Z",
+              "updatedAt": "2026-05-21T12:07:58.864Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229319489774"
+            },
+            {
+              "id": "1229319492830",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:17.121Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:17.488Z",
+                "hs_object_id": "1229319492830"
+              },
+              "createdAt": "2026-05-21T12:08:17.121Z",
+              "updatedAt": "2026-05-21T12:08:17.488Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229319492830"
+            },
+            {
+              "id": "1229337273544",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:06.003Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:06.534Z",
+                "hs_object_id": "1229337273544"
+              },
+              "createdAt": "2026-05-21T12:08:06.003Z",
+              "updatedAt": "2026-05-21T12:08:06.534Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229337273544"
+            },
+            {
+              "id": "1229337275624",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:09.421Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:09.890Z",
+                "hs_object_id": "1229337275624"
+              },
+              "createdAt": "2026-05-21T12:08:09.421Z",
+              "updatedAt": "2026-05-21T12:08:09.890Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229337275624"
+            },
+            {
+              "id": "1229337652417",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:28.156Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:28.537Z",
+                "hs_object_id": "1229337652417"
+              },
+              "createdAt": "2026-05-21T12:08:28.156Z",
+              "updatedAt": "2026-05-21T12:08:28.537Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229337652417"
+            },
+            {
+              "id": "1229343494343",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:08:32.073Z",
+                "hs_lastmodifieddate": "2026-05-21T12:08:32.478Z",
+                "hs_object_id": "1229343494343"
+              },
+              "createdAt": "2026-05-21T12:08:32.073Z",
+              "updatedAt": "2026-05-21T12:08:32.478Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229343494343"
+            },
+            {
+              "id": "1229343963337",
+              "properties": {
+                "hs_createdate": "2026-05-21T12:07:51.518Z",
+                "hs_lastmodifieddate": "2026-05-21T12:07:51.707Z",
+                "hs_object_id": "1229343963337"
+              },
+              "createdAt": "2026-05-21T12:07:51.518Z",
+              "updatedAt": "2026-05-21T12:07:51.707Z",
+              "archived": false,
+              "url": "https://app-eu1.hubspot.com/contacts/148539260/record/0-123/1229343963337"
+            }
+          ]
+        },
+        "status": 200,
+        "headers": {
+          "date": "Thu, 21 May 2026 12:36:26 GMT",
+          "content-type": "application/json;charset=utf-8",
+          "content-length": "5083",
+          "connection": "keep-alive",
+          "x-xss-protection": "0",
+          "x-content-type-options": "nosniff",
+          "x-download-options": "noopen",
+          "x-frame-options": "SAMEORIGIN",
+          "x-dns-prefetch-control": "off",
+          "strict-transport-security": "max-age=5184000; includeSubDomains",
+          "content-security-policy-report-only": "default-src 'self' https://app.nango.dev https://api.nango.dev https://connect.nango.dev;child-src 'self';connect-src 'self' https://*.google-analytics.com https://*.sentry.io https://app.nango.dev https://api.nango.dev wss://api.nango.dev/ https://connect.nango.dev https://*.posthog.com https://*.stripe.com;font-src 'self' https://*.googleapis.com https://*.gstatic.com;frame-src 'self' https://accounts.google.com https://app.nango.dev https://api.nango.dev https://connect.nango.dev https://www.youtube.com https://*.stripe.com;img-src 'self' data: https://app.nango.dev https://api.nango.dev https://*.google-analytics.com https://*.googleapis.com https://*.posthog.com https://img.logo.dev https://*.ytimg.com;manifest-src 'self';media-src 'self';object-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://app.nango.dev https://api.nango.dev https://*.stripe.com https://*.google-analytics.com https://*.googleapis.com https://apis.google.com https://*.posthog.com https://www.youtube.com;style-src blob: 'self' 'unsafe-inline' https://*.googleapis.com https://app.nango.dev https://api.nango.dev;worker-src blob: 'self' https://app.nango.dev https://api.nango.dev https://*.googleapis.com https://*.posthog.com;base-uri 'self';form-action 'self';frame-ancestors 'self';script-src-attr 'none';upgrade-insecure-requests",
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "Authorization, Etag, Content-Type, Content-Length, X-Nango-Signature, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "990",
+          "x-ratelimit-reset": "1779367022",
+          "etag": "W/\"13db-trLTiC/xzy456PCxkiWEG4gf57o\""
+        },
+        "hash": "8e862464874ea1c98f573ebdfc63431e2ddbc2a8",
+        "request": {
+          "params": {
+            "limit": "100",
+            "properties": "createdate,hs_lastmodifieddate"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "provider": "github",
+  "nangoIntegration": "github-relay",
+  "adapterPackage": "@relayfile/adapter-github",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "issues.opened",
+      "source": "official:https://docs.github.com/en/webhooks/webhook-events-and-payloads | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/github-app | local:relayfile-adapters/packages/github/src/webhook-normalizer.ts",
+      "payload": {
+        "action": "opened",
+        "issue": {
+          "id": 9001,
+          "number": 17,
+          "title": "Fixture issue",
+          "state": "open"
+        },
+        "repository": {
+          "name": "app",
+          "full_name": "acme/app",
+          "owner": {
+            "login": "acme"
+          }
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "title",
+          "state"
+        ],
+        "paths": [
+          "/github/repos/acme/app/issues/17__fixture-issue/meta.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "create-issue-comment",
+      "source": "official:https://docs.github.com/en/webhooks/webhook-events-and-payloads | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/github-app | local:relayfile-adapters/packages/github/src/writeback.ts",
+      "filePath": "/github/repos/acme/app/issues/17/comments/new.json",
+      "content": {
+        "body": "Fixture comment"
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/repos/acme/app/issues/17/comments",
+        "bodyIncludes": {
+          "body": "Fixture comment"
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "Issue",
+      "syncName": "fetch-open-issues",
+      "source": "official:https://docs.github.com/en/webhooks/webhook-events-and-payloads | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/github-app | local:cloud/nango-integrations/github-relay/syncs/fetch-open-issues.ts",
+      "records": [
+        {
+          "id": 9001,
+          "number": 17,
+          "title": "Fixture issue",
+          "state": "open",
+          "body": "Fixture body",
+          "labels": [],
+          "assignees": [],
+          "url": "https://github.com/acme/app/issues/17",
+          "created_at": "2026-06-01T10:00:00Z",
+          "updated_at": "2026-06-01T10:15:00Z"
+        }
+      ],
+      "expect": [
+        {
+          "path": "/github/repos/acme/app/issues/17__fixture-issue/meta.json",
+          "contentIncludes": [
+            "title",
+            "state"
+          ]
+        }
+      ]
+    }
+  ]
+}

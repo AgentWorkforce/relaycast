@@ -1,0 +1,32 @@
+{
+  "name": "relaycast-cloud",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node ../../node_modules/vitest/vitest.mjs run",
+    "test:watch": "node ../../node_modules/vitest/vitest.mjs",
+    "test:integration": "node ../../node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit"
+  },
+  "dependencies": {
+    "@relaycast/a2a": "5.0.5",
+    "@relaycast/engine": "5.0.5",
+    "@relaycast/types": "5.0.5",
+    "aws4fetch": "^1.0.20",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.11.9",
+    "posthog-node": "^5.29.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.5",
+    "@cloudflare/workers-types": "^4.20260217.0",
+    "@types/node": "^25.2.1",
+    "@types/supertest": "^6.0.3",
+    "better-sqlite3": "^11.10.0",
+    "supertest": "^7.2.2",
+    "vitest": "^4.0.18",
+    "wrangler": "^4.91.0"
+  }
+}

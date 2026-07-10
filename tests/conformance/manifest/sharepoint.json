@@ -1,0 +1,14 @@
+{
+  "provider": "sharepoint",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/sharepoint",
+  "capabilities": {
+    "webhook": false,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@cloud/acceptance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node ../../node_modules/vitest/vitest.mjs run --config ./vitest.config.ts",
+    "test:auth": "node ../../node_modules/vitest/vitest.mjs run --config ./vitest.config.ts src/auth",
+    "test:runtime": "node ../../node_modules/vitest/vitest.mjs run --config ./vitest.config.ts src/runtime",
+    "coverage:routes": "node ../../scripts/check-route-coverage.mjs",
+    "coverage:routes:runtime": "node ../../scripts/check-route-coverage.mjs --prefix=/api/v1/ricky,/api/v1/workflows,/api/v1/agents,/api/v1/cloud-agents,/api/v1/sandboxes,/api/v1/workers,/api/v1/deploy --tests-prefix=runtime"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "provider": "mixpanel",
+  "nangoIntegration": null,
+  "adapterPackage": "@relayfile/adapter-mixpanel",
+  "capabilities": {
+    "webhook": true,
+    "writeback": "adapter-only",
+    "sync": false
+  },
+  "inbound": [
+    {
+      "event": "cohort.updated",
+      "source": "official:https://developer.mixpanel.com/reference/overview | nango-template:none-found-in-NangoHQ/integration-templates | local:relayfile-adapters/packages/mixpanel/src/webhook-normalizer.ts",
+      "payload": {
+        "event": "cohort.updated",
+        "properties": {
+          "id": "event_123",
+          "cohort_id": "cohort_1"
+        }
+      },
+      "expect": {
+        "contentIncludes": [
+          "id"
+        ],
+        "paths": [
+          "/mixpanel/events/event_123.json"
+        ]
+      }
+    }
+  ],
+  "writeback": [],
+  "sync": [],
+  "writebackScope": "not-cloud-bridged"
+}

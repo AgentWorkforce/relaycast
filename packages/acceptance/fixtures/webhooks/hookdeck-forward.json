@@ -1,0 +1,20 @@
+{
+  "from": "github",
+  "type": "forward",
+  "provider_config_key": "github-relay",
+  "connection_id": "conn_[REDACTED:8]",
+  "payload": {
+    "request": {
+      "headers": {
+        "x-github-event": "installation",
+        "x-github-delivery": "delivery-[REDACTED:8]"
+      },
+      "body": {
+        "action": "created",
+        "installation": {
+          "id": "[REDACTED:6]"
+        }
+      }
+    }
+  }
+}

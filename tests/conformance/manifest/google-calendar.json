@@ -1,0 +1,84 @@
+{
+  "provider": "google-calendar",
+  "nangoIntegration": "google-calendar-relay",
+  "adapterPackage": "@relayfile/adapter-google-calendar",
+  "capabilities": {
+    "webhook": true,
+    "writeback": true,
+    "sync": true
+  },
+  "inbound": [
+    {
+      "event": "calendar.events.changed",
+      "source": "official:https://developers.google.com/calendar/api/v3/reference | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-calendar | local:relayfile-adapters/packages/google-calendar/src/webhook-normalizer.ts",
+      "payload": {
+        "kind": "api#channel",
+        "id": "chan_123",
+        "resourceId": "res_123",
+        "resourceUri": "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "token": "calendarId=primary"
+      },
+      "expect": {
+        "triggersSync": [
+          {
+            "providerConfigKey": "google-calendar-relay",
+            "syncName": "fetch-events"
+          }
+        ]
+      }
+    }
+  ],
+  "writeback": [
+    {
+      "action": "create-event",
+      "source": "official:https://developers.google.com/calendar/api/v3/reference/events/insert | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-calendar | local:relayfile-adapters/packages/google-calendar/src/writeback.ts",
+      "filePath": "/google-calendar/calendars/primary/events/new.json",
+      "content": {
+        "summary": "Design review",
+        "start": {
+          "dateTime": "2026-06-12T10:00:00Z"
+        },
+        "end": {
+          "dateTime": "2026-06-12T10:30:00Z"
+        }
+      },
+      "expectCall": {
+        "method": "POST",
+        "endpointMatches": "/calendar/v3/calendars/primary/events",
+        "bodyIncludes": {
+          "summary": "Design review"
+        }
+      }
+    }
+  ],
+  "sync": [
+    {
+      "model": "GoogleCalendarEvent",
+      "syncName": "fetch-events",
+      "source": "official:https://developers.google.com/calendar/api/v3/reference | nango-template:https://github.com/NangoHQ/integration-templates/tree/main/integrations/google-calendar | local:cloud/nango-integrations/google-calendar-relay/syncs/fetch-events.ts",
+      "records": [
+        {
+          "id": "primary:evt_123",
+          "calendarId": "primary",
+          "eventId": "evt_123",
+          "summary": "Design review",
+          "start": {
+            "dateTime": "2026-06-12T10:00:00Z"
+          },
+          "end": {
+            "dateTime": "2026-06-12T10:30:00Z"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "/google-calendar/calendars/primary/events/evt_123.json",
+          "contentIncludes": [
+            "summary",
+            "start"
+          ]
+        }
+      ]
+    }
+  ]
+}

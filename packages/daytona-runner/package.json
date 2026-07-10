@@ -1,0 +1,41 @@
+{
+  "name": "@cloud/daytona-runner",
+  "version": "3.0.15",
+  "description": "Daytona-backed WorkflowRuntime adapter for Cloud deploy workflows.",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/cloud",
+    "directory": "packages/daytona-runner"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@daytonaio/sdk": ">=0.180.0 <0.181.0"
+  },
+  "devDependencies": {
+    "@daytonaio/sdk": "0.180.0",
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}

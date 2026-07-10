@@ -1,0 +1,17 @@
+{
+  "name": "proactive-runtime-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloud/core": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250312.0",
+    "@types/node": "^25.5.0",
+    "typescript": "^5.7.0"
+  }
+}

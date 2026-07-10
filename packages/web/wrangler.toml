@@ -1,0 +1,96 @@
+# Staging-only Wrangler config for local `wrangler dev` smoke tests and as
+# binding documentation during the Cloudflare web-worker migration.
+#
+# Real deployed staging/prod infrastructure is managed declaratively by
+# `sst.cloudflare.Worker` in `infra/web-worker.ts`. The `compatibility_flags`
+# and bindings in *this* file are NOT what runs in staging/prod — the SST
+# transform owns that. Keep the two surfaces in sync when changing either.
+#
+# The `<set by ...>` placeholders below are documentation, not valid IDs.
+# `wrangler dev` will refuse to start until the binding placeholders are
+# replaced with real KV namespace IDs (run `wrangler kv:namespace list` in the
+# configured CF account, or pull them from the deployed staging stack outputs).
+#
+# Wrangler does not support a checked-in `[secrets]` block. Secrets such as
+# `AUTH_SESSION_SECRET`, `NANGO_SECRET_KEY`, `GOOGLE_CLIENT_SECRET`,
+# `WEBHOOK_MSD_BACKEND_TOKEN`, and similar SST-linked values must be supplied
+# out of band via `wrangler secret put` / `.dev.vars` when doing local Worker
+# smoke tests.
+
+name = "cloud-web-staging"
+main = ".open-next/worker.js"
+compatibility_date = "2026-05-14"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "cloud-web-staging"
+
+[[kv_namespaces]]
+binding = "ROUTER_CONFIG"
+id = "<set by infra/webhook-worker.ts>"
+
+[[kv_namespaces]]
+binding = "WORKFLOW_KV"
+id = "<reserved-for-phase3-spec; no Cloudflare workflow KV is currently linked>"
+
+[[r2_buckets]]
+binding = "TRAFFIC_RECORDER"
+bucket_name = "traffic-recorder-staging"
+
+[[r2_buckets]]
+binding = "WORKFLOW_STORAGE_R2"
+bucket_name = "workflow-storage-staging"
+
+[[queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "webhook-events-staging"
+
+# `GithubCloneQueue` and `WorkflowLaunchQueue` are AWS SQS queues exposed to the app
+# through SST `Resource.*.url` bindings, not Cloudflare Queues, so there is no
+# `[[queues.producers]]` entry for them here.
+#
+# WorkflowStorage is R2 in the Cloudflare Worker. The legacy S3 bucket vars stay
+# for local/Lambda fallback paths while the Worker uses WORKFLOW_STORAGE_R2.
+
+[vars]
+NEXT_PUBLIC_APP_URL = "https://staging.agentrelay.com/cloud"
+NEXT_PUBLIC_POSTHOG_HOST = "https://i.agentrelay.com"
+NEXT_PUBLIC_POSTHOG_KEY = ""
+NEXT_PUBLIC_SST_STAGE = "staging"
+# Non-prod session cookie is host-scoped (no SESSION_COOKIE_DOMAIN) so a staging
+# session can't bleed into production on agentrelay.com.
+RelayauthUrl = "https://staging-api.relayauth.dev"
+RELAYAUTH_URL = "https://staging-api.relayauth.dev"
+WEB_RELAYAUTH_URL = "https://staging-api.relayauth.dev"
+RelayfileUrl = "https://staging-api.relayfile.dev"
+RELAYFILE_URL = "https://staging-api.relayfile.dev"
+RELAY_LLM_PROXY = "https://staging-llm-proxy.relayauth.dev"
+RELAY_LLM_PROXY_URL = "https://staging-llm-proxy.relayauth.dev"
+RELAYCRON_URL = "https://staging-api.relaycron.dev"
+CREDENTIAL_PROXY_URL = "https://staging-llm-proxy.relayauth.dev"
+SAGE_WEBHOOK_URL = "https://staging.sage.agentrelay.com"
+S3_BUCKET = "<set by SST WorkflowStorage bucket output>"
+WORKFLOW_STORAGE_BUCKET = "<set by SST WorkflowStorage bucket output>"
+WORKFLOW_STORAGE_BACKEND = "r2"
+WORKFLOW_STORAGE_R2_BUCKET = "workflow-storage-staging"
+WEBHOOK_MSD_BACKEND_URL = ""

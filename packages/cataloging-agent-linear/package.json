@@ -1,0 +1,28 @@
+{
+  "name": "@cloud/cataloging-agent-linear",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "npx tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloud/cataloging-agent-core": "*",
+    "@relayauth/sdk": "^0.2.15",
+    "@relayfile/adapter-linear": "^0.3.22",
+    "@relayfile/core": "^0.10.9",
+    "@relayfile/sdk": "^0.10.9",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250312.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
+  }
+}
