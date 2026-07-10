@@ -76,6 +76,9 @@ export const agents = sqliteTable(
     sessionRef: text('session_ref'),
     originNodeId: text('origin_node_id').references((): AnySQLiteColumn => nodes.id, { onDelete: 'set null' }),
     deliveryAckSeq: integer('delivery_ack_seq').notNull().default(0),
+    // Durable allocation high-water. Unlike MAX(deliveries.seq), this survives
+    // settled-delivery pruning and message-retention cascades.
+    deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },

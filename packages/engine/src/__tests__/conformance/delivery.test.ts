@@ -14,6 +14,7 @@ import { agents, deliveries } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
+import { pruneExpired } from '../../engine/retention.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 
@@ -639,6 +640,66 @@ describe('durable delivery api', () => {
     }));
     await new Promise((r) => setTimeout(r, 50));
     expect(reconnected.sock.ofType('deliver')).toHaveLength(0);
+  });
+
+  it('replays and acknowledges the next sequence after settled history is pruned offline', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-node-pruned-history');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'first' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(node.sock, 'message.created').map((frame) => frame.seq)).toEqual([1]);
+    });
+
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 1,
+    }));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ createdAt: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000) })
+      .where(eq(deliveries.agentId, bob.agentId));
+    expect((await pruneExpired(stack.runtime.deps.db)).deliveries).toBe(1);
+
+    await node.handle.handleClose();
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'second while offline' }),
+    });
+    expect(second.status).toBe(201);
+
+    const reconnected = await enrollAndAttachNode(ws, { id: node.id, name: node.name });
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: 'bob', session_ref: 'sess-bob' }],
+    }));
+    await waitForAssertion(() => {
+      expect(deliverFramesOfType(reconnected.sock, 'message.created').map((frame) => frame.seq)).toEqual([2]);
+    });
+
+    await reconnected.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'bob',
+      up_to_seq: 2,
+    }));
+    const [recipient] = await stack.runtime.deps.db
+      .select({ ackSeq: agents.deliveryAckSeq, deliverySeq: agents.deliverySeq })
+      .from(agents)
+      .where(eq(agents.id, bob.agentId));
+    expect(recipient).toEqual({ ackSeq: 2, deliverySeq: 2 });
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
   });
 
   it('redelivers a channel message with the same deliver payload after broker death/reconnect', async () => {

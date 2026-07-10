@@ -1,0 +1,57 @@
+{
+  "id": "traj_3r3h6jisvzaq",
+  "version": 1,
+  "task": {
+    "title": "Keep delivery sequences monotonic across retention",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#252"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-10T14:00:44.444Z",
+  "completedAt": "2026-07-10T14:12:04.064Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-10T14:11:06.992Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_6kt0zjj30fer",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-10T14:11:06.992Z",
+      "endedAt": "2026-07-10T14:12:04.064Z",
+      "events": [
+        {
+          "ts": 1783692666993,
+          "type": "decision",
+          "content": "Store delivery sequence high-water on agents and advance it with an AFTER INSERT trigger: Store delivery sequence high-water on agents and advance it with an AFTER INSERT trigger",
+          "raw": {
+            "question": "Store delivery sequence high-water on agents and advance it with an AFTER INSERT trigger",
+            "chosen": "Store delivery sequence high-water on agents and advance it with an AFTER INSERT trigger",
+            "alternatives": [],
+            "reasoning": "A persistent counter survives both explicit delivery pruning and message-cascade deletion. The trigger makes allocation and advancement one SQLite statement across Node, D1 batch, and bare sequential adapters; migration repair renumbers all active rows for affected agents above max(ACK, existing seq) in FIFO order."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Fixed Relaycast #252 with a durable per-agent delivery sequence high-water, atomic trigger-backed allocation, migration repair for replay-hidden active rows, and regression coverage for retention, cascades, offline replay/ACK, migration backfill/FIFO repair, and concurrency",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "e905f3acfb790279ee2eb964cf711f29de87f718",
+    "endRef": "e905f3acfb790279ee2eb964cf711f29de87f718"
+  }
+}
