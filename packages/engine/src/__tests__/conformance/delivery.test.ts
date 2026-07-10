@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
 import {
   makeNodeStack,
   createWorkspace,
@@ -86,17 +87,28 @@ describe('durable delivery api', () => {
 
   async function enrollAndAttachNode(
     ws: { workspaceKey: string; workspaceId: string },
-    opts: { id?: string; name?: string } = {},
+    opts: { id?: string; name?: string; cursorHandshake?: boolean } = {},
   ) {
     const id = opts.id ?? 'node_mailbox';
     const name = opts.name ?? 'mailbox-node';
+    // Preserve the legacy fixture shape for existing conformance cases. The
+    // cursor case uses current structured capabilities because it exercises
+    // capability negotiation explicitly.
+    const capabilities = opts.cursorHandshake
+      ? [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ]
+      : ['spawn:claude'];
     const create = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({
         node_id: id,
         name,
-        capabilities: ['spawn:claude'],
+        capabilities: capabilities.map((capability) => (
+          typeof capability === 'string' ? capability : capability.name
+        )),
         max_agents: 4,
         tags: ['mailbox-test'],
         version: 'test-node',
@@ -111,7 +123,7 @@ describe('durable delivery api', () => {
       type: 'node.register',
       name,
       node_id: id,
-      capabilities: ['spawn:claude'],
+      capabilities,
       max_agents: 4,
       tags: ['mailbox-test'],
       version: 'test-node',
@@ -142,7 +154,7 @@ describe('durable delivery api', () => {
     // relay broker's node_control client consumes): { ok, data: {agent_id, token, name} }.
     const reply = node.sock.ofType('reply').at(-1) as {
       ok: boolean;
-      data: { agent_id: string; token: string; name?: string };
+      data: { agent_id: string; token: string; name?: string; delivery_ack_seq?: number };
     };
     expect(reply?.ok).toBe(true);
     expect(reply.data).toMatchObject({ name });
@@ -536,6 +548,82 @@ describe('durable delivery api', () => {
     expect(((await inboxAfter.json()) as {
       data: { unread_channels: Array<{ channel_name: string; unread_count: number }> };
     }).data.unread_channels).toHaveLength(0);
+  });
+
+  it('returns the authoritative cursor before resumed delivery only to negotiated brokers', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-handshake');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const initialReply = node.sock.ofType('reply').at(-1) as {
+      data: { delivery_ack_seq?: number };
+    };
+    expect(initialReply.data.delivery_ack_seq).toBe(0);
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before broker restart' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: bob.name,
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after broker restart' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    resumed.sock.received.length = 0;
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob',
+      type: 'agent.register',
+      name: bob.name,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob',
+    );
+    const deliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.seq === 2,
+    );
+    expect(replyIndex).toBeGreaterThanOrEqual(0);
+    expect(resumed.sock.received[replyIndex]).toMatchObject({
+      data: { agent_id: bob.agentId, delivery_ack_seq: 1 },
+    });
+    expect(deliveryIndex).toBeGreaterThan(replyIndex);
+
+    const legacy = await enrollAndAttachNode(ws, {
+      id: 'node_legacy_cursor',
+      name: 'legacy-cursor-node',
+    });
+    await legacy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'legacy-register',
+      type: 'agent.register',
+      name: 'legacy-worker',
+    }));
+    const legacyReply = legacy.sock.received.find(
+      (frame) => frame.type === 'reply' && frame.id === 'legacy-register',
+    ) as { data: Record<string, unknown> };
+    expect(legacyReply.data).not.toHaveProperty('delivery_ack_seq');
   });
 
   it('honors recorded route metadata when live binding changes before fanout', async () => {

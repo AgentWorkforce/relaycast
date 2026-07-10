@@ -10,7 +10,10 @@ import type {
   FleetCapability,
   AgentRegisterReplyData,
 } from '@relaycast/types';
-import { parseFleetBrokerToRelaycastMessage } from '@relaycast/types';
+import {
+  FLEET_DELIVERY_CURSOR_CAPABILITY,
+  parseFleetBrokerToRelaycastMessage,
+} from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -1032,6 +1035,17 @@ export async function registerAgentViaNode(
       .from(nodes)
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+    const [provider] = await tx
+      .select({ capabilities: nodeProviders.capabilities })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      ));
+    const cursorHandshake = provider?.capabilities?.some(
+      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+    ) ?? false;
 
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
@@ -1115,6 +1129,7 @@ export async function registerAgentViaNode(
       agent_id: result.id,
       name: result.name,
       token,
+      ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
     };
   });
 }
@@ -1489,14 +1504,16 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // and parses `data` as {agent_id, token, name} with deny_unknown_fields).
         // A bare `agent.registered` frame leaves the token-authority handshake
         // hanging until the 30s timeout, so spawn never completes. Reply in the
-        // shape the shipped broker consumes; the broker already holds the
-        // invocation_id/session_ref it sent, so only the minted identity is echoed.
+        // shape the shipped broker consumes. Cursor-aware brokers advertise a
+        // node capability and receive the authoritative cumulative cursor before
+        // the pending-delivery drain below; legacy strict parsers receive the
+        // original three-field shape.
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
           type: 'reply',
           ok: true,
-          data: { agent_id: registered.agent_id, token: registered.token, name: registered.name },
+          data: registered,
         });
         await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
         return;

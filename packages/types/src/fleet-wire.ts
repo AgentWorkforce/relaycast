@@ -25,6 +25,13 @@ export type FleetWireVersion = z.infer<typeof FleetWireVersionSchema>;
 export const FleetDeliveryModeSchema = z.enum(['wait', 'steer']);
 export type FleetDeliveryMode = z.infer<typeof FleetDeliveryModeSchema>;
 
+/**
+ * Negotiates an authoritative delivery cursor in `agent.register` replies.
+ * It is a capacity capability so older engines never materialize it as an
+ * invokable action.
+ */
+export const FLEET_DELIVERY_CURSOR_CAPABILITY = 'relay:delivery-cursor-v1';
+
 const FleetWireEnvelopeFields = {
   v: FleetWireVersionSchema,
 } as const;
@@ -266,6 +273,8 @@ export const AgentRegisterReplyDataSchema = z
     agent_id: z.string(),
     token: z.string(),
     name: z.string().optional(),
+    // Returned only to nodes that advertise FLEET_DELIVERY_CURSOR_CAPABILITY.
+    delivery_ack_seq: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema>;

@@ -37,6 +37,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `FLEET_DELIVERY_CURSOR_CAPABILITY` and optional `AgentRegisterReplyData.delivery_ack_seq` define the negotiated broker-restart cursor handshake while retaining the legacy reply shape.
 - `DeliverySchema` gains fleet location and lifecycle fields: `seq`,
   `location_type`, `location_node_id`, `expires_at`, `delivered_at`, `acked_at`,
   and `dead_lettered_at`.
@@ -46,7 +47,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `delivery.ack`, `action.invoke`/`action.result`, `inventory.sync`, `deliver`,
   `ping`, and the `reply`/`error` correlation frames, plus `FleetCapability`
   (`{ name, kind?, metadata? }`), `FleetWireJsonValue`, and
-  `AgentRegisterReplyData` (`{ agent_id, token, name? }`). Field casing is
+  `AgentRegisterReplyData` (`{ agent_id, token, name?, delivery_ack_seq? }`). Field casing is
   snake_case throughout.
 
 ## [3.1.1]

@@ -479,6 +479,15 @@ also call `handleNodeReconnect` for those same frames. If an adapter owns
 `POST /v1/agents/disconnect` outside the engine router, call `handleAgentDisconnect`
 from `@relaycast/engine/agent-disconnect` before presence cleanup so node-hosted
 agents follow the same deregistration path as an `agent.deregister` frame.
+
+Broker nodes can negotiate restart-safe delivery cursor recovery by including
+`{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every
+`node.register`. Relaycast then adds the authoritative `delivery_ack_seq` for the
+returned `agent_id` to each successful `agent.register` reply and sends that reply
+before replaying pending deliveries. Nodes must accept only the next consecutive
+sequence. Relaycast omits the field for nodes that do not advertise the capability,
+preserving the legacy strict reply shape.
+
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and
 `sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
