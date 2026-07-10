@@ -30,6 +30,7 @@ import {
   removeProvider,
   upsertProvider,
 } from './nodeProvider.js';
+import { serializeNodeOp } from './nodeLock.js';
 import {
   completeNodeInvocation,
   dispatchCapacitySpawn,
@@ -508,21 +509,26 @@ export async function handleProviderDisconnect(
   providerName: string,
   hasRemainingConnections: boolean,
 ) {
-  if (!hasRemainingConnections) {
-    await markNodeOffline(db, registry, workspaceId, nodeId);
-    return;
-  }
-  await markProviderOffline(db, workspaceId, nodeId, providerName);
-  await db
-    .update(agents)
-    .set({ status: 'offline', lastSeen: new Date() })
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-      eq(agents.providerName, providerName),
-    ));
-  await recomputeNodeAggregate(db, workspaceId, nodeId);
+  // Serialized with node-control operations so a teardown can't race a
+  // concurrent register's provider upsert / aggregate recompute (or, on
+  // better-sqlite3, deadlock its isolated transaction).
+  return serializeNodeOp(workspaceId, nodeId, async () => {
+    if (!hasRemainingConnections) {
+      await markNodeOffline(db, registry, workspaceId, nodeId);
+      return;
+    }
+    await markProviderOffline(db, workspaceId, nodeId, providerName);
+    await db
+      .update(agents)
+      .set({ status: 'offline', lastSeen: new Date() })
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+        eq(agents.providerName, providerName),
+      ));
+    await recomputeNodeAggregate(db, workspaceId, nodeId);
+  });
 }
 
 /**
@@ -566,10 +572,22 @@ export async function deregisterProvider(
 export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry): Promise<number> {
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
   const stale = rows.filter((node) => !isNodeLive(node));
+  let swept = 0;
   for (const node of stale) {
-    await markNodeOffline(db, registry, node.workspaceId, node.id);
+    const offlined = await serializeNodeOp(node.workspaceId, node.id, async () => {
+      // Re-read under the lock: a heartbeat/register queued ahead of this sweep
+      // may have refreshed the node since the stale snapshot was taken.
+      const [current] = await db
+        .select()
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, node.workspaceId), eq(nodes.id, node.id)));
+      if (!current || current.status !== 'online' || isNodeLive(current)) return false;
+      await markNodeOffline(db, registry, node.workspaceId, node.id);
+      return true;
+    });
+    if (offlined) swept++;
   }
-  return stale.length;
+  return swept;
 }
 
 async function autoJoinGeneral(db: Db, workspaceId: string, agentId: string) {
@@ -1366,6 +1384,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // (heartbeat, deregister, agent.register, results) resolve it from the
   // connection. Absent a bound provider (or when driven without a registry
   // connection), fall back to the synthetic `default` provider.
+  //
+  // Resolve this at frame ARRIVAL, before entering the per-node queue: if the
+  // socket closes while this frame is queued, `onNodeConnectionClose` clears the
+  // connection's provider binding synchronously, and a lookup inside the callback
+  // would then fall back to `default` and act on the wrong provider.
   const boundProviderName = args.connectionId
     ? args.registry.providerNameForConnection?.(args.connectionId)
     : undefined;
@@ -1376,6 +1399,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     ?? ('provider' in message && message.provider ? message.provider.name : undefined)
     ?? DEFAULT_PROVIDER_NAME;
 
+  // Serialize all control operations for a node so a concurrent register and
+  // teardown (or two providers attaching at once) can't race the duplicate
+  // check, the provider-row upsert, or the aggregate recompute.
+  return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
     switch (message.type) {
       case 'node.register': {
@@ -1514,4 +1541,5 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       message: error.message,
     });
   }
+  });
 }
