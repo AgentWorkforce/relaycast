@@ -81,8 +81,10 @@ describe('provider attach race', () => {
     // that would drop a recompute). Serialization means it never fires here — so
     // assert no teardown error is logged across the loop.
     const teardownErrors: unknown[][] = [];
+    const originalConsoleError = console.error.bind(console);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
       if (typeof args[0] === 'string' && args[0].startsWith('[node.teardown]')) teardownErrors.push(args);
+      else originalConsoleError(...args); // don't swallow unrelated errors
     });
     try {
       for (let i = 0; i < 25; i++) {
