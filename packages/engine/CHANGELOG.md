@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Node control logs a rejected `node.register`/`node.heartbeat` (e.g. `node_name_conflict`, a UNIQUE violation) at warn level with workspace/node/provider/code context, so a node left half-registered by a rejected message is no longer invisible server-side.
+
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.
 - Split engine internals into focused modules for background jobs, migrations, node adapters, websocket handling, and shared route utilities.

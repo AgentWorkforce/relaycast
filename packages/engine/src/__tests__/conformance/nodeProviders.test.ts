@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
@@ -89,6 +89,32 @@ describe('node providers', () => {
       .from(nodeProviders)
       .where(and(eq(nodeProviders.workspaceId, ws.workspaceId), eq(nodeProviders.nodeId, 'node_a')));
     expect(providers).toEqual([{ name: 'default' }]);
+  });
+
+  it('logs a rejected node-control message server-side, not only on the socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const ws = await createWorkspace(stack.app, 'np-reject-log');
+      await enrollNode(ws, 'node_a', 'alpha');
+
+      const first = attachSocket(ws.workspaceId, 'node_a');
+      await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'py', instance_id: 'i1' }, [{ name: 'run-etl', kind: 'action' }]));
+
+      // A duplicate live instance is rejected. The rejection must surface
+      // server-side too, so a half-registered node is not silent.
+      const dup = attachSocket(ws.workspaceId, 'node_a');
+      await dup.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'py', instance_id: 'i2' }, [{ name: 'run-etl', kind: 'action' }]));
+
+      expect(dup.sock.ofType('error').at(-1)).toMatchObject({ code: 'provider_instance_conflict' });
+      expect(warn).toHaveBeenCalledWith('[node.control] rejected message', expect.objectContaining({
+        type: 'node.register',
+        code: 'provider_instance_conflict',
+        workspaceId: ws.workspaceId,
+        nodeId: 'node_a',
+      }));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('attaches, replaces on reconnect, and rejects a duplicate live instance', async () => {
