@@ -198,8 +198,19 @@ export async function fireMessageTriggers(args: {
         },
       }, { nodeConnections: args.nodeConnections });
       invoked.push(row.id);
-    } catch {
-      // Trigger delivery is best-effort; message posting has already succeeded.
+    } catch (err) {
+      // Trigger delivery is best-effort — the message posting already succeeded
+      // — but swallowing the failure silently hides a broken trigger (its
+      // action is missing, has no handler, or the handling node is offline).
+      // Log it with trigger/action context so a dead trigger is diagnosable.
+      const error = err as Error & { code?: string };
+      console.warn('[trigger] action dispatch failed', {
+        triggerId: row.id,
+        actionName: row.actionName,
+        code: error.code ?? 'trigger_dispatch_failed',
+        workspaceId: args.workspaceId,
+        message: error.message,
+      });
     }
   }
 
