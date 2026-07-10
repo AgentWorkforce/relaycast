@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Provider-attach conflict honors spec §3.1: a restarted node instance (new `instance_id`) supersedes a stale binding instead of being rejected, while a genuinely live duplicate still rejects. The liveness window is ~2× the broker heartbeat cadence (24s) rather than the 45s node TTL, so a `node up` restarted after an unclean disconnect is no longer blocked for up to 45s.
+
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.
 - Split engine internals into focused modules for background jobs, migrations, node adapters, websocket handling, and shared route utilities.

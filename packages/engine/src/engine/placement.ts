@@ -10,6 +10,19 @@ type NodeRow = typeof nodes.$inferSelect;
 
 export const NODE_LIVENESS_TTL_MS = 45_000;
 
+/**
+ * Recency window for the provider-attach duplicate check — how long a provider's
+ * last frame keeps its binding "live" for the purpose of rejecting a competing
+ * instance. Set to ~2x the broker's node-control heartbeat cadence (12s; see
+ * `crates/broker/src/node_control.rs`), so a genuinely live provider (which
+ * frames at least every 12s) is always inside it, while a killed one lapses
+ * after ~2 missed beats. A restart then supersedes the stale binding instead of
+ * being blocked for the full {@link NODE_LIVENESS_TTL_MS}. Deliberately tighter
+ * than the node-liveness TTL, which governs roster/routing rather than attach
+ * arbitration.
+ */
+export const PROVIDER_ATTACH_LIVENESS_MS = 24_000;
+
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
   return (
     node.status === 'online' &&

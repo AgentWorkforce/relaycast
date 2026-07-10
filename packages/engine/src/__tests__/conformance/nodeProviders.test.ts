@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   makeNodeStack,
@@ -114,6 +114,56 @@ describe('node providers', () => {
       .from(nodeProviders)
       .where(and(eq(nodeProviders.workspaceId, ws.workspaceId), eq(nodeProviders.nodeId, 'node_a'), eq(nodeProviders.name, 'py')));
     expect(provider.instanceId).toBe('i3');
+  });
+
+  it('supersedes a stale provider binding when a fresh instance restarts after an unclean disconnect', async () => {
+    // Spec §3.1: a restart (new instance_id) supersedes a stale binding. On an
+    // UNCLEAN disconnect (kill -9 / dropped socket) the old connection is never
+    // closed, so it lingers in the registry; the restart must still take over
+    // once the old instance stops framing — not be blocked for the full node
+    // TTL. Drive Date.now so the incumbent's last frame ages past the
+    // attach-liveness window (24s) but within the 45s node TTL.
+    let nowMs = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const ws = await createWorkspace(stack.app, 'np-stale-supersede');
+      await enrollNode(ws, 'node_a', 'alpha');
+
+      const first = attachSocket(ws.workspaceId, 'node_a');
+      await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
+      expect(first.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
+
+      // Unclean disconnect: no handleClose. Time advances past the 24s window.
+      nowMs += 30_000;
+
+      const restart = attachSocket(ws.workspaceId, 'node_a');
+      await restart.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-2' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
+
+      expect(restart.sock.ofType('error')).toHaveLength(0);
+      expect(restart.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
+      const [row] = await stack.runtime.handle.db
+        .select({ caps: nodes.capabilities })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+      expect((row?.caps ?? []).map((c) => c.name)).toEqual(['spawn:claude']);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('still rejects a different instance while the incumbent is actively heartbeating', async () => {
+    const ws = await createWorkspace(stack.app, 'np-live-dup');
+    await enrollNode(ws, 'node_a', 'alpha');
+
+    const first = attachSocket(ws.workspaceId, 'node_a');
+    await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
+    expect(first.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
+
+    // A second, different instance registers immediately — the incumbent is
+    // still live (framed just now), so this is a genuine duplicate and rejects.
+    const dup = attachSocket(ws.workspaceId, 'node_a');
+    await dup.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-2' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
+    expect(dup.sock.ofType('error').at(-1)).toMatchObject({ code: 'provider_instance_conflict' });
   });
 
   it('rejects a second provider registering an action another provider already owns on the node', async () => {
