@@ -160,7 +160,9 @@ async function fetchAction(
       ),
     );
   return rows.sort(
-    (a, b) => actionResolutionRank(a) - actionResolutionRank(b) || a.id.localeCompare(b.id),
+    (a, b) =>
+      actionResolutionRank(a) - actionResolutionRank(b) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   )[0] ?? null;
 }
 

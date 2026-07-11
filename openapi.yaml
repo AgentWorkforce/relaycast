@@ -4065,6 +4065,12 @@ paths:
                   nullable: true
                 action_name:
                   type: string
+                  description: >-
+                    Name of the action invoked on a match. Resolution prefers agent-hosted
+                    actions, then node actions with workspace-global aliases, then plain
+                    node-scoped actions. A node-scoped match dispatches to its owning node.
+                    Ties select one action deterministically by action ID; triggers do not
+                    fan out.
                 enabled:
                   type: boolean
       responses:
@@ -4148,6 +4154,12 @@ paths:
                   nullable: true
                 action_name:
                   type: string
+                  description: >-
+                    Name of the action invoked on a match. Resolution prefers agent-hosted
+                    actions, then node actions with workspace-global aliases, then plain
+                    node-scoped actions. A node-scoped match dispatches to its owning node.
+                    Ties select one action deterministically by action ID; triggers do not
+                    fan out.
                 enabled:
                   type: boolean
       responses:

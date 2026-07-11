@@ -491,6 +491,13 @@ workspace observers, and subscriptions. Action discovery is filtered by `availab
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
 
+Message triggers created with `POST /triggers` resolve `action_name` in this order:
+agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped
+actions. A node-scoped match dispatches to its owning node. Ties select one action
+deterministically by action ID; triggers do not fan out.
+Direct `POST /actions/:name/invoke` calls remain limited to agent-hosted and
+workspace-global actions; use the node-addressed endpoint for a specific node action.
+
 Inbound webhooks created with `POST /webhooks` return `{ url, token }`. External callers
 must post to `url` with `Authorization: Bearer <token>` and may send either
 `{ "message": "...", "author": "..." }` or the existing `{ "text": "...", "source": "..." }`

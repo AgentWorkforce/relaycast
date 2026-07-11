@@ -10,6 +10,17 @@ type NodeRow = typeof nodes.$inferSelect;
 
 export const NODE_LIVENESS_TTL_MS = 45_000;
 
+/**
+ * Recency window for the provider-attach duplicate check — how long a provider's
+ * last frame keeps its binding "live" for the purpose of rejecting a competing
+ * instance. The longest built-in node heartbeat cadence is 30 seconds; five
+ * seconds of scheduling/network slack keeps those live connections inside the
+ * window. A killed instance stops framing, so a restart can still supersede its
+ * stale binding before the full {@link NODE_LIVENESS_TTL_MS}, which governs
+ * roster/routing rather than attach arbitration.
+ */
+export const PROVIDER_ATTACH_LIVENESS_MS = 35_000;
+
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
   return (
     node.status === 'online' &&
