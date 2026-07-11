@@ -1,0 +1,125 @@
+{
+  "id": "traj_t3db89jnv7nr",
+  "version": 1,
+  "task": {
+    "title": "Harden cursor delivery readiness and provider inventory isolation",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#254-review"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-11T12:43:24.012Z",
+  "completedAt": "2026-07-11T13:09:21.431Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-11T12:47:27.620Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_rm5s2v6d5fzj",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-11T12:47:27.620Z",
+      "endedAt": "2026-07-11T13:09:21.431Z",
+      "events": [
+        {
+          "ts": 1783774047621,
+          "type": "decision",
+          "content": "Track delivery readiness on each active provider connection: Track delivery readiness on each active provider connection",
+          "raw": {
+            "question": "Track delivery readiness on each active provider connection",
+            "chosen": "Track delivery readiness on each active provider connection",
+            "alternatives": [],
+            "reasoning": "Query-time replay scoping does not stop concurrent live fanout. The registry must gate positive-sequence deliver frames until the cursor reply is sent, with an immediate mode for legacy providers and an identity set for negotiated providers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783774048169,
+          "type": "decision",
+          "content": "Persist the invocation's dispatched provider: Persist the invocation's dispatched provider",
+          "raw": {
+            "question": "Persist the invocation's dispatched provider",
+            "chosen": "Persist the invocation's dispatched provider",
+            "alternatives": [],
+            "reasoning": "Provider-scoped inventory cannot safely reschedule node invocations from node_id alone. Recording the dispatch provider makes inventory reconciliation exact for action, capacity, and agent-hosted invocations."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783775054314,
+          "type": "decision",
+          "content": "Backfill dispatched providers from node actions or their handler agents: Backfill dispatched providers from node actions or their handler agents",
+          "raw": {
+            "question": "Backfill dispatched providers from node actions or their handler agents",
+            "chosen": "Backfill dispatched providers from node actions or their handler agents",
+            "alternatives": [],
+            "reasoning": "Inventory reconciliation is provider-scoped, so defaulting an agent-hosted named-provider invocation would let the wrong provider reconcile it; native legacy dispatches retain the synthetic default fallback."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783775059749,
+          "type": "reflection",
+          "content": "Review fixes now cover connection-scoped readiness for durable and ephemeral delivery, provider-owned inventory reconciliation, canonical agent identity validation, and provider-persistent invocation dispatch. Focused conformance, migration, atomicity, typecheck, lint, build, and the full 436-test engine suite are green before the final review pass.",
+          "raw": {
+            "focalPoints": [
+              "delivery-ordering",
+              "provider-isolation",
+              "migration-compatibility"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:delivery-ordering",
+            "focal:provider-isolation",
+            "focal:migration-compatibility",
+            "confidence:0.9"
+          ]
+        },
+        {
+          "ts": 1783775353073,
+          "type": "decision",
+          "content": "Authorize node control mutations by provider as well as node: Authorize node control mutations by provider as well as node",
+          "raw": {
+            "question": "Authorize node control mutations by provider as well as node",
+            "chosen": "Authorize node control mutations by provider as well as node",
+            "alternatives": [],
+            "reasoning": "A multi-provider node shares a node credential and transport surface, so node ID alone cannot authorize action results or cumulative delivery acknowledgements; the bound provider must own the invocation or agent."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783775356572,
+          "type": "decision",
+          "content": "Leave historically ambiguous multi-provider invocations unclaimed: Leave historically ambiguous multi-provider invocations unclaimed",
+          "raw": {
+            "question": "Leave historically ambiguous multi-provider invocations unclaimed",
+            "chosen": "Leave historically ambiguous multi-provider invocations unclaimed",
+            "alternatives": [],
+            "reasoning": "When migration evidence cannot identify a unique provider, NULL prevents the wrong provider inventory from completing or rescheduling the invocation; the global timeout sweep remains the conservative recovery path."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Hardened cursor-aware broker recovery with connection-scoped delivery readiness, provider-scoped inventory reconciliation, canonical agent validation, provider-persistent invocation dispatch and migration inference, and provider authorization for results and acknowledgements. Added cross-provider, live/seq-zero gate, compatibility, identity, and migration regression coverage; focused 108 tests and full 437 engine tests pass with typecheck, lint, and build.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "8e4776b941d9622890b80c73e0002c7818b232a4",
+    "endRef": "8e4776b941d9622890b80c73e0002c7818b232a4"
+  }
+}

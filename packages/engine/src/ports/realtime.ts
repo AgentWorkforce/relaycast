@@ -119,6 +119,36 @@ export interface NodeConnectionRegistry {
     connectionId: string,
   ): void;
 
+  /**
+   * Configure durable-delivery readiness for the active provider connection.
+   * Cursor-negotiated connections start agent-scoped with no ready identities;
+   * legacy connections are immediately ready for every hosted agent.
+   */
+  setProviderDeliveryReadiness?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId: string | undefined,
+    mode: 'immediate' | 'agent_scoped',
+  ): void;
+
+  /** Mark identities ready after their cursor-bearing reply is on the socket. */
+  markProviderAgentsDeliveryReady?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId: string | undefined,
+    agentIds: readonly string[],
+  ): void;
+
+  /** Whether the current provider connection may receive durable frames for an identity. */
+  isProviderAgentDeliveryReady?(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    agentId: string,
+  ): boolean;
+
   /** Drop a provider's attachment (provider-scoped deregister / prune). */
   detachProvider(workspaceId: string, nodeId: string, providerName: string): void;
 
@@ -132,4 +162,15 @@ export interface NodeConnectionRegistry {
    * Implementations serialize concurrent drains per node.
    */
   drainNode(workspaceId: string, nodeId: string): Promise<void>;
+}
+
+/** Registries without cursor-readiness support retain legacy immediate delivery. */
+export function isProviderAgentDeliveryReady(
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  agentId: string,
+): boolean {
+  return registry.isProviderAgentDeliveryReady?.(workspaceId, nodeId, providerName, agentId) ?? true;
 }

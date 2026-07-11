@@ -489,7 +489,10 @@ sequence. Relaycast omits the field for nodes that do not advertise the capabili
 preserving the legacy strict reply shape. On a transport-only reconnect, an
 `inventory.sync` certifies that the listed provider-owned sessions retained their
 in-memory cursors and may replay; a restarted broker must begin with empty inventory
-and make each resumed identity cursor-ready through `agent.register`.
+and make each resumed identity cursor-ready through `agent.register`. Realtime
+adapters accept this capability only when their `NodeConnectionRegistry` implements
+the provider delivery-readiness hooks; adapters without those hooks remain on legacy
+immediate delivery and receive a rejected capability result.
 
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and

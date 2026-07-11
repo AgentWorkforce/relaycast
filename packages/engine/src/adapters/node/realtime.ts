@@ -31,6 +31,8 @@ export interface EngineSocket {
 
 /** Returned by attach helpers; the transport drives these on socket events. */
 export interface SocketHandle {
+  /** Registry connection epoch, exposed for adapters that own provider binding. */
+  connectionId?: string;
   handleMessage(raw: string): Promise<void>;
   handleClose(): Promise<void>;
 }
@@ -46,6 +48,8 @@ interface NodeConn {
   nodeId: string;
   providerName?: string;
   instanceId?: string;
+  /** Null means legacy/immediate; a set means cursor-gated ready identities. */
+  deliveryReadyAgentIds?: Set<string> | null;
   lastSeen: number;
 }
 
@@ -105,6 +109,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
 
   private providerConnId(nodeKey: string, providerName: string): string | undefined {
     return this.providerIndex.get(nodeKey)?.get(providerName);
+  }
+
+  private providerConnection(nodeKey: string, providerName: string): NodeConn | undefined {
+    const connId = this.providerConnId(nodeKey, providerName);
+    return connId ? this.nodeConnections.get(connId) : undefined;
   }
 
   private providerSocket(nodeKey: string, providerName: string): EngineSocket | undefined {
@@ -232,6 +241,12 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     message: FleetRelaycastToBrokerMessage,
   ): Promise<boolean> {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
+    if (
+      message.type === 'deliver'
+      && !this.isProviderAgentDeliveryReady(workspaceId, nodeId, providerName, message.agent_id)
+    ) {
+      return false;
+    }
     const socket = this.providerSocket(nodeKey, providerName);
     if (socket) {
       try {
@@ -339,6 +354,47 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     providers.set(providerName, connectionId);
   }
 
+  setProviderDeliveryReadiness(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId: string | undefined,
+    mode: 'immediate' | 'agent_scoped',
+  ): void {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const currentConnectionId = this.providerConnId(nodeKey, providerName);
+    if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return;
+    const conn = this.nodeConnections.get(currentConnectionId);
+    if (!conn || conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || conn.providerName !== providerName) return;
+    conn.deliveryReadyAgentIds = mode === 'immediate' ? null : new Set();
+  }
+
+  markProviderAgentsDeliveryReady(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    connectionId: string | undefined,
+    agentIds: readonly string[],
+  ): void {
+    const nodeKey = this.nodeKey(workspaceId, nodeId);
+    const currentConnectionId = this.providerConnId(nodeKey, providerName);
+    if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return;
+    const conn = this.nodeConnections.get(currentConnectionId);
+    if (!(conn?.deliveryReadyAgentIds instanceof Set)) return;
+    for (const agentId of agentIds) conn.deliveryReadyAgentIds.add(agentId);
+  }
+
+  isProviderAgentDeliveryReady(
+    workspaceId: string,
+    nodeId: string,
+    providerName: string,
+    agentId: string,
+  ): boolean {
+    const conn = this.providerConnection(this.nodeKey(workspaceId, nodeId), providerName);
+    if (!conn || conn.deliveryReadyAgentIds === undefined) return false;
+    return conn.deliveryReadyAgentIds === null || conn.deliveryReadyAgentIds.has(agentId);
+  }
+
   detachProvider(workspaceId: string, nodeId: string, providerName: string): void {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     const providers = this.providerIndex.get(nodeKey);
@@ -349,7 +405,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     if (connId) {
       const conn = this.nodeConnections.get(connId);
-      if (conn) conn.providerName = undefined;
+      if (conn) {
+        conn.providerName = undefined;
+        conn.deliveryReadyAgentIds = undefined;
+      }
     }
     this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
   }
@@ -418,6 +477,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     }
     conns.add(connectionId);
     const handle: SocketHandle = {
+      connectionId,
       handleMessage: async (raw) => {
         const conn = this.nodeConnections.get(connectionId);
         if (conn) conn.lastSeen = Date.now();

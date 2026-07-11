@@ -867,11 +867,12 @@ async function dispatchNodeAttempt(
   invocationId: string,
   nodeId: string,
   opts: {
+    providerName: string;
     pending?: boolean;
     retryAfterAt?: Date | null;
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
-  } = {},
+  },
 ) {
   const stateFields = opts.pending
     ? { status: 'pending' as const, dispatchedAt: null, retryAfterAt: opts.retryAfterAt ?? null }
@@ -887,6 +888,7 @@ async function dispatchNodeAttempt(
     .set({
       ...stateFields,
       dispatchedNodeId: nodeId,
+      dispatchedProvider: opts.providerName,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
       ...attemptFields,
     })
@@ -934,8 +936,8 @@ async function dispatchNodeInvocation(args: {
   workspaceId: string;
   invocationId: string;
   nodeId: string;
-  /** When set, route to this provider's socket; otherwise the node default. */
-  providerName?: string;
+  /** Provider connection that owns this dispatch attempt. */
+  providerName: string;
   action: string;
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
@@ -952,12 +954,8 @@ async function dispatchNodeInvocation(args: {
     ...(args.agent ? { agent_id: args.agent.id, agent_name: args.agent.name } : {}),
     input: toFleetWireJson(args.input),
   };
-  const connectedBefore = args.providerName
-    ? args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName)
-    : args.registry.isNodeConnected(args.workspaceId, args.nodeId);
-  const sent = args.providerName
-    ? await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame)
-    : await args.registry.sendToNode(args.workspaceId, args.nodeId, frame);
+  const connectedBefore = args.registry.isProviderConnected(args.workspaceId, args.nodeId, args.providerName);
+  const sent = await args.registry.sendToProvider(args.workspaceId, args.nodeId, args.providerName, frame);
 
   if (!sent) return { accepted: false, pending: false };
 
@@ -969,6 +967,7 @@ async function dispatchNodeInvocation(args: {
     args.nodeId,
     {
       pending,
+      providerName: args.providerName,
       retryAfterAt: args.retryAfterAt,
       reservationHeld: args.reservationHeld,
       skipIncrementAttempts: args.skipIncrementAttempts,
@@ -1225,8 +1224,12 @@ export async function rescheduleNodeInvocation(
   for (const excludeNodeIds of candidates) {
     try {
       const placement = await selectRetryPlacement(db, invocation, excludeNodeIds);
+      const providerName = isSpawnInvocation(invocation.actionName)
+        ? (await capacityProviderName(db, invocation.workspaceId, placement.node.id, actionToSend)) ?? DEFAULT_PROVIDER_NAME
+        : (await fetchNodeAction(db, invocation.workspaceId, placement.node.id, actionToSend))?.handlerProvider ?? DEFAULT_PROVIDER_NAME;
       if (placement.queued) {
         await dispatchNodeAttempt(db, invocation.workspaceId, invocation.id, placement.node.id, {
+          providerName,
           pending: true,
           retryAfterAt: opts.retryAfterAt ?? null,
           reservationHeld: false,
@@ -1239,6 +1242,7 @@ export async function rescheduleNodeInvocation(
         workspaceId: invocation.workspaceId,
         invocationId: invocation.id,
         nodeId: placement.node.id,
+        providerName,
         action: actionToSend,
         input,
         reservationHeld: isSpawnInvocation(invocation.actionName) && !placement.queued,
@@ -1254,6 +1258,7 @@ export async function rescheduleNodeInvocation(
     .set({
       status: 'pending',
       dispatchedNodeId: null,
+      dispatchedProvider: null,
       dispatchedAt: null,
       spawnReservedAt: null,
       retryAfterAt: opts.retryAfterAt ?? nextRetryAfter(invocation.dispatchAttempts + 1),
@@ -1294,6 +1299,7 @@ export async function rescheduleInvocationsForLostNode(
         .set({
           status: 'pending',
           dispatchedNodeId: null,
+          dispatchedProvider: null,
           dispatchedAt: null,
           spawnReservedAt: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
@@ -1380,6 +1386,7 @@ export async function completeNodeInvocation(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
   invocationId: string,
   data: {
     output?: unknown;
@@ -1406,7 +1413,11 @@ export async function completeNodeInvocation(
       completedAt: actionInvocations.completedAt,
     })
     .from(actionInvocations)
-    .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocationId)));
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.dispatchedProvider, providerName),
+    ));
 
   if (!existing) return null;
 
@@ -1445,6 +1456,7 @@ export async function completeNodeInvocation(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
       eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.dispatchedProvider, providerName),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ))
     .returning();

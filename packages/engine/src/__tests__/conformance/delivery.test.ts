@@ -15,6 +15,8 @@ import { agents, deliveries } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
+import { sendNodeDeliveriesToAgents } from '../../engine/nodeDeliver.js';
+import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { pruneExpired } from '../../engine/retention.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
@@ -91,24 +93,19 @@ describe('durable delivery api', () => {
   ) {
     const id = opts.id ?? 'node_mailbox';
     const name = opts.name ?? 'mailbox-node';
-    // Preserve the legacy fixture shape for existing conformance cases. The
-    // cursor case uses current structured capabilities because it exercises
-    // capability negotiation explicitly.
     const capabilities = opts.cursorHandshake
       ? [
         { name: 'spawn:claude', kind: 'capacity' },
         { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
       ]
-      : ['spawn:claude'];
+      : [{ name: 'spawn:claude', kind: 'capacity' }];
     const create = await stack.app.request('/v1/nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
       body: JSON.stringify({
         node_id: id,
         name,
-        capabilities: capabilities.map((capability) => (
-          typeof capability === 'string' ? capability : capability.name
-        )),
+        capabilities: capabilities.map((capability) => capability.name),
         max_agents: 4,
         tags: ['mailbox-test'],
         version: 'test-node',
@@ -706,6 +703,164 @@ describe('durable delivery api', () => {
     expect(carolDeliveryIndex).toBeGreaterThan(carolReplyIndex);
   });
 
+  it('gates live durable and seq-zero delivery until the agent cursor reply is sent', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-live-gate');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'establish cursor' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: bob.name,
+      up_to_seq: 1,
+    }));
+    await node.handle.handleClose();
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    const live = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'arrives before cursor readiness' }),
+    });
+    expect(live.status).toBe(201);
+    let adapterSendAttempts = 0;
+    const recordingRegistry: NodeConnectionRegistry = {
+      upgradeNode: async () => new Response(null, { status: 501 }),
+      sendToNode: async () => false,
+      sendToProvider: async () => {
+        adapterSendAttempts++;
+        return true;
+      },
+      isNodeConnected: () => true,
+      isProviderConnected: () => true,
+      setProviderDeliveryReadiness: () => {},
+      markProviderAgentsDeliveryReady: () => {},
+      isProviderAgentDeliveryReady: () => false,
+      detachProvider: () => {},
+      disconnectNode: async () => {},
+      drainNode: async () => {},
+    };
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: recordingRegistry,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'adapter-before-cursor-ready',
+      data: { message_id: 'msg_adapter_before_cursor', emoji: 'eyes' },
+      messageId: 'msg_adapter_before_cursor',
+    });
+    expect(adapterSendAttempts).toBe(0);
+
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: stack.runtime.deps.nodeConnections,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'before-cursor-ready',
+      data: { message_id: 'msg_before_cursor', emoji: 'eyes' },
+      messageId: 'msg_before_cursor',
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-live-gated-bob',
+      type: 'agent.register',
+      name: bob.name,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-live-gated-bob',
+    );
+    const durableIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(durableIndex).toBeGreaterThan(replyIndex);
+
+    await sendNodeDeliveriesToAgents({
+      db: stack.runtime.deps.db,
+      nodeConnections: stack.runtime.deps.nodeConnections,
+      workspaceId: ws.workspaceId,
+      environment: 'test',
+    }, {
+      agentIds: [bob.agentId],
+      event: 'message.reacted',
+      eventKey: 'after-cursor-ready',
+      data: { message_id: 'msg_after_cursor', emoji: 'eyes' },
+      messageId: 'msg_after_cursor',
+    });
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 0)).toBe(true);
+  });
+
+  it('rejects a mismatched inventory identity without making its agent delivery-ready', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-inventory-id');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    await node.handle.handleClose();
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-wrong-bob-id',
+      type: 'inventory.sync',
+      agents: [{ agent_id: 'agt_wrong_bob', name: bob.name, session_ref: 'sess-bob' }],
+    }));
+    expect(resumed.sock.ofType('error').at(-1)).toMatchObject({
+      id: 'inventory-wrong-bob-id',
+      code: 'agent_identity_mismatch',
+    });
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'must remain gated after bad inventory' }),
+    });
+    expect(post.status).toBe(201);
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob-after-bad-inventory',
+      type: 'agent.register',
+      name: bob.name,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob-after-bad-inventory',
+    );
+    const deliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 1,
+    );
+    expect(deliveryIndex).toBeGreaterThan(replyIndex);
+  });
+
   it('replays only inventoried cursor agents after a transient control reconnect', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-cursor-inventory-scope');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
@@ -1060,7 +1215,21 @@ describe('durable delivery api', () => {
     await node.handle.handleClose();
 
     const replaySock = new FakeSocket();
-    stack.runtime.realtime.attachNodeSocket(ws.workspaceId, node.id, replaySock);
+    const replayHandle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, node.id, replaySock);
+    stack.runtime.realtime.attachProvider(
+      ws.workspaceId,
+      node.id,
+      'default',
+      'external-adapter-reconnect',
+      replayHandle.connectionId!,
+    );
+    stack.runtime.realtime.setProviderDeliveryReadiness(
+      ws.workspaceId,
+      node.id,
+      'default',
+      replayHandle.connectionId,
+      'immediate',
+    );
     const replayedCount = await handleNodeReconnect(
       stack.runtime.deps.db,
       stack.runtime.deps.nodeConnections,

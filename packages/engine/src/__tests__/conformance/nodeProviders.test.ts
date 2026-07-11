@@ -9,7 +9,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { actions, agents, nodeProviders, nodes } from '../../db/schema.js';
+import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
@@ -370,6 +370,160 @@ describe('node providers', () => {
 
     expect(deliverFramesOfType(py.sock, 'message.created').length).toBeGreaterThanOrEqual(1);
     expect(deliverFramesOfType(rb.sock, 'message.created')).toHaveLength(0);
+  });
+
+  it('keeps one provider inventory from offlining agents or rescheduling invocations owned by another', async () => {
+    const ws = await createWorkspace(stack.app, 'np-inventory-isolation');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+    const rb = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', [{ name: 'build', kind: 'action' }]);
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-py-worker',
+      type: 'agent.register',
+      name: 'py-worker',
+      session_ref: 'pty://py/worker',
+    }));
+    await rb.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-rb-worker',
+      type: 'agent.register',
+      name: 'rb-worker',
+      session_ref: 'pty://rb/worker',
+    }));
+    const pyAgentId = (py.sock.ofType('reply').find((frame) => frame.id === 'register-py-worker') as {
+      data: { agent_id: string };
+    }).data.agent_id;
+
+    const invoke = await stack.app.request('/v1/nodes/alpha/actions/build/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { task: 'keep with rb' } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(rb.sock.ofType('action.invoke').at(-1)).toMatchObject({ invocation_id: invocationId });
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'py-inventory-only',
+      type: 'inventory.sync',
+      agents: [{ agent_id: pyAgentId, name: 'py-worker', session_ref: 'pty://py/worker' }],
+    }));
+    expect(py.sock.ofType('reply').find((frame) => frame.id === 'py-inventory-only')).toMatchObject({ ok: true });
+
+    const rbAgent = await stack.runtime.handle.db
+      .select({ status: agents.status, providerName: agents.providerName })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'rb-worker')))
+      .then((rows) => rows[0]);
+    expect(rbAgent).toEqual({ status: 'active', providerName: 'rb' });
+
+    const invocation = await stack.runtime.handle.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        dispatchedProvider: actionInvocations.dispatchedProvider,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId))
+      .then((rows) => rows[0]);
+    expect(invocation).toEqual({
+      status: 'dispatched',
+      dispatchedNodeId: 'node_a',
+      dispatchedProvider: 'rb',
+    });
+  });
+
+  it('rejects cross-provider action results and delivery acknowledgements', async () => {
+    const ws = await createWorkspace(stack.app, 'np-frame-isolation');
+    const poster = await registerAgent(stack.app, ws.workspaceKey, 'poster');
+    await enrollNode(ws, 'node_a', 'alpha');
+    const py = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'py', [{ name: 'run-etl', kind: 'action' }]);
+    const rb = await attachProvider(ws.workspaceId, 'node_a', 'alpha', 'rb', [{ name: 'build', kind: 'action' }]);
+
+    await rb.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-rb-ack-worker',
+      type: 'agent.register',
+      name: 'rb-ack-worker',
+      session_ref: 'pty://rb/ack-worker',
+    }));
+
+    const invoke = await stack.app.request('/v1/nodes/alpha/actions/build/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${poster.token}` },
+      body: JSON.stringify({ input: { task: 'provider-owned' } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { provider: 'wrong' },
+    }));
+    const statusAfterWrongProvider = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId))
+      .then((rows) => rows[0]?.status);
+    expect(statusAfterWrongProvider).toBe('dispatched');
+
+    await rb.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'action.result',
+      invocation_id: invocationId,
+      output: { provider: 'rb' },
+    }));
+    const statusAfterOwner = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId))
+      .then((rows) => rows[0]?.status);
+    expect(statusAfterOwner).toBe('completed');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${poster.token}` },
+      body: JSON.stringify({ text: 'provider-scoped ack' }),
+    });
+    expect(post.status).toBe(201);
+    for (let i = 0; i < 50 && deliverFramesOfType(rb.sock, 'message.created').length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const delivery = deliverFramesOfType(rb.sock, 'message.created').at(-1) as { seq?: number } | undefined;
+    expect(delivery?.seq).toBeGreaterThan(0);
+    const upToSeq = delivery?.seq ?? 0;
+
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'rb-ack-worker',
+      up_to_seq: upToSeq,
+    }));
+    const cursorAfterWrongProvider = await stack.runtime.handle.db
+      .select({ deliveryAckSeq: agents.deliveryAckSeq })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'rb-ack-worker')))
+      .then((rows) => rows[0]?.deliveryAckSeq);
+    expect(cursorAfterWrongProvider).toBe(0);
+
+    await rb.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: 'rb-ack-worker',
+      up_to_seq: upToSeq,
+    }));
+    const cursorAfterOwner = await stack.runtime.handle.db
+      .select({ deliveryAckSeq: agents.deliveryAckSeq })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, 'rb-ack-worker')))
+      .then((rows) => rows[0]?.deliveryAckSeq);
+    expect(cursorAfterOwner).toBe(upToSeq);
   });
 
   it('releases reserved capacity when a fail-fast node-scoped spawn hits an offline provider', async () => {

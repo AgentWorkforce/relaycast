@@ -13,7 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Node control logs a rejected `node.register`/`node.heartbeat` (e.g. `node_name_conflict`, a UNIQUE violation) at warn level with workspace/node/provider/code context, so a node left half-registered by a rejected message is no longer invisible server-side.
 - Message-trigger dispatch failures are logged at warn with trigger/action/workspace context instead of being swallowed, so a trigger whose action is missing or unroutable is diagnosable.
 - Kept per-agent delivery sequences monotonic across delivery pruning and message-retention cascades, including migration repair for active rows hidden behind an acknowledged cursor.
-- Negotiated node brokers receive each resumed agent's authoritative delivery ACK cursor before mailbox replay, preventing post-restart sequence gaps without changing legacy reply frames.
+- Negotiated node brokers receive each resumed agent's authoritative delivery ACK cursor before replay or live delivery, with provider-scoped reconnect inventory and control frames that cannot disturb another provider's agents, cursors, or invocations.
 
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.

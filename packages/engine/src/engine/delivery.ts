@@ -4,6 +4,7 @@ import { deliveries, messages, agents, readReceipts, channelMembers, channels, d
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomic } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 import { toIso } from '../lib/serialize.js';
@@ -360,6 +361,7 @@ export async function ackDeliveriesUpToSeq(
   db: Db,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
   agentName: string,
   upToSeq: number,
 ): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number } | null> {
@@ -371,6 +373,7 @@ export async function ackDeliveriesUpToSeq(
       eq(agents.name, agentName),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
     ));
   if (!agent) return null;
 
@@ -780,6 +783,15 @@ export async function deliverPendingToNode(
 
   const deliveredIds: string[] = [];
   for (const row of rows) {
+    if (!isProviderAgentDeliveryReady(
+      registry,
+      workspaceId,
+      nodeId,
+      row.recipientProviderName,
+      row.delivery.agentId,
+    )) {
+      continue;
+    }
     const attachments = attachmentsByMessageId.get(row.delivery.messageId) ?? [];
     const { eventType, eventData } = buildRoutableDeliveryEvent(row, attachments);
 
