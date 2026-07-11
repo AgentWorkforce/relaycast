@@ -363,10 +363,26 @@ async function isNodeProviderLive(
   return !!provider && isProviderLive(provider);
 }
 
+async function failInvocationForUnavailableProvider(
+  db: Db,
+  workspaceId: string,
+  invocationId: string,
+): Promise<void> {
+  await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ));
+}
+
 /**
  * Dispatch an invoke to a specific provider on a node. When the provider is
  * offline the invoke fails fast (the invocation is failed) unless it opted into
- * the per-provider offline queue.
+ * the per-provider offline queue. Retry placement can request a non-terminal
+ * unavailable result so it can try another node before failing the invocation.
  */
 async function dispatchNodeProviderInvocation(args: {
   db: Db;
@@ -379,8 +395,11 @@ async function dispatchNodeProviderInvocation(args: {
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
   queue: boolean;
+  actionId?: string;
   reservationHeld?: boolean;
-}): Promise<{ accepted: boolean; pending: boolean }> {
+}, options: {
+  failIfUnavailable?: boolean;
+} = {}): Promise<{ accepted: boolean; pending: boolean; providerUnavailable?: boolean }> {
   const live = await isNodeProviderLive(args.db, args.registry, args.workspaceId, args.nodeId, args.providerName);
   if (!live) {
     if (!args.queue) {
@@ -389,17 +408,21 @@ async function dispatchNodeProviderInvocation(args: {
       if (args.reservationHeld) {
         await releaseNodeCapacity(args.db, args.workspaceId, args.nodeId);
       }
-      await args.db
-        .update(actionInvocations)
-        .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
-        .where(and(
-          eq(actionInvocations.workspaceId, args.workspaceId),
-          eq(actionInvocations.id, args.invocationId),
-          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-        ));
+      if (options.failIfUnavailable === false) {
+        return { accepted: false, pending: false, providerUnavailable: true };
+      }
+      await failInvocationForUnavailableProvider(args.db, args.workspaceId, args.invocationId);
       throw codedError(`Provider "${args.providerName}" is offline for action "${args.action}"`, 'handler_unavailable', 503);
     }
-    return dispatchNodeInvocation({ ...args, pending: true });
+    // The DB is the authoritative offline queue. Do not call sendToProvider
+    // here: a connected provider whose heartbeat says handlers_live=false still
+    // has a socket, and sendToProvider would deliver the frame immediately.
+    const accepted = await dispatchNodeAttempt(args.db, args.workspaceId, args.invocationId, args.nodeId, {
+      pending: true,
+      reservationHeld: args.reservationHeld,
+      actionId: args.actionId,
+    });
+    return { accepted, pending: true };
   }
   return dispatchNodeInvocation({ ...args });
 }
@@ -895,6 +918,7 @@ async function dispatchNodeAttempt(
     retryAfterAt?: Date | null;
     reservationHeld?: boolean;
     skipIncrementAttempts?: boolean;
+    actionId?: string;
   } = {},
 ) {
   const stateFields = opts.pending
@@ -912,6 +936,7 @@ async function dispatchNodeAttempt(
       ...stateFields,
       dispatchedNodeId: nodeId,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
+      ...(opts.actionId ? { actionId: opts.actionId } : {}),
       ...attemptFields,
     })
     .where(and(
@@ -963,6 +988,7 @@ async function dispatchNodeInvocation(args: {
   action: string;
   input: Record<string, unknown>;
   agent?: { id: string; name: string } | null;
+  actionId?: string;
   pending?: boolean;
   retryAfterAt?: Date | null;
   reservationHeld?: boolean;
@@ -996,6 +1022,7 @@ async function dispatchNodeInvocation(args: {
       retryAfterAt: args.retryAfterAt,
       reservationHeld: args.reservationHeld,
       skipIncrementAttempts: args.skipIncrementAttempts,
+      actionId: args.actionId,
     },
   );
   return { accepted, pending };
@@ -1121,11 +1148,13 @@ export async function drainNodeInvocations(
             : DEFAULT_PROVIDER_NAME);
     const nativeSpawn = isSpawnInvocation(row.actionName) && !shadowProvider;
 
-    // Skip draining to a provider that isn't connected yet (e.g. a named
-    // provider reconnecting before it re-registers). Dispatching here would mark
-    // the frame delivered and push retryAfterAt out by the dispatch timeout,
-    // leaving it idle; leave it pending so the post-register drain re-sends it.
+    // Skip draining to a provider that is disconnected or whose heartbeat says
+    // handlers are not live. A missing provider row is a legacy single-socket
+    // node, for which connection state remains the available liveness signal.
     if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) continue;
+    const provider = await getProvider(db, workspaceId, nodeId, providerName);
+    const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
+    if (provider && explicitlyAttached && !isProviderLive(provider)) continue;
 
     let reservedForDrain = false;
     try {
@@ -1245,32 +1274,80 @@ export async function rescheduleNodeInvocation(
   const actionToSend = dispatchActionNameForInvocation(invocation.actionName, input);
   const baseExclude = Array.from(new Set([...attempted, ...current]));
   const candidates = opts.allowAttemptedFallback ? [baseExclude, []] : [baseExclude];
+  const providerRejectedNodeIds = new Set<string>();
 
-  for (const excludeNodeIds of candidates) {
-    try {
-      const placement = await selectRetryPlacement(db, invocation, excludeNodeIds);
-      if (placement.queued) {
-        await dispatchNodeAttempt(db, invocation.workspaceId, invocation.id, placement.node.id, {
-          pending: true,
-          retryAfterAt: opts.retryAfterAt ?? null,
-          reservationHeld: false,
+  for (const candidateExcludes of candidates) {
+    const excludeNodeIds = new Set([...candidateExcludes, ...providerRejectedNodeIds]);
+    while (true) {
+      try {
+        const placement = await selectRetryPlacement(db, invocation, Array.from(excludeNodeIds));
+        // Resolve the owning provider before accepting node-level queued
+        // placement. A node can be live through its broker while the named
+        // provider for this action is offline, and provider queue policy must
+        // decide whether that retry may wait.
+        const target = await fetchNodeAction(db, invocation.workspaceId, placement.node.id, actionToSend);
+        const reservationHeld = isSpawnInvocation(invocation.actionName) && !placement.queued;
+        if (target?.handlerProvider) {
+          // A spawn shadow is an action, not native capacity. claimSpawnNode
+          // reserved capacity before discovering the shadow, so release it just
+          // like the initial dispatch path does before provider dispatch.
+          if (reservationHeld) {
+            await releaseNodeCapacity(db, invocation.workspaceId, placement.node.id);
+          }
+          const dispatched = await dispatchNodeProviderInvocation({
+            db,
+            registry,
+            workspaceId: invocation.workspaceId,
+            invocationId: invocation.id,
+            nodeId: placement.node.id,
+            providerName: target.handlerProvider,
+            action: actionToSend,
+            actionId: target.id,
+            input,
+            queue: target.queue,
+            reservationHeld: false,
+          }, { failIfUnavailable: false });
+          if (dispatched.providerUnavailable) {
+            providerRejectedNodeIds.add(placement.node.id);
+            excludeNodeIds.add(placement.node.id);
+            continue;
+          }
+          return dispatched.accepted;
+        }
+
+        // No named action owner means native spawn/capacity or a legacy
+        // single-socket node; retain the node-level pending/default behavior.
+        if (placement.queued) {
+          await dispatchNodeAttempt(db, invocation.workspaceId, invocation.id, placement.node.id, {
+            pending: true,
+            retryAfterAt: opts.retryAfterAt ?? null,
+            reservationHeld: false,
+            actionId: target?.id,
+          });
+          return true;
+        }
+        const dispatched = await dispatchNodeInvocation({
+          db,
+          registry,
+          workspaceId: invocation.workspaceId,
+          invocationId: invocation.id,
+          nodeId: placement.node.id,
+          action: actionToSend,
+          actionId: target?.id,
+          input,
+          reservationHeld,
         });
-        return true;
+        return dispatched.accepted;
+      } catch {
+        // This candidate phase is exhausted; optionally retry attempted nodes.
+        break;
       }
-      const dispatched = await dispatchNodeInvocation({
-        db,
-        registry,
-        workspaceId: invocation.workspaceId,
-        invocationId: invocation.id,
-        nodeId: placement.node.id,
-        action: actionToSend,
-        input,
-        reservationHeld: isSpawnInvocation(invocation.actionName) && !placement.queued,
-      });
-      return dispatched.accepted;
-    } catch {
-      // Try the next candidate set.
     }
+  }
+
+  if (providerRejectedNodeIds.size > 0) {
+    await failInvocationForUnavailableProvider(db, invocation.workspaceId, invocation.id);
+    return false;
   }
 
   await db
