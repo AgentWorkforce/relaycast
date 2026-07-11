@@ -1461,7 +1461,22 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // The success reply was already sent above; keep the pending flush
         // best-effort so a delivery error cannot trigger a second error reply
         // for the same request id from the outer catch.
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId).catch(() => {});
+        const cursorHandshake = registered.acceptance.some(
+          (capability) => capability.accepted && capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+        );
+        // Cursor-aware providers seed each resumed identity through
+        // `agent.register`; replaying here would race every cursor reply. Legacy
+        // providers retain immediate reconnect replay, scoped to their socket so
+        // one provider cannot flush another provider's mailbox.
+        if (!cursorHandshake) {
+          await deliverPendingToNode(
+            args.db,
+            args.registry,
+            args.workspaceId,
+            args.nodeId,
+            { providerName: provider.name },
+          ).catch(() => {});
+        }
         return;
       }
       case 'node.heartbeat':
@@ -1515,7 +1530,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: registered,
         });
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        // Only this identity is cursor-ready. A node-wide drain here could send
+        // another resumed agent's pending frame before its own reply.
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: [registered.agent_id] },
+        );
         return;
       }
       case 'agent.deregister':
@@ -1530,7 +1553,17 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           ok: true,
           data: result,
         });
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        // Inventory represents sessions that survived a transport reconnect and
+        // therefore retain their in-memory cursors. Restrict replay to exactly
+        // those provider-owned identities; restarted sessions not in inventory
+        // become ready individually through `agent.register`.
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: message.agents.map((agent) => agent.agent_id) },
+        );
         return;
       }
       case 'action.result': {

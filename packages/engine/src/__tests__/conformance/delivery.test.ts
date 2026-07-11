@@ -588,7 +588,7 @@ describe('durable delivery api', () => {
       name: node.name,
       cursorHandshake: true,
     });
-    resumed.sock.received.length = 0;
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
     await resumed.handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'resume-bob',
@@ -624,6 +624,223 @@ describe('durable delivery api', () => {
       (frame) => frame.type === 'reply' && frame.id === 'legacy-register',
     ) as { data: Record<string, unknown> };
     expect(legacyReply.data).not.toHaveProperty('delivery_ack_seq');
+  });
+
+  it('does not replay another negotiated agent before that agent receives its cursor', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-agent-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    const carol = await registerViaNode(node, 'carol');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before multi-agent restart' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      const deliveredAgents = node.sock.ofType('deliver')
+        .filter((frame) => frame.seq === 1)
+        .map((frame) => frame.agent)
+        .sort();
+      expect(deliveredAgents).toEqual(['bob', 'carol']);
+    });
+    for (const agent of [bob, carol]) {
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: agent.name,
+        up_to_seq: 1,
+      }));
+    }
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after multi-agent restart' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-bob-first',
+      type: 'agent.register',
+      name: bob.name,
+      resumable: true,
+      session_ref: 'sess-bob',
+    }));
+    const bobReplyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-bob-first',
+    );
+    const bobDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(bobReplyIndex).toBeGreaterThanOrEqual(0);
+    expect(bobDeliveryIndex).toBeGreaterThan(bobReplyIndex);
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === carol.name)).toBe(false);
+
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'resume-carol-second',
+      type: 'agent.register',
+      name: carol.name,
+      resumable: true,
+      session_ref: 'sess-carol',
+    }));
+    const carolReplyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'resume-carol-second',
+    );
+    const carolDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === carol.name && frame.seq === 2,
+    );
+    expect(carolReplyIndex).toBeGreaterThan(bobDeliveryIndex);
+    expect(carolDeliveryIndex).toBeGreaterThan(carolReplyIndex);
+  });
+
+  it('replays only inventoried cursor agents after a transient control reconnect', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-inventory-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+    const carol = await registerViaNode(node, 'carol');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before transient reconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').filter((frame) => frame.seq === 1)).toHaveLength(2);
+    });
+    for (const agent of [bob, carol]) {
+      await node.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'delivery.ack',
+        agent: agent.name,
+        up_to_seq: 1,
+      }));
+    }
+    await node.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'queued during transport outage' }),
+    });
+    expect(second.status).toBe(201);
+
+    const resumed = await enrollAndAttachNode(ws, {
+      id: node.id,
+      name: node.name,
+      cursorHandshake: true,
+    });
+    expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+    await resumed.handle.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'inventory-bob-only',
+      type: 'inventory.sync',
+      agents: [{ agent_id: bob.agentId, name: bob.name, session_ref: 'sess-bob' }],
+    }));
+
+    const replyIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'reply' && frame.id === 'inventory-bob-only',
+    );
+    const bobDeliveryIndex = resumed.sock.received.findIndex(
+      (frame) => frame.type === 'deliver' && frame.agent === bob.name && frame.seq === 2,
+    );
+    expect(replyIndex).toBeGreaterThanOrEqual(0);
+    expect(bobDeliveryIndex).toBeGreaterThan(replyIndex);
+    expect(resumed.sock.ofType('deliver').some((frame) => frame.agent === carol.name)).toBe(false);
+  });
+
+  it('keeps a legacy provider reconnect from flushing a cursor provider mailbox', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-provider-scope');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const cursor = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const cursorAgent = await registerViaNode(cursor, 'cursor-agent');
+
+    const attachLegacyProvider = async (instanceId: string) => {
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, cursor.id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: `register-legacy-${instanceId}`,
+        type: 'node.register',
+        name: cursor.name,
+        node_id: cursor.id,
+        provider: { name: 'legacy', instance_id: instanceId },
+        capabilities: [{ name: 'spawn:codex', kind: 'capacity' }],
+        max_agents: 4,
+        tags: ['mailbox-test'],
+        version: 'test-node',
+        resume_cursor: null,
+      }));
+      await handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        provider: { name: 'legacy', instance_id: instanceId },
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      return { id: cursor.id, name: cursor.name, sock, handle };
+    };
+
+    const legacy = await attachLegacyProvider('legacy-i1');
+    const legacyAgent = await registerViaNode(legacy, 'legacy-agent');
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before provider reconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(cursor.sock.ofType('deliver').some((frame) => frame.agent === cursorAgent.name && frame.seq === 1)).toBe(true);
+      expect(legacy.sock.ofType('deliver').some((frame) => frame.agent === legacyAgent.name && frame.seq === 1)).toBe(true);
+    });
+    await cursor.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: cursorAgent.name,
+      up_to_seq: 1,
+    }));
+    await legacy.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'delivery.ack',
+      agent: legacyAgent.name,
+      up_to_seq: 1,
+    }));
+    await cursor.handle.handleClose();
+    await legacy.handle.handleClose();
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'queued for both providers' }),
+    });
+    expect(second.status).toBe(201);
+
+    const cursorResumed = await enrollAndAttachNode(ws, {
+      id: cursor.id,
+      name: cursor.name,
+      cursorHandshake: true,
+    });
+    expect(cursorResumed.sock.ofType('deliver')).toHaveLength(0);
+    const legacyResumed = await attachLegacyProvider('legacy-i2');
+    expect(legacyResumed.sock.ofType('deliver')).toEqual([
+      expect.objectContaining({ agent: legacyAgent.name, seq: 2 }),
+    ]);
+    expect(cursorResumed.sock.ofType('deliver')).toHaveLength(0);
   });
 
   it('honors recorded route metadata when live binding changes before fanout', async () => {

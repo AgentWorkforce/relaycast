@@ -486,7 +486,10 @@ Broker nodes can negotiate restart-safe delivery cursor recovery by including
 returned `agent_id` to each successful `agent.register` reply and sends that reply
 before replaying pending deliveries. Nodes must accept only the next consecutive
 sequence. Relaycast omits the field for nodes that do not advertise the capability,
-preserving the legacy strict reply shape.
+preserving the legacy strict reply shape. On a transport-only reconnect, an
+`inventory.sync` certifies that the listed provider-owned sessions retained their
+in-memory cursors and may replay; a restarted broker must begin with empty inventory
+and make each resumed identity cursor-ready through `agent.register`.
 
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and

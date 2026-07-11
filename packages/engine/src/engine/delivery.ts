@@ -714,13 +714,39 @@ export async function fetchDueHttpPushDeliveryEvents(
   });
 }
 
+export interface NodeDeliveryReplayScope {
+  /** Limit replay to agents registered through this provider connection. */
+  providerName?: string;
+  /** Limit replay to identities whose broker-side cursor is ready. */
+  agentIds?: readonly string[];
+}
+
 export async function deliverPendingToNode(
   db: Db,
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  scope: NodeDeliveryReplayScope = {},
 ): Promise<number> {
+  const agentIds = scope.agentIds ? [...new Set(scope.agentIds)] : undefined;
+  if (agentIds?.length === 0) return 0;
+
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const conditions = [
+    eq(deliveries.workspaceId, workspaceId),
+    eq(agents.locationType, 'via_node'),
+    eq(agents.locationNodeId, nodeId),
+    inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+    gt(deliveries.seq, agents.deliveryAckSeq),
+    sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
+  ];
+  if (scope.providerName !== undefined) {
+    conditions.push(eq(agents.providerName, scope.providerName));
+  }
+  if (agentIds) {
+    conditions.push(inArray(agents.id, agentIds));
+  }
+
   const rows = await db
     .select({
       delivery: deliveries,
@@ -747,14 +773,7 @@ export async function deliverPendingToNode(
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(channels, eq(messages.channelId, channels.id))
     .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
-    .where(and(
-      eq(deliveries.workspaceId, workspaceId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-      inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
-      gt(deliveries.seq, agents.deliveryAckSeq),
-      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
-    ))
+    .where(and(...conditions))
     .orderBy(asc(agents.name), asc(deliveries.seq));
 
   const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
