@@ -10,6 +10,7 @@ import {
   type TestStack,
 } from './harness.js';
 import { actions, agents, nodeProviders, nodes } from '../../db/schema.js';
+import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 
 type Cap = { name: string; kind?: string; global?: boolean; queue?: boolean };
 
@@ -91,6 +92,32 @@ describe('node providers', () => {
     expect(providers).toEqual([{ name: 'default' }]);
   });
 
+  it('logs a rejected node-control message server-side, not only on the socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const ws = await createWorkspace(stack.app, 'np-reject-log');
+      await enrollNode(ws, 'node_a', 'alpha');
+
+      const first = attachSocket(ws.workspaceId, 'node_a');
+      await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'py', instance_id: 'i1' }, [{ name: 'run-etl', kind: 'action' }]));
+
+      // A duplicate live instance is rejected. The rejection must surface
+      // server-side too, so a half-registered node is not silent.
+      const dup = attachSocket(ws.workspaceId, 'node_a');
+      await dup.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'py', instance_id: 'i2' }, [{ name: 'run-etl', kind: 'action' }]));
+
+      expect(dup.sock.ofType('error').at(-1)).toMatchObject({ code: 'provider_instance_conflict' });
+      expect(warn).toHaveBeenCalledWith('[node.control] rejected message', expect.objectContaining({
+        type: 'node.register',
+        code: 'provider_instance_conflict',
+        workspaceId: ws.workspaceId,
+        nodeId: 'node_a',
+      }));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('attaches, replaces on reconnect, and rejects a duplicate live instance', async () => {
     const ws = await createWorkspace(stack.app, 'np-attach');
     await enrollNode(ws, 'node_a', 'alpha');
@@ -121,8 +148,8 @@ describe('node providers', () => {
     // UNCLEAN disconnect (kill -9 / dropped socket) the old connection is never
     // closed, so it lingers in the registry; the restart must still take over
     // once the old instance stops framing — not be blocked for the full node
-    // TTL. Drive Date.now so the incumbent's last frame ages past the
-    // attach-liveness window (24s) but within the 45s node TTL.
+    // TTL. Drive Date.now so the incumbent's last frame ages past the attach
+    // window but remains within the node-liveness TTL.
     let nowMs = Date.now();
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
@@ -133,37 +160,58 @@ describe('node providers', () => {
       await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
       expect(first.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
 
-      // Unclean disconnect: no handleClose. Time advances past the 24s window.
-      nowMs += 30_000;
+      // Unclean disconnect: no handleClose. The attach window must remain
+      // strictly below the node TTL for this takeover path to exist.
+      expect(PROVIDER_ATTACH_LIVENESS_MS).toBeLessThan(NODE_LIVENESS_TTL_MS);
+      nowMs += PROVIDER_ATTACH_LIVENESS_MS + 1;
 
       const restart = attachSocket(ws.workspaceId, 'node_a');
       await restart.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-2' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
 
       expect(restart.sock.ofType('error')).toHaveLength(0);
       expect(restart.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
+      expect(first.sock.closed).toBe(true);
       const [row] = await stack.runtime.handle.db
         .select({ caps: nodes.capabilities })
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
       expect((row?.caps ?? []).map((c) => c.name)).toEqual(['spawn:claude']);
+      const [provider] = await stack.runtime.handle.db
+        .select({ instanceId: nodeProviders.instanceId })
+        .from(nodeProviders)
+        .where(and(
+          eq(nodeProviders.workspaceId, ws.workspaceId),
+          eq(nodeProviders.nodeId, 'node_a'),
+          eq(nodeProviders.name, 'broker'),
+        ));
+      expect(provider?.instanceId).toBe('epoch-2');
     } finally {
       nowSpy.mockRestore();
     }
   });
 
-  it('still rejects a different instance while the incumbent is actively heartbeating', async () => {
-    const ws = await createWorkspace(stack.app, 'np-live-dup');
-    await enrollNode(ws, 'node_a', 'alpha');
+  it('still rejects a direct SDK instance through the attach-liveness boundary', async () => {
+    let nowMs = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const ws = await createWorkspace(stack.app, 'np-live-dup');
+      await enrollNode(ws, 'node_a', 'alpha');
 
-    const first = attachSocket(ws.workspaceId, 'node_a');
-    await first.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
-    expect(first.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
+      const first = attachSocket(ws.workspaceId, 'node_a');
+      await first.handle.handleMessage(registerFrame('node_a', 'alpha', undefined, []));
+      expect(first.sock.ofType('reply').at(-1)).toMatchObject({ ok: true });
 
-    // A second, different instance registers immediately — the incumbent is
-    // still live (framed just now), so this is a genuine duplicate and rejects.
-    const dup = attachSocket(ws.workspaceId, 'node_a');
-    await dup.handle.handleMessage(registerFrame('node_a', 'alpha', { name: 'broker', instance_id: 'epoch-2' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
-    expect(dup.sock.ofType('error').at(-1)).toMatchObject({ code: 'provider_instance_conflict' });
+      // Direct node connections in the built-in SDKs heartbeat every 30s. The
+      // attach window includes scheduling slack and remains live at its exact
+      // inclusive boundary.
+      expect(PROVIDER_ATTACH_LIVENESS_MS).toBeGreaterThan(30_000);
+      nowMs += PROVIDER_ATTACH_LIVENESS_MS;
+      const dup = attachSocket(ws.workspaceId, 'node_a');
+      await dup.handle.handleMessage(registerFrame('node_a', 'alpha', undefined, []));
+      expect(dup.sock.ofType('error').at(-1)).toMatchObject({ code: 'provider_instance_conflict' });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('rejects a second provider registering an action another provider already owns on the node', async () => {

@@ -1532,12 +1532,26 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
   } catch (err) {
     const error = err as Error & { code?: string };
+    const code = error.code ?? 'node_control_failed';
+    // The rejection reaches the client only as the error frame below. Log it so
+    // it is not invisible server-side: a rejected node.register/node.heartbeat
+    // (e.g. node_name_conflict, a UNIQUE violation) otherwise leaves a node
+    // running half-registered with no signal to operators. Warn, not error —
+    // these are client/protocol rejections, not server faults.
+    console.warn('[node.control] rejected message', {
+      type: message.type,
+      code,
+      workspaceId: args.workspaceId,
+      nodeId: args.nodeId,
+      provider: frameProviderName,
+      message: error.message,
+    });
     sendControl(args.socket, {
       v: 1,
       id: requestId(message),
       type: 'error',
       ok: false,
-      code: error.code ?? 'node_control_failed',
+      code,
       message: error.message,
     });
   }

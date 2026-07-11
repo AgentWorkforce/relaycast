@@ -286,9 +286,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // incumbent on attach; the same instance re-registering just replaces
     // itself. Reject only a genuinely-live DUPLICATE — a different instance
     // whose connection is still actively framing, i.e. seen within
-    // PROVIDER_ATTACH_LIVENESS_MS (~2x the broker heartbeat cadence). A killed
-    // instance stops framing, so its window lapses and the restart supersedes
-    // the stale binding instead of being blocked for the full node TTL.
+    // PROVIDER_ATTACH_LIVENESS_MS. The window covers the longest built-in SDK
+    // heartbeat cadence with scheduling slack. A killed instance stops framing,
+    // so its window lapses and the restart supersedes the stale binding instead
+    // of being blocked for the full node TTL.
     if (existing.instanceId === instanceId) return null;
     if (Date.now() - existing.lastSeen <= PROVIDER_ATTACH_LIVENESS_MS) {
       return {

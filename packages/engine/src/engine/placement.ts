@@ -13,15 +13,13 @@ export const NODE_LIVENESS_TTL_MS = 45_000;
 /**
  * Recency window for the provider-attach duplicate check — how long a provider's
  * last frame keeps its binding "live" for the purpose of rejecting a competing
- * instance. Set to ~2x the broker's node-control heartbeat cadence (12s; see
- * `crates/broker/src/node_control.rs`), so a genuinely live provider (which
- * frames at least every 12s) is always inside it, while a killed one lapses
- * after ~2 missed beats. A restart then supersedes the stale binding instead of
- * being blocked for the full {@link NODE_LIVENESS_TTL_MS}. Deliberately tighter
- * than the node-liveness TTL, which governs roster/routing rather than attach
- * arbitration.
+ * instance. The longest built-in node heartbeat cadence is 30 seconds; five
+ * seconds of scheduling/network slack keeps those live connections inside the
+ * window. A killed instance stops framing, so a restart can still supersede its
+ * stale binding before the full {@link NODE_LIVENESS_TTL_MS}, which governs
+ * roster/routing rather than attach arbitration.
  */
-export const PROVIDER_ATTACH_LIVENESS_MS = 24_000;
+export const PROVIDER_ATTACH_LIVENESS_MS = 35_000;
 
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
   return (
