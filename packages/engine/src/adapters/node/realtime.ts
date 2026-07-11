@@ -12,7 +12,7 @@ import type { EngineDb } from '../../ports/database.js';
 import { observerTokens } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
-import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
+import { PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
@@ -274,7 +274,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     workspaceId: string,
     nodeId: string,
     providerName: string,
-    _instanceId: string,
+    instanceId: string,
     connectionId: string,
   ): { code: string; message: string } | null {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
@@ -282,9 +282,16 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (!existingConnId || existingConnId === connectionId) return null;
     const existing = this.nodeConnections.get(existingConnId);
     if (!existing) return null;
-    // A still-live instance owns the name (duplicate process). A dropped or
-    // silent (stale) instance is a reconnect and gets replaced on attach.
-    if (Date.now() - existing.lastSeen <= NODE_LIVENESS_TTL_MS) {
+    // Spec §3.1: a new instance_id is a reconnect/restart and supersedes the
+    // incumbent on attach; the same instance re-registering just replaces
+    // itself. Reject only a genuinely-live DUPLICATE — a different instance
+    // whose connection is still actively framing, i.e. seen within
+    // PROVIDER_ATTACH_LIVENESS_MS. The window covers the longest built-in SDK
+    // heartbeat cadence with scheduling slack. A killed instance stops framing,
+    // so its window lapses and the restart supersedes the stale binding instead
+    // of being blocked for the full node TTL.
+    if (existing.instanceId === instanceId) return null;
+    if (Date.now() - existing.lastSeen <= PROVIDER_ATTACH_LIVENESS_MS) {
       return {
         code: 'provider_instance_conflict',
         message: `Provider "${providerName}" is already connected on this node`,
