@@ -266,6 +266,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return !!this.providerSocket(this.nodeKey(workspaceId, nodeId), providerName);
   }
 
+  isProviderAttached(workspaceId: string, nodeId: string, providerName: string): boolean {
+    const connId = this.providerConnId(this.nodeKey(workspaceId, nodeId), providerName);
+    return !!connId && this.nodeConnections.has(connId);
+  }
+
   providerNameForConnection(connectionId: string): string | undefined {
     return this.nodeConnections.get(connectionId)?.providerName;
   }
