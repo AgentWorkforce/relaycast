@@ -9,6 +9,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [6.0.3] - 2026-07-12
+
+### Added
+
+- `FLEET_DELIVERY_CURSOR_CAPABILITY` and optional `AgentRegisterReplyData.delivery_ack_seq` define the negotiated broker-restart cursor handshake while retaining the legacy reply shape.
+
+## [4.0.0] - 2026-06-15
+
 ### Breaking
 
 - `DeliveryStatus` reworked for the durable mailbox / fleet location routing.
@@ -39,7 +47,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `FLEET_DELIVERY_CURSOR_CAPABILITY` and optional `AgentRegisterReplyData.delivery_ack_seq` define the negotiated broker-restart cursor handshake while retaining the legacy reply shape.
 - `DeliverySchema` gains fleet location and lifecycle fields: `seq`,
   `location_type`, `location_node_id`, `expires_at`, `delivered_at`, `acked_at`,
   and `dead_lettered_at`.

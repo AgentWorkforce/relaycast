@@ -44,14 +44,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [6.0.0] - 2026-07-09
 
-### Breaking
-
-- Added multi-provider nodes and provider-owned, node-scoped actions, changing node routing and lifecycle semantics.
-
 ### Added
 
-- Node provider clients for the TypeScript, Python, and Swift SDKs.
-- Provider disconnect hooks and aggregate node-state cleanup in the engine.
+- Allowed one logical node to host multiple named providers with provider-owned capabilities and node-scoped actions.
+- Added node provider clients for the TypeScript, Python, and Swift SDKs.
+- Added provider disconnect hooks and aggregate node-state cleanup in the engine.
 
 ### Fixed
 
@@ -159,7 +156,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Added first-class node delivery contracts.
+- Made nodes first-class delivery hosts for agents across direct WebSocket, fleet WebSocket, and HTTP-push transports.
+- Added agent-to-node bindings, HTTP-push authentication and acknowledgement modes, delivery retries, and redacted node configuration.
+- Added matching node delivery contracts to the TypeScript, Python, Rust, and Swift SDKs.
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 

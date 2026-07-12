@@ -4,6 +4,12 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
+## [Unreleased]
+
+## [6.0.0] - 2026-07-09
+
+- Added `NodeProvider` support for hosting agents and node-scoped actions from Swift.
+
 ## 0.1.0
 
 - Added initial SwiftPM package.

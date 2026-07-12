@@ -8,9 +8,25 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-06-24
+
 ### Added
 - Added `node_control_ws_url(base_url: Option<&str>)`, which builds the fleet node-control WebSocket URL (`{ws_base}/v1/node/ws`), applying the hosted default and `https`→`wss` rewrite when no base is given. Lets callers reach the node-control endpoint without knowing the hosted host or scheme.
+
+## [2.3.0] - 2026-06-09
+
+### Added
 - Added optional `harness` identifier on `RelayCastOptions`/`ClientOptions` and `WsClientOptions` via `with_harness(...)`, plus `sanitize_harness(...)` and the `HARNESS_HEADER` constant. A User-Agent-style identifier for the harness driving requests (e.g. `"claude-code/2.3 (model=opus-4.8)"`, `"codex"`, `"human"`); sent as the `X-Relaycast-Harness` HTTP header and forwarded as the `harness` WS query param so server-side telemetry can attribute traffic. Invalid values (empty, control characters) are dropped; the header/param is omitted entirely when unset, and the value survives `HttpClient::with_api_key(...)`. Brings the Rust SDK to parity with `@relaycast/sdk`.
+
+## [2.1.0] - 2026-06-03
+
+### Added
+- Added durable delivery APIs on `AgentClient`: `deliveries(...)`, `ack_delivery(...)`, `fail_delivery(...)`, and `defer_delivery(...)`.
+- Added durable delivery types and websocket event variants for `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and `delivery.failed`.
+
+## [1.1.0] - 2026-05-19
+
+### Added
 - Added raw WebSocket event subscriptions with `WsClient::subscribe_raw_events()` and `RawEventReceiver`.
 - Added SDK-owned raw event normalization helpers:
   - `normalize_inbound_event(...)`
@@ -21,12 +37,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Added `AgentRegistrationClient::registered_agent_client(...)` for cached/spawned token registration followed by agent-client construction.
 - Added idempotent channel startup helpers `AgentClient::ensure_joined_channel(...)` and `AgentClient::ensure_joined_channels(...)`.
 - Added `DmParticipantsCache` for bounded workspace DM participant lookup caching.
-- Added durable delivery APIs on `AgentClient`:
-  - `deliveries(...)`
-  - `ack_delivery(...)`
-  - `fail_delivery(...)`
-  - `defer_delivery(...)`
-- Added durable delivery types and websocket event variants for `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and `delivery.failed`.
+
+## [1.0.1] - 2026-05-10
 
 ### Changed
 - Made `agent.spawn_requested` websocket parsing tolerant of missing or `null` `task`, `channel`, and `already_existed` fields.
