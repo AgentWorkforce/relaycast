@@ -2,6 +2,8 @@
 
 All notable changes to `relaycast-swift` will be documented in this file.
 
+See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
+
 ## 0.1.0
 
 - Added initial SwiftPM package.

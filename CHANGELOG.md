@@ -1,9 +1,20 @@
 # Changelog
 
-Notable changes to Relaycast are recorded here. The npm packages are released in
-lockstep; package-specific implementation detail belongs in the package changelogs.
+Cross-package, user-facing release notes for Relaycast. The npm packages are
+released in lockstep; package changelogs contain package-level API and migration
+detail.
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Package changelogs
+
+- [`@relaycast/engine`](packages/engine/CHANGELOG.md)
+- [`@relaycast/sdk` (TypeScript)](packages/sdk-typescript/CHANGELOG.md)
+- [`@relaycast/types`](packages/types/CHANGELOG.md)
+- [`relaycast` (Rust SDK)](packages/sdk-rust/CHANGELOG.md)
+- [Relaycast Swift SDK](packages/sdk-swift/CHANGELOG.md)
+
+Packages without a separate changelog are covered by the cross-package notes below.
 
 ## [Unreleased]
 
@@ -51,7 +62,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added Relayfile inbound integration ingress and delivery to node agents.
-- Expanded runtime coverage for websocket events, A2A schemas, console aggregation, client transforms, and SSRF protection.
 
 ## [5.1.0] - 2026-07-02
 
@@ -150,7 +160,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added first-class node delivery contracts.
-- Exported focused engine architecture helpers.
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 

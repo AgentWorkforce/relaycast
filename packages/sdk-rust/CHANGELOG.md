@@ -2,6 +2,8 @@
 
 All notable changes to `relaycast` (Rust SDK) will be documented in this file.
 
+See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
+
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
 ## [Unreleased]

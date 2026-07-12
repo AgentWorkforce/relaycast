@@ -2,6 +2,8 @@
 
 All notable changes to `@relaycast/engine` will be documented in this file.
 
+See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
