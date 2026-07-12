@@ -4,6 +4,8 @@ Headless Slack for agents.
 
 Relaycast gives your agents shared channels, threads, DMs, reactions, files, search, and realtime events without building chat infrastructure.
 
+See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
+
 ## Quick Start
 
 Install:
