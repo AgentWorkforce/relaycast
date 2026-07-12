@@ -12,7 +12,7 @@ import type { EngineDb } from '../../ports/database.js';
 import { observerTokens } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
-import { PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
+import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
 import { observerAllowsEvent } from '../../engine/observerToken.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
@@ -302,22 +302,22 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (!existingConnId || existingConnId === connectionId) return null;
     const existing = this.nodeConnections.get(existingConnId);
     if (!existing) return null;
-    // Spec §3.1: a new instance_id is a reconnect/restart and supersedes the
-    // incumbent on attach; the same instance re-registering just replaces
-    // itself. Reject only a genuinely-live DUPLICATE — a different instance
-    // whose connection is still actively framing, i.e. seen within
-    // PROVIDER_ATTACH_LIVENESS_MS. The window covers the longest built-in SDK
-    // heartbeat cadence with scheduling slack. A killed instance stops framing,
-    // so its window lapses and the restart supersedes the stale binding instead
-    // of being blocked for the full node TTL.
-    if (existing.instanceId === instanceId) return null;
-    if (Date.now() - existing.lastSeen <= PROVIDER_ATTACH_LIVENESS_MS) {
-      return {
-        code: 'provider_instance_conflict',
-        message: `Provider "${providerName}" is already connected on this node`,
-      };
-    }
-    return null;
+    // Spec §3.1 arbitration lives in the shared `providerAttachDecision` policy so
+    // this in-process adapter and out-of-process socket owners (the
+    // relaycast-cloud NodeDO) stay in lockstep: a same-instance re-register is a
+    // reconnect, a different instance still framing within
+    // PROVIDER_ATTACH_LIVENESS_MS is a live duplicate, and otherwise the incumbent
+    // is stale and the restart supersedes it.
+    const decision = providerAttachDecision({
+      existingInstanceId: existing.instanceId,
+      existingLastSeen: existing.lastSeen,
+      incomingInstanceId: instanceId,
+    });
+    if (!decision.conflict) return null;
+    return {
+      code: decision.code,
+      message: `Provider "${providerName}" is already connected on this node`,
+    };
   }
 
   attachProvider(

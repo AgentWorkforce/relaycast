@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
+
 ### Fixed
 - Rescheduling a node-scoped action onto a fallback node targets the provider that owns the action and honors that provider's liveness and queue policy. Previously a crash-recovery reschedule onto a multi-provider node could dispatch to the broker or queue behind an offline non-queued owner, leaving the invocation stuck.
 - Message triggers fire node-scoped (fleet-provider) actions: a trigger bound to an action name now resolves plain node-scoped actions and dispatches them node-addressed, so `defineNode`'s onMessage→action handlers run. Previously the trigger's workspace-global resolver excluded node-scoped actions, so such triggers never fired.
