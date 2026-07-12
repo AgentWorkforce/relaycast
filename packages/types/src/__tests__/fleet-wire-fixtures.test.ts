@@ -112,6 +112,7 @@ describe('fleet wire fixtures', () => {
       if (fixtureFile === 'reply.agent_register.json') {
         expect(AgentRegisterReplyDataSchema.parse((parsed as { data: unknown }).data)).toEqual({
           agent_id: 'agt_01J7FLEET000000000000101',
+          delivery_ack_seq: 42,
           token: 'at_live_0123456789abcdef01234567',
           name: 'codex-builder-1',
         });
@@ -298,6 +299,18 @@ describe('fleet wire fixtures', () => {
       id: 'req_agent_register_001',
       type: 'agent.register',
       name: 'codex-builder-1',
+    });
+  });
+
+  it('keeps legacy agent.register reply data valid without a cursor', () => {
+    expect(AgentRegisterReplyDataSchema.parse({
+      agent_id: 'agt_legacy',
+      token: 'at_live_legacy',
+      name: 'legacy-worker',
+    })).toEqual({
+      agent_id: 'agt_legacy',
+      token: 'at_live_legacy',
+      name: 'legacy-worker',
     });
   });
 });

@@ -28,6 +28,7 @@ export type {
   UpgradeArgs,
   NodeUpgradeArgs,
 } from './realtime.js';
+export { isProviderAgentDeliveryReady } from './realtime.js';
 export type { PresenceTracker } from './presence.js';
 export type { RateLimiter, RateLimitResult } from './rate-limit.js';
 export type { FileStorage } from './files.js';

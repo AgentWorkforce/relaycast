@@ -10,14 +10,17 @@ import type {
   FleetCapability,
   AgentRegisterReplyData,
 } from '@relaycast/types';
-import { parseFleetBrokerToRelaycastMessage } from '@relaycast/types';
+import {
+  FLEET_DELIVERY_CURSOR_CAPABILITY,
+  parseFleetBrokerToRelaycastMessage,
+} from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 import type { EngineDb } from '../ports/database.js';
-import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
 import {
@@ -94,6 +97,12 @@ function normalizeCapabilities(capabilities: CapabilityLike[]): FleetCapability[
   return capabilities.map((capability) => (
     typeof capability === 'string' ? { name: capability } : capability
   ));
+}
+
+function supportsProviderDeliveryReadiness(registry: NodeConnectionRegistry): boolean {
+  return typeof registry.setProviderDeliveryReadiness === 'function'
+    && typeof registry.markProviderAgentsDeliveryReady === 'function'
+    && typeof registry.isProviderAgentDeliveryReady === 'function';
 }
 
 function requestId(message: { id?: string }): string {
@@ -1025,6 +1034,7 @@ export async function registerAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRegisterMessage,
+  options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   return runAtomic(db, async (tx) => {
     const [node] = await tx
@@ -1032,6 +1042,17 @@ export async function registerAgentViaNode(
       .from(nodes)
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+    const [provider] = await tx
+      .select({ capabilities: nodeProviders.capabilities })
+      .from(nodeProviders)
+      .where(and(
+        eq(nodeProviders.workspaceId, workspaceId),
+        eq(nodeProviders.nodeId, nodeId),
+        eq(nodeProviders.name, providerName),
+      ));
+    const cursorHandshake = (options.deliveryCursorSupported ?? true) && (provider?.capabilities?.some(
+      (capability) => capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+    ) ?? false);
 
     const token = `at_live_${randomHex(16)}`;
     const tokenHash = await sha256Hex(token);
@@ -1115,6 +1136,7 @@ export async function registerAgentViaNode(
       agent_id: result.id,
       name: result.name,
       token,
+      ...(cursorHandshake ? { delivery_ack_seq: result.deliveryAckSeq } : {}),
     };
   });
 }
@@ -1171,6 +1193,7 @@ export async function reconcileInventory(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  providerName: string,
   inventoryAgents: FleetInventoryAgent[],
   completionDeps?: InvocationCompletionDeps,
 ) {
@@ -1196,37 +1219,81 @@ export async function reconcileInventory(
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, item.name)));
     if (!existing) continue;
-    existingByName.set(item.name, existing);
-    if (existing.status !== 'active') continue;
-    const [boundNode] = await db
-      .select()
-      .from(nodes)
-      .where(and(
-        eq(nodes.workspaceId, workspaceId),
-        eq(nodes.id, existing.locationNodeId ?? ''),
-      ));
-    const boundNodeLive = !!boundNode && isNodeLive(boundNode);
-    const conflict = existing.locationType !== 'via_node'
-      || !existing.locationNodeId
-      || (existing.locationNodeId !== nodeId && boundNodeLive && !isImplicitDirectLocation(existing));
-    if (conflict) {
-      console.warn('[node.inventory] rejected active-name claim', {
-        workspace_id: workspaceId,
-        node_id: nodeId,
-        agent_id: existing.id,
-        agent_name: existing.name,
-        existing_location_type: existing.locationType,
-        existing_location_node_id: existing.locationNodeId,
-      });
-      throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+    if (existing.providerName !== providerName) {
+      throw codedError(
+        `Agent "${item.name}" belongs to provider "${existing.providerName}"`,
+        'agent_provider_conflict',
+        409,
+      );
     }
+    if (existing.status === 'active') {
+      const [boundNode] = await db
+        .select()
+        .from(nodes)
+        .where(and(
+          eq(nodes.workspaceId, workspaceId),
+          eq(nodes.id, existing.locationNodeId ?? ''),
+        ));
+      const boundNodeLive = !!boundNode && isNodeLive(boundNode);
+      const conflict = existing.locationType !== 'via_node'
+        || !existing.locationNodeId
+        || (existing.locationNodeId !== nodeId && boundNodeLive && !isImplicitDirectLocation(existing));
+      if (conflict) {
+        console.warn('[node.inventory] rejected active-name claim', {
+          workspace_id: workspaceId,
+          node_id: nodeId,
+          provider_name: providerName,
+          agent_id: existing.id,
+          agent_name: existing.name,
+          existing_location_type: existing.locationType,
+          existing_location_node_id: existing.locationNodeId,
+        });
+        throw codedError(`Agent "${item.name}" is already active on another live location`, 'agent_location_conflict', 409);
+      }
+    }
+    if (existing.id !== item.agent_id) {
+      throw codedError(
+        `Inventory identity for agent "${item.name}" does not match its registered agent_id`,
+        'agent_identity_mismatch',
+        409,
+      );
+    }
+    existingByName.set(item.name, existing);
   }
 
+  const openInvocations = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      actionName: actionInvocations.actionName,
+      callerId: actionInvocations.callerId,
+      input: actionInvocations.input,
+      status: actionInvocations.status,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedProvider: actionInvocations.dispatchedProvider,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+      attemptedNodeIds: actionInvocations.attemptedNodeIds,
+      dispatchAttempts: actionInvocations.dispatchAttempts,
+    })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.dispatchedProvider, providerName),
+      inArray(actionInvocations.status, ['pending', 'dispatched']),
+    ));
+  const providerInvocationIds = new Set(openInvocations.map((invocation) => invocation.id));
+
+  const reconciledAgentIds: string[] = [];
+  const newlyRoutedAgentIds: string[] = [];
   for (const item of inventoryAgents) {
     const existing = existingByName.get(item.name);
     if (existing) {
       const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
       const targetWasActive = activeNodeIds.includes(nodeId);
+      const wasRoutableThroughProvider = existing.locationType === 'via_node'
+        && existing.locationNodeId === nodeId
+        && targetWasActive;
       let reservedTargetSlot = false;
       try {
         if (!targetWasActive) {
@@ -1249,6 +1316,8 @@ export async function reconcileInventory(
           deactivateExisting: true,
         });
         await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+        reconciledAgentIds.push(existing.id);
+        if (!wasRoutableThroughProvider) newlyRoutedAgentIds.push(existing.id);
       } catch (err) {
         if (reservedTargetSlot) {
           await releaseNodeAgentSlots(db, workspaceId, [nodeId]);
@@ -1257,8 +1326,8 @@ export async function reconcileInventory(
       }
     }
 
-    if (!item.invocation_id) continue;
-    const completed = await completeNodeInvocation(db, registry, workspaceId, nodeId, item.invocation_id, {
+    if (!item.invocation_id || !providerInvocationIds.has(item.invocation_id)) continue;
+    const completed = await completeNodeInvocation(db, registry, workspaceId, nodeId, providerName, item.invocation_id, {
       output: {
         agent_id: item.agent_id,
         name: item.name,
@@ -1281,6 +1350,7 @@ export async function reconcileInventory(
       eq(agents.workspaceId, workspaceId),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
       eq(agents.status, 'active'),
     ));
   const missing = nodeAgents.filter((agent) => !names.has(agent.name)).map((agent) => agent.id);
@@ -1291,25 +1361,6 @@ export async function reconcileInventory(
       .where(inArray(agents.id, missing));
   }
 
-  const openInvocations = await db
-    .select({
-      id: actionInvocations.id,
-      workspaceId: actionInvocations.workspaceId,
-      actionName: actionInvocations.actionName,
-      callerId: actionInvocations.callerId,
-      input: actionInvocations.input,
-      status: actionInvocations.status,
-      dispatchedNodeId: actionInvocations.dispatchedNodeId,
-      spawnReservedAt: actionInvocations.spawnReservedAt,
-      attemptedNodeIds: actionInvocations.attemptedNodeIds,
-      dispatchAttempts: actionInvocations.dispatchAttempts,
-    })
-    .from(actionInvocations)
-    .where(and(
-      eq(actionInvocations.workspaceId, workspaceId),
-      eq(actionInvocations.dispatchedNodeId, nodeId),
-      inArray(actionInvocations.status, ['pending', 'dispatched']),
-    ));
   let rescheduledInvocations = 0;
   for (const invocation of openInvocations) {
     if (liveInvocationIds.has(invocation.id)) continue;
@@ -1323,6 +1374,7 @@ export async function reconcileInventory(
         .set({
           status: 'pending',
           dispatchedNodeId: null,
+          dispatchedProvider: null,
           dispatchedAt: null,
           retryAfterAt: new Date(Date.now() + 5_000),
         })
@@ -1331,10 +1383,14 @@ export async function reconcileInventory(
   }
 
   return {
-    rebound_agents: inventoryAgents.length,
-    open_invocations: openInvocations.length,
-    completed_invocations: completedInvocations,
-    rescheduled_invocations: rescheduledInvocations,
+    reply: {
+      rebound_agents: reconciledAgentIds.length,
+      open_invocations: openInvocations.length,
+      completed_invocations: completedInvocations,
+      rescheduled_invocations: rescheduledInvocations,
+    },
+    reconciledAgentIds,
+    newlyRoutedAgentIds,
   };
 }
 
@@ -1355,12 +1411,14 @@ export async function getPublicNode(db: Db, workspaceId: string, name: string) {
   return node ? publicNode(node) : null;
 }
 
-function sendControl(socket: NodeSocketLike | undefined, payload: Record<string, unknown>): void {
-  if (!socket) return;
+function sendControl(socket: NodeSocketLike | undefined, payload: Record<string, unknown>): boolean {
+  if (!socket) return false;
   try {
     socket.send(JSON.stringify(payload));
+    return true;
   } catch {
     // The close handler will clean up the socket.
+    return false;
   }
 }
 
@@ -1420,6 +1478,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           }
         }
         const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message, provider);
+        const readinessSupported = supportsProviderDeliveryReadiness(args.registry);
+        const acceptance = registered.acceptance.map((capability) => (
+          capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY && !readinessSupported
+            ? { ...capability, accepted: false, reason: 'delivery_readiness_unsupported' }
+            : capability
+        ));
+        const cursorHandshake = acceptance.some(
+          (capability) => capability.accepted && capability.name === FLEET_DELIVERY_CURSOR_CAPABILITY,
+        );
         if (args.connectionId && args.registry.attachProvider) {
           args.registry.attachProvider(
             args.workspaceId,
@@ -1429,6 +1496,13 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             args.connectionId,
           );
         }
+        args.registry.setProviderDeliveryReadiness?.(
+          args.workspaceId,
+          args.nodeId,
+          provider.name,
+          args.connectionId,
+          cursorHandshake ? 'agent_scoped' : 'immediate',
+        );
         sendControl(args.socket, {
           v: 1,
           id: requestId(message),
@@ -1437,7 +1511,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           data: {
             ...registered.node,
             provider: registered.provider,
-            accepted_capabilities: registered.acceptance,
+            accepted_capabilities: acceptance,
           },
         });
         // Node is now marked online: flush any queued action.invoke frames so
@@ -1446,7 +1520,19 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // The success reply was already sent above; keep the pending flush
         // best-effort so a delivery error cannot trigger a second error reply
         // for the same request id from the outer catch.
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId).catch(() => {});
+        // Cursor-aware providers seed each resumed identity through
+        // `agent.register`; replaying here would race every cursor reply. Legacy
+        // providers retain immediate reconnect replay, scoped to their socket so
+        // one provider cannot flush another provider's mailbox.
+        if (!cursorHandshake) {
+          await deliverPendingToNode(
+            args.db,
+            args.registry,
+            args.workspaceId,
+            args.nodeId,
+            { providerName: provider.name },
+          ).catch(() => {});
+        }
         return;
       }
       case 'node.heartbeat':
@@ -1483,51 +1569,127 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'agent.register': {
-        const registered = await registerAgentViaNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        const registered = await registerAgentViaNode(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message,
+          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+        );
         // The relay broker's node_control client awaits a `reply` frame keyed by
         // the request id (it matches `pending_agent_registrations` by `reply.id`
         // and parses `data` as {agent_id, token, name} with deny_unknown_fields).
         // A bare `agent.registered` frame leaves the token-authority handshake
         // hanging until the 30s timeout, so spawn never completes. Reply in the
-        // shape the shipped broker consumes; the broker already holds the
-        // invocation_id/session_ref it sent, so only the minted identity is echoed.
-        sendControl(args.socket, {
+        // shape the shipped broker consumes. Cursor-aware brokers advertise a
+        // node capability and receive the authoritative cumulative cursor before
+        // the pending-delivery drain below; legacy strict parsers receive the
+        // original three-field shape.
+        const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),
           type: 'reply',
           ok: true,
-          data: { agent_id: registered.agent_id, token: registered.token, name: registered.name },
+          data: registered,
         });
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        if (!replySent) return;
+        args.registry.markProviderAgentsDeliveryReady?.(
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+          [registered.agent_id],
+        );
+        // Only this identity is cursor-ready. A node-wide drain here could send
+        // another resumed agent's pending frame before its own reply.
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: [registered.agent_id] },
+        );
         return;
       }
       case 'agent.deregister':
         await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
         return;
       case 'inventory.sync': {
-        const result = await reconcileInventory(args.db, args.registry, args.workspaceId, args.nodeId, message.agents, args.completionDeps);
-        sendControl(args.socket, {
+        const result = await reconcileInventory(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message.agents,
+          args.completionDeps,
+        );
+        const replySent = sendControl(args.socket, {
           v: 1,
           id: requestId(message),
           type: 'reply',
           ok: true,
-          data: result,
+          data: result.reply,
         });
-        await deliverPendingToNode(args.db, args.registry, args.workspaceId, args.nodeId);
+        if (!replySent) return;
+        const newlyReadyAgentIds = result.reconciledAgentIds.filter((agentId) => (
+          !isProviderAgentDeliveryReady(
+            args.registry,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            agentId,
+          )
+        ));
+        args.registry.markProviderAgentsDeliveryReady?.(
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          args.connectionId,
+          result.reconciledAgentIds,
+        );
+        // Inventory represents sessions that survived a transport reconnect and
+        // therefore retain their in-memory cursors. Restrict replay to exactly
+        // those provider-owned identities; restarted sessions not in inventory
+        // become ready individually through `agent.register`.
+        const replayAgentIds = [...new Set([...newlyReadyAgentIds, ...result.newlyRoutedAgentIds])];
+        await deliverPendingToNode(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          { providerName: frameProviderName, agentIds: replayAgentIds },
+        );
         return;
       }
       case 'action.result': {
-        const completed = await completeNodeInvocation(args.db, args.registry, args.workspaceId, args.nodeId, message.invocation_id, {
-          ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
-          ...(message.error ? { error: message.error } : {}),
-        });
+        const completed = await completeNodeInvocation(
+          args.db,
+          args.registry,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message.invocation_id,
+          {
+            ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
+            ...(message.error ? { error: message.error } : {}),
+          },
+        );
         if (completed && args.completionDeps) {
           await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);
         }
         return;
       }
       case 'delivery.ack':
-        await ackDeliveriesUpToSeq(args.db, args.workspaceId, args.nodeId, message.agent, message.up_to_seq);
+        await ackDeliveriesUpToSeq(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message.agent,
+          message.up_to_seq,
+        );
         return;
     }
   } catch (err) {

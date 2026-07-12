@@ -693,6 +693,79 @@ describe('node adapter conformance', () => {
       expect(directNode.capabilities).toEqual([]);
     });
 
+    it('rejects delivery cursor negotiation when a realtime adapter lacks readiness hooks', async () => {
+      const ws = await createWorkspace(stack.app, 'node-control-legacy-readiness');
+      const db = stack.runtime.handle.db;
+      const createBroker = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          node_id: 'legacy_adapter_broker',
+          name: 'legacy-adapter-broker',
+          role: 'broker',
+          capabilities: [],
+          max_agents: 4,
+          tags: ['control'],
+          version: 'control-v0',
+        }),
+      });
+      expect(createBroker.status).toBe(201);
+
+      const realtime = stack.runtime.realtime;
+      const legacyRegistry: NodeConnectionRegistry = {
+        upgradeNode: (args) => realtime.upgradeNode(args),
+        sendToNode: (...args) => realtime.sendToNode(...args),
+        sendToProvider: (...args) => realtime.sendToProvider(...args),
+        isNodeConnected: (...args) => realtime.isNodeConnected(...args),
+        isProviderConnected: (...args) => realtime.isProviderConnected(...args),
+        detachProvider: (...args) => realtime.detachProvider(...args),
+        disconnectNode: (...args) => realtime.disconnectNode(...args),
+        drainNode: (...args) => realtime.drainNode(...args),
+      };
+      const sock = new FakeSocket();
+      const send = (frame: Record<string, unknown>) => handleNodeControlMessage({
+        db,
+        registry: legacyRegistry,
+        workspaceId: ws.workspaceId,
+        nodeId: 'legacy_adapter_broker',
+        socket: sock,
+        raw: JSON.stringify(frame),
+      });
+
+      await send({
+        v: 1,
+        id: 'legacy-node-register',
+        type: 'node.register',
+        name: 'legacy-adapter-broker',
+        node_id: 'legacy_adapter_broker',
+        capabilities: [capability('relay:delivery-cursor-v1', 'capacity')],
+        max_agents: 4,
+        tags: ['control'],
+        version: 'control-v1',
+        resume_cursor: null,
+      });
+      expect(sock.ofType('reply').at(-1)).toMatchObject({
+        data: {
+          accepted_capabilities: [expect.objectContaining({
+            name: 'relay:delivery-cursor-v1',
+            accepted: false,
+            reason: 'delivery_readiness_unsupported',
+          })],
+        },
+      });
+
+      await send({
+        v: 1,
+        id: 'legacy-agent-register',
+        type: 'agent.register',
+        name: 'legacy-worker',
+        session_ref: 'pty://legacy/worker',
+        resumable: true,
+      });
+      const reply = sock.ofType('reply').at(-1) as { data?: Record<string, unknown> };
+      expect(reply.data).not.toHaveProperty('delivery_ack_seq');
+    });
+
     it('enforces node capacity for agents registered over node control', async () => {
       const ws = await createWorkspace(stack.app, 'fleet-agent-register-capacity');
       const alpha = await enrollAndAttachNode(ws, {
@@ -1321,6 +1394,9 @@ describe('node adapter conformance', () => {
         sendToProvider: async () => false,
         isNodeConnected: () => true,
         isProviderConnected: () => true,
+        setProviderDeliveryReadiness: () => {},
+        markProviderAgentsDeliveryReady: () => {},
+        isProviderAgentDeliveryReady: () => true,
         detachProvider: () => {},
         disconnectNode: async () => {},
         drainNode: async () => {},

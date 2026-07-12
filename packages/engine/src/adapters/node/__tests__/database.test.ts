@@ -88,3 +88,85 @@ describe('delivery sequence high-water migration', () => {
       .toEqual({ seq: 8 });
   });
 });
+describe('action invocation provider migration', () => {
+  it('backfills action-owned and legacy node dispatches without claiming undispatched work', () => {
+    const sqlite = new Database(':memory:');
+    handles.push(sqlite);
+    sqlite.exec(`
+      CREATE TABLE actions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        handler_provider TEXT DEFAULT NULL,
+        handler_agent_id TEXT DEFAULT NULL,
+        handler_node_id TEXT DEFAULT NULL
+      );
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        provider_name TEXT NOT NULL DEFAULT 'default'
+      );
+      CREATE TABLE node_providers (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        capabilities TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE action_invocations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        action_id TEXT DEFAULT NULL,
+        action_name TEXT NOT NULL,
+        input TEXT NOT NULL DEFAULT '{}',
+        dispatched_node_id TEXT DEFAULT NULL
+      );
+      INSERT INTO agents (id, workspace_id, name, provider_name) VALUES
+        ('agent_ruby', 'ws_1', 'ruby-worker', 'ruby'),
+        ('agent_go', 'ws_1', 'go-worker', 'go');
+      INSERT INTO actions (id, workspace_id, name, handler_provider, handler_agent_id, handler_node_id) VALUES
+        ('action_named', 'ws_1', 'run-etl', 'python', NULL, 'node_a'),
+        ('action_agent', 'ws_1', 'agent-task', NULL, 'agent_ruby', NULL),
+        ('action_shadow', 'ws_1', 'spawn:codex', 'policy', NULL, 'node_a'),
+        ('action_ambiguous', 'ws_1', 'spawn:claude', 'policy', NULL, 'node_a');
+      INSERT INTO node_providers (id, workspace_id, node_id, name, capabilities) VALUES
+        ('provider_default', 'ws_1', 'node_a', 'default', '[]'),
+        ('provider_python', 'ws_1', 'node_a', 'python-capacity', '[{"name":"spawn:python","kind":"capacity"}]'),
+        ('provider_claude', 'ws_1', 'node_a', 'claude-capacity', '[{"name":"spawn:claude","kind":"capacity"}]'),
+        ('provider_legacy', 'ws_1', 'node_legacy', 'default', '[]');
+      INSERT INTO action_invocations (id, workspace_id, action_id, action_name, input, dispatched_node_id) VALUES
+        ('named_action', 'ws_1', 'action_named', 'run-etl', '{}', 'node_a'),
+        ('agent_action', 'ws_1', 'action_agent', 'agent-task', '{}', 'node_a'),
+        ('release_named', 'ws_1', NULL, 'release', '{"name":"go-worker"}', 'node_a'),
+        ('shadow_spawn', 'ws_1', NULL, 'spawn', '{"cli":"codex"}', 'node_a'),
+        ('ambiguous_spawn', 'ws_1', NULL, 'spawn', '{"cli":"claude"}', 'node_a'),
+        ('native_capacity', 'ws_1', NULL, 'spawn', '{"cli":"python"}', 'node_a'),
+        ('legacy_unknown', 'ws_1', NULL, 'spawn', '{}', 'node_legacy'),
+        ('ambiguous_unknown', 'ws_1', NULL, 'spawn', '{}', 'node_a'),
+        ('not_dispatched', 'ws_1', 'action_named', 'run-etl', '{}', NULL);
+    `);
+
+    const migration = readFileSync(
+      new URL('../../../db/migrations/0030_action_invocation_provider.sql', import.meta.url),
+      'utf8',
+    );
+    sqlite.exec(migration);
+
+    expect(sqlite.prepare(`
+      SELECT id, dispatched_provider
+      FROM action_invocations
+      ORDER BY id
+    `).all()).toEqual([
+      { id: 'agent_action', dispatched_provider: 'ruby' },
+      { id: 'ambiguous_spawn', dispatched_provider: null },
+      { id: 'ambiguous_unknown', dispatched_provider: null },
+      { id: 'legacy_unknown', dispatched_provider: 'default' },
+      { id: 'named_action', dispatched_provider: 'python' },
+      { id: 'native_capacity', dispatched_provider: 'python-capacity' },
+      { id: 'not_dispatched', dispatched_provider: null },
+      { id: 'release_named', dispatched_provider: 'go' },
+      { id: 'shadow_spawn', dispatched_provider: 'policy' },
+    ]);
+  });
+});

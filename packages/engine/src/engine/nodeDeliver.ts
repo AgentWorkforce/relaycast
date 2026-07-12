@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { agents, agentNodeBindings, channelMembers, dmConversations, dmParticipants, nodes } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
-import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload } from './deliveryWire.js';
 import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch, type HttpPushProxyConfig } from './httpPushDispatch.js';
 
@@ -128,6 +128,15 @@ function deliverEventToRecipient(
         },
       },
     });
+  }
+  if (!isProviderAgentDeliveryReady(
+    deps.nodeConnections,
+    deps.workspaceId,
+    recipient.nodeId,
+    recipient.providerName,
+    recipient.agentId,
+  )) {
+    return Promise.resolve(false);
   }
   return deps.nodeConnections.sendToProvider(deps.workspaceId, recipient.nodeId, recipient.providerName, buildDeliverFrame({
     delivery_id: eventDeliveryId(args.event, args.eventKey, recipient.agentId),

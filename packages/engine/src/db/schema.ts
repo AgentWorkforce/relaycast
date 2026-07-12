@@ -833,6 +833,9 @@ export const actionInvocations = sqliteTable(
     spawnReservedAt: integer('spawn_reserved_at', { mode: 'timestamp' }),
     attemptedNodeIds: text('attempted_node_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
+    // Provider connection that received the current node dispatch. Inventory is
+    // provider-scoped, so node_id alone is insufficient for reconciliation.
+    dispatchedProvider: text('dispatched_provider'),
     retryAfterAt: integer('retry_after_at', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     completedAt: integer('completed_at', { mode: 'timestamp' }),

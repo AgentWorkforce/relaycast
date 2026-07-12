@@ -1,0 +1,79 @@
+{
+  "id": "traj_ejracsirz9ku",
+  "version": 1,
+  "task": {
+    "title": "Fix cursor-negotiated provider replay ordering",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#254"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-11T12:26:07.748Z",
+  "completedAt": "2026-07-11T12:32:35.405Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-07-11T12:28:07.181Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_x3qf8upt3or5",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-07-11T12:28:07.181Z",
+      "endedAt": "2026-07-11T12:32:35.405Z",
+      "events": [
+        {
+          "ts": 1783772887182,
+          "type": "decision",
+          "content": "Scope mailbox replay by provider and ready agent identity: Scope mailbox replay by provider and ready agent identity",
+          "raw": {
+            "question": "Scope mailbox replay by provider and ready agent identity",
+            "chosen": "Scope mailbox replay by provider and ready agent identity",
+            "alternatives": [],
+            "reasoning": "A cursor-capable provider cannot replay at node.register. Agent registration must drain only the replied agent, inventory sync must drain only the provider's listed live identities, and legacy node registration must keep immediate replay without touching other providers."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1783773154909,
+          "type": "reflection",
+          "content": "Replay gating now covers cursor reply ordering, per-agent drains, provider isolation, and inventory-based transport continuity; focused and full engine tests pass after rerunning the listener test outside the sandbox.",
+          "raw": {
+            "focalPoints": [
+              "cursor-ordering",
+              "provider-scope",
+              "inventory-continuity",
+              "test-coverage"
+            ],
+            "confidence": 0.92
+          },
+          "significance": "high",
+          "tags": [
+            "focal:cursor-ordering",
+            "focal:provider-scope",
+            "focal:inventory-continuity",
+            "focal:test-coverage",
+            "confidence:0.92"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Scoped node mailbox replay by provider and cursor-ready agent, documented inventory continuity, and added restart regression coverage.",
+    "approach": "Standard approach",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "afe4bec0e0fa6c789b48285731ba5cd1bcbc8092",
+    "endRef": "afe4bec0e0fa6c789b48285731ba5cd1bcbc8092"
+  }
+}

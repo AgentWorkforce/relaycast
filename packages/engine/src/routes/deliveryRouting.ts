@@ -11,7 +11,7 @@ import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '..
 import { buildHttpPushHeaders, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { transformForClient, type WsEvent } from '../engine/wsTransform.js';
-import type { EngineDb, EngineDeps } from '../ports/index.js';
+import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { sendNodeContextToAgents } from '../engine/nodeContext.js';
 import { appendAndPublishWorkspaceEvent } from '../engine/workspaceEvents.js';
@@ -416,6 +416,15 @@ async function routeOneDeliveryOutcome(
 
   if (locationType === 'via_node' && locationNodeId && deliveryAdapter === 'ws.node.v1') {
     const providerName = liveLocation?.providerName ?? recordedTarget?.providerName ?? 'default';
+    if (!isProviderAgentDeliveryReady(
+      ctx.engine.nodeConnections,
+      ctx.workspaceId,
+      locationNodeId,
+      providerName,
+      delivery.agentId,
+    )) {
+      return;
+    }
     const sent = await ctx.engine.nodeConnections.sendToProvider(ctx.workspaceId, locationNodeId, providerName, buildDeliverFrame({
       delivery_id: delivery.id,
       agent_id: delivery.agentId,
