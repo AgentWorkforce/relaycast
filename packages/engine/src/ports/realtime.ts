@@ -94,6 +94,13 @@ export interface NodeConnectionRegistry {
   /** True when a specific provider currently has a connected socket. */
   isProviderConnected(workspaceId: string, nodeId: string, providerName: string): boolean;
 
+  /**
+   * True when the socket is explicitly bound to this provider. Unlike
+   * isProviderConnected, this stays false for the synthetic default provider's
+   * reconnect-before-reregister compatibility socket.
+   */
+  isProviderAttached?(workspaceId: string, nodeId: string, providerName: string): boolean;
+
   /** The provider name bound to a registry connection, once it has registered. */
   providerNameForConnection?(connectionId: string): string | undefined;
 

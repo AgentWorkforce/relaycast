@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,23 +77,37 @@ describe('provider attach race', () => {
   });
 
   it('keeps a stable aggregate when a register races another provider disconnecting', async () => {
-    for (let i = 0; i < 25; i++) {
-      const ws = await createWorkspace(stack.app, `disc-${i}`);
-      const nodeId = `node_${i}`;
-      await enroll(ws.workspaceKey, nodeId, `alpha${i}`);
-      const a = new FakeSocket(); const ha = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, a);
-      await ha.handleMessage(registerFrame(nodeId, `alpha${i}`, { name: 'broker', instance_id: 'b1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
-      const b = new FakeSocket(); const hb = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, b);
-      // The broker disconnects at the same instant the py provider registers.
-      await Promise.all([
-        hb.handleMessage(registerFrame(nodeId, `alpha${i}`, { name: 'py', instance_id: 'p1' }, [{ name: 'run-etl', kind: 'action' }])),
-        ha.handleClose(),
-      ]);
-      // The broker's row persists offline (manifest), py is online; neither cap
-      // set is clobbered out of the aggregate.
-      expect(await providerNames(ws.workspaceId, nodeId)).toEqual(['broker', 'py']);
-      expect(await nodeCapNames(ws.workspaceId, nodeId)).toEqual(['run-etl', 'spawn:claude']);
+    // The teardown path now logs failures loudly (e.g. a swallowed SQLITE_BUSY
+    // that would drop a recompute). Serialization means it never fires here — so
+    // assert no teardown error is logged across the loop.
+    const teardownErrors: unknown[][] = [];
+    const originalConsoleError = console.error.bind(console);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      if (typeof args[0] === 'string' && args[0].startsWith('[node.teardown]')) teardownErrors.push(args);
+      else originalConsoleError(...args); // don't swallow unrelated errors
+    });
+    try {
+      for (let i = 0; i < 25; i++) {
+        const ws = await createWorkspace(stack.app, `disc-${i}`);
+        const nodeId = `node_${i}`;
+        await enroll(ws.workspaceKey, nodeId, `alpha${i}`);
+        const a = new FakeSocket(); const ha = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, a);
+        await ha.handleMessage(registerFrame(nodeId, `alpha${i}`, { name: 'broker', instance_id: 'b1' }, [{ name: 'spawn:claude', kind: 'capacity' }]));
+        const b = new FakeSocket(); const hb = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, b);
+        // The broker disconnects at the same instant the py provider registers.
+        await Promise.all([
+          hb.handleMessage(registerFrame(nodeId, `alpha${i}`, { name: 'py', instance_id: 'p1' }, [{ name: 'run-etl', kind: 'action' }])),
+          ha.handleClose(),
+        ]);
+        // The broker's row persists offline (manifest), py is online; neither cap
+        // set is clobbered out of the aggregate.
+        expect(await providerNames(ws.workspaceId, nodeId)).toEqual(['broker', 'py']);
+        expect(await nodeCapNames(ws.workspaceId, nodeId)).toEqual(['run-etl', 'spawn:claude']);
+      }
+    } finally {
+      errorSpy.mockRestore();
     }
+    expect(teardownErrors).toEqual([]);
   });
 
   it('resolves two providers claiming the same name deterministically, without silent cap loss', async () => {

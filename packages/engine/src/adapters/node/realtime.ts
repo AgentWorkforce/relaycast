@@ -281,6 +281,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return !!this.providerSocket(this.nodeKey(workspaceId, nodeId), providerName);
   }
 
+  isProviderAttached(workspaceId: string, nodeId: string, providerName: string): boolean {
+    const connId = this.providerConnId(this.nodeKey(workspaceId, nodeId), providerName);
+    return !!connId && this.nodeConnections.has(connId);
+  }
+
   providerNameForConnection(connectionId: string): string | undefined {
     return this.nodeConnections.get(connectionId)?.providerName;
   }
@@ -519,11 +524,20 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
     }
     const hasRemaining = this.isNodeConnected(workspaceId, nodeId);
+    // A teardown failure (e.g. SQLITE_BUSY) must be loud, not swallowed: if it
+    // silently dropped the provider-offline / aggregate recompute the node roster
+    // would keep stale capabilities with no signal. Log it; a close still must
+    // not throw.
     if (providerName) {
-      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining).catch(() => {});
+      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining).catch((err) => {
+        // Pass the error object so the runtime logs its stack, not just the message.
+        console.error('[node.teardown] provider disconnect failed', { workspace_id: workspaceId, node_id: nodeId, provider: providerName }, err);
+      });
     } else if (!hasRemaining) {
       // Connection dropped before it bound a provider and it was the node's last.
-      await markNodeOffline(this.db, this, workspaceId, nodeId).catch(() => {});
+      await markNodeOffline(this.db, this, workspaceId, nodeId).catch((err) => {
+        console.error('[node.teardown] mark node offline failed', { workspace_id: workspaceId, node_id: nodeId }, err);
+      });
     }
   }
 

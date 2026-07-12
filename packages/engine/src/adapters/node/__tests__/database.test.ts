@@ -88,7 +88,6 @@ describe('delivery sequence high-water migration', () => {
       .toEqual({ seq: 8 });
   });
 });
-
 describe('action invocation provider migration', () => {
   it('backfills action-owned and legacy node dispatches without claiming undispatched work', () => {
     const sqlite = new Database(':memory:');
