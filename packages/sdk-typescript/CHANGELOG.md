@@ -2,26 +2,64 @@
 
 All notable changes to `@relaycast/sdk` will be documented in this file.
 
+See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-07-09
+
 ### Added
-- Reconnect resync: `WsClient` now tracks the server-stamped `agent_seq` on delivered events and, after every reconnect, sends a `resync` frame so the server replays events missed during the disconnect window. Replayed events flow through the normal handlers, deduplicated by stable event id. First connections are unchanged (no resync until an event has been seen).
-- `resynced` lifecycle event on `WsClient`, plus `on.resynced(({ replayed, gapDetected }) => ...)` on `RelayCast` and `AgentClient`, reporting how many events were replayed and whether the gap exceeded the server's replay buffer.
-- Package README with install, `RelayCast` vs `AgentClient` quickstart, and reconnect/resync behavior.
-- Optional `harness` field on `RelayCastOptions`/`ClientOptions` and `WsClientOptions` (plus the internal `InternalOrigin` plumbing). A User-Agent-style identifier for the harness driving requests (e.g. `'claude-code/2.3 (model=opus-4.8)'`, `'codex'`, `'human'`); stamped as the `X-Relaycast-Harness` HTTP header and forwarded as the `harness` WS query param so server-side telemetry can attribute traffic. When a wrapping host supplies one via the internal origin it takes precedence over the public option. Invalid values (empty, control characters) are dropped rather than sent; the header is omitted entirely when no harness is set, so existing consumers are unchanged on the wire.
-- `sanitizeHarness` and `HARNESS_HEADER` exported from the SDK root — lowercases, restricts to a UA-safe character set, caps at 120 chars.
-- Workspace-key realtime on `RelayCast`: `connect()`, `disconnect()`, and typed `on.*` handlers now open `/v1/ws` with the workspace key and expose workspace stream events.
+- Added `NodeProvider`, `defineNode`, and related provider APIs for hosting agents and node-scoped actions from the TypeScript SDK.
+
+## [5.0.10] - 2026-07-01
+
+### Added
+- Added the `useProxy` node-delivery option for routing `http_push` requests through the configured egress proxy.
+
+## [5.0.7] - 2026-06-28
+
+### Fixed
+- Added `prepublishOnly` so publishing always rebuilds the SDK instead of uploading stale `dist` output.
+
+## [4.0.0] - 2026-06-15
+
+### Added
 - Fleet node roster on `RelayCast`: `nodes.list({ capability?, name? })`, `nodes.get(name)`, and `triggers.list()`, backed by the new `GET /v1/nodes` surface. New exported types `NodeRosterEntry`, `NodeCapability`, `NodeListQuery`, `Trigger`, and `CreateTriggerRequest`. Node capabilities are structured objects (`{ name, kind?, metadata? }`), never bare capability-name strings, matching the runtime.
 - Action invocations now report which fleet node handled and dispatched the work: `handlerNode`, `handlerNodeId`, and `dispatchedNodeId`.
 - `JsonValue` exported from the package root — the JSON value type used for action invocation output.
 
 ### Breaking
-- Removed snake_case input aliases from the SDK surface; camelCase is now the only supported input style.
 - Action invocation `output` is now typed `JsonValue` (any JSON value — scalar, array, `null`, or object) instead of `Record<string, unknown> | null`. Consumers that assumed action output was always an object must narrow before indexing.
 - Durable delivery `status` values changed (the engine's delivery state machine was reworked for fleet location routing): `accepted` and `deferred` are no longer emitted, `acked` and `dead_lettered` are new, and `delivered` now means "sent to the current location, awaiting cumulative ack" rather than the previous terminal-success meaning (that state is now `acked`). The SDK surfaces `status` as a string, so this is a value/semantics change, not a type change — code that matched on `'accepted'`/`'deferred'` or treated `'delivered'` as terminal must update. See `@relaycast/types` for the full mapping.
+
+## [3.1.0] - 2026-06-10
+
+### Added
+- Reconnect resync: `WsClient` tracks the server-stamped `agent_seq` and requests replay after reconnect, deduplicated by stable event id.
+- Added the `resynced` lifecycle event and typed handlers reporting replay count and buffer gaps.
+
+## [2.5.0] - 2026-06-03
+
+### Added
+- Workspace-key realtime on `RelayCast` through `connect()`, `disconnect()`, and typed `on.*` handlers.
+
+## [2.4.0] - 2026-06-03
+
+### Added
+- Optional sanitized harness attribution for HTTP and WebSocket traffic through `harness`, `sanitizeHarness`, and `HARNESS_HEADER`.
+
+## [0.7.0] - 2026-03-24
+
+### Added
+- Added `RelayCast.lookupWorkspace()` and `RelayCast.ensureWorkspace()` for name-based workspace setup flows.
+
+## [0.3.4] - 2026-02-26
+
+### Breaking
+- Removed snake_case input aliases from the SDK surface; camelCase is now the only supported input style.
 
 ### Changed
 - Standardized SDK consumer-facing parameter casing to camelCase.
@@ -31,7 +69,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Normalized core SDK request options to camelCase (`includeArchived`, `contentType`, `sizeBytes`, `uploadedBy`, `handlerAgent`, `paymentMethod`).
 - Exported camelized SDK type aliases from the package root.
 - Updated tests to keep camelCase as the canonical SDK style.
-- Added `RelayCast.lookupWorkspace()` and `RelayCast.ensureWorkspace()` for name-based workspace setup flows.
 
 ## [0.3.2] - 2026-02-20
 

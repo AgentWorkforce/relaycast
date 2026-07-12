@@ -35,6 +35,12 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 - Update `README.md` and `openapi.yaml` together when API behavior changes.
 - Keep quickstart examples realtime-first (WebSocket subscriptions and message handlers) instead of polling-first flows.
 
+## Changelog
+- Curate `[Unreleased]` in `CHANGELOG.md` for cross-package or user-facing release notes.
+- Add package-level API and migration detail to the relevant `packages/*/CHANGELOG.md` when one exists.
+- Keep entries concise and impact-first: one short bullet per user-visible change.
+- Omit PR links, internal review notes, test-only work, and implementation backstory unless they explain shipped impact.
+
 
 
 
