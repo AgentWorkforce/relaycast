@@ -16,6 +16,7 @@ import {
 } from '../../db/schema.js';
 import { pruneExpired } from '../retention.js';
 import { snowflakeIdLowerBound } from '../snowflake.js';
+import { buildDirectDeliveryWrite } from '../deliveryWrites.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -98,6 +99,23 @@ async function insertDelivery(
     createdAt: new Date(Date.now() - daysAgo * DAY_MS),
   });
   return id;
+}
+
+async function insertAllocatedDelivery(db: Db, base: Seeded, messageId: string): Promise<number> {
+  await buildDirectDeliveryWrite(db, {
+    workspaceId: base.ws,
+    messageId,
+    agentId: base.agent,
+    mode: 'immediate',
+    reason: 'dm',
+    ttlMs: 60_000,
+    depthCap: 1_000,
+  });
+  const [row] = await db
+    .select({ seq: deliveries.seq })
+    .from(deliveries)
+    .where(eq(deliveries.messageId, messageId));
+  return row.seq;
 }
 
 async function insertMessageLog(db: Db, base: Seeded, messageId: string, id: string): Promise<string> {
@@ -259,6 +277,47 @@ describe('pruneExpired', () => {
     expect(result.deliveries).toBe(2);
     const remaining = (await db.select({ status: deliveries.status }).from(deliveries)).map((r) => r.status);
     expect(remaining.sort()).toEqual(['acked', 'queued']);
+  });
+
+  it('does not reuse a delivery sequence after settled delivery retention', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    const oldMessage = await insertMessage(db, base, idAt(100));
+    await insertDelivery(db, base, oldMessage, 'acked', 100);
+    const [{ seq: oldSeq }] = await db
+      .select({ seq: deliveries.seq })
+      .from(deliveries)
+      .where(eq(deliveries.messageId, oldMessage));
+
+    const result = await pruneExpired(db);
+    expect(result.deliveries).toBe(1);
+    expect(await db.select().from(deliveries)).toHaveLength(0);
+
+    const newMessage = await insertMessage(db, base, idAt(1));
+    expect(await insertAllocatedDelivery(db, base, newMessage)).toBe(oldSeq + 1);
+    const [agent] = await db
+      .select({ deliverySeq: agents.deliverySeq })
+      .from(agents)
+      .where(eq(agents.id, base.agent));
+    expect(agent.deliverySeq).toBe(oldSeq + 1);
+  });
+
+  it('does not reuse a delivery sequence after message retention cascades the row', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db, { message_ttl_days: 30 });
+    const oldMessage = await insertMessage(db, base, idAt(40));
+    await insertDelivery(db, base, oldMessage, 'delivered', 40);
+    const [{ seq: oldSeq }] = await db
+      .select({ seq: deliveries.seq })
+      .from(deliveries)
+      .where(eq(deliveries.messageId, oldMessage));
+
+    const result = await pruneExpired(db);
+    expect(result.messages).toBe(1);
+    expect(await db.select().from(deliveries)).toHaveLength(0);
+
+    const newMessage = await insertMessage(db, base, idAt(1));
+    expect(await insertAllocatedDelivery(db, base, newMessage)).toBe(oldSeq + 1);
   });
 
   it('lets a workspace override or disable the operational defaults', async () => {

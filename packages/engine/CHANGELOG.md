@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Self-host (file-backed SQLite): route every write through one async gate so a raw statement write can no longer busy-wait the event loop while a transaction holds the write lock. Under concurrent node registration, this deadlocked on `busy_timeout` and silently dropped a provider's capabilities from the node aggregate (#250).
 - Node control logs a rejected `node.register`/`node.heartbeat` (e.g. `node_name_conflict`, a UNIQUE violation) at warn level with workspace/node/provider/code context, so a node left half-registered by a rejected message is no longer invisible server-side.
 - Message-trigger dispatch failures are logged at warn with trigger/action/workspace context instead of being swallowed, so a trigger whose action is missing or unroutable is diagnosable.
+- Kept per-agent delivery sequences monotonic across delivery pruning and message-retention cascades, including migration repair for active rows hidden behind an acknowledged cursor.
 
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.

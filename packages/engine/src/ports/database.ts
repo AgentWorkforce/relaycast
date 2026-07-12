@@ -20,8 +20,8 @@ import type * as schema from '../db/schema.js';
  * one, and otherwise falls back to plain sequential statements (the engine's
  * historical behavior). Cross-row invariants that must hold on *every*
  * adapter — not just atomicity-capable ones — still need single-statement
- * atomicity (e.g. a `... SELECT COALESCE(MAX(seq),0)+1 ...` scalar-subquery
- * insert guarded by a UNIQUE index) rather than a multi-step read-modify-write.
+ * atomicity (for example, an insert whose trigger advances a durable sequence
+ * high-water) rather than a multi-step read-modify-write.
  */
 // The engine is written against the async surface (everything is `await`ed),
 // which is exactly what the D1 driver produces, so the Cloudflare adapter's

@@ -77,13 +77,10 @@ function ttlSeconds(ttlMs: number): number {
   return Math.max(1, Math.ceil(ttlMs / 1000));
 }
 
-function nextSeqSql(workspaceId: string, agentId: unknown) {
-  return sql<number>`(
-    SELECT COALESCE(MAX(d.seq), 0) + 1
-    FROM deliveries d
-    WHERE d.workspace_id = ${workspaceId}
-      AND d.agent_id = ${agentId}
-  )`;
+function nextDeliverySeqSql() {
+  // deliverySeq is normally >= deliveryAckSeq. Including the cursor keeps a
+  // future/stale cumulative ACK from making the next allocation replay-hidden.
+  return sql<number>`MAX(${agents.deliverySeq}, ${agents.deliveryAckSeq}) + 1`;
 }
 
 function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
@@ -131,7 +128,10 @@ export function buildChannelDeliveryWrite(
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
-          seq: nextSeqSql(input.workspaceId, channelMembers.agentId),
+          // Migration 0029 installs an AFTER INSERT trigger that advances the
+          // same agent row to this value. Allocation and high-water advancement
+          // therefore happen in one SQLite statement on every adapter.
+          seq: nextDeliverySeqSql(),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -203,7 +203,7 @@ export function buildGroupDmDeliveryWrite(
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
-          seq: nextSeqSql(input.workspaceId, dmParticipants.agentId),
+          seq: nextDeliverySeqSql(),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -276,7 +276,7 @@ export function buildDirectDeliveryWrite(
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
           status: sql<string>`${'queued'}`,
-          seq: nextSeqSql(input.workspaceId, agents.id),
+          seq: nextDeliverySeqSql(),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,

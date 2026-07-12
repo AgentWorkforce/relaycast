@@ -6,7 +6,7 @@ import {
   registerAgent,
   type TestStack,
 } from './conformance/harness.js';
-import { channels, deliveries, files, messageAttachments, messageLogs, messages, readReceipts, channelMembers } from '../db/schema.js';
+import { agents, channels, deliveries, files, messageAttachments, messageLogs, messages, readReceipts, channelMembers } from '../db/schema.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
@@ -250,7 +250,7 @@ describe('atomic write paths', () => {
     });
 
     it('commits concurrent transactional sends without interleaving', async () => {
-      const { ws, alice, channelId, db } = await seed();
+      const { ws, alice, bob, channelId, db } = await seed();
 
       const results = await Promise.all(
         Array.from({ length: 5 }, (_, i) =>
@@ -260,8 +260,18 @@ describe('atomic write paths', () => {
 
       expect(new Set(results.map((r) => r.id)).size).toBe(5);
       expect(await db.select().from(messages)).toHaveLength(5);
-      // One delivery per message for bob, the only other member.
-      expect(await db.select().from(deliveries)).toHaveLength(5);
+      // One delivery per message for bob, the only other member. Concurrent
+      // inserts allocate distinct values and advance the durable high-water.
+      const deliveryRows = await db
+        .select({ seq: deliveries.seq })
+        .from(deliveries)
+        .where(eq(deliveries.agentId, bob.agentId));
+      expect(deliveryRows.map((row) => row.seq).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+      const [recipient] = await db
+        .select({ deliverySeq: agents.deliverySeq })
+        .from(agents)
+        .where(eq(agents.id, bob.agentId));
+      expect(recipient.deliverySeq).toBe(5);
     });
   });
 
