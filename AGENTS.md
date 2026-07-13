@@ -36,8 +36,12 @@ Relaycast is headless Slack for agents: channels, threads, DMs, reactions, files
 - Keep quickstart examples realtime-first (WebSocket subscriptions and message handlers) instead of polling-first flows.
 
 ## Changelog
-- Curate `[Unreleased]` in `CHANGELOG.md` for cross-package or user-facing release notes.
+- Curate the unreleased section in `CHANGELOG.md` for cross-package or user-facing release notes.
+- An empty post-release changelog starts at `[Unreleased]`. The first pending user-visible change must set the heading to `[Unreleased - Patch]`, `[Unreleased - Minor]`, or `[Unreleased - Major]` according to its SemVer impact.
+- The pending release level is monotonic: `Patch < Minor < Major`. Raise the heading when a higher-impact change arrives; never lower it for a later lower-impact change, and leave it unchanged for another change at the same level.
+- When a release is cut, move the pending entries under the released version and restore an empty `[Unreleased]` heading with no release level.
 - Add package-level API and migration detail to the relevant `packages/*/CHANGELOG.md` when one exists.
+- Apply the same release-level heading rules to any package changelog that receives a pending entry.
 - Keep entries concise and impact-first: one short bullet per user-visible change.
 - Omit PR links, internal review notes, test-only work, and implementation backstory unless they explain shipped impact.
 
