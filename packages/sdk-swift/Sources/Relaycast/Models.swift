@@ -268,6 +268,10 @@ public enum AgentType: String, Codable, Sendable {
 }
 
 public enum AgentStatus: String, Codable, Sendable {
+    case active
+    case idle
+    case blocked
+    case waiting
     case online
     case offline
     case away
