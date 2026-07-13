@@ -1596,6 +1596,17 @@ describe('durable delivery api', () => {
       .set({ expiresAt: bobExpiredAt })
       .where(eq(deliveries.messageId, messageId));
 
+    const expiryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status IN ('queued', 'delivered')
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?
+        ORDER BY expires_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(expiryPlan.some((step) => step.detail.includes('idx_deliveries_active_expiry'))).toBe(true);
+
     // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
     // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
     const sqlite = stack.runtime.handle.sqlite;

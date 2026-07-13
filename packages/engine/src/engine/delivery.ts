@@ -468,7 +468,10 @@ export async function expireDueDeliveries(
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .where(and(
       workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
-      inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+      // Keep these literals aligned with idx_deliveries_active_expiry. SQLite
+      // can only select a partial index when its predicate is visible while
+      // planning; parameterizing the two statuses would hide that implication.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
       sql`${deliveries.expiresAt} IS NOT NULL AND ${deliveries.expiresAt} <= ${nowSeconds}`,
     ))
     .orderBy(asc(deliveries.expiresAt), asc(deliveries.id))
