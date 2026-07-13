@@ -65,4 +65,23 @@ describe('Node delivery maintenance', () => {
       op: 'http_push_delivery',
     });
   });
+
+  it('captures expiry failures without rejecting the maintenance cycle', async () => {
+    const error = new Error('expiry sweep failed');
+    const captureException = vi.fn();
+    const deps = {
+      telemetry: { captureException },
+    } as unknown as EngineDeps;
+    const run = createDeliveryMaintenanceRunner(deps, {
+      sweepHttpPush: vi.fn(async () => {}),
+      sweepExpiry: vi.fn(async () => { throw error; }),
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(captureException).toHaveBeenCalledWith(error, {
+      source: 'node.maintenance',
+      op: 'delivery_expiry',
+    });
+  });
 });
