@@ -11,14 +11,14 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries } from '../../db/schema.js';
+import { agents, deliveries, messages } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
 import { sendNodeDeliveriesToAgents } from '../../engine/nodeDeliver.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { pruneExpired } from '../../engine/retention.js';
-import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
+import { routeDeliveryOutcomes, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 
 /**
@@ -1552,6 +1552,7 @@ describe('durable delivery api', () => {
 
     await new Promise((r) => setTimeout(r, 1100));
     expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId })).toBe(1);
     expect(await listDeliveries(bob.token, '?status=dead_lettered')).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 50));
     await waitForAssertion(() => {
@@ -1559,6 +1560,132 @@ describe('durable delivery api', () => {
         expect.objectContaining({ reason: 'ttl_expired', retryable: false }),
       ]));
     });
+  });
+
+  it('scheduled expiry drains a large backlog in D1-safe batches without affecting reads', async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const charlie = await registerAgent(stack.app, ws.workspaceKey, 'charlie');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const [seedMessage] = await stack.runtime.deps.db
+      .select({ channelId: messages.channelId })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const bobExpiredAt = new Date(Date.now() - 60_000);
+    const charlieExpiredAt = new Date(Date.now() - 120_000);
+    const extraCount = 120;
+    const charlieCount = 60;
+
+    await stack.runtime.deps.db.insert(messages).values(Array.from({ length: extraCount }, (_, index) => ({
+      id: `expiry-message-${index}`,
+      workspaceId: ws.workspaceId,
+      channelId: seedMessage.channelId,
+      agentId: alice.agentId,
+      body: `expired ${index}`,
+    })));
+    await stack.runtime.deps.db.insert(deliveries).values(Array.from({ length: extraCount }, (_, index) => ({
+      id: `expiry-delivery-${index}`,
+      workspaceId: ws.workspaceId,
+      messageId: `expiry-message-${index}`,
+      agentId: index < charlieCount ? charlie.agentId : bob.agentId,
+      status: 'queued',
+      seq: index < charlieCount ? index + 1 : index - charlieCount + 2,
+      expiresAt: index < charlieCount ? charlieExpiredAt : bobExpiredAt,
+    })));
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: bobExpiredAt })
+      .where(eq(deliveries.messageId, messageId));
+
+    const expiryPlan = stack.runtime.handle.sqlite
+      .prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM deliveries
+        WHERE status IN ('queued', 'delivered')
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?
+        ORDER BY expires_at, id
+        LIMIT 50`)
+      .all(Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
+    expect(expiryPlan.some((step) => step.detail.includes('idx_deliveries_active_expiry'))).toBe(true);
+
+    // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
+    // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      const parameterCount = (source.match(/\?/g) ?? []).length;
+      if (parameterCount > 100) {
+        throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    const deadLetteredCount = async () => (await stack.runtime.deps.db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(eq(deliveries.status, 'dead_lettered'))).length;
+
+    const inbox = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inbox.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    // Reads filter expired active rows but do not mutate them or depend on cleanup.
+    expect(await deadLetteredCount()).toBe(0);
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
+    expect(await deadLetteredCount()).toBe(50);
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(50);
+    // Charlie's remaining 10 rows and Bob's oldest 40 transitioned. Bob's 21
+    // still-unswept expired rows must not leak through the active list.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    expect(await deadLetteredCount()).toBe(100);
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(21);
+    expect(await deadLetteredCount()).toBe(121);
+
+    await waitForAssertion(() => {
+      const notices = contextUpdatesOfType(aliceSock, 'delivery.failed')
+        .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired');
+      expect(notices).toHaveLength(121);
+      expect(new Set(notices.map((event) => (event.data as Record<string, unknown>).delivery_id)).size).toBe(121);
+    });
+
+    expect(await sweepExpiredDeliveries(stack.runtime.deps)).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(contextUpdatesOfType(aliceSock, 'delivery.failed')
+      .filter((event) => event.data && (event.data as Record<string, unknown>).reason === 'ttl_expired')).toHaveLength(121);
+  });
+
+  it('keeps inbox and delivery reads available when scheduled expiry fails', async () => {
+    const { ws, bob, messageId } = await seed();
+    await stack.runtime.deps.db
+      .update(deliveries)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(deliveries.messageId, messageId));
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
+        throw new Error('simulated scheduled expiry failure');
+      }
+      return prepare(source);
+    }) as typeof sqlite.prepare;
+
+    await expect(sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId }))
+      .rejects.toThrow('simulated scheduled expiry failure');
+
+    const inbox = await stack.app.request('/v1/inbox', {
+      headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(inbox.status).toBe(200);
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
+    const [stored] = await stack.runtime.deps.db
+      .select({ status: deliveries.status })
+      .from(deliveries)
+      .where(eq(deliveries.messageId, messageId));
+    expect(stored.status).toBe('queued');
   });
 
   it('rejects new deliveries over the depth cap and sends feedback to the sender', async () => {

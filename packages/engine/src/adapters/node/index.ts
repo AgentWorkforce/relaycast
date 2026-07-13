@@ -16,7 +16,7 @@ import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './f
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 import { sendNodePresenceContext } from '../../engine/nodeContext.js';
-import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
+import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
 
 export {
   InProcessRealtime,
@@ -161,10 +161,12 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
 
   realtime.setNodeCompletionDeps(deps);
 
+  const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
+
   const sweepTimer = setInterval(() => {
     void sweepOfflineNodes(db, realtime).catch(() => {});
     void sweepTimedOutInvocations(db, realtime).catch(() => {});
-    void sweepDueHttpPushDeliveries(deps).catch(() => {});
+    void runDeliveryMaintenance();
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();
 

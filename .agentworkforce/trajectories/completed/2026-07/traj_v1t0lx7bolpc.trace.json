@@ -1,0 +1,132 @@
+{
+  "version": "1.0.0",
+  "id": "11ad3a6d-5c1e-4dd8-96f3-f204fe4c85d4",
+  "timestamp": "2026-07-13T14:40:46.256Z",
+  "trajectory": "traj_v1t0lx7bolpc",
+  "files": [
+    {
+      "path": "packages/engine/src/__tests__/conformance/delivery.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1596,
+              "end_line": 1612,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/adapters/node/__tests__/delivery-maintenance.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 68,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/adapters/node/delivery-maintenance.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 50,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/adapters/node/index.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 16,
+              "end_line": 22,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            },
+            {
+              "start_line": 161,
+              "end_line": 172,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/migrations/0031_delivery_active_expiry_index.sql",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/db/schema.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 948,
+              "end_line": 956,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/delivery.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 468,
+              "end_line": 477,
+              "revision": "9b5913eca2cf93f91cf5ac56ab0e45e03b81346d"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
