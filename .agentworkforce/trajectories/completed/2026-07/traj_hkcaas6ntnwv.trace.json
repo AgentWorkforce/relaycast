@@ -5,51 +5,15 @@
   "trajectory": "traj_hkcaas6ntnwv",
   "files": [
     {
-      "path": "AGENTS.md",
-      "conversations": [
-        {
-          "contributor": {
-            "type": "ai"
-          },
-          "ranges": [
-            {
-              "start_line": 35,
-              "end_line": 46,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "path": "CHANGELOG.md",
       "conversations": [
         {
-          "contributor": {
-            "type": "ai"
-          },
+          "contributor": { "type": "ai" },
           "ranges": [
             {
-              "start_line": 1,
-              "end_line": 184,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "path": "README.md",
-      "conversations": [
-        {
-          "contributor": {
-            "type": "ai"
-          },
-          "ranges": [
-            {
-              "start_line": 4,
-              "end_line": 11,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 21,
+              "end_line": 24,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             }
           ]
         }
@@ -59,97 +23,52 @@
       "path": "packages/engine/CHANGELOG.md",
       "conversations": [
         {
-          "contributor": {
-            "type": "ai"
-          },
+          "contributor": { "type": "ai" },
           "ranges": [
             {
-              "start_line": 2,
-              "end_line": 116,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 12,
+              "end_line": 14,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             }
           ]
         }
       ]
     },
     {
-      "path": "packages/sdk-rust/CHANGELOG.md",
+      "path": "packages/engine/src/__tests__/conformance/delivery.test.ts",
       "conversations": [
         {
-          "contributor": {
-            "type": "ai"
-          },
+          "contributor": { "type": "ai" },
           "ranges": [
             {
-              "start_line": 2,
-              "end_line": 32,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 14,
+              "end_line": 14,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             },
             {
-              "start_line": 37,
-              "end_line": 44,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 1564,
+              "end_line": 1635,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             }
           ]
         }
       ]
     },
     {
-      "path": "packages/sdk-swift/CHANGELOG.md",
+      "path": "packages/engine/src/engine/delivery.ts",
       "conversations": [
         {
-          "contributor": {
-            "type": "ai"
-          },
+          "contributor": { "type": "ai" },
           "ranges": [
             {
-              "start_line": 2,
-              "end_line": 15,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "path": "packages/sdk-typescript/CHANGELOG.md",
-      "conversations": [
-        {
-          "contributor": {
-            "type": "ai"
-          },
-          "ranges": [
-            {
-              "start_line": 2,
-              "end_line": 66,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 44,
+              "end_line": 47,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             },
             {
-              "start_line": 69,
-              "end_line": 74,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "path": "packages/types/CHANGELOG.md",
-      "conversations": [
-        {
-          "contributor": {
-            "type": "ai"
-          },
-          "ranges": [
-            {
-              "start_line": 2,
-              "end_line": 22,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
-            },
-            {
-              "start_line": 47,
-              "end_line": 52,
-              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+              "start_line": 465,
+              "end_line": 467,
+              "revision": "65c36c7d2ab7db627dbbe285b75571d4e580c399"
             }
           ]
         }

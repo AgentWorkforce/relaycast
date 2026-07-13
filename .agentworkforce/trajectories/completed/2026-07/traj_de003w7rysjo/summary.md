@@ -30,3 +30,10 @@ Addressed PR #266 review feedback by hiding unswept expired rows from default de
 *Agent: default*
 
 - Filter unswept expired rows from default active delivery lists: Filter unswept expired rows from default active delivery lists
+
+---
+
+## Artifacts
+
+**Commits:** 59bf556
+**Files changed:** 2

@@ -69,23 +69,19 @@
     "confidence": 0.95
   },
   "commits": [
-    "65f0e6a"
+    "65c36c7"
   ],
   "filesChanged": [
-    "AGENTS.md",
     "CHANGELOG.md",
-    "README.md",
     "packages/engine/CHANGELOG.md",
-    "packages/sdk-rust/CHANGELOG.md",
-    "packages/sdk-swift/CHANGELOG.md",
-    "packages/sdk-typescript/CHANGELOG.md",
-    "packages/types/CHANGELOG.md"
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/engine/delivery.ts"
   ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "a29b3eccc1b9ef11dc6f5351a7d626357d8833d1",
-    "endRef": "65f0e6a6321c2de647350e8c4501cf864d9c72a3",
+    "startRef": "65f0e6a6321c2de647350e8c4501cf864d9c72a3",
+    "endRef": "65c36c7d2ab7db627dbbe285b75571d4e580c399",
     "traceId": "aaaff677-e82d-4a63-b5e0-ac618bcccd56"
   }
 }

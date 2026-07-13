@@ -36,5 +36,5 @@ Bounded delivery TTL expiry to D1-safe batches, added large-backlog route and no
 
 ## Artifacts
 
-**Commits:** 65f0e6a
-**Files changed:** 8
+**Commits:** 65c36c7
+**Files changed:** 4

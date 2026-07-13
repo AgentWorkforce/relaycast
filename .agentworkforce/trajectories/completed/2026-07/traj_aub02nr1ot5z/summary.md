@@ -31,3 +31,10 @@ Decoupled delivery expiry from inbox reads, added a bounded global scheduled swe
 
 - Make scheduled maintenance the sole owner of delivery expiry transitions: Make scheduled maintenance the sole owner of delivery expiry transitions
 - Read paths are now pure, Node schedules expiry every 15 seconds, cron adapters receive an exported sweep helper, and failure-isolation plus 121-row D1 regressions pass
+
+---
+
+## Artifacts
+
+**Commits:** b136358
+**Files changed:** 11
