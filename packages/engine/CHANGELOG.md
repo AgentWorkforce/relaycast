@@ -2,6 +2,8 @@
 
 All notable changes to `@relaycast/engine` will be documented in this file.
 
+See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -12,14 +14,110 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 - Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
+- Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
+
+## [6.0.3] - 2026-07-12
+
+### Fixed
+- Kept per-agent delivery sequences monotonic across delivery pruning and message-retention cascades, including migration repair for active rows hidden behind an acknowledged cursor.
+- Negotiated node brokers receive each resumed agent's authoritative delivery ACK cursor before replay or live delivery, with provider-scoped reconnect inventory and control frames that cannot disturb another provider's agents, cursors, or invocations.
+
+## [6.0.2] - 2026-07-11
+
+### Fixed
+- Logged node teardown failures with provider and node context while preserving the original error stack.
+
+## [6.0.1] - 2026-07-11
+
+### Fixed
+- Serialized provider attachment so concurrent registration cannot drop a provider's capabilities from the node aggregate.
 - Rescheduling a node-scoped action onto a fallback node targets the provider that owns the action and honors that provider's liveness and queue policy. Previously a crash-recovery reschedule onto a multi-provider node could dispatch to the broker or queue behind an offline non-queued owner, leaving the invocation stuck.
 - Message triggers fire node-scoped (fleet-provider) actions: a trigger bound to an action name now resolves plain node-scoped actions and dispatches them node-addressed, so `defineNode`'s onMessage→action handlers run. Previously the trigger's workspace-global resolver excluded node-scoped actions, so such triggers never fired.
 - Provider-attach conflict honors spec §3.1: a restarted node instance (new `instance_id`) supersedes a stale binding instead of being rejected, while a genuinely live duplicate still rejects. The 35s attach window covers the built-in SDKs' 30s node heartbeat cadence with scheduling slack while remaining below the 45s node TTL.
 - Self-host (file-backed SQLite): route every write through one async gate so a raw statement write can no longer busy-wait the event loop while a transaction holds the write lock. Under concurrent node registration, this deadlocked on `busy_timeout` and silently dropped a provider's capabilities from the node aggregate (#250).
 - Node control logs a rejected `node.register`/`node.heartbeat` (e.g. `node_name_conflict`, a UNIQUE violation) at warn level with workspace/node/provider/code context, so a node left half-registered by a rejected message is no longer invisible server-side.
 - Message-trigger dispatch failures are logged at warn with trigger/action/workspace context instead of being swallowed, so a trigger whose action is missing or unroutable is diagnosable.
-- Kept per-agent delivery sequences monotonic across delivery pruning and message-retention cascades, including migration repair for active rows hidden behind an acknowledged cursor.
-- Negotiated node brokers receive each resumed agent's authoritative delivery ACK cursor before replay or live delivery, with provider-scoped reconnect inventory and control frames that cannot disturb another provider's agents, cursors, or invocations.
+
+## [6.0.0] - 2026-07-09
+
+### Added
+- Allowed multiple named providers to share a logical node while retaining provider-owned capabilities, actions, liveness, and routing policy.
+- Added provider disconnect hooks and corrected aggregate node state after a provider disconnects.
+
+## [5.1.1] - 2026-07-08
+
+### Added
+- Added Relayfile inbound integration ingress and delivery to node agents.
+
+## [5.1.0] - 2026-07-02
+
+### Added
+- Added the durable workspace event log used by observer clients.
+
+## [5.0.12] - 2026-07-02
+
+### Fixed
+- Recognized wrapped Cloudflare D1 unique-constraint errors so duplicate observer-token names return `409 observer_token_name_conflict` instead of `500`.
+
+## [5.0.11] - 2026-07-01
+
+### Fixed
+- Allowed observer tokens to read workspace metadata.
+
+## [5.0.10] - 2026-07-01
+
+### Added
+- Added optional egress proxying for `http_push` delivery.
+
+## [5.0.9] - 2026-07-01
+
+### Fixed
+- Fixed `http_push` delivery on Cloudflare when `redirect: 'error'` rejects a dispatch.
+
+## [5.0.8] - 2026-06-30
+
+### Fixed
+- Delivered ephemeral reactions, receipts, and presence events to `http_push` nodes.
+
+## [5.0.7] - 2026-06-28
+
+### Added
+- Emitted `message.created` from inbound webhook triggers.
+
+## [5.0.6] - 2026-06-27
+
+### Added
+- Preserved inbound webhook payloads in message metadata.
+
+## [5.0.5] - 2026-06-26
+
+### Added
+- Exported node invocation helpers from the engine package.
+
+## [5.0.4] - 2026-06-26
+
+### Added
+- Exported agent disconnect handling from the engine package.
+
+## [5.0.3] - 2026-06-26
+
+### Added
+- Exported the node-control handler from the engine package.
+
+## [5.0.2] - 2026-06-26
+
+### Changed
+- Routed agent fanout events through node streams.
+
+## [5.0.1] - 2026-06-25
+
+### Changed
+- Made realtime delivery node-only.
+
+## [5.0.0] - 2026-06-25
+
+### Added
+- Added first-class `direct_ws`, `fleet_ws`, and `http_push` node delivery contracts, agent bindings, HTTP authentication and acknowledgement modes, and retry state.
 
 ### Changed
 - Refactored route handlers, route response helpers, and service internals without changing the public HTTP envelopes or API behavior.

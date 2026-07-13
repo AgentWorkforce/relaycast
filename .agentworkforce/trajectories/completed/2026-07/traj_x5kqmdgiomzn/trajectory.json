@@ -1,0 +1,34 @@
+{
+  "id": "traj_x5kqmdgiomzn",
+  "version": 1,
+  "task": {
+    "title": "Add expiry maintenance failure regression",
+    "source": {
+      "system": "plain",
+      "id": "PR #266 review"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-07-13T14:45:00.016Z",
+  "completedAt": "2026-07-13T14:45:28.431Z",
+  "agents": [],
+  "chapters": [],
+  "retrospective": {
+    "summary": "Added the requested regression proving expiry sweep failures are captured and do not reject the Node maintenance cycle.",
+    "approach": "Standard approach",
+    "confidence": 0.98
+  },
+  "commits": [
+    "0a83241"
+  ],
+  "filesChanged": [
+    "packages/engine/src/adapters/node/__tests__/delivery-maintenance.test.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "08248f9e8e8287ea6fc1d196b086c0cd0f6273d6",
+    "endRef": "0a8324157924b110528d79723b3c86b95088952b",
+    "traceId": "c4d19ec4-339b-4355-9ee0-e37ef85090f1"
+  }
+}

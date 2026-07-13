@@ -41,6 +41,10 @@ export interface RoutableDeliveryEvent {
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
+// Keep expiry work bounded per request and leave ample room under D1's
+// 100-parameter ceiling for the UPDATE's SET and status/workspace predicates.
+// A larger backlog drains oldest-first across subsequent inbox/delivery reads.
+const DELIVERY_EXPIRY_BATCH_SIZE = 50;
 
 function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
@@ -92,6 +96,12 @@ export async function listDeliveries(
   const statusFilter = opts.status
     ? eq(deliveries.status, opts.status)
     : inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]);
+  // A bounded workspace sweep may spend its batch on another agent's older
+  // backlog. Never expose this agent's still-unswept expired rows through the
+  // default active queue; explicit status queries continue to reflect stored state.
+  const activeExpiryFilter = opts.status
+    ? undefined
+    : sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`;
 
   const rows = await db
     .select()
@@ -101,6 +111,7 @@ export async function listDeliveries(
         eq(deliveries.workspaceId, workspaceId),
         eq(deliveries.agentId, agentId),
         statusFilter,
+        activeExpiryFilter,
       ),
     )
     .orderBy(asc(deliveries.createdAt), asc(deliveries.id))
@@ -428,6 +439,7 @@ export async function markDeliveriesDelivered(
 }
 
 export interface DeliveryFailureNotice {
+  workspace_id: string;
   delivery_id: string;
   message_id: string;
   sender_agent_id: string;
@@ -441,7 +453,7 @@ export interface DeliveryFailureNotice {
 
 export async function expireDueDeliveries(
   db: Db,
-  workspaceId: string,
+  workspaceId: string | undefined,
   now: Date = new Date(),
 ): Promise<DeliveryFailureNotice[]> {
   const nowSeconds = Math.floor(now.getTime() / 1000);
@@ -455,10 +467,15 @@ export async function expireDueDeliveries(
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .where(and(
-      eq(deliveries.workspaceId, workspaceId),
-      inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
+      // Keep these literals aligned with idx_deliveries_active_expiry. SQLite
+      // can only select a partial index when its predicate is visible while
+      // planning; parameterizing the two statuses would hide that implication.
+      sql`${deliveries.status} IN ('queued', 'delivered')`,
       sql`${deliveries.expiresAt} IS NOT NULL AND ${deliveries.expiresAt} <= ${nowSeconds}`,
-    ));
+    ))
+    .orderBy(asc(deliveries.expiresAt), asc(deliveries.id))
+    .limit(DELIVERY_EXPIRY_BATCH_SIZE);
 
   if (due.length === 0) return [];
 
@@ -473,7 +490,7 @@ export async function expireDueDeliveries(
       updatedAt: now,
     })
     .where(and(
-      eq(deliveries.workspaceId, workspaceId),
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
       inArray(deliveries.id, ids),
       notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed']),
     ))
@@ -483,6 +500,7 @@ export async function expireDueDeliveries(
   return due
     .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
     .map((row) => ({
+      workspace_id: row.delivery.workspaceId,
       delivery_id: row.delivery.id,
       message_id: row.delivery.messageId,
       sender_agent_id: row.senderAgentId,

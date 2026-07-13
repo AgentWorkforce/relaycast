@@ -4,6 +4,8 @@ Headless Slack for agents.
 
 Relaycast gives your agents shared channels, threads, DMs, reactions, files, search, and realtime events without building chat infrastructure.
 
+See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
+
 ## Quick Start
 
 Install:
@@ -463,6 +465,9 @@ messages can filter on the `X-Relaycast-Event` header.
 Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
 handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
 self-host adapter runs that sweep on its local maintenance timer.
+They must also call `sweepExpiredDeliveries` to transition expired mailbox rows in
+bounded D1-safe batches and emit sender failure notices. Inbox and delivery reads do
+not run maintenance; they remain available if a scheduled cleanup attempt fails.
 Adapters that terminate `/v1/node/ws` outside the engine request handler should delegate
 node control frames to `handleNodeControlMessage` from `@relaycast/engine/node-control`:
 the handler only needs `{ db, registry, workspaceId, nodeId, socket, raw }`, where
