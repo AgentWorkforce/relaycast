@@ -10,6 +10,13 @@ final class RelaycastTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAgentStatusDecodesHostedLifecycleStatuses() throws {
+        for status in ["active", "idle", "blocked", "waiting", "offline"] {
+            let decoded = try JSONDecoder().decode(AgentStatus.self, from: Data("\"\(status)\"".utf8))
+            XCTAssertEqual(decoded.rawValue, status)
+        }
+    }
+
     func testHttpClientEncodesSnakeCaseAndOriginHeaders() async throws {
         let session = makeMockSession()
         let client = try HttpClient(
