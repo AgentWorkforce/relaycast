@@ -96,6 +96,12 @@ export async function listDeliveries(
   const statusFilter = opts.status
     ? eq(deliveries.status, opts.status)
     : inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]);
+  // A bounded workspace sweep may spend its batch on another agent's older
+  // backlog. Never expose this agent's still-unswept expired rows through the
+  // default active queue; explicit status queries continue to reflect stored state.
+  const activeExpiryFilter = opts.status
+    ? undefined
+    : sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`;
 
   const rows = await db
     .select()
@@ -105,6 +111,7 @@ export async function listDeliveries(
         eq(deliveries.workspaceId, workspaceId),
         eq(deliveries.agentId, agentId),
         statusFilter,
+        activeExpiryFilter,
       ),
     )
     .orderBy(asc(deliveries.createdAt), asc(deliveries.id))

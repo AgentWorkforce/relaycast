@@ -1563,13 +1563,16 @@ describe('durable delivery api', () => {
 
   it('drains a large expiry backlog in D1-safe batches without duplicate notices', async () => {
     const { ws, alice, bob, messageId } = await seed();
+    const charlie = await registerAgent(stack.app, ws.workspaceKey, 'charlie');
     const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
     const [seedMessage] = await stack.runtime.deps.db
       .select({ channelId: messages.channelId })
       .from(messages)
       .where(eq(messages.id, messageId));
-    const expiredAt = new Date(Date.now() - 60_000);
+    const bobExpiredAt = new Date(Date.now() - 60_000);
+    const charlieExpiredAt = new Date(Date.now() - 120_000);
     const extraCount = 120;
+    const charlieCount = 60;
 
     await stack.runtime.deps.db.insert(messages).values(Array.from({ length: extraCount }, (_, index) => ({
       id: `expiry-message-${index}`,
@@ -1582,14 +1585,14 @@ describe('durable delivery api', () => {
       id: `expiry-delivery-${index}`,
       workspaceId: ws.workspaceId,
       messageId: `expiry-message-${index}`,
-      agentId: bob.agentId,
+      agentId: index < charlieCount ? charlie.agentId : bob.agentId,
       status: 'queued',
-      seq: index + 2,
-      expiresAt: expiredAt,
+      seq: index < charlieCount ? index + 1 : index - charlieCount + 2,
+      expiresAt: index < charlieCount ? charlieExpiredAt : bobExpiredAt,
     })));
     await stack.runtime.deps.db
       .update(deliveries)
-      .set({ expiresAt: expiredAt })
+      .set({ expiresAt: bobExpiredAt })
       .where(eq(deliveries.messageId, messageId));
 
     // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
@@ -1615,7 +1618,9 @@ describe('durable delivery api', () => {
     expect(inbox.status).toBe(200);
     expect(await deadLetteredCount()).toBe(50);
 
-    expect(await listDeliveries(bob.token)).toHaveLength(21);
+    // The second sweep dead-letters Charlie's remaining 10 rows and Bob's oldest
+    // 40. Bob's 21 still-unswept expired rows must not leak through the active list.
+    expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await deadLetteredCount()).toBe(100);
     expect(await listDeliveries(bob.token)).toHaveLength(0);
     expect(await deadLetteredCount()).toBe(121);
