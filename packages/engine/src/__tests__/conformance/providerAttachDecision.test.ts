@@ -17,6 +17,17 @@ const PROVIDER = 'broker';
 const INCUMBENT = 'inst-A';
 const T0 = 1_700_000_000_000;
 
+describe('providerAttachDecision', () => {
+  it('accepts an unbound provider regardless of a recent last-seen timestamp', () => {
+    expect(providerAttachDecision({
+      existingInstanceId: undefined,
+      existingLastSeen: T0,
+      incomingInstanceId: 'inst-B',
+      now: T0 + 1_000,
+    })).toEqual({ conflict: false });
+  });
+});
+
 describe('providerAttachDecision matches InProcessRealtime.providerAttachConflict', () => {
   let stack: TestStack;
 

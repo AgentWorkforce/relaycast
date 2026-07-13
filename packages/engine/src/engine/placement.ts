@@ -46,6 +46,7 @@ export type ProviderAttachDecision =
  * instance id and last-frame time and the registrant's instance id, decide
  * whether the incoming attach collides with a still-live duplicate instance:
  *
+ * - No incumbent binding — nothing to collide with; not a conflict.
  * - Same instance id — a reconnect/re-register, never a conflict.
  * - Different instance framed within {@link PROVIDER_ATTACH_LIVENESS_MS} — a live
  *   duplicate; reject with `provider_instance_conflict`.
@@ -59,6 +60,7 @@ export type ProviderAttachDecision =
  */
 export function providerAttachDecision(input: ProviderAttachDecisionInput): ProviderAttachDecision {
   const { existingInstanceId, existingLastSeen, incomingInstanceId, now = Date.now() } = input;
+  if (existingInstanceId === undefined) return { conflict: false };
   if (existingInstanceId === incomingInstanceId) return { conflict: false };
   if (now - existingLastSeen <= PROVIDER_ATTACH_LIVENESS_MS) {
     return { conflict: true, code: 'provider_instance_conflict' };

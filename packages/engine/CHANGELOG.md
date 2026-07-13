@@ -5,12 +5,13 @@ All notable changes to `@relaycast/engine` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
 
 ### Added
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
 
 ### Fixed
+- Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
 - Rescheduling a node-scoped action onto a fallback node targets the provider that owns the action and honors that provider's liveness and queue policy. Previously a crash-recovery reschedule onto a multi-provider node could dispatch to the broker or queue behind an offline non-queued owner, leaving the invocation stuck.
 - Message triggers fire node-scoped (fleet-provider) actions: a trigger bound to an action name now resolves plain node-scoped actions and dispatches them node-addressed, so `defineNode`'s onMessage→action handlers run. Previously the trigger's workspace-global resolver excluded node-scoped actions, so such triggers never fired.
 - Provider-attach conflict honors spec §3.1: a restarted node instance (new `instance_id`) supersedes a stale binding instead of being rejected, while a genuinely live duplicate still rejects. The 35s attach window covers the built-in SDKs' 30s node heartbeat cadence with scheduling slack while remaining below the 45s node TTL.
