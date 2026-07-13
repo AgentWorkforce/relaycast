@@ -3191,7 +3191,8 @@ paths:
         List durable delivery items queued for the calling agent. Defaults to
         the non-terminal queue (`queued` + `delivered`) so an offline consumer
         can replay what it missed after reconnect, oldest first. Each item
-        carries the message payload.
+        carries the message payload. Expired rows awaiting scheduled cleanup
+        are excluded from the default active queue.
       tags:
         - Deliveries
       security:

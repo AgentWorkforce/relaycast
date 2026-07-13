@@ -439,6 +439,7 @@ export async function markDeliveriesDelivered(
 }
 
 export interface DeliveryFailureNotice {
+  workspace_id: string;
   delivery_id: string;
   message_id: string;
   sender_agent_id: string;
@@ -452,7 +453,7 @@ export interface DeliveryFailureNotice {
 
 export async function expireDueDeliveries(
   db: Db,
-  workspaceId: string,
+  workspaceId: string | undefined,
   now: Date = new Date(),
 ): Promise<DeliveryFailureNotice[]> {
   const nowSeconds = Math.floor(now.getTime() / 1000);
@@ -466,7 +467,7 @@ export async function expireDueDeliveries(
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .where(and(
-      eq(deliveries.workspaceId, workspaceId),
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
       inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
       sql`${deliveries.expiresAt} IS NOT NULL AND ${deliveries.expiresAt} <= ${nowSeconds}`,
     ))
@@ -486,7 +487,7 @@ export async function expireDueDeliveries(
       updatedAt: now,
     })
     .where(and(
-      eq(deliveries.workspaceId, workspaceId),
+      workspaceId ? eq(deliveries.workspaceId, workspaceId) : undefined,
       inArray(deliveries.id, ids),
       notInArray(deliveries.status, ['acked', 'dead_lettered', 'failed']),
     ))
@@ -496,6 +497,7 @@ export async function expireDueDeliveries(
   return due
     .filter((row) => row.senderAgentId && updatedIds.has(row.delivery.id))
     .map((row) => ({
+      workspace_id: row.delivery.workspaceId,
       delivery_id: row.delivery.id,
       message_id: row.delivery.messageId,
       sender_agent_id: row.senderAgentId,

@@ -494,6 +494,50 @@ export async function sweepDueHttpPushDeliveries(
   return due.length;
 }
 
+async function notifyDeliveryFailuresForContext(
+  ctx: RoutingContext,
+  notices: deliveryEngine.DeliveryFailureNotice[],
+): Promise<void> {
+  for (const notice of notices) {
+    await fanoutToAgentsForContext(ctx, [notice.sender_agent_id], 'delivery.failed', {
+      delivery_id: notice.delivery_id,
+      message_id: notice.message_id,
+      target_agent_id: notice.target_agent_id,
+      target_agent_name: notice.target_agent_name,
+      seq: notice.seq,
+      reason: notice.reason,
+      error: notice.error,
+      retryable: notice.retryable,
+    });
+  }
+}
+
+/**
+ * Scheduled TTL expiry maintenance. Each workspace advances by at most one
+ * D1-safe delivery batch per invocation; adapters call this on a cadence rather
+ * than coupling mailbox reads to cleanup work.
+ */
+export async function sweepExpiredDeliveries(
+  engine: EngineDeps,
+  opts: { workspaceId?: string; now?: Date } = {},
+): Promise<number> {
+  const now = opts.now ?? new Date();
+  const notices = await deliveryEngine.expireDueDeliveries(engine.db, opts.workspaceId, now);
+  const byWorkspace = new Map<string, deliveryEngine.DeliveryFailureNotice[]>();
+  for (const notice of notices) {
+    const workspaceNotices = byWorkspace.get(notice.workspace_id) ?? [];
+    workspaceNotices.push(notice);
+    byWorkspace.set(notice.workspace_id, workspaceNotices);
+  }
+  for (const [workspaceId, workspaceNotices] of byWorkspace) {
+    await notifyDeliveryFailuresForContext(
+      { db: engine.db, workspaceId, engine },
+      workspaceNotices,
+    );
+  }
+  return notices.length;
+}
+
 export async function notifyDeliveryRejections(
   c: HonoContext,
   senderAgentId: string,
@@ -509,25 +553,6 @@ export async function notifyDeliveryRejections(
       reason: rejection.reason,
       error: rejection.error,
       retryable: rejection.retryable,
-    });
-  }
-}
-
-export async function notifyDeliveryFailures(
-  c: HonoContext,
-  notices: deliveryEngine.DeliveryFailureNotice[],
-): Promise<void> {
-  if (notices.length === 0) return;
-  for (const notice of notices) {
-    await fanoutToAgents(c, [notice.sender_agent_id], 'delivery.failed', {
-      delivery_id: notice.delivery_id,
-      message_id: notice.message_id,
-      target_agent_id: notice.target_agent_id,
-      target_agent_name: notice.target_agent_name,
-      seq: notice.seq,
-      reason: notice.reason,
-      error: notice.error,
-      retryable: notice.retryable,
     });
   }
 }
