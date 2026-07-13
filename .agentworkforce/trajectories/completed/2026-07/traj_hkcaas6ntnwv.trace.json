@@ -1,0 +1,159 @@
+{
+  "version": "1.0.0",
+  "id": "aaaff677-e82d-4a63-b5e0-ac618bcccd56",
+  "timestamp": "2026-07-13T14:06:33.735Z",
+  "trajectory": "traj_hkcaas6ntnwv",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 35,
+              "end_line": 46,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 184,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "README.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 4,
+              "end_line": 11,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 116,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-rust/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 32,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            },
+            {
+              "start_line": 37,
+              "end_line": 44,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-swift/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 15,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/sdk-typescript/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 66,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            },
+            {
+              "start_line": 69,
+              "end_line": 74,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/types/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 2,
+              "end_line": 22,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            },
+            {
+              "start_line": 47,
+              "end_line": 52,
+              "revision": "65f0e6a6321c2de647350e8c4501cf864d9c72a3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

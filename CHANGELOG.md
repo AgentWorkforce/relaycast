@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept inbox and delivery reads available while large expired-delivery backlogs drain in bounded batches.
+
 ## [6.0.3] - 2026-07-12
 
 ### Fixed

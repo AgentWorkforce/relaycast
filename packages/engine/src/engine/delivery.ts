@@ -41,6 +41,10 @@ export interface RoutableDeliveryEvent {
 
 const ACTIVE_DELIVERY_STATUSES = ['queued', 'delivered'] as const;
 const TERMINAL_SUCCESS_STATUS = 'acked';
+// Keep expiry work bounded per request and leave ample room under D1's
+// 100-parameter ceiling for the UPDATE's SET and status/workspace predicates.
+// A larger backlog drains oldest-first across subsequent inbox/delivery reads.
+const DELIVERY_EXPIRY_BATCH_SIZE = 50;
 
 function serializeDelivery(row: DeliveryRow & { channelId?: string }) {
   return {
@@ -458,7 +462,9 @@ export async function expireDueDeliveries(
       eq(deliveries.workspaceId, workspaceId),
       inArray(deliveries.status, [...ACTIVE_DELIVERY_STATUSES]),
       sql`${deliveries.expiresAt} IS NOT NULL AND ${deliveries.expiresAt} <= ${nowSeconds}`,
-    ));
+    ))
+    .orderBy(asc(deliveries.expiresAt), asc(deliveries.id))
+    .limit(DELIVERY_EXPIRY_BATCH_SIZE);
 
   if (due.length === 0) return [];
 

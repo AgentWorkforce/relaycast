@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Bounded delivery TTL expiry work so large backlogs drain across D1-safe batches without breaking inbox reads or duplicating sender failure notices.
+
 ## [6.0.3] - 2026-07-12
 
 ### Fixed
