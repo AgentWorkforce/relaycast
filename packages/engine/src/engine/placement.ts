@@ -21,6 +21,53 @@ export const NODE_LIVENESS_TTL_MS = 45_000;
  */
 export const PROVIDER_ATTACH_LIVENESS_MS = 35_000;
 
+/** The reject code for an attach that collides with a still-live provider instance. */
+export type ProviderAttachConflictCode = 'provider_instance_conflict';
+
+/** Inputs to {@link providerAttachDecision}: the incumbent binding vs. the registrant. */
+export interface ProviderAttachDecisionInput {
+  /** The incumbent binding's instance id, or `undefined` when nothing is bound. */
+  existingInstanceId: string | undefined;
+  /** Epoch-ms of the incumbent's last inbound frame. */
+  existingLastSeen: number;
+  /** The registering connection's instance id. */
+  incomingInstanceId: string;
+  /** Comparison clock; defaults to `Date.now()`. */
+  now?: number;
+}
+
+/** The arbitration outcome for a provider attach. */
+export type ProviderAttachDecision =
+  | { conflict: false }
+  | { conflict: true; code: ProviderAttachConflictCode };
+
+/**
+ * Provider-attach arbitration policy (spec §3.1). Given the incumbent binding's
+ * instance id and last-frame time and the registrant's instance id, decide
+ * whether the incoming attach collides with a still-live duplicate instance:
+ *
+ * - No incumbent binding — nothing to collide with; not a conflict.
+ * - Same instance id — a reconnect/re-register, never a conflict.
+ * - Different instance framed within {@link PROVIDER_ATTACH_LIVENESS_MS} — a live
+ *   duplicate; reject with `provider_instance_conflict`.
+ * - Different instance silent past the window — a stale binding the restart
+ *   supersedes; not a conflict.
+ *
+ * The single source of truth for both the in-process `InProcessRealtime` adapter
+ * and out-of-process socket owners (the relaycast-cloud NodeDO) that mirror the
+ * decision against their own live sockets, so the policy can never silently
+ * diverge between them.
+ */
+export function providerAttachDecision(input: ProviderAttachDecisionInput): ProviderAttachDecision {
+  const { existingInstanceId, existingLastSeen, incomingInstanceId, now = Date.now() } = input;
+  if (existingInstanceId === undefined) return { conflict: false };
+  if (existingInstanceId === incomingInstanceId) return { conflict: false };
+  if (now - existingLastSeen <= PROVIDER_ATTACH_LIVENESS_MS) {
+    return { conflict: true, code: 'provider_instance_conflict' };
+  }
+  return { conflict: false };
+}
+
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
   return (
     node.status === 'online' &&

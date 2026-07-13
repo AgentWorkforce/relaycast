@@ -15,3 +15,13 @@ export {
   type NodeSocketLike,
 } from './engine/node.js';
 export type { InvocationCompletionDeps } from './engine/invocationCompletion.js';
+// Provider-attach arbitration policy (spec §3.1), exported so an out-of-process
+// socket owner (the relaycast-cloud NodeDO) mirrors the decision and the liveness
+// window from one source of truth instead of hand-copying the constant + logic.
+export {
+  providerAttachDecision,
+  PROVIDER_ATTACH_LIVENESS_MS,
+  type ProviderAttachDecision,
+  type ProviderAttachDecisionInput,
+  type ProviderAttachConflictCode,
+} from './engine/placement.js';
