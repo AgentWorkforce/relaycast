@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Major]
+
+### Changed
+
+- Default message retention now prunes messages after 30 days instead of keeping them forever. Set `RELAYCAST_MESSAGE_TTL_DAYS=0` (self-host) or a per-workspace `retention.message_ttl_days: null` to keep history indefinitely.
 
 ### Fixed
 

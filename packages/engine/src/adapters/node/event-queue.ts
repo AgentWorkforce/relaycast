@@ -35,9 +35,9 @@ export interface DurableEventQueueOptions {
   cleanupIntervalMs?: number;
   /**
    * Retention pruning (`pruneExpired`) options, run on the same cleanup
-   * cadence. `false` disables it. Defaults are conservative: only operational
-   * tables (settled deliveries, message logs) are pruned; message retention is
-   * opt-in per workspace via `workspaces.retention`.
+   * cadence. `false` disables it. Defaults prune `messages` after 30 days and
+   * operational tables (settled deliveries, message logs) after 90 days; a
+   * workspace can raise, lower, or disable each TTL via `workspaces.retention`.
    */
   retention?: PruneOptions | false;
 }

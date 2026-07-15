@@ -154,14 +154,28 @@ describe('pruneExpired', () => {
     expect(await db.select().from(messageLogs)).toHaveLength(1);
   });
 
-  it('never prunes messages by default — operational tables only', async () => {
+  it('prunes messages past the 30-day default', async () => {
+    const { db } = track(openDb());
+    const base = await seedWorkspace(db);
+    const expired = await insertMessage(db, base, idAt(40));
+    const fresh = await insertMessage(db, base, idAt(10, 1));
+
+    const result = await pruneExpired(db);
+
+    expect(result.messages).toBe(1);
+    const remaining = (await db.select({ id: messages.id }).from(messages)).map((r) => r.id);
+    expect(remaining).toEqual([fresh]);
+    expect(remaining).not.toContain(expired);
+  });
+
+  it('keeps message history when the deployment default is explicitly null (operational tables still prune)', async () => {
     const { db } = track(openDb());
     const base = await seedWorkspace(db);
     const oldMsg = await insertMessage(db, base, idAt(400));
     await insertDelivery(db, base, oldMsg, 'acked', 400);
     await insertMessageLog(db, base, oldMsg, idAt(400, 1));
 
-    const result = await pruneExpired(db);
+    const result = await pruneExpired(db, { defaults: { messageTtlDays: null } });
 
     expect(result.messages).toBe(0);
     expect(result.deliveries).toBe(1);
@@ -171,21 +185,37 @@ describe('pruneExpired', () => {
     expect(await db.select().from(messageLogs)).toHaveLength(0);
   });
 
-  it('prunes messages past the workspace TTL and leaves other workspaces alone', async () => {
+  it('prunes messages past the default but respects a per-workspace opt-out', async () => {
     const { db } = track(openDb());
-    const optedIn = await seedWorkspace(db, { message_ttl_days: 30 });
-    const untouched = await seedWorkspace(db);
+    const def = await seedWorkspace(db); // inherits the 30-day default
+    const optedOut = await seedWorkspace(db, { message_ttl_days: null }); // keeps history forever
 
-    const expired = await insertMessage(db, optedIn, idAt(40));
-    const fresh = await insertMessage(db, optedIn, idAt(10));
-    const otherOld = await insertMessage(db, untouched, idAt(40, 1));
+    const expired = await insertMessage(db, def, idAt(40));
+    const fresh = await insertMessage(db, def, idAt(10));
+    const keptForever = await insertMessage(db, optedOut, idAt(400, 1));
 
     const result = await pruneExpired(db);
 
     expect(result.messages).toBe(1);
     const remaining = (await db.select({ id: messages.id }).from(messages)).map((r) => r.id);
-    expect(remaining.sort()).toEqual([fresh, otherOld].sort());
+    expect(remaining.sort()).toEqual([fresh, keptForever].sort());
     expect(remaining).not.toContain(expired);
+  });
+
+  it('lets a per-workspace message TTL override the default in both directions', async () => {
+    const { db } = track(openDb());
+    const relaxed = await seedWorkspace(db, { message_ttl_days: 90 });
+    const strict = await seedWorkspace(db, { message_ttl_days: 7 });
+
+    const relaxedKept = await insertMessage(db, relaxed, idAt(40)); // <90d -> kept despite the 30-day default
+    const strictPruned = await insertMessage(db, strict, idAt(10, 1)); // >7d -> pruned though <30d default
+
+    const result = await pruneExpired(db);
+
+    expect(result.messages).toBe(1);
+    const remaining = (await db.select({ id: messages.id }).from(messages)).map((r) => r.id);
+    expect(remaining).toEqual([relaxedKept]);
+    expect(remaining).not.toContain(strictPruned);
   });
 
   it('cascades message deletion to receipts, reactions, attachments, logs, and deliveries', async () => {
@@ -261,7 +291,9 @@ describe('pruneExpired', () => {
 
   it('prunes only settled deliveries past the TTL', async () => {
     const { db } = track(openDb());
-    const base = await seedWorkspace(db);
+    // Opt out of message pruning so the 30-day default doesn't cascade the
+    // aged messages (and their deliveries) out from under this assertion.
+    const base = await seedWorkspace(db, { message_ttl_days: null });
     const m1 = await insertMessage(db, base, idAt(100));
     const m2 = await insertMessage(db, base, idAt(100, 1));
     const m3 = await insertMessage(db, base, idAt(100, 2));
@@ -281,7 +313,8 @@ describe('pruneExpired', () => {
 
   it('does not reuse a delivery sequence after settled delivery retention', async () => {
     const { db } = track(openDb());
-    const base = await seedWorkspace(db);
+    // Opt out of message pruning to isolate settled-delivery retention.
+    const base = await seedWorkspace(db, { message_ttl_days: null });
     const oldMessage = await insertMessage(db, base, idAt(100));
     await insertDelivery(db, base, oldMessage, 'acked', 100);
     const [{ seq: oldSeq }] = await db
@@ -322,8 +355,8 @@ describe('pruneExpired', () => {
 
   it('lets a workspace override or disable the operational defaults', async () => {
     const { db } = track(openDb());
-    const disabled = await seedWorkspace(db, { delivery_ttl_days: null, message_log_ttl_days: null });
-    const aggressive = await seedWorkspace(db, { delivery_ttl_days: 7, message_log_ttl_days: 7 });
+    const disabled = await seedWorkspace(db, { message_ttl_days: null, delivery_ttl_days: null, message_log_ttl_days: null });
+    const aggressive = await seedWorkspace(db, { message_ttl_days: null, delivery_ttl_days: 7, message_log_ttl_days: 7 });
 
     const mA = await insertMessage(db, disabled, idAt(100));
     await insertDelivery(db, disabled, mA, 'acked', 100);
