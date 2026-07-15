@@ -218,6 +218,7 @@ export async function triggerWebhook(
 
   return {
     message_id: message.id,
+    agent_id: message.agentId,
     webhook_id: webhook.id,
     workspace_id: webhook.workspaceId,
     channel_id: webhook.channelId,
