@@ -115,6 +115,7 @@ describe('inbound webhook message triggers', () => {
         message_id: string;
         channel: string;
         text: string;
+        author: string;
         created_at: string;
         metadata: Record<string, unknown>;
       };
@@ -123,6 +124,7 @@ describe('inbound webhook message triggers', () => {
 
     const action = await waitForAction(socket, actionName);
     expect(action).toBeDefined();
+    expect(socket.ofType('action.invoke').filter((event) => event.action === actionName)).toHaveLength(1);
     expect(action?.action).toBe(actionName);
     expect(action?.input).toEqual({
       trigger_id: trigger.id,
@@ -131,6 +133,7 @@ describe('inbound webhook message triggers', () => {
         channel_id: webhook.channelId,
         channel_name: body.data.channel,
         agent_id: webhook.createdBy,
+        agent_name: body.data.author,
         text: body.data.text,
         mentions: [],
         metadata,

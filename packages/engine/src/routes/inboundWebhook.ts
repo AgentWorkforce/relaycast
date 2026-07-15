@@ -160,6 +160,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
             channel_id,
             channel_name: result.channel,
             agent_id,
+            agent_name: result.author,
             text: result.text,
             mentions: [],
             metadata: result.metadata,
