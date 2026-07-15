@@ -5,6 +5,7 @@ import { errorResponse } from '../lib/httpError.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as inboundWebhookEngine from '../engine/inboundWebhook.js';
+import * as triggerEngine from '../engine/trigger.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel } from './fanout.js';
 import { runInBackground } from './background.js';
@@ -136,7 +137,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
-    const { workspace_id, channel_id, ...responseData } = result;
+    const { workspace_id, channel_id, agent_id, ...responseData } = result;
 
     const eventData = { ...responseData, channel_id };
     if (channel_id) {
@@ -146,6 +147,29 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
         'fanout webhook.received',
       );
     }
+    runInBackground(
+      c,
+      (async () => {
+        const { nodeConnections } = c.get('engine');
+        await triggerEngine.fireMessageTriggers({
+          db,
+          nodeConnections,
+          workspaceId: workspace_id,
+          message: {
+            id: String(result.message_id),
+            channel_id,
+            channel_name: result.channel,
+            agent_id,
+            agent_name: result.author,
+            text: result.text,
+            mentions: [],
+            metadata: result.metadata,
+            created_at: result.created_at,
+          },
+        });
+      })(),
+      'fire message triggers',
+    );
     await sendWebhookEvent(c, {
       type: 'webhook.received',
       workspaceId: workspace_id,
