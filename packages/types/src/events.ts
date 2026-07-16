@@ -136,6 +136,34 @@ export const AgentStatusChangedEventSchema = z.object({
 });
 export type AgentStatusChangedEvent = z.infer<typeof AgentStatusChangedEventSchema>;
 
+// Durable agent exit — an agent hosted by a node was deregistered, dropped from
+// a node inventory sync, or released. Correlates back to the spawn invocation.
+export const AgentExitedEventSchema = z.object({
+  type: z.literal('agent.exited'),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  node_id: z.string().nullable(),
+  invocation_id: z.string().nullable(),
+  reason: z.enum(['deregistered', 'missing_from_inventory', 'released']),
+});
+export type AgentExitedEvent = z.infer<typeof AgentExitedEventSchema>;
+
+// Durable node liveness transitions. Emitted once per online <-> offline flip.
+export const NodeStatusOnlineEventSchema = z.object({
+  type: z.literal('node.status.online'),
+  node_id: z.string(),
+  node_name: z.string().nullable(),
+});
+export type NodeStatusOnlineEvent = z.infer<typeof NodeStatusOnlineEventSchema>;
+
+export const NodeStatusOfflineEventSchema = z.object({
+  type: z.literal('node.status.offline'),
+  node_id: z.string(),
+  node_name: z.string().nullable(),
+  reason: z.enum(['liveness_timeout', 'disconnected', 'deregistered']).optional(),
+});
+export type NodeStatusOfflineEvent = z.infer<typeof NodeStatusOfflineEventSchema>;
+
 export type AgentStatusEvent =
   | AgentStatusActiveEvent
   | AgentStatusIdleEvent
@@ -360,6 +388,9 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
+  AgentExitedEventSchema,
+  NodeStatusOnlineEventSchema,
+  NodeStatusOfflineEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,
@@ -408,6 +439,9 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   AgentStatusWaitingEventSchema,
   AgentStatusOfflineEventSchema,
   AgentStatusChangedEventSchema,
+  AgentExitedEventSchema,
+  NodeStatusOnlineEventSchema,
+  NodeStatusOfflineEventSchema,
   ChannelCreatedEventSchema,
   ChannelUpdatedEventSchema,
   ChannelArchivedEventSchema,

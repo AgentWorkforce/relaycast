@@ -11,6 +11,7 @@ import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import { observerTokens } from '../../db/schema.js';
 import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
+import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
 import { providerAttachDecision } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../engine/action.js';
@@ -529,13 +530,21 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // would keep stale capabilities with no signal. Log it; a close still must
     // not throw.
     if (providerName) {
-      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining).catch((err) => {
+      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining, this.nodeCompletionDeps).catch((err) => {
         // Pass the error object so the runtime logs its stack, not just the message.
         console.error('[node.teardown] provider disconnect failed', { workspace_id: workspaceId, node_id: nodeId, provider: providerName }, err);
       });
     } else if (!hasRemaining) {
       // Connection dropped before it bound a provider and it was the node's last.
-      await markNodeOffline(this.db, this, workspaceId, nodeId).catch((err) => {
+      // Serialize with node-control ops (register/heartbeat) and re-check
+      // connectivity under the lock: a reconnect racing this close may have bound
+      // a fresh socket, in which case the node must stay online. Without this a
+      // stale close could append node.status.offline after the reconnect's online
+      // event and leave the node marked offline despite a live socket.
+      await serializeNodeOp(workspaceId, nodeId, async () => {
+        if (this.isNodeConnected(workspaceId, nodeId)) return;
+        await markNodeOffline(this.db, this, workspaceId, nodeId, { deps: this.nodeCompletionDeps, reason: 'disconnected' });
+      }).catch((err) => {
         console.error('[node.teardown] mark node offline failed', { workspace_id: workspaceId, node_id: nodeId }, err);
       });
     }

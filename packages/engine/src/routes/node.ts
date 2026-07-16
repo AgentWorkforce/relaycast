@@ -343,8 +343,9 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
     }
     // Serialize with node-control operations so removal can't race a concurrent
     // register/heartbeat's aggregate recompute.
+    const engine = c.get('engine');
     await serializeNodeOp(workspace.id, node.id, () =>
-      nodeEngine.deregisterProvider(db, c.get('engine').nodeConnections, workspace.id, node.id, c.req.param('name')),
+      nodeEngine.deregisterProvider(db, engine.nodeConnections, workspace.id, node.id, c.req.param('name'), engine),
     );
     return jsonNoContent(c);
   } catch (err: unknown) {

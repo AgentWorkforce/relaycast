@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { EngineDb } from './ports/index.js';
 import { agents } from './db/schema.js';
 import { deregisterAgentViaNode, directNodeIdForAgent } from './engine/node.js';
+import type { InvocationCompletionDeps } from './engine/invocationCompletion.js';
 
 /** Options for {@link handleAgentDisconnect}. */
 export interface HandleAgentDisconnectOptions {
@@ -14,6 +15,11 @@ export interface HandleAgentDisconnectOptions {
    * receiving deliveries. See issue #272.
    */
   deregister?: boolean;
+  /**
+   * Optional fanout ports so this stays infallible for callers without them;
+   * when provided, a deregister emits a durable `agent.exited`.
+   */
+  deps?: InvocationCompletionDeps;
 }
 
 /**
@@ -68,6 +74,7 @@ export async function handleAgentDisconnect(
     workspaceId,
     agent.locationNodeId,
     { agent_id: agentId },
+    opts.deps,
   );
   return disconnected !== null;
 }
