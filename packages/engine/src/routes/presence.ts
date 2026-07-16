@@ -49,9 +49,10 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
     const db = c.get('db');
     const agent = c.get('agent')!;
     const workspace = c.get('workspace');
-    const { presence } = c.get('engine');
+    const engine = c.get('engine');
+    const { presence } = engine;
 
-    await handleAgentDisconnect(db, workspace.id, agent.id);
+    await handleAgentDisconnect(db, workspace.id, agent.id, engine);
     await presence.disconnect(workspace.id, agent.id, agent.name);
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {

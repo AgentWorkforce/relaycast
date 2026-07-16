@@ -40,8 +40,8 @@ import {
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
-import { emitInvocationCompletionEffects } from './invocationCompletion.js';
-import type { InvocationCompletionDeps } from './invocationCompletion.js';
+import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
+import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -473,7 +473,16 @@ export async function markNodeOffline(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
+  effects?: { deps?: InvocationCompletionDeps; reason?: NodeOfflineReason },
 ) {
+  // Capture the node's name + prior status BEFORE flipping it so a durable
+  // node.status.offline is emitted only on a real online -> offline transition
+  // (never on a node that was already offline).
+  const [before] = await db
+    .select({ status: nodes.status, name: nodes.name })
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+
   await db
     .update(nodes)
     .set({
@@ -503,6 +512,15 @@ export async function markNodeOffline(
     ));
 
   await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId);
+
+  if (effects?.deps && before && before.status === 'online') {
+    await emitNodeStatusEffects(effects.deps, workspaceId, {
+      status: 'offline',
+      nodeId,
+      nodeName: before.name,
+      reason: effects.reason,
+    });
+  }
 }
 
 /**
@@ -517,13 +535,14 @@ export async function handleProviderDisconnect(
   nodeId: string,
   providerName: string,
   hasRemainingConnections: boolean,
+  deps?: InvocationCompletionDeps,
 ) {
   // Serialized with node-control operations so a teardown can't race a
   // concurrent register's provider upsert / aggregate recompute (or, on
   // better-sqlite3, deadlock its isolated transaction).
   return serializeNodeOp(workspaceId, nodeId, async () => {
     if (!hasRemainingConnections) {
-      await markNodeOffline(db, registry, workspaceId, nodeId);
+      await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'disconnected' });
       return;
     }
     await markProviderOffline(db, workspaceId, nodeId, providerName);
@@ -551,6 +570,7 @@ export async function deregisterProvider(
   workspaceId: string,
   nodeId: string,
   providerName: string,
+  deps?: InvocationCompletionDeps,
 ) {
   await removeProvider(db, workspaceId, nodeId, providerName);
   registry.detachProvider(workspaceId, nodeId, providerName);
@@ -568,7 +588,7 @@ export async function deregisterProvider(
     .from(nodeProviders)
     .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
   if (!remaining || remaining.count === 0) {
-    await markNodeOffline(db, registry, workspaceId, nodeId);
+    await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'deregistered' });
   } else {
     // Other providers remain: recompute the node aggregate but don't reschedule
     // node-wide — that would disturb the surviving providers' in-flight invokes.
@@ -578,7 +598,11 @@ export async function deregisterProvider(
   }
 }
 
-export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry): Promise<number> {
+export async function sweepOfflineNodes(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  deps?: InvocationCompletionDeps,
+): Promise<number> {
   const rows = await db.select().from(nodes).where(eq(nodes.status, 'online'));
   const stale = rows.filter((node) => !isNodeLive(node));
   let swept = 0;
@@ -591,7 +615,7 @@ export async function sweepOfflineNodes(db: Db, registry: NodeConnectionRegistry
         .from(nodes)
         .where(and(eq(nodes.workspaceId, node.workspaceId), eq(nodes.id, node.id)));
       if (!current || current.status !== 'online' || isNodeLive(current)) return false;
-      await markNodeOffline(db, registry, node.workspaceId, node.id);
+      await markNodeOffline(db, registry, node.workspaceId, node.id, { deps, reason: 'liveness_timeout' });
       return true;
     });
     if (offlined) swept++;
@@ -1146,6 +1170,7 @@ export async function deregisterAgentViaNode(
   workspaceId: string,
   nodeId: string,
   message: { agent_id?: string; name?: string },
+  deps?: InvocationCompletionDeps,
 ) {
   const conditions = [
     eq(agents.workspaceId, workspaceId),
@@ -1184,6 +1209,16 @@ export async function deregisterAgentViaNode(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, updated.id)));
     await markDirectNodeOfflineForAgent(db, workspaceId, updated.id);
     await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+
+    if (deps) {
+      await emitAgentExitedEffects(deps, workspaceId, {
+        agentId: updated.id,
+        agentName: updated.name,
+        nodeId,
+        invocationId: fleetInvocationId(updated.metadata),
+        reason: 'deregistered',
+      });
+    }
   }
   return updated ?? null;
 }
@@ -1334,7 +1369,7 @@ export async function reconcileInventory(
         invocation_id: item.invocation_id ?? null,
         session_ref: item.session_ref ?? null,
       },
-    });
+    }, completionDeps);
     if (completed) {
       completedInvocations++;
       if (completionDeps) {
@@ -1344,7 +1379,7 @@ export async function reconcileInventory(
   }
 
   const nodeAgents = await db
-    .select({ id: agents.id, name: agents.name })
+    .select({ id: agents.id, name: agents.name, metadata: agents.metadata })
     .from(agents)
     .where(and(
       eq(agents.workspaceId, workspaceId),
@@ -1353,12 +1388,24 @@ export async function reconcileInventory(
       eq(agents.providerName, providerName),
       eq(agents.status, 'active'),
     ));
-  const missing = nodeAgents.filter((agent) => !names.has(agent.name)).map((agent) => agent.id);
+  const missingAgents = nodeAgents.filter((agent) => !names.has(agent.name));
+  const missing = missingAgents.map((agent) => agent.id);
   if (missing.length > 0) {
     await db
       .update(agents)
       .set({ status: 'offline', lastSeen: new Date() })
       .where(inArray(agents.id, missing));
+    if (completionDeps) {
+      for (const agent of missingAgents) {
+        await emitAgentExitedEffects(completionDeps, workspaceId, {
+          agentId: agent.id,
+          agentName: agent.name,
+          nodeId,
+          invocationId: fleetInvocationId(agent.metadata),
+          reason: 'missing_from_inventory',
+        });
+      }
+    }
   }
 
   let rescheduledInvocations = 0;
@@ -1409,6 +1456,35 @@ export async function listNodes(
 export async function getPublicNode(db: Db, workspaceId: string, name: string) {
   const node = await getNodeByName(db, workspaceId, name);
   return node ? publicNode(node) : null;
+}
+
+/** The node's persisted `status` column, or undefined when the node is gone. */
+async function readNodeStatus(db: Db, workspaceId: string, nodeId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ status: nodes.status })
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  return row?.status;
+}
+
+/**
+ * Emit a durable `node.status.online` only on a real offline -> online
+ * transition: the node was not `online` before the register/heartbeat and the
+ * resulting descriptor reports online. A steady heartbeat (already online) or a
+ * register that leaves the node offline (no live provider) emits nothing.
+ */
+async function emitNodeOnlineTransition(
+  deps: InvocationCompletionDeps | undefined,
+  workspaceId: string,
+  priorStatus: string | undefined,
+  node: { id: string; name: string; status: string } | null,
+): Promise<void> {
+  if (!deps || !node || priorStatus === 'online' || node.status !== 'online') return;
+  await emitNodeStatusEffects(deps, workspaceId, {
+    status: 'online',
+    nodeId: node.id,
+    nodeName: node.name,
+  });
 }
 
 function sendControl(socket: NodeSocketLike | undefined, payload: Record<string, unknown>): boolean {
@@ -1477,6 +1553,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             throw codedError(conflict.message, conflict.code, 409);
           }
         }
+        const priorStatus = await readNodeStatus(args.db, args.workspaceId, args.nodeId);
         const registered = await registerNode(args.db, args.workspaceId, args.nodeId, message, provider);
         const readinessSupported = supportsProviderDeliveryReadiness(args.registry);
         const acceptance = registered.acceptance.map((capability) => (
@@ -1533,16 +1610,20 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             { providerName: provider.name },
           ).catch(() => {});
         }
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, registered.node);
         return;
       }
-      case 'node.heartbeat':
-        await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+      case 'node.heartbeat': {
+        const priorStatus = await readNodeStatus(args.db, args.workspaceId, args.nodeId);
+        const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
         // Heartbeat refreshes online/capacity state; re-drain as a backstop in
         // case a queued spawn could not reserve capacity at register time.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, beat);
         return;
+      }
       case 'node.deregister':
-        await deregisterProvider(args.db, args.registry, args.workspaceId, args.nodeId, frameProviderName);
+        await deregisterProvider(args.db, args.registry, args.workspaceId, args.nodeId, frameProviderName, args.completionDeps);
         return;
       case 'node.spawn': {
         // Handler-context `ctx.spawnAgent`: capacity-direct delegation to this
@@ -1613,7 +1694,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'agent.deregister':
-        await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message);
+        await deregisterAgentViaNode(args.db, args.workspaceId, args.nodeId, message, args.completionDeps);
         return;
       case 'inventory.sync': {
         const result = await reconcileInventory(
@@ -1675,6 +1756,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...(Object.prototype.hasOwnProperty.call(message, 'output') ? { output: message.output } : {}),
             ...(message.error ? { error: message.error } : {}),
           },
+          args.completionDeps,
         );
         if (completed && args.completionDeps) {
           await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);

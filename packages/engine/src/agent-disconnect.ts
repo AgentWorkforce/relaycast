@@ -2,15 +2,20 @@ import { and, eq } from 'drizzle-orm';
 import type { EngineDb } from './ports/index.js';
 import { agents } from './db/schema.js';
 import { deregisterAgentViaNode, directNodeIdForAgent } from './engine/node.js';
+import type { InvocationCompletionDeps } from './engine/invocationCompletion.js';
 
 /**
  * Disconnect an agent currently hosted by an explicit node when the caller has
  * no node-control socket frame to pass through `handleNodeControlMessage`.
+ *
+ * `deps` are optional so this stays infallible for callers without the fanout
+ * ports; when provided, the deregister emits a durable `agent.exited`.
  */
 export async function handleAgentDisconnect(
   db: EngineDb,
   workspaceId: string,
   agentId: string,
+  deps?: InvocationCompletionDeps,
 ): Promise<boolean> {
   const [agent] = await db
     .select({
@@ -34,6 +39,7 @@ export async function handleAgentDisconnect(
     workspaceId,
     agent.locationNodeId,
     { agent_id: agentId },
+    deps,
   );
   return disconnected !== null;
 }

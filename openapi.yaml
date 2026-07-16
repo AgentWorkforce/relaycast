@@ -4275,7 +4275,9 @@ paths:
     post:
       summary: Create outbound event subscription
       description: |
-        Subscribe an external webhook endpoint to workspace events. Delivery payloads are JSON:
+        Subscribe an external webhook endpoint to workspace events. `events` is a free-form array of
+        dotted event names (or `["*"]` to receive every event, including new ones such as
+        `agent.exited` and `node.status.online` / `node.status.offline`). Delivery payloads are JSON:
         `{ type, workspace_id, timestamp, data }`. If `secret` is provided, Relaycast signs the exact
         JSON request body with HMAC-SHA256 and sends `X-Relay-Signature: sha256=<hex>` along with
         `X-Relay-Event` and `X-Relay-Timestamp`. Custom `headers` are included on delivery; Relay's
