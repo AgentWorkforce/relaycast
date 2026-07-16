@@ -18,7 +18,7 @@ import { ensureDirectNodeForAgent } from '../../engine/node.js';
 import { sendNodeDeliveriesToAgents } from '../../engine/nodeDeliver.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { pruneExpired } from '../../engine/retention.js';
-import { routeDeliveryOutcomes, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
+import { routeDeliveryOutcomes, sweepDueNodeDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
 
 /**
@@ -1104,6 +1104,177 @@ describe('durable delivery api', () => {
       expect(row.dispatchAttempts).toBe(0);
     });
     expect(resumed.sock.ofType('deliver')).toHaveLength(0);
+  });
+
+  it('sweep delivers a never-inline-dispatched ws-node row to a connected, ready node', async () => {
+    // Regression for #271: a ws.node.v1 delivery is a single background dispatch.
+    // If that attempt is lost (e.g. a dropped waitUntil) the row sits queued with
+    // no next_attempt_at. The node sweep now redrives ws rows (not just http_push)
+    // and delivers when the node is connected + delivery-ready.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-null-next');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'lost background dispatch' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    // Reproduce the lost inline dispatch: the row is queued again with no
+    // next_attempt_at, as if the single background send never landed.
+    const db = stack.runtime.deps.db;
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+
+    const afterDeliver = node.sock.ofType('deliver');
+    expect(afterDeliver).toHaveLength(beforeDeliver + 1);
+    expect(afterDeliver.at(-1)).toMatchObject({ agent: bob.name, seq: 1 });
+    const [row] = await db
+      .select()
+      .from(deliveries)
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1)));
+    expect(row.status).toBe('delivered');
+  });
+
+  it('sweep stamps a stranded ws-node row when the node is offline and respects next_attempt_at spacing', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-offline');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'delivered before disconnect' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: bob.name, up_to_seq: 1 }));
+    await node.handle.handleClose();
+
+    // Message queued while the node is offline: no live socket, so the row cannot
+    // be delivered. Reset next_attempt_at to NULL so the sweep (not the inline
+    // post) is what stamps it, exercising the ws branch of the sweep.
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'stranded while offline' }),
+    });
+    expect(second.status).toBe(201);
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
+    await db
+      .update(deliveries)
+      .set({ nextAttemptAt: null, dispatchAttempts: 0, lastDispatchError: null })
+      .where(strandedRow);
+    const deliverCount = node.sock.ofType('deliver').length;
+
+    // First sweep: node is offline / not delivery-ready, so the row stays queued
+    // but is stamped observable + retryable. A readiness skip is not a dispatch
+    // attempt, so dispatch_attempts stays 0.
+    const firstSweep = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(firstSweep).toBe(1);
+    const [stamped] = await db.select().from(deliveries).where(strandedRow);
+    expect(stamped.status).toBe('queued');
+    expect(stamped.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+    expect(stamped.nextAttemptAt).toBeInstanceOf(Date);
+    expect(stamped.dispatchAttempts).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(deliverCount);
+
+    // Second sweep before next_attempt_at is due: the row must NOT be re-attempted
+    // (due-ness respected), so nothing is fetched.
+    const secondSweep = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(secondSweep).toBe(0);
+    const [unchanged] = await db.select().from(deliveries).where(strandedRow);
+    expect(unchanged.status).toBe('queued');
+    expect(node.sock.ofType('deliver')).toHaveLength(deliverCount);
+  });
+
+  it('sweep delivers a stranded ws-node row once past next_attempt_at with a ready node', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-due');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'stranded but node stays ready' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    // A row that a prior failed/deferred attempt stamped for retry ~30s out. The
+    // node stays connected and bob stays delivery-ready throughout.
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: new Date(Date.now() + 30_000), dispatchAttempts: 1, deliveredAt: null, lastDispatchError: 'node socket send failed' })
+      .where(strandedRow);
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    // Not yet due: the sweep must skip it.
+    expect(await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() })).toBe(0);
+    expect(node.sock.ofType('deliver')).toHaveLength(beforeDeliver);
+
+    // Past next_attempt_at: the ready node receives the previously stranded row.
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 31_000) });
+    expect(swept).toBe(1);
+    const afterDeliver = node.sock.ofType('deliver');
+    expect(afterDeliver).toHaveLength(beforeDeliver + 1);
+    expect(afterDeliver.at(-1)).toMatchObject({ agent: bob.name, seq: 1 });
+    const [row] = await db.select().from(deliveries).where(strandedRow);
+    expect(row.status).toBe('delivered');
+  });
+
+  it('sweep stamps a ws-node row (incrementing attempts) when the live send fails', async () => {
+    // Regression for #271 part A: the provider is delivery-ready but the live
+    // send does not land (socket throws / provider detaches mid-send). The row is
+    // stamped for retry — counting a real dispatch attempt — instead of silently
+    // sitting queued until the mailbox TTL dead-letters it.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-send-fail');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'send will throw on redrive' }),
+    });
+    expect(post.status).toBe(201);
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(1));
+
+    const db = stack.runtime.deps.db;
+    const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
+    await db
+      .update(deliveries)
+      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .where(strandedRow);
+
+    // bob is delivery-ready, but the underlying socket send throws — sendToProvider
+    // catches it, detaches the provider, and returns false, hitting the failed-send
+    // branch (not the readiness skip).
+    node.sock.send = () => { throw new Error('socket write failed'); };
+
+    const swept = await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(swept).toBe(1);
+    const [row] = await db.select().from(deliveries).where(strandedRow);
+    expect(row.status).toBe('queued');
+    expect(row.lastDispatchError).toBe('node socket send failed');
+    expect(row.nextAttemptAt).toBeInstanceOf(Date);
+    expect(row.dispatchAttempts).toBe(1);
   });
 
   it('honors recorded route metadata when live binding changes before fanout', async () => {

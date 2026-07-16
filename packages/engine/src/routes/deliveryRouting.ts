@@ -449,7 +449,22 @@ async function routeOneDeliveryOutcome(
     }));
     if (sent) {
       await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return;
     }
+    // The provider was delivery-ready but the live send did not land (no open
+    // socket, the provider detached mid-send, or `socket.send` threw). Leave the
+    // row queued but stamp it so the periodic node sweep re-attempts with ~30s
+    // spacing, instead of the row sitting silently until its mailbox TTL
+    // dead-letters it. Unlike the readiness skip above this is a real dispatch
+    // attempt, so it counts toward dispatch_attempts.
+    await recordDispatchRetry(ctx, delivery.id, 'node socket send failed', { incrementAttempts: true });
+    console.warn('[delivery.route] node send failed; delivery deferred', {
+      workspace_id: ctx.workspaceId,
+      node_id: locationNodeId,
+      provider_name: providerName,
+      agent_id: delivery.agentId,
+      delivery_id: delivery.id,
+    });
     return;
   }
 
@@ -491,11 +506,19 @@ export async function routeDeliveryOutcomes(
   await routeDeliveryOutcomesForContext(routingContextFromHono(c, opts.workspaceId), deliveries, eventType, eventData);
 }
 
-export async function sweepDueHttpPushDeliveries(
+/**
+ * Periodic redrive for queued node deliveries whose `next_attempt_at` is due (or
+ * was never stamped). Covers http_push rows (their agent never connects to pull)
+ * and ws-node rows whose single background dispatch was lost or failed — each
+ * fetched row is re-routed through {@link routeOneDeliveryOutcome}, which either
+ * delivers (node connected + delivery-ready) or re-stamps the row to pace the
+ * next retry.
+ */
+export async function sweepDueNodeDeliveries(
   engine: EngineDeps,
   opts: { workspaceId?: string; now?: Date; limit?: number } = {},
 ): Promise<number> {
-  const due = await deliveryEngine.fetchDueHttpPushDeliveryEvents(engine.db, opts);
+  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, opts);
   await Promise.allSettled(due.map((event) => (
     routeDeliveryOutcomesForContext(
       { db: engine.db, workspaceId: event.workspaceId, engine },
@@ -506,6 +529,13 @@ export async function sweepDueHttpPushDeliveries(
   )));
   return due.length;
 }
+
+/**
+ * @deprecated Renamed to {@link sweepDueNodeDeliveries}, which also sweeps queued
+ * ws-node rows. Kept as a thin alias because relaycast-cloud's cron imports this
+ * name; delete once that host migrates.
+ */
+export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
 async function notifyDeliveryFailuresForContext(
   ctx: RoutingContext,

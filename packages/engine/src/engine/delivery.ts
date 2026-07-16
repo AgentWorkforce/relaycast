@@ -639,7 +639,15 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
   };
 }
 
-export async function fetchDueHttpPushDeliveryEvents(
+// Node kinds the periodic sweep redrives from a durable delivery row: http_push
+// (its agent never "comes online" to pull, so the cron is its only guaranteed
+// path) and the ws node kinds (a lost inline dispatch or a failed live send
+// otherwise strands the row until the mailbox TTL dead-letters it — the sweep
+// re-attempts once the node is connected + delivery-ready). Mirrors
+// `WS_NODE_KINDS` in `nodeDeliver.ts`.
+const NODE_REDRIVE_KINDS = ['http_push', 'ws', 'fleet_ws', 'direct_ws'] as const;
+
+export async function fetchDueNodeDeliveryEvents(
   db: Db,
   opts: { workspaceId?: string; now?: Date; limit?: number } = {},
 ): Promise<RoutableDeliveryEvent[]> {
@@ -648,15 +656,15 @@ export async function fetchDueHttpPushDeliveryEvents(
   const nowSeconds = Math.floor(now.getTime() / 1000);
   const conditions = [
     eq(deliveries.status, 'queued'),
-    eq(deliveries.routeNodeKind, 'http_push'),
+    inArray(deliveries.routeNodeKind, [...NODE_REDRIVE_KINDS]),
     // Match deliveries that are EITHER never-attempted (nextAttemptAt IS NULL —
-    // e.g. the inline send-time push never ran or its waitUntil was lost) OR due
-    // for retry (nextAttemptAt <= now). Without the NULL branch the cron could
-    // only ever *retry* deliveries that already had an inline attempt (the inline
-    // dispatch is what first stamps nextAttemptAt); a fresh http_push delivery
-    // whose inline push never fired would sit queued forever and never reach the
-    // webhook — an http_push agent never "comes online" to pull it, so the cron
-    // is its only guaranteed delivery path.
+    // e.g. the inline send-time dispatch never ran or its waitUntil was lost) OR
+    // due for retry (nextAttemptAt <= now). Without the NULL branch the cron
+    // could only ever *retry* deliveries that already had an inline attempt (the
+    // inline dispatch is what first stamps nextAttemptAt); a fresh delivery whose
+    // inline dispatch never fired would sit queued forever. For http_push the
+    // cron is the only guaranteed delivery path; for ws nodes it recovers a row
+    // whose single background dispatch was lost before the node re-announces.
     or(isNull(deliveries.nextAttemptAt), lte(deliveries.nextAttemptAt, now)),
     sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
   ];
@@ -734,6 +742,12 @@ export async function fetchDueHttpPushDeliveryEvents(
     };
   });
 }
+
+/**
+ * @deprecated Renamed to {@link fetchDueNodeDeliveryEvents}, which also matches
+ * queued ws-node rows. Kept as a thin alias for out-of-tree callers.
+ */
+export const fetchDueHttpPushDeliveryEvents = fetchDueNodeDeliveryEvents;
 
 export interface NodeDeliveryReplayScope {
   /** Limit replay to agents registered through this provider connection. */

@@ -1,8 +1,8 @@
 import type { EngineDeps } from '../../ports/index.js';
-import { sweepDueHttpPushDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
+import { sweepDueNodeDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 
 interface DeliveryMaintenanceOperations {
-  sweepHttpPush: (deps: EngineDeps) => Promise<unknown>;
+  sweepNodeDeliveries: (deps: EngineDeps) => Promise<unknown>;
   sweepExpiry: (deps: EngineDeps) => Promise<unknown>;
 }
 
@@ -14,7 +14,7 @@ interface DeliveryMaintenanceOperations {
 export function createDeliveryMaintenanceRunner(
   deps: EngineDeps,
   operations: DeliveryMaintenanceOperations = {
-    sweepHttpPush: sweepDueHttpPushDeliveries,
+    sweepNodeDeliveries: sweepDueNodeDeliveries,
     sweepExpiry: sweepExpiredDeliveries,
   },
 ): () => Promise<void> {
@@ -25,11 +25,11 @@ export function createDeliveryMaintenanceRunner(
 
     const cycle = (async () => {
       try {
-        await operations.sweepHttpPush(deps);
+        await operations.sweepNodeDeliveries(deps);
       } catch (err) {
         deps.telemetry.captureException(err, {
           source: 'node.maintenance',
-          op: 'http_push_delivery',
+          op: 'node_delivery',
         });
       }
 
