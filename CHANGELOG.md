@@ -21,11 +21,19 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Message retention remains opt-in (history is kept forever by default); self-host deployments can now opt in to a deployment-wide message TTL via `RELAYCAST_MESSAGE_TTL_DAYS`.
+- Durable `agent.exited` event when a node-hosted agent leaves (deregister, missing from an inventory sync, or release), carrying `agent_id`, `agent_name`, `node_id`, the spawn `invocation_id`, and a `reason`; the spawn's caller is notified directly.
+- Durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` like `liveness_timeout`). Wildcard webhook subscriptions (`events: ["*"]`) receive all three new events automatically.
+- `POST /v1/agents/disconnect` accepts an optional `deregister` flag; SDK `disconnect()` and `presence.markOffline()` take `{ deregister?: boolean }` to opt into full node teardown.
+
+### Changed
+
+- Agent disconnect is presence-only by default for node-hosted agents: the node binding is kept so a still-running session keeps receiving deliveries, instead of silently re-homing to an offline direct node.
 
 ### Fixed
 
 - Allowed Swift clients to decode hosted agent lifecycle statuses and complete realtime connections.
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
+- Node enrollment (`POST /v1/nodes`) now keys on `node_id` when supplied: re-enrolling rotates (and can rename) the same node in place, and a name held by a different node is rejected with `node_name_conflict` (409) instead of silently rewriting the other node.
 - Stopped a reconnecting node broker from silently dropping messages: a same-connection `node.register` re-register now preserves already-announced agents' delivery readiness, and readiness-gated skips stamp the delivery row for retry instead of dead-lettering it after the mailbox TTL.
 - Recovered WebSocket node messages whose single live dispatch was lost or failed: instead of letting rows sit queued until the mailbox TTL dead-letters them, the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one.
 

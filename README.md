@@ -403,13 +403,22 @@ and outbound subscriptions: `message.created`, `message.reacted`, `message.read`
 `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, `delivery.failed`,
 `agent.status.changed`, `agent.status.active`, `agent.status.idle`,
 `agent.status.blocked`, `agent.status.waiting`, `agent.status.offline`,
+`agent.exited`, `node.status.online`, `node.status.offline`,
 `action.invoked`, `action.completed`, `action.failed`, and `action.denied`.
 
-Fleet node presence is published to workspace-key observer streams as
-`node.online`, `node.heartbeat`, and `node.offline`. Each carries a `node`
-payload matching the `GET /nodes` roster entry (capabilities, tags, `load`,
-`active_agents`/`max_agents`, `handlers_live`, `last_heartbeat_at`), so a single
-event fully refreshes a node's row.
+`agent.exited` is a durable record that an agent hosted by a node left — via
+deregister, an inventory sync that dropped it, or a release — carrying
+`agent_id`, `agent_name`, `node_id`, the correlated spawn `invocation_id`, and a
+`reason` (`deregistered` | `missing_from_inventory` | `released`); the spawn's
+caller also receives it directly. `node.status.online` / `node.status.offline`
+durably record node liveness transitions (offline carries a `reason` such as
+`liveness_timeout` | `disconnected` | `deregistered`).
+
+Fleet node presence is also published to workspace-key observer streams as the
+ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
+carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
+tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
+`last_heartbeat_at`), so a single event fully refreshes a node's row.
 
 Nodes are first-class delivery hosts and every agent has a node route. `kind`
 describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
@@ -489,8 +498,10 @@ drains queued node invocations and replays pending node deliveries after
 `node.register`, `agent.register`, and `inventory.sync`, so adapters using it should not
 also call `handleNodeReconnect` for those same frames. If an adapter owns
 `POST /v1/agents/disconnect` outside the engine router, call `handleAgentDisconnect`
-from `@relaycast/engine/agent-disconnect` before presence cleanup so node-hosted
-agents follow the same deregistration path as an `agent.deregister` frame.
+from `@relaycast/engine/agent-disconnect` before presence cleanup. By default it is
+presence-only for node-hosted agents (the node binding is left intact so the
+still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
+full `agent.deregister` teardown path that re-homes the agent to its direct node.
 
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every

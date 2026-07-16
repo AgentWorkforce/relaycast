@@ -342,4 +342,57 @@ describe('AgentClient features', () => {
     });
 
   });
+
+  describe('presence.markOffline', () => {
+    it('posts to /v1/agents/disconnect with no deregister flag by default', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.presence.markOffline();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/disconnect');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBe(JSON.stringify({}));
+    });
+
+    it('sends { deregister: true } when opted in', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.presence.markOffline({ deregister: true });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({ deregister: true }));
+    });
+
+    it('sends no deregister flag when deregister is false', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.presence.markOffline({ deregister: false });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({}));
+    });
+  });
+
+  describe('disconnect', () => {
+    it('posts to /v1/agents/disconnect with no deregister flag by default', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.disconnect();
+
+      const disconnectCall = mockFetch.mock.calls.find(
+        ([url]) => url === 'https://cast.agentrelay.com/v1/agents/disconnect',
+      );
+      expect(disconnectCall).toBeDefined();
+      expect(disconnectCall![1].method).toBe('POST');
+      expect(disconnectCall![1].body).toBe(JSON.stringify({}));
+    });
+
+    it('sends { deregister: true } when opted in', async () => {
+      mockFetch.mockImplementation(() => mockResponse({}));
+      await me.disconnect({ deregister: true });
+
+      const disconnectCall = mockFetch.mock.calls.find(
+        ([url]) => url === 'https://cast.agentrelay.com/v1/agents/disconnect',
+      );
+      expect(disconnectCall).toBeDefined();
+      expect(disconnectCall![1].body).toBe(JSON.stringify({ deregister: true }));
+    });
+  });
 });
