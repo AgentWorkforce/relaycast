@@ -205,7 +205,18 @@ export async function createNodeToken(
 ) {
   const token = `nt_live_${randomHex(24)}`;
   const tokenHash = await sha256Hex(token);
-  const existing = await getNodeByName(db, workspaceId, data.name);
+  const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
+  // Enrollment keys on node_id (the stable identity) when supplied; the name
+  // lookup is only a fallback for callers without a stable id. A name held by
+  // a *different* node id is a conflict — mirroring node.register — never a
+  // silent rewrite of the other node.
+  const existing = await resolveNodeForEnroll(db, workspaceId, data);
+  if (data.node_id !== undefined) {
+    const nameHolder = await getNodeByName(db, workspaceId, name);
+    if (nameHolder && nameHolder.id !== data.node_id) {
+      throw codedError(`Node name "${name}" is already enrolled by another node`, 'node_name_conflict', 409);
+    }
+  }
   const now = new Date();
   const existingShape = existing ? normalizeLegacyNodeShape(existing.kind, existing.role) : null;
   const normalized = normalizeLegacyNodeShape(
@@ -234,6 +245,7 @@ export async function createNodeToken(
     const [updated] = await db
       .update(nodes)
       .set({
+        name,
         tokenHash,
         kind,
         role,
@@ -256,7 +268,7 @@ export async function createNodeToken(
     .values({
       id: data.node_id ?? `node_${generateId()}`,
       workspaceId,
-      name: data.name,
+      name,
       tokenHash,
       kind,
       role,
@@ -288,6 +300,29 @@ export async function getNodeByName(db: Db, workspaceId: string, name: string) {
     .from(nodes)
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.name, normalized)));
   return node ?? null;
+}
+
+export async function getNodeById(db: Db, workspaceId: string, nodeId: string) {
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  return node ?? null;
+}
+
+/**
+ * Resolve the node an enroll (POST /v1/nodes) targets: by node_id when
+ * supplied, by name otherwise.
+ */
+export async function resolveNodeForEnroll(
+  db: Db,
+  workspaceId: string,
+  data: { node_id?: string; name: string },
+) {
+  if (data.node_id !== undefined) {
+    return getNodeById(db, workspaceId, data.node_id);
+  }
+  return getNodeByName(db, workspaceId, data.name);
 }
 
 export interface RegisterNodeResult {

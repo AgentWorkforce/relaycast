@@ -3703,7 +3703,11 @@ paths:
     post:
       summary: Enroll or rotate a node token
       description: >
-        Enroll a delivery node in the workspace or rotate the token for an existing node name.
+        Enroll a delivery node in the workspace or rotate the token for an existing node.
+        When `node_id` is supplied, it is the enrollment key: a matching node is rotated
+        in place (and renamed if `name` differs), a new `node_id` creates a new node, and
+        a `name` already held by a different node is rejected with `node_name_conflict`
+        (409). Without `node_id`, an existing node with the same `name` is rotated.
         Fleet WebSocket nodes use the returned token on `/node/ws`; HTTP push nodes store a
         delivery endpoint and can host one bound agent by default.
       tags:
@@ -3721,6 +3725,7 @@ paths:
               properties:
                 node_id:
                   type: string
+                  description: Stable node identity. When supplied, enrollment keys on it — matching node rotated in place, new id creates a node — instead of resolving by name.
                 name:
                   type: string
                 kind:
@@ -3761,6 +3766,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '409':
+          description: Node name is already enrolled by a different node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       summary: List nodes
       description: List delivery nodes in the workspace, optionally filtered by capability or name. Observer tokens require `nodes:read`; agent filters constrain active-agent details.
