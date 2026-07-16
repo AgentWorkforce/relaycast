@@ -11,10 +11,10 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('Node delivery maintenance', () => {
-  it('serializes HTTP push and expiry and coalesces overlapping cycles', async () => {
+  it('serializes node delivery and expiry sweeps and coalesces overlapping cycles', async () => {
     const pushFinished = deferred();
     const order: string[] = [];
-    const sweepHttpPush = vi.fn(async () => {
+    const sweepNodeDeliveries = vi.fn(async () => {
       order.push('push:start');
       await pushFinished.promise;
       order.push('push:end');
@@ -25,13 +25,13 @@ describe('Node delivery maintenance', () => {
     const deps = {
       telemetry: { captureException: vi.fn() },
     } as unknown as EngineDeps;
-    const run = createDeliveryMaintenanceRunner(deps, { sweepHttpPush, sweepExpiry });
+    const run = createDeliveryMaintenanceRunner(deps, { sweepNodeDeliveries, sweepExpiry });
 
     const first = run();
     const overlapping = run();
 
     expect(overlapping).toBe(first);
-    expect(sweepHttpPush).toHaveBeenCalledTimes(1);
+    expect(sweepNodeDeliveries).toHaveBeenCalledTimes(1);
     expect(sweepExpiry).not.toHaveBeenCalled();
 
     pushFinished.resolve();
@@ -41,11 +41,11 @@ describe('Node delivery maintenance', () => {
     expect(sweepExpiry).toHaveBeenCalledTimes(1);
 
     await run();
-    expect(sweepHttpPush).toHaveBeenCalledTimes(2);
+    expect(sweepNodeDeliveries).toHaveBeenCalledTimes(2);
     expect(sweepExpiry).toHaveBeenCalledTimes(2);
   });
 
-  it('still runs expiry when the HTTP push sweep fails', async () => {
+  it('still runs expiry when the node delivery sweep fails', async () => {
     const error = new Error('push sweep failed');
     const captureException = vi.fn();
     const sweepExpiry = vi.fn(async () => {});
@@ -53,7 +53,7 @@ describe('Node delivery maintenance', () => {
       telemetry: { captureException },
     } as unknown as EngineDeps;
     const run = createDeliveryMaintenanceRunner(deps, {
-      sweepHttpPush: vi.fn(async () => { throw error; }),
+      sweepNodeDeliveries: vi.fn(async () => { throw error; }),
       sweepExpiry,
     });
 
@@ -62,7 +62,7 @@ describe('Node delivery maintenance', () => {
     expect(sweepExpiry).toHaveBeenCalledTimes(1);
     expect(captureException).toHaveBeenCalledWith(error, {
       source: 'node.maintenance',
-      op: 'http_push_delivery',
+      op: 'node_delivery',
     });
   });
 
@@ -73,7 +73,7 @@ describe('Node delivery maintenance', () => {
       telemetry: { captureException },
     } as unknown as EngineDeps;
     const run = createDeliveryMaintenanceRunner(deps, {
-      sweepHttpPush: vi.fn(async () => {}),
+      sweepNodeDeliveries: vi.fn(async () => {}),
       sweepExpiry: vi.fn(async () => { throw error; }),
     });
 

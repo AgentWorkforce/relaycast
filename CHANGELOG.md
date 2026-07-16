@@ -35,6 +35,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
 - Node enrollment (`POST /v1/nodes`) now keys on `node_id` when supplied: re-enrolling rotates (and can rename) the same node in place, and a name held by a different node is rejected with `node_name_conflict` (409) instead of silently rewriting the other node.
 - Stopped a same-connection node broker `node.register` re-register from silently gating deliveries: already-announced agents keep their delivery readiness, and readiness-gated skips stamp the delivery row with observable retry metadata instead of failing silently.
+- Recovered WebSocket node messages whose single live dispatch was lost or failed: instead of letting rows sit queued until the mailbox TTL dead-letters them, the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one.
 
 ## [6.0.3] - 2026-07-12
 

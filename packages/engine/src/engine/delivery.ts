@@ -639,7 +639,15 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
   };
 }
 
-export async function fetchDueHttpPushDeliveryEvents(
+// Node kinds the periodic sweep redrives from a durable delivery row: http_push
+// (its agent never "comes online" to pull, so the cron is its only guaranteed
+// path) and the ws node kinds (a lost inline dispatch or a failed live send
+// otherwise strands the row until the mailbox TTL dead-letters it — the sweep
+// re-attempts once the node is connected + delivery-ready). Mirrors
+// `WS_NODE_KINDS` in `nodeDeliver.ts`.
+const NODE_REDRIVE_KINDS = ['http_push', 'ws', 'fleet_ws', 'direct_ws'] as const;
+
+export async function fetchDueNodeDeliveryEvents(
   db: Db,
   opts: { workspaceId?: string; now?: Date; limit?: number } = {},
 ): Promise<RoutableDeliveryEvent[]> {
@@ -648,15 +656,15 @@ export async function fetchDueHttpPushDeliveryEvents(
   const nowSeconds = Math.floor(now.getTime() / 1000);
   const conditions = [
     eq(deliveries.status, 'queued'),
-    eq(deliveries.routeNodeKind, 'http_push'),
+    inArray(deliveries.routeNodeKind, [...NODE_REDRIVE_KINDS]),
     // Match deliveries that are EITHER never-attempted (nextAttemptAt IS NULL —
-    // e.g. the inline send-time push never ran or its waitUntil was lost) OR due
-    // for retry (nextAttemptAt <= now). Without the NULL branch the cron could
-    // only ever *retry* deliveries that already had an inline attempt (the inline
-    // dispatch is what first stamps nextAttemptAt); a fresh http_push delivery
-    // whose inline push never fired would sit queued forever and never reach the
-    // webhook — an http_push agent never "comes online" to pull it, so the cron
-    // is its only guaranteed delivery path.
+    // e.g. the inline send-time dispatch never ran or its waitUntil was lost) OR
+    // due for retry (nextAttemptAt <= now). Without the NULL branch the cron
+    // could only ever *retry* deliveries that already had an inline attempt (the
+    // inline dispatch is what first stamps nextAttemptAt); a fresh delivery whose
+    // inline dispatch never fired would sit queued forever. For http_push the
+    // cron is the only guaranteed delivery path; for ws nodes it recovers a row
+    // whose single background dispatch was lost before the node re-announces.
     or(isNull(deliveries.nextAttemptAt), lte(deliveries.nextAttemptAt, now)),
     sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
   ];
@@ -728,6 +736,89 @@ export async function fetchDueHttpPushDeliveryEvents(
     );
     return {
       workspaceId: row.delivery.workspaceId,
+      delivery: fanoutRecordFromDeliveryRow(pendingRow),
+      eventType,
+      eventData,
+    };
+  });
+}
+
+/**
+ * @deprecated Renamed to {@link fetchDueNodeDeliveryEvents}, which also matches
+ * queued ws-node rows. Kept as a thin alias for out-of-tree callers.
+ */
+export const fetchDueHttpPushDeliveryEvents = fetchDueNodeDeliveryEvents;
+
+// The ws node kinds only (http_push is excluded): the sweep redrives a ws
+// agent's backlog as an ordered, seq-monotonic stream, whereas http_push rows
+// are independent single-shot webhooks with no ordering relationship.
+const WS_NODE_REDRIVE_KINDS = ['ws', 'fleet_ws', 'direct_ws'] as const;
+
+/**
+ * Fetch an agent's full queued ws-node backlog in ascending `seq` order,
+ * regardless of each row's `next_attempt_at` due-ness. The periodic sweep uses
+ * this to redrive a ws agent's whole queued backlog once ANY of its rows comes
+ * due, mirroring {@link deliverPendingToNode}'s reconnect-replay ordering.
+ *
+ * Durable delivery rows always carry `seq >= 1` (see `nextDeliverySeqSql` in
+ * `deliveryWrites.ts`: `MAX(deliverySeq, deliveryAckSeq) + 1`), so there is no
+ * seq-0 fan-out row to reason about here — every returned row participates in
+ * the broker's monotonic-seq gate and must be sent in order.
+ */
+export async function fetchQueuedWsBacklogEvents(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  opts: { now?: Date; limit?: number } = {},
+): Promise<RoutableDeliveryEvent[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+  const now = opts.now ?? new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+
+  const rows = await db
+    .select({
+      delivery: deliveries,
+      recipientAgentName: agents.name,
+      body: messages.body,
+      blocks: messages.blocks,
+      metadata: messages.metadata,
+      hasAttachments: messages.hasAttachments,
+      threadId: messages.threadId,
+      createdAt: messages.createdAt,
+      channelId: messages.channelId,
+      channelName: channels.name,
+      conversationId: dmConversations.id,
+      dmType: dmConversations.dmType,
+      senderAgentId: messages.agentId,
+      senderAgentName: sql<string | null>`(
+        SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
+      )`,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, agentId),
+      eq(deliveries.status, 'queued'),
+      inArray(deliveries.routeNodeKind, [...WS_NODE_REDRIVE_KINDS]),
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
+    ))
+    .orderBy(asc(deliveries.seq))
+    .limit(limit);
+
+  const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
+
+  return rows.map((row) => {
+    const pendingRow = row as PendingDeliveryRow;
+    const { eventType, eventData } = buildRoutableDeliveryEvent(
+      pendingRow,
+      attachmentsByMessageId.get(row.delivery.messageId) ?? [],
+    );
+    return {
+      workspaceId,
       delivery: fanoutRecordFromDeliveryRow(pendingRow),
       eventType,
       eventData,

@@ -474,9 +474,13 @@ no delivery row or ack). Each body is snake_case with `type`, `workspace_id`,
 `agent_id` / `agent_name` for reactions and receipts, or `topic` / `channel_id` /
 `agent_ids` for presence and context updates. Receivers that only want durable
 messages can filter on the `X-Relaycast-Event` header.
-Queue/cron-backed deployments must call `sweepDueHttpPushDeliveries` from a scheduled
-handler to retry queued HTTP push deliveries whose `next_attempt_at` is due; the Node
-self-host adapter runs that sweep on its local maintenance timer.
+Queue/cron-backed deployments must call `sweepDueNodeDeliveries` from a scheduled
+handler to redrive queued node deliveries whose `next_attempt_at` is due (or was
+never stamped). It covers both queued ws-node rows — replayed to a connected,
+delivery-ready node per agent in ascending `seq` order so a later message never
+outruns an earlier one — and due HTTP push deliveries. The Node self-host adapter
+runs that sweep on its local maintenance timer. (`sweepDueHttpPushDeliveries`
+remains exported as a deprecated alias for the old, http-push-only name.)
 They must also call `sweepExpiredDeliveries` to transition expired mailbox rows in
 bounded D1-safe batches and emit sender failure notices. Inbox and delivery reads do
 not run maintenance; they remain available if a scheduled cleanup attempt fails.
