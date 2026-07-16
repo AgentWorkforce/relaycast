@@ -494,8 +494,10 @@ drains queued node invocations and replays pending node deliveries after
 `node.register`, `agent.register`, and `inventory.sync`, so adapters using it should not
 also call `handleNodeReconnect` for those same frames. If an adapter owns
 `POST /v1/agents/disconnect` outside the engine router, call `handleAgentDisconnect`
-from `@relaycast/engine/agent-disconnect` before presence cleanup so node-hosted
-agents follow the same deregistration path as an `agent.deregister` frame.
+from `@relaycast/engine/agent-disconnect` before presence cleanup. By default it is
+presence-only for node-hosted agents (the node binding is left intact so the
+still-running session keeps its deliveries); pass `{ deregister: true }` to follow the
+full `agent.deregister` teardown path that re-homes the agent to its direct node.
 
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every
