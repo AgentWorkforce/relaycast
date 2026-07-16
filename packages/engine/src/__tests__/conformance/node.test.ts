@@ -1800,4 +1800,109 @@ describe('node adapter conformance', () => {
       });
     });
   });
+
+  describe('node enrollment identity', () => {
+    async function enroll(workspaceKey: string, body: Record<string, unknown>) {
+      const res = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, body: await res.json() as { data?: { id: string; name: string; token: string }; error?: { code: string } } };
+    }
+
+    it('rejects enrolling a second node_id under an existing name instead of rewriting the other node', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-name-conflict-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(first.status).toBe(201);
+
+      const second = await enroll(ws.workspaceKey, { node_id: 'node_b', name: 'host' });
+      expect(second.status).toBe(409);
+      expect(second.body.error?.code).toBe('node_name_conflict');
+
+      // Node A keeps its identity and token; node B was never created.
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows.map((row) => row.id)).toEqual(['node_a']);
+      expect(rows[0].name).toBe('host');
+    });
+
+    it('re-enrolling the same node_id rotates the token in place', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-rotate-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v1' });
+      expect(first.status).toBe(201);
+
+      const second = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host', version: 'v2' });
+      expect(second.status).toBe(201);
+      expect(second.body.data?.id).toBe('node_a');
+      expect(second.body.data?.token).not.toBe(first.body.data?.token);
+
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].version).toBe('v2');
+    });
+
+    it('re-enrolling the same node_id under a new name renames the node', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-rename-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'old-name' });
+      expect(first.status).toBe(201);
+
+      const renamed = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'new-name' });
+      expect(renamed.status).toBe(201);
+      expect(renamed.body.data?.id).toBe('node_a');
+      expect(renamed.body.data?.name).toBe('new-name');
+
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].name).toBe('new-name');
+    });
+
+    it('rejects renaming a node onto a name held by a different node', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-rename-conflict-ws');
+      expect((await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'alpha' })).status).toBe(201);
+      expect((await enroll(ws.workspaceKey, { node_id: 'node_b', name: 'beta' })).status).toBe(201);
+
+      const collide = await enroll(ws.workspaceKey, { node_id: 'node_b', name: 'alpha' });
+      expect(collide.status).toBe(409);
+      expect(collide.body.error?.code).toBe('node_name_conflict');
+    });
+
+    it('rejects names that normalize to empty or stay #-prefixed', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-bad-name-ws');
+      for (const badName of ['#', '##host']) {
+        const res = await enroll(ws.workspaceKey, { node_id: 'node_a', name: badName });
+        expect(res.status).toBe(400);
+        expect(res.body.error?.code).toBe('invalid_node_name');
+      }
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(0);
+
+      // A single leading "#" is a reference prefix, not part of the name.
+      const prefixed = await enroll(ws.workspaceKey, { node_id: 'node_a', name: '#host' });
+      expect(prefixed.status).toBe(201);
+      expect(prefixed.body.data?.name).toBe('host');
+    });
+
+    it('enrolling without node_id still rotates the existing node by name', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-by-name-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(first.status).toBe(201);
+
+      const rotated = await enroll(ws.workspaceKey, { name: 'host' });
+      expect(rotated.status).toBe(201);
+      expect(rotated.body.data?.id).toBe('node_a');
+      expect(rotated.body.data?.token).not.toBe(first.body.data?.token);
+    });
+  });
 });

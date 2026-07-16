@@ -134,7 +134,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const existing = await nodeEngine.getNodeByName(c.get('db'), c.get('workspace').id, parsed.data.name);
+    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, parsed.data);
     const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
     const role = parsed.data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
