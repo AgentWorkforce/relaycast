@@ -10,12 +10,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
+- Added durable `agent.exited` events on every node-hosted agent exit (deregistration, missing from an inventory sync, and release), delivered to the durable workspace event log, webhook subscribers, and the spawn caller's mailbox, and carrying `agent_id`, `agent_name`, `node_id`, `invocation_id`, and a `reason`.
+- Added durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` such as `liveness_timeout`, `disconnected`, or `deregistered`), delivered to the workspace event log and webhook subscribers.
 - Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
+- `handleAgentDisconnect` accepts an optional `{ deregister?: boolean }` argument, and `POST /v1/agents/disconnect` accepts an optional `{ deregister?: boolean }` body.
+
+### Changed
+- `handleAgentDisconnect` / `POST /v1/agents/disconnect` are presence-only by default for node-hosted agents: the active `agent_node_bindings` row and node slot are kept (deliveries keep flowing to the still-running session) instead of deactivating the binding and re-homing `location_node_id` to the offline direct node. Pass `deregister: true` for the previous full teardown. Skipped and re-homing paths now log at warn.
 
 ### Fixed
 - Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
 - Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
+- `createNodeToken` (`POST /v1/nodes`) resolves the target node by `node_id` when supplied instead of by name: a matching id is rotated in place (renaming if `name` differs), a new id creates a new node, and a `name` held by a different node throws `node_name_conflict` (409) — matching `node.register` — instead of silently rotating and reshaping the other node. Name-only enrollment (no `node_id`) still rotates by name. A name that is empty or still `#`-prefixed after stripping the single reference `#` is rejected with `invalid_node_name` (400).
 - Cursor-negotiating node providers keep their delivery-ready agent set on a same-connection `node.register` re-register (`setProviderDeliveryReadiness` no longer resets it to empty), fixing silent message drops until the mailbox TTL when a broker reconnects without re-announcing every hosted agent. Readiness-skipped `ws.node.v1` deliveries now stamp `last_dispatch_error` + `next_attempt_at` (without counting a `dispatch_attempts`) so they are observable and retryable instead of a bare silent queued row.
 
 ## [6.0.3] - 2026-07-12
