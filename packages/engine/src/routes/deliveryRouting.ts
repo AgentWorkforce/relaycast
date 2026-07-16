@@ -33,7 +33,7 @@ type DeliveryTarget = {
   providerName?: string;
 };
 
-const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
+const DISPATCH_RETRY_DELAY_MS = 30_000;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -222,7 +222,7 @@ function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: 
   return null;
 }
 
-async function recordHttpPushRetry(
+async function recordDispatchRetry(
   ctx: RoutingContext,
   deliveryId: string,
   error: string,
@@ -233,7 +233,7 @@ async function recordHttpPushRetry(
     .set({
       ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
       lastDispatchError: error,
-      nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+      nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
       updatedAt: new Date(),
     })
     .where(and(
@@ -253,11 +253,11 @@ async function dispatchHttpPush(args: {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
     return 'failed';
   }
   if (!isSafeExternalUrl(url, { strict: strictExternalUrl(args.ctx.engine) })) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
     return 'failed';
   }
 
@@ -269,7 +269,7 @@ async function dispatchHttpPush(args: {
   // above; the proxy requires both a url and a secret.
   const proxied = resolveHttpPushProxy(url, config, args.ctx.engine.config?.httpPushProxy);
   if (!proxied.ok) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
     return 'failed';
   }
   const requestUrl = proxied.requestUrl;
@@ -316,7 +316,7 @@ async function dispatchHttpPush(args: {
       .set({
         dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
         lastDispatchError: null,
-        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+        nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
       .where(and(...claimConditions))
@@ -342,12 +342,12 @@ async function dispatchHttpPush(args: {
     // `redirect: 'manual'` surfaces a redirect as a 3xx status (or an
     // opaqueredirect response with status 0); treat both as a hard failure.
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-      await recordHttpPushRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
+      await recordDispatchRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
       return 'failed';
     }
 
     if (!response.ok) {
-      await recordHttpPushRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);
+      await recordDispatchRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);
       return 'failed';
     }
 
@@ -387,13 +387,13 @@ async function dispatchHttpPush(args: {
           return 'acked';
         }
       }
-      await recordHttpPushRetry(args.ctx, args.delivery.id, 'response ack not signaled');
+      await recordDispatchRetry(args.ctx, args.delivery.id, 'response ack not signaled');
       return 'failed';
     }
 
     return 'delivered';
   } catch (err) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, err instanceof Error ? err.message : 'HTTP delivery failed');
+    await recordDispatchRetry(args.ctx, args.delivery.id, err instanceof Error ? err.message : 'HTTP delivery failed');
     return 'failed';
   }
 }
@@ -423,6 +423,19 @@ async function routeOneDeliveryOutcome(
       providerName,
       delivery.agentId,
     )) {
+      // The provider connection has not marked this identity delivery-ready
+      // (cursor negotiation pending). Leave the row queued but stamp it so the
+      // skip is observable and a later sweep retries it, instead of the row
+      // silently sitting until its mailbox TTL dead-letters it. This is a skip,
+      // not a dispatch attempt, so dispatch_attempts is not incremented.
+      await recordDispatchRetry(ctx, delivery.id, 'provider connection not delivery-ready for agent');
+      console.warn('[delivery.route] provider not delivery-ready; delivery deferred', {
+        workspace_id: ctx.workspaceId,
+        node_id: locationNodeId,
+        provider_name: providerName,
+        agent_id: delivery.agentId,
+        delivery_id: delivery.id,
+      });
       return;
     }
     const sent = await ctx.engine.nodeConnections.sendToProvider(ctx.workspaceId, locationNodeId, providerName, buildDeliverFrame({

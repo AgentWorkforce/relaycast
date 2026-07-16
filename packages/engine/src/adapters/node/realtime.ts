@@ -354,6 +354,24 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         }
       }
     }
+    // A re-register on the SAME live connection but with a NEW provider
+    // identity (a different provider name, or a different instance id — a
+    // restarted provider whose broker-side cursors are gone) must not inherit
+    // the previous identity's ready-set. Reset it (back to undefined) so the
+    // immediately-following `setProviderDeliveryReadiness('agent_scoped')`
+    // starts a fresh empty Set and every identity must re-announce before
+    // deliver frames flow — preservation applies only to a same-name,
+    // same-instance reconnect.
+    const previousProviderName = conn.providerName;
+    const providerNameChanged = previousProviderName !== undefined && previousProviderName !== providerName;
+    if (providerNameChanged || (conn.instanceId !== undefined && conn.instanceId !== instanceId)) {
+      conn.deliveryReadyAgentIds = undefined;
+    }
+    // A rename would otherwise leave the old name's index entry pointing at
+    // this socket forever (close cleanup only removes the current name).
+    if (providerNameChanged && providers.get(previousProviderName) === connectionId) {
+      providers.delete(previousProviderName);
+    }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
     conn.lastSeen = Date.now();
@@ -372,7 +390,21 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return;
     const conn = this.nodeConnections.get(currentConnectionId);
     if (!conn || conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || conn.providerName !== providerName) return;
-    conn.deliveryReadyAgentIds = mode === 'immediate' ? null : new Set();
+    if (mode === 'immediate') {
+      conn.deliveryReadyAgentIds = null;
+      return;
+    }
+    // agent_scoped: a re-register on the SAME live connection by the same
+    // provider instance is a reconnect that does not invalidate broker-side
+    // cursors, so keep the identities already marked ready — replacing the set
+    // here would silently gate every in-flight delivery until each agent is
+    // re-announced. A genuinely new connection starts with
+    // `deliveryReadyAgentIds` undefined (a fresh NodeConn), so preservation
+    // never carries across reconnects; a transition from immediate (null) still
+    // resets to an empty set.
+    if (!(conn.deliveryReadyAgentIds instanceof Set)) {
+      conn.deliveryReadyAgentIds = new Set();
+    }
   }
 
   markProviderAgentsDeliveryReady(
