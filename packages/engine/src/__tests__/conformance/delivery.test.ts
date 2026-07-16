@@ -1111,6 +1111,71 @@ describe('durable delivery api', () => {
     expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
   });
 
+  it('resets readiness and drops the stale index entry on a same-connection re-register with a new provider name', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-reregister-new-name');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before rename' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+
+    // The broker re-registers on the SAME live connection with the SAME
+    // instance id but a DIFFERENT provider name. A name change is a different
+    // provider identity: the ready-set must reset (bob was announced under the
+    // old name) and the old name's index entry must not keep pointing at this
+    // socket.
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name: node.name,
+      node_id: node.id,
+      provider: { name: 'renamed-provider', instance_id: node.handle.connectionId },
+      capabilities: [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ],
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+
+    expect(stack.runtime.realtime.isProviderAttached(ws.workspaceId, node.id, DEFAULT_PROVIDER_NAME)).toBe(false);
+    expect(stack.runtime.realtime.isProviderAttached(ws.workspaceId, node.id, 'renamed-provider')).toBe(true);
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after rename re-register' }),
+    });
+    expect(second.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.agentId, bob.agentId),
+          eq(deliveries.seq, 2),
+        ));
+      expect(row).toBeDefined();
+      expect(row.status).toBe('queued');
+      expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+      expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.dispatchAttempts).toBe(0);
+    });
+    expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
+  });
+
   it('stamps a retryable dispatch error when a reconnected provider never re-announces the agent', async () => {
     const ws = await createWorkspace(stack.app, 'mailbox-cursor-observable-drop');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

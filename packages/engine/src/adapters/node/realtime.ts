@@ -355,13 +355,22 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       }
     }
     // A re-register on the SAME live connection but with a NEW provider
-    // instance id is a restarted provider whose broker-side cursors are gone.
-    // Reset the ready-set (back to undefined) so the immediately-following
-    // `setProviderDeliveryReadiness('agent_scoped')` starts a fresh empty Set
-    // and every identity must re-announce before deliver frames flow —
-    // preservation applies only to a same-instance reconnect.
-    if (conn.instanceId !== undefined && conn.instanceId !== instanceId) {
+    // identity (a different provider name, or a different instance id — a
+    // restarted provider whose broker-side cursors are gone) must not inherit
+    // the previous identity's ready-set. Reset it (back to undefined) so the
+    // immediately-following `setProviderDeliveryReadiness('agent_scoped')`
+    // starts a fresh empty Set and every identity must re-announce before
+    // deliver frames flow — preservation applies only to a same-name,
+    // same-instance reconnect.
+    const previousProviderName = conn.providerName;
+    const providerNameChanged = previousProviderName !== undefined && previousProviderName !== providerName;
+    if (providerNameChanged || (conn.instanceId !== undefined && conn.instanceId !== instanceId)) {
       conn.deliveryReadyAgentIds = undefined;
+    }
+    // A rename would otherwise leave the old name's index entry pointing at
+    // this socket forever (close cleanup only removes the current name).
+    if (providerNameChanged && providers.get(previousProviderName) === connectionId) {
+      providers.delete(previousProviderName);
     }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
