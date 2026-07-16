@@ -15,6 +15,7 @@ import { agents, deliveries, messages } from '../../db/schema.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
+import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
 import { sendNodeDeliveriesToAgents } from '../../engine/nodeDeliver.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { pruneExpired } from '../../engine/retention.js';
@@ -1044,6 +1045,70 @@ describe('durable delivery api', () => {
     await waitForAssertion(() => {
       expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(true);
     });
+  });
+
+  it('resets readiness on a same-connection re-register with a new provider instance id', async () => {
+    const ws = await createWorkspace(stack.app, 'mailbox-cursor-reregister-new-instance');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    const first = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'before re-register' }),
+    });
+    expect(first.status).toBe(201);
+    await waitForAssertion(() => {
+      expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 1)).toBe(true);
+    });
+
+    // The broker re-registers on the SAME live connection but with a NEW
+    // provider instance id — a restarted provider whose broker-side cursors are
+    // gone. providerAttachConflict never conflicts for the same connectionId, so
+    // this is accepted; attachProvider must reset the ready-set so the following
+    // agent_scoped readiness starts empty and bob is gated until it re-announces.
+    await node.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.register',
+      name: node.name,
+      node_id: node.id,
+      provider: { name: DEFAULT_PROVIDER_NAME, instance_id: 'restarted-instance' },
+      capabilities: [
+        { name: 'spawn:claude', kind: 'capacity' },
+        { name: FLEET_DELIVERY_CURSOR_CAPABILITY, kind: 'capacity' },
+      ],
+      max_agents: 4,
+      tags: ['mailbox-test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+
+    const second = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ text: 'after new-instance re-register' }),
+    });
+    expect(second.status).toBe(201);
+
+    // The new-instance re-register wiped the ready-set: the seq 2 frame is NOT
+    // delivered and the row stays queued but is stamped observable + retryable.
+    await waitForAssertion(async () => {
+      const [row] = await stack.runtime.deps.db
+        .select()
+        .from(deliveries)
+        .where(and(
+          eq(deliveries.workspaceId, ws.workspaceId),
+          eq(deliveries.agentId, bob.agentId),
+          eq(deliveries.seq, 2),
+        ));
+      expect(row).toBeDefined();
+      expect(row.status).toBe('queued');
+      expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
+      expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.dispatchAttempts).toBe(0);
+    });
+    expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
   });
 
   it('stamps a retryable dispatch error when a reconnected provider never re-announces the agent', async () => {
