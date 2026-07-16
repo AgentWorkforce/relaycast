@@ -69,9 +69,10 @@ async function main(): Promise<void> {
     ...(num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) !== undefined ? { depthCap: num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) } : {}),
   };
 
-  // Optional override of the default message retention TTL (30 days). A positive
-  // value sets the days of message history kept; `0` or negative disables
-  // message pruning entirely (history is kept forever, mapping to `null`).
+  // Optional deployment-wide message retention TTL. Unset keeps message
+  // history forever (the engine default — pruning is opt-in). A positive value
+  // prunes messages after that many days; `0` or negative is an explicit
+  // keep-forever (maps to `null`).
   const messageTtlDays = num(process.env.RELAYCAST_MESSAGE_TTL_DAYS);
   const eventQueue =
     messageTtlDays !== undefined

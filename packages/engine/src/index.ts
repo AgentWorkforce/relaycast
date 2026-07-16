@@ -83,7 +83,6 @@ export type { ClaimedEvent, SweptEvent } from './engine/eventQueue.js';
 // scheduled handler.
 export {
   pruneExpired,
-  DEFAULT_MESSAGE_TTL_DAYS,
   DEFAULT_DELIVERY_TTL_DAYS,
   DEFAULT_MESSAGE_LOG_TTL_DAYS,
   DEFAULT_WORKSPACE_EVENT_TTL_DAYS,

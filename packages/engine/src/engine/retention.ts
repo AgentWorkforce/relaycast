@@ -16,8 +16,6 @@ type Db = ReturnType<typeof getDb>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Messages are user data, pruned after 30 days by default; a workspace can raise, lower, or disable this. */
-export const DEFAULT_MESSAGE_TTL_DAYS = 30;
 /** Settled deliveries are operational tracking rows, pruned after 90 days by default. */
 export const DEFAULT_DELIVERY_TTL_DAYS = 90;
 /** Message logs are operational telemetry (duplicate bodies), pruned after 90 days by default. */
@@ -43,7 +41,7 @@ const SETTLED_DELIVERY_STATUSES = ['acked', 'failed', 'dead_lettered'];
  * `workspaces.retention` settings. `null` disables pruning for that table.
  */
 export interface RetentionDefaults {
-  /** Default {@link DEFAULT_MESSAGE_TTL_DAYS}. */
+  /** Messages are user data: no default — pruning is opt-in per workspace or via this deployment default. */
   messageTtlDays?: number | null;
   /** Default {@link DEFAULT_DELIVERY_TTL_DAYS}. */
   deliveryTtlDays?: number | null;
@@ -98,13 +96,13 @@ interface PrunePass {
  *
  * Per-workspace TTLs come from `workspaces.retention` (see
  * {@link WorkspaceRetentionSettings}); workspaces without settings inherit
- * `opts.defaults`. Out of the box `messages` are pruned after 30 days
- * ({@link DEFAULT_MESSAGE_TTL_DAYS}) and operational tables after 90 days
- * (settled `deliveries` and `message_logs`). A workspace can raise, lower, or
- * disable each TTL via its `retention` settings — an explicit `null` keeps that
- * table's history forever — and a deployment can override the message default
- * (self-host exposes the `RELAYCAST_MESSAGE_TTL_DAYS` env knob, where `0`
- * disables message pruning).
+ * `opts.defaults`. Out of the box only operational tables are pruned
+ * (settled `deliveries` and `message_logs`, 90 days); `messages` retention is
+ * strictly opt-in — no workspace loses message history unless its settings
+ * (or an explicit deployment default) say so. Deployments can set a
+ * deployment-wide message default via `defaults.messageTtlDays` (the hosted
+ * gateway uses 30 days); self-host exposes the `RELAYCAST_MESSAGE_TTL_DAYS`
+ * env knob.
  *
  * What a run does, per table, oldest rows first:
  * - `messages` older than the effective TTL, leaf-first: a message still
@@ -128,10 +126,7 @@ export async function pruneExpired(db: Db, opts: PruneOptions = {}): Promise<Pru
   const batchLimit = Math.max(1, opts.batchLimit ?? DEFAULT_BATCH_LIMIT);
   const maxBatches = Math.max(1, opts.maxBatches ?? DEFAULT_MAX_BATCHES);
   const defaults: Required<RetentionDefaults> = {
-    messageTtlDays:
-      opts.defaults?.messageTtlDays !== undefined
-        ? opts.defaults.messageTtlDays
-        : DEFAULT_MESSAGE_TTL_DAYS,
+    messageTtlDays: opts.defaults?.messageTtlDays ?? null,
     deliveryTtlDays:
       opts.defaults?.deliveryTtlDays !== undefined
         ? opts.defaults.deliveryTtlDays

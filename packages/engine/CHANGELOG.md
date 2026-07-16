@@ -7,12 +7,10 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Major]
-
-### Changed
-- `pruneExpired` now defaults `messageTtlDays` to 30 (`DEFAULT_MESSAGE_TTL_DAYS`, also exported from the package root) instead of `null`, so messages are pruned after 30 days out of the box. An explicit `messageTtlDays: null` deployment default or a per-workspace `retention.message_ttl_days: null` disables message pruning. Self-host exposes the `RELAYCAST_MESSAGE_TTL_DAYS` env knob (`0` disables).
+## [Unreleased - Minor]
 
 ### Added
+- Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
 
 ### Fixed

@@ -63,7 +63,7 @@ Flags take precedence over environment variables.
 | `--port <n>` | `PORT` | `8787` | HTTP/WebSocket listen port. |
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
-| — | `RELAYCAST_MESSAGE_TTL_DAYS` | `30` | Days of message history retained before pruning. `0` (or negative) keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
+| — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
