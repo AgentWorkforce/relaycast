@@ -196,6 +196,12 @@ export class AgentClient {
      */
     markOffline: async (options?: { deregister?: boolean }): Promise<void> => {
       this.stopAutoHeartbeat();
+      // Wait for any in-flight auto heartbeat to settle so the HTTP disconnect
+      // below is guaranteed to be the last presence mutation.
+      if (this.pendingHeartbeat) {
+        await this.pendingHeartbeat;
+        this.pendingHeartbeat = null;
+      }
       await this.client.post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {});
     },
   };
