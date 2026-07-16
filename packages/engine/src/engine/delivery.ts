@@ -749,6 +749,83 @@ export async function fetchDueNodeDeliveryEvents(
  */
 export const fetchDueHttpPushDeliveryEvents = fetchDueNodeDeliveryEvents;
 
+// The ws node kinds only (http_push is excluded): the sweep redrives a ws
+// agent's backlog as an ordered, seq-monotonic stream, whereas http_push rows
+// are independent single-shot webhooks with no ordering relationship.
+const WS_NODE_REDRIVE_KINDS = ['ws', 'fleet_ws', 'direct_ws'] as const;
+
+/**
+ * Fetch an agent's full queued ws-node backlog in ascending `seq` order,
+ * regardless of each row's `next_attempt_at` due-ness. The periodic sweep uses
+ * this to redrive a ws agent's whole queued backlog once ANY of its rows comes
+ * due, mirroring {@link deliverPendingToNode}'s reconnect-replay ordering.
+ *
+ * Durable delivery rows always carry `seq >= 1` (see `nextDeliverySeqSql` in
+ * `deliveryWrites.ts`: `MAX(deliverySeq, deliveryAckSeq) + 1`), so there is no
+ * seq-0 fan-out row to reason about here — every returned row participates in
+ * the broker's monotonic-seq gate and must be sent in order.
+ */
+export async function fetchQueuedWsBacklogEvents(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  opts: { now?: Date; limit?: number } = {},
+): Promise<RoutableDeliveryEvent[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+  const now = opts.now ?? new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+
+  const rows = await db
+    .select({
+      delivery: deliveries,
+      recipientAgentName: agents.name,
+      body: messages.body,
+      blocks: messages.blocks,
+      metadata: messages.metadata,
+      hasAttachments: messages.hasAttachments,
+      threadId: messages.threadId,
+      createdAt: messages.createdAt,
+      channelId: messages.channelId,
+      channelName: channels.name,
+      conversationId: dmConversations.id,
+      dmType: dmConversations.dmType,
+      senderAgentId: messages.agentId,
+      senderAgentName: sql<string | null>`(
+        SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
+      )`,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(channels, eq(messages.channelId, channels.id))
+    .leftJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.agentId, agentId),
+      eq(deliveries.status, 'queued'),
+      inArray(deliveries.routeNodeKind, [...WS_NODE_REDRIVE_KINDS]),
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${nowSeconds})`,
+    ))
+    .orderBy(asc(deliveries.seq))
+    .limit(limit);
+
+  const attachmentsByMessageId = await fetchAttachmentsBatch(db, workspaceId, [...new Set(rows.map((row) => row.delivery.messageId))]);
+
+  return rows.map((row) => {
+    const pendingRow = row as PendingDeliveryRow;
+    const { eventType, eventData } = buildRoutableDeliveryEvent(
+      pendingRow,
+      attachmentsByMessageId.get(row.delivery.messageId) ?? [],
+    );
+    return {
+      workspaceId,
+      delivery: fanoutRecordFromDeliveryRow(pendingRow),
+      eventType,
+      eventData,
+    };
+  });
+}
+
 export interface NodeDeliveryReplayScope {
   /** Limit replay to agents registered through this provider connection. */
   providerName?: string;
