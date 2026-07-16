@@ -1613,6 +1613,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             accepted_capabilities: acceptance,
           },
         });
+        // The node row is already persisted online, so emit the durable
+        // transition before draining: a drainNode rejection must not skip the
+        // node.status.online event. Isolated so its own failure can't either.
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, registered.node)
+          .catch((err) => console.error('[node.status] online event emission failed', err));
         // Node is now marked online: flush any queued action.invoke frames so
         // spawns queued while it was offline can reserve capacity and dispatch.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
@@ -1632,16 +1637,19 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             { providerName: provider.name },
           ).catch(() => {});
         }
-        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, registered.node);
         return;
       }
       case 'node.heartbeat': {
         const priorStatus = await readNodeStatus(args.db, args.workspaceId, args.nodeId);
         const beat = await heartbeatNode(args.db, args.workspaceId, args.nodeId, frameProviderName, message);
+        // The node row is already persisted, so emit the durable online
+        // transition before draining: a drainNode rejection must not skip the
+        // node.status.online event. Isolated so its own failure can't either.
+        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, beat)
+          .catch((err) => console.error('[node.status] online event emission failed', err));
         // Heartbeat refreshes online/capacity state; re-drain as a backstop in
         // case a queued spawn could not reserve capacity at register time.
         await args.registry.drainNode(args.workspaceId, args.nodeId);
-        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, priorStatus, beat);
         return;
       }
       case 'node.deregister':

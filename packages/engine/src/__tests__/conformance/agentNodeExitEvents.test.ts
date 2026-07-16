@@ -54,8 +54,16 @@ describe('agent.exited + node.status durable events', () => {
     return { sock, handle };
   }
 
-  async function registerAgentViaNode(handle: { handleMessage(raw: string): Promise<void> }, sock: FakeSocket, name: string) {
-    await handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.register', name, resumable: true }));
+  async function registerAgentViaNode(
+    handle: { handleMessage(raw: string): Promise<void> },
+    sock: FakeSocket,
+    name: string,
+    opts: { invocationId?: string } = {},
+  ) {
+    await handle.handleMessage(JSON.stringify({
+      v: 1, type: 'agent.register', name, resumable: true,
+      ...(opts.invocationId ? { invocation_id: opts.invocationId } : {}),
+    }));
     const reply = sock.ofType('reply').at(-1) as { ok: boolean; data: { agent_id: string; name?: string } };
     expect(reply?.ok).toBe(true);
     return reply.data.agent_id;
@@ -71,7 +79,8 @@ describe('agent.exited + node.status durable events', () => {
   it('(a) agent.deregister control frame emits a durable agent.exited', async () => {
     const ws = await createWorkspace(stack.app, 'exit-a');
     const { sock, handle } = await bringNodeOnline(ws, 'node_a', 'alpha');
-    const agentId = await registerAgentViaNode(handle, sock, 'worker-a');
+    // Register under a spawn invocation so the exit event must carry the same id.
+    const agentId = await registerAgentViaNode(handle, sock, 'worker-a', { invocationId: 'inv_spawn_a' });
 
     await handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.deregister', agent_id: agentId }));
 
@@ -79,6 +88,8 @@ describe('agent.exited + node.status durable events', () => {
     expect(logged).toHaveLength(1);
     expect(JSON.parse(logged[0]!.payload)).toMatchObject({
       type: 'agent.exited', agent_id: agentId, agent_name: 'worker-a', node_id: 'node_a', reason: 'deregistered',
+      // Spawn correlation: the exit carries the invocation the agent registered under.
+      invocation_id: 'inv_spawn_a',
     });
   });
 

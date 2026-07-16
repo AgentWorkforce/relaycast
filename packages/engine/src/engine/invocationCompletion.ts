@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { transformForClient } from './wsTransform.js';
 import { enqueueEvent } from './eventQueue.js';
 import { actionInvocations } from '../db/schema.js';
@@ -103,20 +104,20 @@ async function enqueueAndSendWebhook(
   }
 }
 
+/** Shape of the `metadata.fleet.invocation_id` spawn correlation. Unknown keys
+ * are stripped by default, so extra metadata fields are tolerated. */
+const fleetInvocationSchema = z.object({
+  fleet: z.object({ invocation_id: z.string() }),
+});
+
 /**
  * Extract the spawn invocation id an agent was registered under, if any. The
  * `metadata.fleet.invocation_id` correlation is written by `registerAgentViaNode`
  * on every via-node agent.
  */
 export function fleetInvocationId(metadata: unknown): string | null {
-  if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
-    const fleet = (metadata as Record<string, unknown>).fleet;
-    if (fleet && typeof fleet === 'object' && !Array.isArray(fleet)) {
-      const invocationId = (fleet as Record<string, unknown>).invocation_id;
-      if (typeof invocationId === 'string') return invocationId;
-    }
-  }
-  return null;
+  const parsed = fleetInvocationSchema.safeParse(metadata);
+  return parsed.success ? parsed.data.fleet.invocation_id : null;
 }
 
 /** Resolve the caller mailbox of a spawn invocation; best-effort (null on any error). */
@@ -186,9 +187,12 @@ export async function emitAgentExitedEffects(
       }, {
         agentIds: [callerId],
         event: eventType,
+        // Omit messageId so delivery falls back to this unique eventKey (agent +
+        // invocation + reason). A messageId keyed only on agentId would repeat
+        // across an agent's lifecycle sessions and a downstream dedup on it could
+        // drop later exit notifications.
         eventKey: `${input.agentId}_${input.invocationId ?? 'none'}_${input.reason}`,
         data: eventData,
-        messageId: `agent_exited_${input.agentId}`,
       }),
     );
   }
