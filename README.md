@@ -537,8 +537,10 @@ the handler to a different agent fails invocations still in flight toward the
 previous handler, and deleting an action fails its open invocations — in both
 cases the callers receive `action.failed`. Invoking an agent-handled action whose
 handler has no live connection fails fast with `handler_unavailable` (503); an
-invocation that still ends up queued toward an unreachable handler is failed with
-an `action.failed` event after a bounded TTL instead of pending forever.
+invocation whose handler stays continuously unreachable past a bounded TTL is
+failed with an `action.failed` event instead of pending forever (the clock starts
+when the sweep first observes the handler unreachable and resets on recovery, so
+a brief handler restart never kills an in-flight invocation).
 
 Message triggers created with `POST /triggers` resolve `action_name` in this order:
 agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped

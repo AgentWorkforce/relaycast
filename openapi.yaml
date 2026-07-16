@@ -3541,6 +3541,10 @@ paths:
               required:
                 - name
                 - description
+              # Exactly one handler: a request with both or neither fails oneOf.
+              oneOf:
+                - required: [handler_agent]
+                - required: [handler_node]
               properties:
                 name:
                   type: string

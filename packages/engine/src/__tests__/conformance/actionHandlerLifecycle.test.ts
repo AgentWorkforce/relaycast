@@ -365,6 +365,109 @@ describe('agent-published action lifecycle', () => {
     });
   });
 
+  it('the TTL clock starts at the first unreachable observation, not invocation age', async () => {
+    const ws = await createWorkspace(stack.app, 'action-ttl-grace');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: registerBody('orchestrator'),
+    });
+    expect(register.status).toBe(201);
+
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 5 } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    // Backdate the invocation far past the TTL: age alone must NOT make the
+    // first post-disconnect sweep kill it — the handler still gets its grace.
+    await stack.runtime.handle.db
+      .update(actionInvocations)
+      .set({ createdAt: new Date(Date.now() - 3_600_000) })
+      .where(eq(actionInvocations.id, invocationId));
+
+    await handlerNode.handle.handleClose();
+
+    // First sweep observes the disconnect: stamps the observation, no failure.
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+      handlerUnreachableTtlMs: 50,
+      completionDeps: stack.runtime.deps,
+    });
+    let [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, since: actionInvocations.handlerUnreachableSince })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(['pending', 'dispatched']).toContain(row.status);
+    expect(row.since).not.toBeNull();
+
+    // Still unreachable past the TTL: the next sweep fails it.
+    await new Promise((r) => setTimeout(r, 60));
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+      handlerUnreachableTtlMs: 50,
+      completionDeps: stack.runtime.deps,
+    });
+    [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, since: actionInvocations.handlerUnreachableSince })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row.status).toBe('failed');
+  });
+
+  it('a handler reconnect clears the unreachable observation instead of failing', async () => {
+    const ws = await createWorkspace(stack.app, 'action-ttl-recover');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: registerBody('orchestrator'),
+    });
+    expect(register.status).toBe(201);
+
+    const handlerNode = await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 5 } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    // Disconnect → sweep stamps the observation (TTL far away, no failure).
+    await handlerNode.handle.handleClose();
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+      handlerUnreachableTtlMs: 60_000,
+      completionDeps: stack.runtime.deps,
+    });
+    let [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, since: actionInvocations.handlerUnreachableSince })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(['pending', 'dispatched']).toContain(row.status);
+    expect(row.since).not.toBeNull();
+
+    // Reconnect (a restart) → sweep clears the observation; invocation lives.
+    await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+      handlerUnreachableTtlMs: 60_000,
+      completionDeps: stack.runtime.deps,
+    });
+    [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, since: actionInvocations.handlerUnreachableSince })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(['pending', 'dispatched']).toContain(row.status);
+    expect(row.since).toBeNull();
+  });
+
   it('a live handler is not failed by the TTL sweep', async () => {
     const ws = await createWorkspace(stack.app, 'action-ttl-live');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
