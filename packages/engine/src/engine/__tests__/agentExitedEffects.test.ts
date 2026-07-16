@@ -14,6 +14,10 @@ vi.mock('../nodeDeliver.js', () => ({
  * Build a deps stub whose `db` resolves a caller lookup to `callerId` and lets
  * the durable outbox insert succeed/fail on demand. `select().from().where()`
  * returns the invocation caller row; `insert()` throws when `outboxThrows`.
+ *
+ * The insert stub mirrors the two real shapes: the workspace-event append chains
+ * `.values(...).returning(...)` (so the primary seq-stamping path is exercised
+ * and returns `seq: 1`), while the outbox enqueue awaits `.values(...)` directly.
  */
 function makeDeps(opts: { callerId?: string | null; outboxThrows?: boolean } = {}) {
   const publishToWorkspaceStream = vi.fn(async () => {});
@@ -26,7 +30,8 @@ function makeDeps(opts: { callerId?: string | null; outboxThrows?: boolean } = {
     }),
     insert: () => {
       if (opts.outboxThrows) throw new Error('skip durable outbox in test');
-      return { values: async () => {} };
+      const chain = { returning: async () => [{ seq: 1 }] };
+      return { values: () => chain };
     },
   };
   const deps = {
@@ -71,6 +76,8 @@ describe('emitAgentExitedEffects', () => {
     expect(publishToWorkspaceStream).toHaveBeenCalledTimes(1);
     const published = publishToWorkspaceStream.mock.calls[0]?.[0] as { event: Record<string, unknown> };
     expect(published.event).toMatchObject({ type: 'agent.exited', agent_id: 'agent-9', reason: 'released' });
+    // Primary (non-throwing) append path assigns and stamps the durable seq.
+    expect(published.event).toMatchObject({ seq: 1 });
     // (3) webhook outbox
     expect(webhookSend).toHaveBeenCalledTimes(1);
     expect(webhookSend.mock.calls[0]?.[0]).toMatchObject({ type: 'agent.exited', workspaceId: 'ws-1' });

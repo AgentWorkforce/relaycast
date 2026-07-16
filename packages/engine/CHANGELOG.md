@@ -10,8 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
-- Emit durable `agent.exited` on every server-observable agent exit — `deregisterAgentViaNode` (deregister control frame + `handleAgentDisconnect`), the `reconcileInventory` missing-agent sweep, and release completion (`completeNodeInvocation`) — fanned out via the new `emitAgentExitedEffects` helper to the spawn caller's mailbox, the durable workspace log, and the webhook outbox.
-- Emit durable `node.status.online` / `node.status.offline` on node liveness transitions via `emitNodeStatusEffects`: `markNodeOffline` (liveness sweep, provider disconnect, deregister) and the register/heartbeat offline→online transition. Both helpers reuse `InvocationCompletionDeps` and are best-effort (never fail the underlying state transition).
+- Added durable `agent.exited` events on every node-hosted agent exit (deregistration, missing from an inventory sync, and release), delivered to the durable workspace event log, webhook subscribers, and the spawn caller's mailbox, and carrying `agent_id`, `agent_name`, `node_id`, `invocation_id`, and a `reason`.
+- Added durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` such as `liveness_timeout`, `disconnected`, or `deregistered`), delivered to the workspace event log and webhook subscribers.
 - Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
 

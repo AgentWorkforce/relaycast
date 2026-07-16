@@ -146,6 +146,58 @@ describe('agent.exited + node.status durable events', () => {
     });
   });
 
+  it('(f) repeated agent.deregister frames emit agent.exited exactly once', async () => {
+    const ws = await createWorkspace(stack.app, 'exit-f');
+    const { sock, handle } = await bringNodeOnline(ws, 'node_f', 'zeta');
+    const agentId = await registerAgentViaNode(handle, sock, 'worker-f');
+
+    // First deregister transitions the agent and re-homes its location to the
+    // implicit direct node, so subsequent frames for node_f no longer match.
+    await handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.deregister', agent_id: agentId }));
+    await handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.deregister', agent_id: agentId }));
+    await handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.deregister', name: 'worker-f' }));
+
+    expect(await workspaceEventsOfType(ws.workspaceId, 'agent.exited')).toHaveLength(1);
+  });
+
+  it('(g) deregistering the last online provider emits node.status.offline even with a leftover offline provider row', async () => {
+    const ws = await createWorkspace(stack.app, 'exit-g');
+    await enrollNode(ws.workspaceKey, 'node_g', 'eta');
+
+    // Two providers on the node: py + rb.
+    const py = attach(ws.workspaceId, 'node_g');
+    await py.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg-py', type: 'node.register', name: 'eta', node_id: 'node_g',
+      provider: { name: 'py', instance_id: 'py-i1' },
+      capabilities: [{ name: 'spawn:claude', kind: 'capacity' }], max_agents: 4, tags: ['test'], version: 'v1', resume_cursor: null,
+    }));
+    await py.handle.handleMessage(JSON.stringify({ v: 1, type: 'node.heartbeat', provider: { name: 'py', instance_id: 'py-i1' }, load: 0, active_agents: 0, handlers_live: true }));
+    const rb = attach(ws.workspaceId, 'node_g');
+    await rb.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'reg-rb', type: 'node.register', name: 'eta', node_id: 'node_g',
+      provider: { name: 'rb', instance_id: 'rb-i1' },
+      capabilities: [{ name: 'build', kind: 'action' }], max_agents: 4, tags: ['test'], version: 'v1', resume_cursor: null,
+    }));
+    await rb.handle.handleMessage(JSON.stringify({ v: 1, type: 'node.heartbeat', provider: { name: 'rb', instance_id: 'rb-i1' }, load: 0, active_agents: 0, handlers_live: true }));
+
+    // rb's socket drops while py remains: rb becomes a persisted *offline* provider
+    // row and the node stays online, so nothing is emitted yet.
+    await rb.handle.handleClose();
+    expect(await workspaceEventsOfType(ws.workspaceId, 'node.status.offline')).toHaveLength(0);
+
+    // Deregister py (the last online provider). The leftover rb row keeps
+    // remaining.count > 0, routing through recomputeNodeAggregate — which flips the
+    // node offline. The durable node.status.offline must still be emitted.
+    await py.handle.handleMessage(JSON.stringify({ v: 1, type: 'node.deregister', provider: { name: 'py', instance_id: 'py-i1' } }));
+
+    const logged = await workspaceEventsOfType(ws.workspaceId, 'node.status.offline');
+    expect(logged.length).toBeGreaterThanOrEqual(1);
+    expect(logged.some((row) => {
+      const p = JSON.parse(row.payload) as { node_id?: string; reason?: string };
+      return p.node_id === 'node_g' && p.reason === 'deregistered';
+    })).toBe(true);
+  });
+
   it('(e) re-heartbeat after offline emits node.status.online exactly once', async () => {
     const ws = await createWorkspace(stack.app, 'exit-e');
     // Initial register already produces the first offline->online transition.

@@ -590,11 +590,33 @@ export async function deregisterProvider(
   if (!remaining || remaining.count === 0) {
     await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'deregistered' });
   } else {
-    // Other providers remain: recompute the node aggregate but don't reschedule
-    // node-wide — that would disturb the surviving providers' in-flight invokes.
-    // Work dispatched to the removed provider is caught by the dispatch-timeout
-    // sweep, matching the provider-disconnect path.
+    // Other provider rows remain (possibly all offline): recompute the node
+    // aggregate but don't reschedule node-wide — that would disturb the surviving
+    // providers' in-flight invokes. Work dispatched to the removed provider is
+    // caught by the dispatch-timeout sweep, matching the provider-disconnect path.
+    // Capture status across the recompute so that when the deregistered provider
+    // was the node's last *online* one, the resulting online -> offline flip still
+    // emits a durable node.status.offline — recomputeNodeAggregate flips the
+    // column but never emits.
+    const [before] = await db
+      .select({ status: nodes.status, name: nodes.name })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
     await recomputeNodeAggregate(db, workspaceId, nodeId);
+    if (deps && before?.status === 'online') {
+      const [after] = await db
+        .select({ status: nodes.status, name: nodes.name })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+      if (after && after.status !== 'online') {
+        await emitNodeStatusEffects(deps, workspaceId, {
+          status: 'offline',
+          nodeId,
+          nodeName: after.name ?? before.name,
+          reason: 'deregistered',
+        });
+      }
+    }
   }
 }
 

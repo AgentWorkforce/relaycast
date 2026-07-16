@@ -17,5 +17,5 @@ Emitted durable agent.exited (deregister / inventory-missing / release) and node
 
 ## Artifacts
 
-**Commits:** 625a610
+**Commits:** c968cb2
 **Files changed:** 19
