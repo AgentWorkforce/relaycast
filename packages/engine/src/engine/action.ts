@@ -1046,6 +1046,26 @@ export async function invokeAction(
     caller_id: data.caller_id,
     caller_name: data.caller_name,
   });
+  // Re-validate the handler pointer AFTER the insert. A takeover committing
+  // between action resolution above and the insert misses this invocation in
+  // its stranded snapshot (the row was not visible yet), which would leave it
+  // dispatched toward the old handler whose completions no longer authorize.
+  // The two orderings are now both covered: a takeover before the insert is
+  // caught here; a takeover after the insert sees the row and sweeps it.
+  // (A concurrent DELETE needs no equivalent check — the actionId foreign key
+  // rejects an insert that lands after the delete commits.)
+  const [currentHandler] = await db
+    .select({ handlerAgentId: actions.handlerAgentId })
+    .from(actions)
+    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.id, action.id)));
+  if (!currentHandler || currentHandler.handlerAgentId !== handlerAgent.id) {
+    await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+    throw codedError(
+      `Action "${actionName}" handler changed during invoke`,
+      'handler_unavailable',
+      503,
+    );
+  }
   const dispatched = await dispatchNodeInvocation({
     db,
     registry: options.nodeConnections,
