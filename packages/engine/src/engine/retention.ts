@@ -97,7 +97,8 @@ interface PrunePass {
  * Per-workspace TTLs come from `workspaces.retention` (see
  * {@link WorkspaceRetentionSettings}); workspaces without settings inherit
  * `opts.defaults`. Out of the box only operational tables are pruned
- * (settled `deliveries` and `message_logs`, 90 days); `messages` retention is
+ * (settled `deliveries` and `message_logs`, 90 days; `workspace_events`,
+ * 30 days); `messages` retention is
  * strictly opt-in — no workspace loses message history unless its settings
  * (or an explicit deployment default) say so. Deployments can set a
  * deployment-wide message default via `defaults.messageTtlDays` (the hosted
