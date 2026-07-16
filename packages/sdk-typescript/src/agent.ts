@@ -210,6 +210,10 @@ export class AgentClient {
     this.stopAutoHeartbeat();
     if (this.autoHeartbeatMs === false) return;
     this.autoHeartbeatTimer = setInterval(() => {
+      // Serialize heartbeats: skip this tick while one is still in flight so
+      // pendingHeartbeat always tracks the only outstanding request — awaiting
+      // it before disconnect then guarantees no heartbeat lands afterwards.
+      if (this.pendingHeartbeat) return;
       this.pendingHeartbeat = this.presence.heartbeat()
         .catch(() => {})
         .finally(() => { this.pendingHeartbeat = null; });
