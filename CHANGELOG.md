@@ -26,6 +26,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Allowed Swift clients to decode hosted agent lifecycle statuses and complete realtime connections.
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
+- Stopped a reconnecting node broker from silently dropping messages: a same-connection `node.register` re-register now preserves already-announced agents' delivery readiness, and readiness-gated skips stamp the delivery row for retry instead of dead-lettering it after the mailbox TTL.
 
 ## [6.0.3] - 2026-07-12
 

@@ -16,6 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 - Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
 - Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
+- Cursor-negotiating node providers keep their delivery-ready agent set on a same-connection `node.register` re-register (`setProviderDeliveryReadiness` no longer resets it to empty), fixing silent message drops until the mailbox TTL when a broker reconnects without re-announcing every hosted agent. Readiness-skipped `ws.node.v1` deliveries now stamp `last_dispatch_error` + `next_attempt_at` (without counting a `dispatch_attempts`) so they are observable and retryable instead of a bare silent queued row (#270).
 
 ## [6.0.3] - 2026-07-12
 

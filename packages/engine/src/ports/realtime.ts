@@ -130,6 +130,14 @@ export interface NodeConnectionRegistry {
    * Configure durable-delivery readiness for the active provider connection.
    * Cursor-negotiated connections start agent-scoped with no ready identities;
    * legacy connections are immediately ready for every hosted agent.
+   *
+   * `agent_scoped` must PRESERVE any identities already marked ready on the
+   * resolved connection: a re-register on the same live connection is a
+   * reconnect and does not invalidate broker-side cursors, so wiping the
+   * ready-set would silently gate every in-flight delivery until each agent is
+   * re-announced. A genuinely new connection has no ready-set yet, so it starts
+   * empty; a transition from `immediate` resets to an empty agent-scoped set.
+   * Out-of-process implementers (relaycast-cloud NodeDO) must mirror this.
    */
   setProviderDeliveryReadiness?(
     workspaceId: string,

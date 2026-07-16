@@ -371,7 +371,21 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (!currentConnectionId || (connectionId && currentConnectionId !== connectionId)) return;
     const conn = this.nodeConnections.get(currentConnectionId);
     if (!conn || conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || conn.providerName !== providerName) return;
-    conn.deliveryReadyAgentIds = mode === 'immediate' ? null : new Set();
+    if (mode === 'immediate') {
+      conn.deliveryReadyAgentIds = null;
+      return;
+    }
+    // agent_scoped: a re-register on the SAME live connection by the same
+    // provider instance is a reconnect that does not invalidate broker-side
+    // cursors, so keep the identities already marked ready — replacing the set
+    // here would silently gate every in-flight delivery until each agent is
+    // re-announced. A genuinely new connection starts with
+    // `deliveryReadyAgentIds` undefined (a fresh NodeConn), so preservation
+    // never carries across reconnects; a transition from immediate (null) still
+    // resets to an empty set.
+    if (!(conn.deliveryReadyAgentIds instanceof Set)) {
+      conn.deliveryReadyAgentIds = new Set();
+    }
   }
 
   markProviderAgentsDeliveryReady(
