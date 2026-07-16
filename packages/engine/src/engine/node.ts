@@ -206,6 +206,12 @@ export async function createNodeToken(
   const token = `nt_live_${randomHex(24)}`;
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
+  // Reject names that are empty or still #-prefixed after normalization: an
+  // empty name is unreachable via /v1/nodes/:name, and a residual "#" would
+  // dodge every name lookup (including the conflict check below).
+  if (!name || name.startsWith('#')) {
+    throw codedError('Node name must be non-empty and cannot begin with "#"', 'invalid_node_name', 400);
+  }
   // Enrollment keys on node_id (the stable identity) when supplied; the name
   // lookup is only a fallback for callers without a stable id. A name held by
   // a *different* node id is a conflict — mirroring node.register — never a

@@ -1788,6 +1788,25 @@ describe('node adapter conformance', () => {
       expect(collide.body.error?.code).toBe('node_name_conflict');
     });
 
+    it('rejects names that normalize to empty or stay #-prefixed', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-bad-name-ws');
+      for (const badName of ['#', '##host']) {
+        const res = await enroll(ws.workspaceKey, { node_id: 'node_a', name: badName });
+        expect(res.status).toBe(400);
+        expect(res.body.error?.code).toBe('invalid_node_name');
+      }
+      const rows = await stack.runtime.deps.db
+        .select()
+        .from(nodes)
+        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(0);
+
+      // A single leading "#" is a reference prefix, not part of the name.
+      const prefixed = await enroll(ws.workspaceKey, { node_id: 'node_a', name: '#host' });
+      expect(prefixed.status).toBe(201);
+      expect(prefixed.body.data?.name).toBe('host');
+    });
+
     it('enrolling without node_id still rotates the existing node by name', async () => {
       const ws = await createWorkspace(stack.app, 'enroll-by-name-ws');
       const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
