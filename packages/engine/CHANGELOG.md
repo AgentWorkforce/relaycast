@@ -12,10 +12,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
+- `sweepTimedOutInvocations` accepts `handlerUnreachableTtlMs` and `completionDeps` options and `@relaycast/engine/node-invocations` exports `ACTION_HANDLER_UNREACHABLE_TTL_MS`: open agent-handled invocations older than the TTL whose handler still has no live connection are failed with `handler_unavailable`, emitting `action.failed` to the caller when completion deps are provided.
 
 ### Fixed
 - Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.
 - Moved delivery TTL expiry out of inbox reads into bounded scheduled D1-safe batches, keeping reads available through cleanup failures without duplicating sender failure notices.
+- `POST /v1/actions` re-registers an existing action name as an idempotent refresh (200) of its description, handler, schemas, `available_to`, and `is_active` — including moving the handler to a new agent identity — instead of surfacing the unique index as a 500 `internal_error`; residual registration races return 409 `action_name_conflict`.
+- `POST /v1/actions/:name/invoke` fails fast with 503 `handler_unavailable` when the handler agent's connection is not live (unless the action opted into `queue`), instead of creating an invocation that pends forever toward a dead handler.
 
 ## [6.0.3] - 2026-07-12
 

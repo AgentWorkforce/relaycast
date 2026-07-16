@@ -218,6 +218,40 @@ describe('Programmability SDK', () => {
       });
     });
 
+    it('register() sends user-authored JSON Schemas verbatim and reads them back untouched', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      const inputSchema = {
+        type: 'object',
+        properties: { batchSize: { type: 'integer', minimum: 1, maximum: 10, default: 5 } },
+        required: ['batchSize'],
+        additionalProperties: false,
+      };
+      mockFetch.mockImplementation(() =>
+        mockResponse({
+          id: 'act_1',
+          name: 'crm.get_person_batch',
+          description: 'Fetch a batch',
+          handler_agent: 'orchestrator',
+          input_schema: inputSchema,
+        }),
+      );
+      const registered = await relay.actions.register({
+        name: 'crm.get_person_batch',
+        description: 'Fetch a batch',
+        handlerAgent: 'orchestrator',
+        inputSchema,
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      // The wire body renames inputSchema -> input_schema but the schema's own
+      // keys (properties.batchSize, additionalProperties) stay untouched.
+      expect(JSON.parse(init.body).input_schema).toEqual(inputSchema);
+      // And the read side hands the stored schema back byte-identical.
+      expect(JSON.stringify(registered.inputSchema)).toBe(JSON.stringify(inputSchema));
+    });
+
     it('list() gets /v1/actions', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

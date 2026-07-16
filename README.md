@@ -514,6 +514,15 @@ workspace observers, and subscriptions. Action discovery is filtered by `availab
 for agent-token callers, workspace-key callers do not see restricted actions without
 an agent identity, and invoke enforces the same rule.
 
+Action registration is an idempotent assertion: re-registering an existing name
+(`POST /actions`) refreshes its description, handler, schemas, `available_to`, and
+`is_active` in place and returns 200, so a reconnecting publisher re-asserts its
+actions on every connect and heals a stale handler pointer. Invoking an
+agent-handled action whose handler has no live connection fails fast with
+`handler_unavailable` (503); an invocation that still ends up queued toward an
+unreachable handler is failed with an `action.failed` event after a bounded TTL
+instead of pending forever.
+
 Message triggers created with `POST /triggers` resolve `action_name` in this order:
 agent-hosted actions, node actions with workspace-global aliases, then plain node-scoped
 actions. A node-scoped match dispatches to its owning node. Ties select one action

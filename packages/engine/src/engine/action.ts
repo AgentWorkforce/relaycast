@@ -1,9 +1,10 @@
-import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
+import { emitInvocationCompletionEffects, type InvocationCompletionDeps } from './invocationCompletion.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
@@ -18,11 +19,22 @@ type RetryableInvocationRow = Pick<
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
+/**
+ * Age after which an open agent-handled invocation whose handler connection is
+ * still down is failed with `handler_unavailable` instead of waiting forever.
+ * Generous enough to ride out a handler restart, bounded enough that a caller
+ * blocked on the invocation gets a signal instead of an unbounded hang.
+ */
+export const ACTION_HANDLER_UNREACHABLE_TTL_MS = 120_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
 const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
 export interface SweepTimedOutInvocationsOptions {
   timeoutMs?: number;
+  /** Override for {@link ACTION_HANDLER_UNREACHABLE_TTL_MS}. */
+  handlerUnreachableTtlMs?: number;
+  /** When provided, TTL failures emit `action.failed` back to the caller. */
+  completionDeps?: InvocationCompletionDeps;
 }
 
 function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
@@ -233,33 +245,68 @@ export async function registerAction(
   }
 
   const id = `act_${generateId()}`;
-  const [action] = await db
-    .insert(actions)
-    .values({
-      id,
-      workspaceId,
-      name: data.name,
-      description: data.description,
-      handlerAgentId,
-      handlerNodeId,
-      inputSchema: data.input_schema ?? {},
-      outputSchema: data.output_schema ?? {},
-      availableTo: data.available_to ?? null,
-    })
-    .returning();
+  // Registration is an idempotent assertion (PUT semantics): re-registering an
+  // existing name refreshes the handler pointer, schemas, and visibility so a
+  // reconnecting publisher heals a stale handler instead of surfacing the
+  // unique index as a 500. Provider-owned fields (handlerProvider, isGlobal,
+  // queue) are deliberately not touched — they belong to node-control
+  // registration (materializeProviderActions).
+  const refresh = {
+    description: data.description,
+    handlerAgentId,
+    inputSchema: data.input_schema ?? {},
+    outputSchema: data.output_schema ?? {},
+    availableTo: data.available_to ?? null,
+    isActive: true,
+  };
+  let action: ActionRow;
+  try {
+    const [row] = await db
+      .insert(actions)
+      .values({
+        id,
+        workspaceId,
+        name: data.name,
+        description: data.description,
+        handlerAgentId,
+        handlerNodeId,
+        inputSchema: data.input_schema ?? {},
+        outputSchema: data.output_schema ?? {},
+        availableTo: data.available_to ?? null,
+      })
+      .onConflictDoUpdate(
+        handlerNodeId
+          ? { target: [actions.workspaceId, actions.handlerNodeId, actions.name], set: refresh }
+          // Agent-hosted uniqueness is a partial index, so the conflict target
+          // must carry its WHERE clause to match it.
+          : { target: [actions.workspaceId, actions.name], targetWhere: isNull(actions.handlerNodeId), set: refresh },
+      )
+      .returning();
+    action = row;
+  } catch (err) {
+    // A residual uniqueness race must surface as a conflict, never as a 500
+    // internal_error (which reads as a server outage and invites retries).
+    if (err instanceof Error && /unique constraint failed/i.test(err.message)) {
+      throw codedError(`Action "${data.name}" conflicts with an existing action`, 'action_name_conflict', 409);
+    }
+    throw err;
+  }
 
   return {
-    id: action.id,
-    name: action.name,
-    description: action.description,
-    handler_agent: handlerAgentName,
-    handler_node: handlerNodeName,
-    handler_node_id: handlerNodeId,
-    input_schema: action.inputSchema,
-    output_schema: action.outputSchema,
-    available_to: action.availableTo ?? null,
-    is_active: action.isActive,
-    created_at: action.createdAt.toISOString(),
+    created: action.id === id,
+    action: {
+      id: action.id,
+      name: action.name,
+      description: action.description,
+      handler_agent: handlerAgentName,
+      handler_node: handlerNodeName,
+      handler_node_id: handlerNodeId,
+      input_schema: action.inputSchema,
+      output_schema: action.outputSchema,
+      available_to: action.availableTo ?? null,
+      is_active: action.isActive,
+      created_at: action.createdAt.toISOString(),
+    },
   };
 }
 
@@ -348,6 +395,27 @@ async function createInvocation(
     })
     .returning();
   return invocation;
+}
+
+/**
+ * Liveness rule for the connection that hosts an agent handler, mirroring the
+ * drain-time rule: the provider socket must be connected, and when a provider
+ * row exists and is explicitly attached its heartbeat must say handlers are
+ * live. A missing provider row (direct node, legacy single-socket broker)
+ * keeps connection state as the available liveness signal.
+ */
+async function isHandlerConnectionLive(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+): Promise<boolean> {
+  if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) return false;
+  const provider = await getProvider(db, workspaceId, nodeId, providerName);
+  if (!provider) return true;
+  const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
+  return !explicitlyAttached || isProviderLive(provider);
 }
 
 /** Is a node provider currently invokable — connection up AND heartbeat handlers_live. */
@@ -789,6 +857,27 @@ export async function invokeAction(
     throw codedError(`Action "${actionName}" handler is not bound to a node`, 'handler_unavailable', 503);
   }
 
+  // Fail fast when the handler agent's connection is not live: an invocation
+  // queued toward a dead handler never completes and the caller gets no signal
+  // — it just hangs on the tool call. An action that opted into `queue` keeps
+  // the queue-and-drain semantics (the TTL sweep still bounds it).
+  if (!action.queue) {
+    const live = await isHandlerConnectionLive(
+      db,
+      options.nodeConnections,
+      workspaceId,
+      handlerAgent.locationNodeId,
+      handlerAgent.providerName,
+    );
+    if (!live) {
+      throw codedError(
+        `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
+        'handler_unavailable',
+        503,
+      );
+    }
+  }
+
   const invocation = await createInvocation(db, workspaceId, action, {
     input: data.input,
     caller_id: data.caller_id,
@@ -1151,10 +1240,7 @@ export async function drainNodeInvocations(
     // Skip draining to a provider that is disconnected or whose heartbeat says
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
-    if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) continue;
-    const provider = await getProvider(db, workspaceId, nodeId, providerName);
-    const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
-    if (provider && explicitlyAttached && !isProviderLive(provider)) continue;
+    if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
 
     let reservedForDrain = false;
     try {
@@ -1577,12 +1663,81 @@ export async function completeNodeInvocation(
   return updated ? publicInvocation(updated) : null;
 }
 
+/**
+ * Bound the wait on agent-handled invocations: any open invocation older than
+ * the TTL whose handler agent still has no live connection is failed with
+ * `handler_unavailable` — emitting `action.failed` to the caller when
+ * completion deps are provided — instead of staying `pending`/`dispatched`
+ * forever. Invocations whose handler is reachable are left to the normal
+ * dispatch-timeout reschedule.
+ */
+async function failUnreachableAgentInvocations(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  ttlMs: number,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const cutoff = new Date(Date.now() - ttlMs);
+  const rows = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+    })
+    .from(actionInvocations)
+    .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .where(and(
+      inArray(actionInvocations.status, ['pending', 'dispatched']),
+      lte(actionInvocations.createdAt, cutoff),
+      isNull(actions.handlerNodeId),
+      isNotNull(actions.handlerAgentId),
+    ));
+
+  for (const row of rows) {
+    try {
+      // targetAgentForInvocation returns null when the handler agent is gone or
+      // no longer node-bound — both count as unreachable.
+      const target = await targetAgentForInvocation(db, row);
+      if (target && await isHandlerConnectionLive(db, registry, row.workspaceId, target.nodeId, target.providerName)) {
+        continue;
+      }
+      const [updated] = await db
+        .update(actionInvocations)
+        .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
+        .where(and(
+          eq(actionInvocations.workspaceId, row.workspaceId),
+          eq(actionInvocations.id, row.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ))
+        .returning();
+      if (updated && completionDeps) {
+        await emitInvocationCompletionEffects(completionDeps, row.workspaceId, {
+          invocation_id: updated.id,
+          action_name: updated.actionName,
+          caller_id: updated.callerId,
+          status: 'failed',
+          output: updated.output,
+          error: updated.error,
+        });
+      }
+    } catch {
+      // Leave the invocation for the next sweep.
+    }
+  }
+}
+
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
   opts: SweepTimedOutInvocationsOptions | number | null = {},
 ) {
-  const timeoutMs = typeof opts === 'number' ? opts : opts?.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
+  const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;
+  const timeoutMs = typeof opts === 'number' ? opts : sweepOpts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
+  await failUnreachableAgentInvocations(
+    db,
+    registry,
+    sweepOpts.handlerUnreachableTtlMs ?? ACTION_HANDLER_UNREACHABLE_TTL_MS,
+    sweepOpts.completionDeps,
+  );
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

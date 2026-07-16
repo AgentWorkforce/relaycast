@@ -78,20 +78,22 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       return jsonError(c, 'forbidden', `Agent "${callerAgent.name}" may only register actions it will handle itself`, 403);
     }
 
-    const result = await actionEngine.registerAction(db, workspace.id, parsed.data);
+    const { created, action } = await actionEngine.registerAction(db, workspace.id, parsed.data);
 
     emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
-      action_name: result.name,
+      action_name: action.name,
       handler_agent_name: parsed.data.handler_agent ?? null,
       handler_node_name: parsed.data.handler_node ?? null,
     });
     runInBackground(
       c,
-      fanoutToWorkspace(c, 'action.registered', { action_name: result.name }),
+      fanoutToWorkspace(c, 'action.registered', { action_name: action.name }),
       'fanout action.registered',
     );
 
-    return jsonCreated(c, result);
+    // 201 when the action was created, 200 when an existing registration was
+    // refreshed (idempotent re-register).
+    return created ? jsonCreated(c, action) : jsonOk(c, action);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

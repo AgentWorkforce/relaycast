@@ -7,7 +7,10 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+- The request/response casing transforms no longer rewrite keys inside user-authored JSON values: action `input_schema`/`output_schema` (JSON Schemas), invocation `input`/`output` payloads, and `headers` maps pass through verbatim in both directions, so a camelCase-keyed schema round-trips byte-identical instead of being corrupted (e.g. `properties.batchSize` → `properties.batch_size`).
 
 ## [6.0.0] - 2026-07-09
 

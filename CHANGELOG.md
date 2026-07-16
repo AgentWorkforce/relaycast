@@ -26,6 +26,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Allowed Swift clients to decode hosted agent lifecycle statuses and complete realtime connections.
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
+- `POST /v1/actions` now treats re-registering an existing action name as an idempotent refresh (200) of its description, handler, schemas, `available_to`, and `is_active` instead of failing with a 500 unique-constraint error.
+- Invoking an agent-handled action whose handler has no live connection fails fast with `handler_unavailable` (503), and invocations stuck on an unreachable handler are failed with an `action.failed` event after a bounded TTL instead of staying `pending` forever.
+- The TypeScript SDK no longer rewrites keys inside user-authored JSON: action `input_schema`/`output_schema`, invocation `input`/`output`, and `headers` maps now cross the wire verbatim in both directions.
 
 ## [6.0.3] - 2026-07-12
 
