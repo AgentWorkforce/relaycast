@@ -189,9 +189,10 @@ export class AgentClient {
      * Mark this agent offline.
      *
      * By default this is a presence-only signal: a node-hosted (broker) agent
-     * keeps its node binding, so its still-running session continues to receive
-     * deliveries. Pass `{ deregister: true }` to also tear down the node
-     * binding and re-home the agent to its implicit direct node.
+     * keeps its node binding, so a session still running on its node keeps
+     * receiving deliveries through that node and the binding stays usable for
+     * later reconnection. Pass `{ deregister: true }` to also tear down the
+     * node binding and re-home the agent to its implicit direct node.
      */
     markOffline: async (options?: { deregister?: boolean }): Promise<void> => {
       this.stopAutoHeartbeat();
@@ -281,12 +282,14 @@ export class AgentClient {
   }
 
   /**
-   * Tear down the WebSocket and mark this agent offline.
+   * Tear down this client's WebSocket and mark the agent offline.
    *
    * By default the HTTP disconnect is presence-only for node-hosted (broker)
-   * agents: the node binding is left intact so a still-running session keeps
-   * receiving deliveries. Pass `{ deregister: true }` to also deregister the
-   * node binding and re-home the agent to its implicit direct node.
+   * agents: the node binding is preserved, so an agent process still running
+   * on its node keeps receiving deliveries through that node, and the binding
+   * remains usable for later reconnection. Pass `{ deregister: true }` to also
+   * deregister the node binding and re-home the agent to its implicit direct
+   * node.
    */
   async disconnect(options?: { deregister?: boolean }): Promise<void> {
     this.stopAutoHeartbeat();
