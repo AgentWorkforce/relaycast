@@ -242,6 +242,129 @@ describe('agent-published action lifecycle', () => {
     });
   });
 
+  it('a handler takeover fails invocations in flight toward the previous handler', async () => {
+    const ws = await createWorkspace(stack.app, 'action-takeover-inflight');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const oldIdentity = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator-run1');
+    const newIdentity = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator-run2');
+
+    const first = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${oldIdentity.token}` },
+      body: registerBody('orchestrator-run1'),
+    });
+    expect(first.status).toBe(201);
+
+    const callerNode = await attachDirectNodeSocket(stack, ws.workspaceId, caller);
+    const oldNode = await attachDirectNodeSocket(stack, ws.workspaceId, oldIdentity);
+    const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 5 } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(oldNode.sock.ofType('action.invoke')).toHaveLength(1);
+
+    // A different identity takes over the action while the old invocation is
+    // still in flight: the stranded invocation must fail (its completion auth
+    // and routing now point at the new handler), and the caller must hear it.
+    const second = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${newIdentity.token}` },
+      body: registerBody('orchestrator-run2'),
+    });
+    expect(second.status).toBe(200);
+
+    const [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row).toMatchObject({ status: 'failed', error: 'handler_unavailable' });
+
+    await new Promise((r) => setTimeout(r, 50));
+    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+    expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: invocationId,
+    });
+
+    // A re-register by the SAME handler (the common register-on-connect no-op)
+    // must NOT fail its own in-flight invocations.
+    const reinvoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 1 } }),
+    });
+    expect(reinvoke.status).toBe(503); // new handler has no live connection yet
+    const newNode = await attachDirectNodeSocket(stack, ws.workspaceId, newIdentity);
+    const invoke2 = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 2 } }),
+    });
+    expect(invoke2.status).toBe(201);
+    const invocation2 = (await invoke2.json() as { data: { invocation_id: string } }).data.invocation_id;
+    expect(newNode.sock.ofType('action.invoke')).toHaveLength(1);
+
+    const refresh = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${newIdentity.token}` },
+      body: registerBody('orchestrator-run2', { description: 'refreshed' }),
+    });
+    expect(refresh.status).toBe(200);
+    const [row2] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocation2));
+    expect(['pending', 'dispatched']).toContain(row2.status);
+  });
+
+  it('deleting an action fails its open invocations and notifies the caller', async () => {
+    const ws = await createWorkspace(stack.app, 'action-delete-inflight');
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
+
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: registerBody('orchestrator'),
+    });
+    expect(register.status).toBe(201);
+
+    const callerNode = await attachDirectNodeSocket(stack, ws.workspaceId, caller);
+    await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+    const invoke = await stack.app.request('/v1/actions/crm.get_person_batch/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input: { batchSize: 5 } }),
+    });
+    expect(invoke.status).toBe(201);
+    const invocationId = (await invoke.json() as { data: { invocation_id: string } }).data.invocation_id;
+
+    const del = await stack.app.request('/v1/actions/crm.get_person_batch', {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(del.status).toBe(204);
+
+    // The open invocation is terminally failed (action delete sets actionId
+    // null, which would otherwise orphan it outside the TTL sweep's join).
+    const [row] = await stack.runtime.handle.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, invocationId));
+    expect(row).toMatchObject({ status: 'failed', error: 'action_deleted' });
+
+    await new Promise((r) => setTimeout(r, 50));
+    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+    expect((failed.at(-1)!.payload as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: invocationId,
+      error: 'action_deleted',
+    });
+  });
+
   it('a live handler is not failed by the TTL sweep', async () => {
     const ws = await createWorkspace(stack.app, 'action-ttl-live');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'worker');

@@ -3522,8 +3522,11 @@ paths:
         with an agent token, `handler_agent` must be the calling agent.
         Registration is an idempotent assertion: re-registering an existing name
         refreshes its description, handler, schemas, `available_to`, and
-        `is_active` in place (200) instead of conflicting. Exactly one of
-        `handler_agent` or `handler_node` is required.
+        `is_active` in place (200) instead of conflicting. When the refresh moves
+        the handler to a different agent, invocations still in flight toward the
+        previous handler are failed (`handler_unavailable`) and their callers
+        receive `action.failed`. Exactly one of `handler_agent` or
+        `handler_node` is required.
       tags:
         - Actions
       security:
@@ -3610,7 +3613,7 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     delete:
       summary: Delete action
-      description: Delete a registered action
+      description: Delete a registered action. Open invocations of the action are failed (`action_deleted`) and their callers receive `action.failed`.
       tags:
         - Actions
       security:

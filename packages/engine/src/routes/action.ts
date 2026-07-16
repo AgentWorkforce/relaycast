@@ -78,7 +78,9 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       return jsonError(c, 'forbidden', `Agent "${callerAgent.name}" may only register actions it will handle itself`, 403);
     }
 
-    const { created, action } = await actionEngine.registerAction(db, workspace.id, parsed.data);
+    const { created, action } = await actionEngine.registerAction(db, workspace.id, parsed.data, {
+      completionDeps: c.get('engine'),
+    });
 
     emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
       action_name: action.name,
@@ -133,7 +135,9 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'));
+    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'), {
+      completionDeps: c.get('engine'),
+    });
     if (!deleted) {
       return jsonNotFound(c, 'action_not_found', 'Action not found');
     }
