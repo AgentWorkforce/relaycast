@@ -185,9 +185,24 @@ export class AgentClient {
     heartbeat: async (): Promise<void> => {
       await this.client.post('/v1/agents/heartbeat', {});
     },
-    markOffline: async (): Promise<void> => {
+    /**
+     * Mark this agent offline.
+     *
+     * By default this is a presence-only signal: a node-hosted (broker) agent
+     * keeps its node binding, so a session still running on its node keeps
+     * receiving deliveries through that node and the binding stays usable for
+     * later reconnection. Pass `{ deregister: true }` to also tear down the
+     * node binding and re-home the agent to its implicit direct node.
+     */
+    markOffline: async (options?: { deregister?: boolean }): Promise<void> => {
       this.stopAutoHeartbeat();
-      await this.client.post('/v1/agents/disconnect', {});
+      // Wait for any in-flight auto heartbeat to settle so the HTTP disconnect
+      // below is guaranteed to be the last presence mutation.
+      if (this.pendingHeartbeat) {
+        await this.pendingHeartbeat;
+        this.pendingHeartbeat = null;
+      }
+      await this.client.post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {});
     },
   };
 
@@ -195,6 +210,10 @@ export class AgentClient {
     this.stopAutoHeartbeat();
     if (this.autoHeartbeatMs === false) return;
     this.autoHeartbeatTimer = setInterval(() => {
+      // Serialize heartbeats: skip this tick while one is still in flight so
+      // pendingHeartbeat always tracks the only outstanding request — awaiting
+      // it before disconnect then guarantees no heartbeat lands afterwards.
+      if (this.pendingHeartbeat) return;
       this.pendingHeartbeat = this.presence.heartbeat()
         .catch(() => {})
         .finally(() => { this.pendingHeartbeat = null; });
@@ -272,7 +291,17 @@ export class AgentClient {
     await this.presence.heartbeat();
   }
 
-  async disconnect(): Promise<void> {
+  /**
+   * Tear down this client's WebSocket and mark the agent offline.
+   *
+   * By default the HTTP disconnect is presence-only for node-hosted (broker)
+   * agents: the node binding is preserved, so an agent process still running
+   * on its node keeps receiving deliveries through that node, and the binding
+   * remains usable for later reconnection. Pass `{ deregister: true }` to also
+   * deregister the node binding and re-home the agent to its implicit direct
+   * node.
+   */
+  async disconnect(options?: { deregister?: boolean }): Promise<void> {
     this.stopAutoHeartbeat();
     // Wait for any in-flight auto heartbeat to settle at PresenceDO so the
     // HTTP disconnect below is guaranteed to be the last presence mutation.
@@ -294,7 +323,9 @@ export class AgentClient {
     this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
-    await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
+    await this.client
+      .post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {})
+      .catch(() => {});
   }
 
   subscribe(channels: string[]): void;

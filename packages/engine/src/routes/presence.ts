@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceRead, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -10,9 +11,13 @@ import {
 } from '../engine/observerToken.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
-import { jsonOk, jsonSuccess } from '../lib/httpResponse.js';
+import { jsonOk, jsonSuccess, parseOptionalJsonBody } from '../lib/httpResponse.js';
 
 export const presenceRoutes = new Hono<AppEnv>();
+
+const disconnectBodySchema = z.object({
+  deregister: z.boolean().optional().default(false),
+});
 
 presenceRoutes.get('/agents/presence', requireWorkspaceRead('agents:read'), rateLimit, async (c) => {
   try {
@@ -43,7 +48,9 @@ presenceRoutes.post('/agents/heartbeat', requireAgentToken, rateLimit, async (c)
   }
 });
 
-// POST /agents/disconnect — explicitly mark agent offline.
+// POST /agents/disconnect — explicitly mark agent offline. For node-hosted
+// agents this is presence-only by default; pass `{ "deregister": true }` to
+// also tear down the node binding and re-home the agent to its direct node.
 presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c) => {
   try {
     const db = c.get('db');
@@ -51,7 +58,12 @@ presenceRoutes.post('/agents/disconnect', requireAgentToken, rateLimit, async (c
     const workspace = c.get('workspace');
     const { presence } = c.get('engine');
 
-    await handleAgentDisconnect(db, workspace.id, agent.id);
+    const parsed = await parseOptionalJsonBody(c, disconnectBodySchema, 'invalid disconnect body');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+
+    await handleAgentDisconnect(db, workspace.id, agent.id, { deregister: parsed.data.deregister });
     await presence.disconnect(workspace.id, agent.id, agent.name);
 
     emitServerEvent(c, workspace.id, 'relaycast_server_presence_disconnected', {

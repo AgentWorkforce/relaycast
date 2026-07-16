@@ -2886,11 +2886,30 @@ paths:
   /agents/disconnect:
     post:
       summary: Mark agent disconnected
-      description: Explicitly mark the authenticated agent offline and release any node-hosted binding
+      description: >-
+        Explicitly mark the authenticated agent offline. For a node-hosted
+        (broker) agent this is presence-only by default: the node binding is
+        left intact so a still-running session keeps receiving deliveries. Pass
+        `deregister: true` to also tear down the node binding and re-home the
+        agent to its implicit direct node.
       tags:
         - Presence
       security:
         - agentToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deregister:
+                  type: boolean
+                  default: false
+                  description: >-
+                    When true, deregister the node-hosted binding and re-home
+                    the agent to its implicit direct node. Defaults to false
+                    (presence-only).
       responses:
         '200':
           description: Agent disconnected
