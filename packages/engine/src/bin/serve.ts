@@ -69,6 +69,16 @@ async function main(): Promise<void> {
     ...(num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) !== undefined ? { depthCap: num(process.env.RELAYCAST_MAILBOX_DEPTH_CAP) } : {}),
   };
 
+  // Optional deployment-wide message retention TTL. Unset keeps message
+  // history forever (the engine default — pruning is opt-in). A positive value
+  // prunes messages after that many days; `0` or negative is an explicit
+  // keep-forever (maps to `null`).
+  const messageTtlDays = num(process.env.RELAYCAST_MESSAGE_TTL_DAYS);
+  const eventQueue =
+    messageTtlDays !== undefined
+      ? { retention: { defaults: { messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null } } }
+      : undefined;
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
@@ -77,6 +87,7 @@ async function main(): Promise<void> {
       environment: opts.environment,
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
+    ...(eventQueue ? { eventQueue } : {}),
   });
 
   process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${opts.db})\n`);

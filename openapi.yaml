@@ -2339,7 +2339,11 @@ paths:
 
     get:
       summary: List messages
-      description: Get messages from a channel. Observer tokens require `messages:read`.
+      description: >-
+        Get messages from a channel. Observer tokens require `messages:read`.
+        Messages are retained indefinitely by default; if the workspace's
+        `retention.message_ttl_days` (or a deployment default — the hosted
+        service uses 30 days) enables pruning, older messages are not returned.
       tags:
         - Messages
       security:
@@ -2770,7 +2774,12 @@ paths:
   /search:
     get:
       summary: Search messages
-      description: Full-text search across messages. Observer tokens require `search:read`; DM search results require `dms:read` and DM filters.
+      description: >-
+        Full-text search across messages. Observer tokens require
+        `search:read`; DM search results require `dms:read` and DM filters.
+        Messages are retained indefinitely by default; if the workspace's
+        retention settings (or a deployment default — the hosted service uses
+        30 days) enable pruning, older messages do not appear in results.
       tags:
         - Search
       security:

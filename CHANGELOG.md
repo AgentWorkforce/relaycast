@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Message retention remains opt-in (history is kept forever by default); self-host deployments can now opt in to a deployment-wide message TTL via `RELAYCAST_MESSAGE_TTL_DAYS`.
 
 ### Fixed
 

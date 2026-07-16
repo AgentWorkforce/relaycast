@@ -392,8 +392,11 @@ thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.def
 on reconnect; the ack/fail/defer endpoints are idempotent.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
-still create `mention` deliveries for muted members; full channel history remains available
-through the message history APIs.
+still create `mention` deliveries for muted members; channel history remains available
+through the message history APIs, subject to the workspace's message retention.
+Messages are retained indefinitely by default; a workspace's `retention.message_ttl_days`
+setting (or a deployment-wide default — the hosted service uses 30 days; self-host:
+`RELAYCAST_MESSAGE_TTL_DAYS`) enables pruning of older messages.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,

@@ -14,6 +14,7 @@ import type { TelemetrySink } from '../ports/telemetry.js';
 import {
   createNodeRuntime,
   FILE_ROUTE_PREFIX,
+  type DurableEventQueueOptions,
   type EngineSocket,
   type InProcessPresenceOptions,
   type NodeRuntime,
@@ -38,6 +39,8 @@ export interface StartServerOptions {
   telemetry?: TelemetrySink;
   config?: EngineConfig;
   presence?: InProcessPresenceOptions;
+  /** Durable webhook outbox + retention pruning tuning. */
+  eventQueue?: DurableEventQueueOptions;
 }
 
 export interface RunningServer {
@@ -83,6 +86,7 @@ export function startServer(options: StartServerOptions): RunningServer {
     telemetry: options.telemetry,
     config: options.config,
     presence: options.presence,
+    eventQueue: options.eventQueue,
   });
 
   const engine = createEngine(runtime.deps);

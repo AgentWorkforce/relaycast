@@ -41,7 +41,7 @@ const SETTLED_DELIVERY_STATUSES = ['acked', 'failed', 'dead_lettered'];
  * `workspaces.retention` settings. `null` disables pruning for that table.
  */
 export interface RetentionDefaults {
-  /** Messages are user data: no default — pruning is opt-in per workspace. */
+  /** Messages are user data: no default — pruning is opt-in per workspace or via this deployment default. */
   messageTtlDays?: number | null;
   /** Default {@link DEFAULT_DELIVERY_TTL_DAYS}. */
   deliveryTtlDays?: number | null;
@@ -97,9 +97,13 @@ interface PrunePass {
  * Per-workspace TTLs come from `workspaces.retention` (see
  * {@link WorkspaceRetentionSettings}); workspaces without settings inherit
  * `opts.defaults`. Out of the box only operational tables are pruned
- * (settled `deliveries` and `message_logs`, 90 days); `messages` retention is
+ * (settled `deliveries` and `message_logs`, 90 days; `workspace_events`,
+ * 30 days); `messages` retention is
  * strictly opt-in — no workspace loses message history unless its settings
- * (or an explicit deployment default) say so.
+ * (or an explicit deployment default) say so. Deployments can set a
+ * deployment-wide message default via `defaults.messageTtlDays` (the hosted
+ * gateway uses 30 days); self-host exposes the `RELAYCAST_MESSAGE_TTL_DAYS`
+ * env knob.
  *
  * What a run does, per table, oldest rows first:
  * - `messages` older than the effective TTL, leaf-first: a message still

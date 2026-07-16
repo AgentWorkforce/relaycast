@@ -188,6 +188,28 @@ describe('pruneExpired', () => {
     expect(remaining).not.toContain(expired);
   });
 
+  it('applies a deployment-wide message TTL, with per-workspace overrides in both directions and null opt-out', async () => {
+    const { db } = track(openDb());
+    const inherits = await seedWorkspace(db); // no settings -> deployment default (30d)
+    const relaxed = await seedWorkspace(db, { message_ttl_days: 90 });
+    const strict = await seedWorkspace(db, { message_ttl_days: 7 });
+    const optedOut = await seedWorkspace(db, { message_ttl_days: null });
+
+    const inheritsPruned = await insertMessage(db, inherits, idAt(40));
+    const inheritsKept = await insertMessage(db, inherits, idAt(10));
+    const relaxedKept = await insertMessage(db, relaxed, idAt(40, 1)); // <90d -> kept despite the 30d default
+    const strictPruned = await insertMessage(db, strict, idAt(10, 1)); // >7d -> pruned though <30d default
+    const keptForever = await insertMessage(db, optedOut, idAt(400)); // explicit null -> never pruned
+
+    const result = await pruneExpired(db, { defaults: { messageTtlDays: 30 } });
+
+    expect(result.messages).toBe(2);
+    const remaining = (await db.select({ id: messages.id }).from(messages)).map((r) => r.id);
+    expect(remaining.sort()).toEqual([inheritsKept, relaxedKept, keptForever].sort());
+    expect(remaining).not.toContain(inheritsPruned);
+    expect(remaining).not.toContain(strictPruned);
+  });
+
   it('cascades message deletion to receipts, reactions, attachments, logs, and deliveries', async () => {
     const { db } = track(openDb());
     const base = await seedWorkspace(db, { message_ttl_days: 30 });

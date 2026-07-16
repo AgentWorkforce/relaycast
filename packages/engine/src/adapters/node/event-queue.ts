@@ -37,7 +37,8 @@ export interface DurableEventQueueOptions {
    * Retention pruning (`pruneExpired`) options, run on the same cleanup
    * cadence. `false` disables it. Defaults are conservative: only operational
    * tables (settled deliveries, message logs) are pruned; message retention is
-   * opt-in per workspace via `workspaces.retention`.
+   * opt-in per workspace via `workspaces.retention` or a deployment-wide
+   * `defaults.messageTtlDays` (self-host: `RELAYCAST_MESSAGE_TTL_DAYS`).
    */
   retention?: PruneOptions | false;
 }
