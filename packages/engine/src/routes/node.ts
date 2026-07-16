@@ -134,7 +134,7 @@ nodeRoutes.post('/nodes', requireWorkspaceKey, rateLimit, async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const existing = await nodeEngine.getNodeByName(c.get('db'), c.get('workspace').id, parsed.data.name);
+    const existing = await nodeEngine.resolveNodeForEnroll(c.get('db'), c.get('workspace').id, parsed.data);
     const kind = parsed.data.kind ?? (existing?.kind as z.infer<typeof nodeKindSchema> | undefined) ?? 'ws';
     const role = parsed.data.role
       ?? (existing?.role as z.infer<typeof nodeRoleSchema> | undefined)
@@ -343,8 +343,9 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
     }
     // Serialize with node-control operations so removal can't race a concurrent
     // register/heartbeat's aggregate recompute.
+    const engine = c.get('engine');
     await serializeNodeOp(workspace.id, node.id, () =>
-      nodeEngine.deregisterProvider(db, c.get('engine').nodeConnections, workspace.id, node.id, c.req.param('name')),
+      nodeEngine.deregisterProvider(db, engine.nodeConnections, workspace.id, node.id, c.req.param('name'), engine),
     );
     return jsonNoContent(c);
   } catch (err: unknown) {

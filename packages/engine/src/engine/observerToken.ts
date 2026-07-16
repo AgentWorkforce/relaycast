@@ -541,7 +541,7 @@ function eventRequiredScopes(type: string): ObserverScope[] {
   if (type === 'message.reacted') return ['reactions:read'];
   if (type === 'dm.received' || type === 'group_dm.received') return ['dms:read'];
   if (type === 'file.uploaded') return ['files:read'];
-  if (type.startsWith('agent.status.')) return ['agents:read'];
+  if (type.startsWith('agent.status.') || type === 'agent.exited') return ['agents:read'];
   if (type.startsWith('member.') || type.startsWith('channel.')) return ['channels:read'];
   if (type.startsWith('delivery.')) return ['deliveries:read'];
   if (type.startsWith('node.')) return ['nodes:read'];

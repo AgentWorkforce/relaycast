@@ -8,6 +8,7 @@ import { emitInvocationCompletionEffects, type InvocationCompletionDeps } from '
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
+import { emitAgentExitedEffects, fleetInvocationId, type InvocationCompletionDeps } from './invocationCompletion.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -931,6 +932,7 @@ async function applyReleaseCompletionEffect(
   nodeId: string,
   invocation: Pick<InvocationRow, 'actionName' | 'input'>,
   data: { error?: string },
+  deps?: InvocationCompletionDeps,
 ): Promise<void> {
   if (!isReleaseInvocation(invocation.actionName) || data.error) return;
 
@@ -964,6 +966,10 @@ async function applyReleaseCompletionEffect(
     .returning({ id: agentNodeBindings.id });
   if (!deactivatedBinding) return;
 
+  // Capture exit correlation BEFORE the mutation deletes the row or strips the
+  // spawn/cli metadata, so a durable agent.exited can still be emitted.
+  const exited = { agentId: agent.id, agentName: agent.name, invocationId: fleetInvocationId(agent.metadata) };
+
   await db
     .update(nodes)
     .set({
@@ -973,29 +979,38 @@ async function applyReleaseCompletionEffect(
 
   if (input.delete_agent === true) {
     await db.delete(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
-    return;
+  } else {
+    const existingMetadata = agent.metadata ?? {};
+    const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
+    await db
+      .update(agents)
+      .set({
+        status: 'offline',
+        // Clear the node location so the agent is no longer routable to the released
+        // node and a repeat release can't re-decrement the node's active count.
+        locationType: 'self_connected',
+        locationNodeId: null,
+        lastSeen: new Date(),
+        metadata: {
+          ...restMetadata,
+          release: {
+            reason: typeof input.reason === 'string' ? input.reason : null,
+            released_at: new Date().toISOString(),
+          },
+        },
+      })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
   }
 
-  const existingMetadata = agent.metadata ?? {};
-  const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
-  await db
-    .update(agents)
-    .set({
-      status: 'offline',
-      // Clear the node location so the agent is no longer routable to the released
-      // node and a repeat release can't re-decrement the node's active count.
-      locationType: 'self_connected',
-      locationNodeId: null,
-      lastSeen: new Date(),
-      metadata: {
-        ...restMetadata,
-        release: {
-          reason: typeof input.reason === 'string' ? input.reason : null,
-          released_at: new Date().toISOString(),
-        },
-      },
-    })
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+  if (deps) {
+    await emitAgentExitedEffects(deps, workspaceId, {
+      agentId: exited.agentId,
+      agentName: exited.agentName,
+      nodeId,
+      invocationId: exited.invocationId,
+      reason: 'released',
+    });
+  }
 }
 
 async function dispatchNodeAttempt(
@@ -1580,6 +1595,7 @@ export async function completeNodeInvocation(
     output?: unknown;
     error?: string;
   },
+  deps?: InvocationCompletionDeps,
 ) {
   const [existing] = await db
     .select({
@@ -1657,7 +1673,7 @@ export async function completeNodeInvocation(
   }
 
   if (updated) {
-    await applyReleaseCompletionEffect(db, workspaceId, nodeId, existing, data);
+    await applyReleaseCompletionEffect(db, workspaceId, nodeId, existing, data, deps);
   }
 
   return updated ? publicInvocation(updated) : null;

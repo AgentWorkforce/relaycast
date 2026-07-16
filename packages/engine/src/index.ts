@@ -48,11 +48,13 @@ export * as schema from './db/schema.js';
 export { deliverEvent } from './engine/eventDelivery.js';
 export { runA2aHealthChecks } from './engine/a2a-health.js';
 
-// HTTP push delivery redrive: queue/cron-backed deployments call this from a
-// scheduled handler to retry queued `http_push` deliveries whose
-// `next_attempt_at` is due. The Node adapter wires the same helper to its local
-// maintenance interval for self-hosted runtimes.
-export { sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
+// Node delivery redrive: queue/cron-backed deployments call this from a
+// scheduled handler to retry queued node deliveries (http_push and ws-node)
+// whose `next_attempt_at` is due (or was never stamped). The Node adapter wires
+// the same helper to its local maintenance interval for self-hosted runtimes.
+// `sweepDueHttpPushDeliveries` is a deprecated alias kept for hosts (relaycast-
+// cloud) that still import the old name.
+export { sweepDueNodeDeliveries, sweepDueHttpPushDeliveries } from './routes/deliveryRouting.js';
 export { sweepExpiredDeliveries } from './routes/deliveryRouting.js';
 export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';

@@ -33,7 +33,7 @@ type DeliveryTarget = {
   providerName?: string;
 };
 
-const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
+const DISPATCH_RETRY_DELAY_MS = 30_000;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -222,7 +222,7 @@ function normalizeDeliveryAdapter(adapter: string | null | undefined, nodeKind: 
   return null;
 }
 
-async function recordHttpPushRetry(
+async function recordDispatchRetry(
   ctx: RoutingContext,
   deliveryId: string,
   error: string,
@@ -233,7 +233,7 @@ async function recordHttpPushRetry(
     .set({
       ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
       lastDispatchError: error,
-      nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+      nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
       updatedAt: new Date(),
     })
     .where(and(
@@ -253,11 +253,11 @@ async function dispatchHttpPush(args: {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, 'invalid http_push delivery config: missing url', { incrementAttempts: true });
     return 'failed';
   }
   if (!isSafeExternalUrl(url, { strict: strictExternalUrl(args.ctx.engine) })) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, 'unsafe http_push delivery url', { incrementAttempts: true });
     return 'failed';
   }
 
@@ -269,7 +269,7 @@ async function dispatchHttpPush(args: {
   // above; the proxy requires both a url and a secret.
   const proxied = resolveHttpPushProxy(url, config, args.ctx.engine.config?.httpPushProxy);
   if (!proxied.ok) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
+    await recordDispatchRetry(args.ctx, args.delivery.id, proxied.reason, { incrementAttempts: true });
     return 'failed';
   }
   const requestUrl = proxied.requestUrl;
@@ -316,7 +316,7 @@ async function dispatchHttpPush(args: {
       .set({
         dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
         lastDispatchError: null,
-        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+        nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
       .where(and(...claimConditions))
@@ -342,12 +342,12 @@ async function dispatchHttpPush(args: {
     // `redirect: 'manual'` surfaces a redirect as a 3xx status (or an
     // opaqueredirect response with status 0); treat both as a hard failure.
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-      await recordHttpPushRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
+      await recordDispatchRetry(args.ctx, args.delivery.id, `redirect not allowed (HTTP ${response.status})`);
       return 'failed';
     }
 
     if (!response.ok) {
-      await recordHttpPushRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);
+      await recordDispatchRetry(args.ctx, args.delivery.id, `HTTP ${response.status}`);
       return 'failed';
     }
 
@@ -387,16 +387,26 @@ async function dispatchHttpPush(args: {
           return 'acked';
         }
       }
-      await recordHttpPushRetry(args.ctx, args.delivery.id, 'response ack not signaled');
+      await recordDispatchRetry(args.ctx, args.delivery.id, 'response ack not signaled');
       return 'failed';
     }
 
     return 'delivered';
   } catch (err) {
-    await recordHttpPushRetry(args.ctx, args.delivery.id, err instanceof Error ? err.message : 'HTTP delivery failed');
+    await recordDispatchRetry(args.ctx, args.delivery.id, err instanceof Error ? err.message : 'HTTP delivery failed');
     return 'failed';
   }
 }
+
+/**
+ * Result of routing a single delivery row.
+ * - `delivered`: the row was sent and marked delivered.
+ * - `deferred`: the row stayed queued and was stamped for a later retry (a
+ *   readiness skip or a failed live send). An ordered ws redrive stops its
+ *   agent's backlog here so a later seq never outruns this one.
+ * - `noop`: no realtime target remained (legacy/unbound row); nothing to do.
+ */
+type DeliveryDispatchOutcome = 'delivered' | 'deferred' | 'noop';
 
 async function routeOneDeliveryOutcome(
   ctx: RoutingContext,
@@ -405,7 +415,7 @@ async function routeOneDeliveryOutcome(
   delivery: DeliveryFanoutRecord,
   eventType: string,
   eventData: Record<string, unknown>,
-): Promise<void> {
+): Promise<DeliveryDispatchOutcome> {
   const recordedTarget = recordedTargets.get(delivery.id);
   const liveLocation = liveLocations.get(delivery.agentId);
   const target = recordedTarget ?? liveLocation;
@@ -423,7 +433,20 @@ async function routeOneDeliveryOutcome(
       providerName,
       delivery.agentId,
     )) {
-      return;
+      // The provider connection has not marked this identity delivery-ready
+      // (cursor negotiation pending). Leave the row queued but stamp it so the
+      // skip is observable and a later sweep retries it, instead of the row
+      // silently sitting until its mailbox TTL dead-letters it. This is a skip,
+      // not a dispatch attempt, so dispatch_attempts is not incremented.
+      await recordDispatchRetry(ctx, delivery.id, 'provider connection not delivery-ready for agent');
+      console.warn('[delivery.route] provider not delivery-ready; delivery deferred', {
+        workspace_id: ctx.workspaceId,
+        node_id: locationNodeId,
+        provider_name: providerName,
+        agent_id: delivery.agentId,
+        delivery_id: delivery.id,
+      });
+      return 'deferred';
     }
     const sent = await ctx.engine.nodeConnections.sendToProvider(ctx.workspaceId, locationNodeId, providerName, buildDeliverFrame({
       delivery_id: delivery.id,
@@ -436,21 +459,38 @@ async function routeOneDeliveryOutcome(
     }));
     if (sent) {
       await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return 'delivered';
     }
-    return;
+    // The provider was delivery-ready but the live send did not land (no open
+    // socket, the provider detached mid-send, or `socket.send` threw). Leave the
+    // row queued but stamp it so the periodic node sweep re-attempts with ~30s
+    // spacing, instead of the row sitting silently until its mailbox TTL
+    // dead-letters it. Unlike the readiness skip above this is a real dispatch
+    // attempt, so it counts toward dispatch_attempts.
+    await recordDispatchRetry(ctx, delivery.id, 'node socket send failed', { incrementAttempts: true });
+    console.warn('[delivery.route] node send failed; delivery deferred', {
+      workspace_id: ctx.workspaceId,
+      node_id: locationNodeId,
+      provider_name: providerName,
+      agent_id: delivery.agentId,
+      delivery_id: delivery.id,
+    });
+    return 'deferred';
   }
 
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
     const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
       await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return 'delivered';
     }
-    return;
+    return 'deferred';
   }
 
   // No agent-owned realtime socket exists anymore. If a legacy/unbound row
   // reaches this point, leave it queued so a later node binding/replay can
   // deliver it instead of falsely marking it delivered.
+  return 'noop';
 }
 
 async function routeDeliveryOutcomesForContext(
@@ -478,21 +518,108 @@ export async function routeDeliveryOutcomes(
   await routeDeliveryOutcomesForContext(routingContextFromHono(c, opts.workspaceId), deliveries, eventType, eventData);
 }
 
-export async function sweepDueHttpPushDeliveries(
+/**
+ * Redrive a single ws-node agent's queued backlog in ascending `seq` order,
+ * serially, stopping at the first row that does not deliver.
+ *
+ * A `ws.node.v1` deliver frame whose `seq != received_up_to_seq + 1` is treated
+ * by the broker as a Gap and is NOT injected (it waits for the missing earlier
+ * seq), while the engine's `sendToProvider` returns `true` on a successful
+ * socket write — so a naive concurrent/unordered redrive can mark a higher seq
+ * "delivered" while the broker silently held it, stranding the row until
+ * reconnect replay or the mailbox TTL. To avoid that we always redrive from the
+ * agent's LOWEST queued seq regardless of the individual row's `next_attempt_at`
+ * due-ness (matching {@link deliverPendingToNode}'s replay ordering): once ANY
+ * of the agent's rows is due, the whole queued backlog is re-attempted in order.
+ * The moment a row cannot be delivered (readiness skip or failed send —
+ * `routeOneDeliveryOutcome` has already stamped it for the next retry) we stop,
+ * so a later seq can never outrun an earlier undelivered one.
+ */
+async function redriveWsBacklogForAgent(
+  ctx: RoutingContext,
+  agentId: string,
+  now: Date,
+): Promise<void> {
+  const backlog = await deliveryEngine.fetchQueuedWsBacklogEvents(ctx.db, ctx.workspaceId, agentId, { now });
+  if (backlog.length === 0) return;
+
+  const backlogDeliveries = backlog.map((event) => event.delivery);
+  const liveLocations = await resolveLiveLocations(ctx, backlogDeliveries);
+  const recordedTargets = await resolveRecordedTargets(ctx, backlogDeliveries);
+
+  for (const event of backlog) {
+    const outcome = await routeOneDeliveryOutcome(
+      ctx,
+      liveLocations,
+      recordedTargets,
+      event.delivery,
+      event.eventType,
+      event.eventData,
+    );
+    if (outcome !== 'delivered') break;
+  }
+}
+
+/**
+ * Periodic redrive for queued node deliveries whose `next_attempt_at` is due (or
+ * was never stamped). Covers http_push rows (their agent never connects to pull)
+ * and ws-node rows whose single background dispatch was lost or failed.
+ *
+ * http_push rows are independent single-shot webhooks with no ordering
+ * relationship, so they are dispatched concurrently per row (each re-routed
+ * through {@link routeOneDeliveryOutcome}). ws-node rows for the same agent form
+ * a monotonic `seq` stream that the broker injects in order, so they are grouped
+ * per agent and redriven serially in ascending seq (see
+ * {@link redriveWsBacklogForAgent}); different agents (and different nodes) are
+ * still processed concurrently. Returns the number of due rows the sweep found.
+ */
+export async function sweepDueNodeDeliveries(
   engine: EngineDeps,
   opts: { workspaceId?: string; now?: Date; limit?: number } = {},
 ): Promise<number> {
-  const due = await deliveryEngine.fetchDueHttpPushDeliveryEvents(engine.db, opts);
-  await Promise.allSettled(due.map((event) => (
-    routeDeliveryOutcomesForContext(
-      { db: engine.db, workspaceId: event.workspaceId, engine },
-      [event.delivery],
-      event.eventType,
-      event.eventData,
-    )
-  )));
+  const now = opts.now ?? new Date();
+  const due = await deliveryEngine.fetchDueNodeDeliveryEvents(engine.db, { ...opts, now });
+
+  const httpPushEvents: typeof due = [];
+  const wsAgents: { workspaceId: string; agentId: string }[] = [];
+  const seenWsAgents = new Set<string>();
+  for (const event of due) {
+    if (event.delivery.routeNodeKind === 'http_push') {
+      httpPushEvents.push(event);
+      continue;
+    }
+    const key = `${event.workspaceId} ${event.delivery.agentId}`;
+    if (seenWsAgents.has(key)) continue;
+    seenWsAgents.add(key);
+    wsAgents.push({ workspaceId: event.workspaceId, agentId: event.delivery.agentId });
+  }
+
+  await Promise.allSettled([
+    ...httpPushEvents.map((event) => (
+      routeDeliveryOutcomesForContext(
+        { db: engine.db, workspaceId: event.workspaceId, engine },
+        [event.delivery],
+        event.eventType,
+        event.eventData,
+      )
+    )),
+    ...wsAgents.map((agent) => (
+      redriveWsBacklogForAgent(
+        { db: engine.db, workspaceId: agent.workspaceId, engine },
+        agent.agentId,
+        now,
+      )
+    )),
+  ]);
   return due.length;
 }
+
+/**
+ * @deprecated Renamed to {@link sweepDueNodeDeliveries}, which also sweeps queued
+ * ws-node rows. Kept as a thin alias because relaycast-cloud's cron imports this
+ * name; delete once that host migrates.
+ */
+export const sweepDueHttpPushDeliveries = sweepDueNodeDeliveries;
 
 async function notifyDeliveryFailuresForContext(
   ctx: RoutingContext,

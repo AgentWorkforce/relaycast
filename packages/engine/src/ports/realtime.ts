@@ -117,7 +117,16 @@ export interface NodeConnectionRegistry {
     connectionId: string,
   ): { code: string; message: string } | null;
 
-  /** Bind a provider name to a connection, superseding a stale prior attachment. */
+  /**
+   * Bind a provider name to a connection, superseding a stale prior attachment.
+   * When the connection was already bound to a DIFFERENT provider identity —
+   * another provider name, or another instance id (a same-socket re-register by
+   * a restarted provider whose broker-side cursors are gone) — reset its
+   * delivery ready-set so the following {@link setProviderDeliveryReadiness}
+   * `agent_scoped` call starts empty and every identity must re-announce, and
+   * drop the old name's index entry if it still points at this connection. Only
+   * a same-name, same-instance re-register keeps the ready-set.
+   */
   attachProvider?(
     workspaceId: string,
     nodeId: string,
@@ -130,6 +139,18 @@ export interface NodeConnectionRegistry {
    * Configure durable-delivery readiness for the active provider connection.
    * Cursor-negotiated connections start agent-scoped with no ready identities;
    * legacy connections are immediately ready for every hosted agent.
+   *
+   * `agent_scoped` must PRESERVE any identities already marked ready on the
+   * resolved connection, but ONLY for a same-connection, same-name,
+   * SAME-instance re-register: that is a reconnect and does not invalidate
+   * broker-side cursors, so wiping the ready-set would silently gate every
+   * in-flight delivery until each agent is re-announced. A re-register with a
+   * NEW provider name or instance id is a different/restarted provider —
+   * {@link attachProvider} clears the ready-set first, so this call starts a
+   * fresh empty agent-scoped set. A genuinely new
+   * connection has no ready-set yet, so it also starts empty; a transition from
+   * `immediate` resets to an empty agent-scoped set. Out-of-process implementers
+   * (relaycast-cloud NodeDO) must mirror this.
    */
   setProviderDeliveryReadiness?(
     workspaceId: string,
