@@ -12,6 +12,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).
 - Exported the provider-attach arbitration policy from `@relaycast/engine/node-control`: `providerAttachDecision()` plus `PROVIDER_ATTACH_LIVENESS_MS`, so an out-of-process socket owner (a hosted NodeDO) mirrors the spec §3.1 decision from one source of truth instead of hand-copying the constant and logic.
+- `handleAgentDisconnect` accepts an optional `{ deregister?: boolean }` argument, and `POST /v1/agents/disconnect` accepts an optional `{ deregister?: boolean }` body.
+
+### Changed
+- `handleAgentDisconnect` / `POST /v1/agents/disconnect` are presence-only by default for node-hosted agents: the active `agent_node_bindings` row and node slot are kept (deliveries keep flowing to the still-running session) instead of deactivating the binding and re-homing `location_node_id` to the offline direct node. Pass `deregister: true` for the previous full teardown. Skipped and re-homing paths now log at warn.
 
 ### Fixed
 - Provider-attach arbitration accepts an unbound provider regardless of a caller's last-seen timestamp instead of reporting a false live-instance conflict.

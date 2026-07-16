@@ -1043,7 +1043,7 @@ describe('node adapter conformance', () => {
       });
     });
 
-    it('REST disconnect deregisters a node-hosted agent without a node socket', async () => {
+    it('REST disconnect is presence-only for a node-hosted agent by default', async () => {
       const ws = await createWorkspace(stack.app, 'agent-disconnect-helper-ws');
       const db = stack.runtime.handle.db;
       const alpha = await enrollAndAttachNode(ws, {
@@ -1076,6 +1076,93 @@ describe('node adapter conformance', () => {
       const disconnect = await stack.app.request('/v1/agents/disconnect', {
         method: 'POST',
         headers: { authorization: `Bearer ${reply.data?.token ?? ''}` },
+      });
+      expect(disconnect.status).toBe(200);
+
+      // Default disconnect is presence intent only: the node binding, slot, and
+      // location are left intact so the still-running PTY keeps its deliveries.
+      const worker = await db
+        .select({
+          locationType: agents.locationType,
+          locationNodeId: agents.locationNodeId,
+        })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, agentId)))
+        .then((rows) => rows[0]);
+      expect(worker).toMatchObject({
+        locationType: 'via_node',
+        locationNodeId: 'node_disconnect_alpha',
+      });
+
+      const activeBindings = await db
+        .select({ nodeId: agentNodeBindings.nodeId })
+        .from(agentNodeBindings)
+        .where(and(
+          eq(agentNodeBindings.workspaceId, ws.workspaceId),
+          eq(agentNodeBindings.agentId, agentId),
+          eq(agentNodeBindings.status, 'active'),
+        ));
+      expect(activeBindings).toEqual([{ nodeId: 'node_disconnect_alpha' }]);
+
+      const alphaNode = await db
+        .select({
+          id: nodes.id,
+          activeAgents: nodes.activeAgents,
+        })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_disconnect_alpha')))
+        .then((rows) => rows[0]);
+      expect(alphaNode).toMatchObject({
+        id: 'node_disconnect_alpha',
+        activeAgents: 1,
+      });
+
+      // The implicit direct node is never created by a presence-only disconnect.
+      const directNode = await db
+        .select({ id: nodes.id })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, `node_direct_${agentId}`)))
+        .then((rows) => rows[0]);
+      expect(directNode).toBeUndefined();
+    });
+
+    it('REST disconnect with deregister:true tears down a node-hosted agent without a node socket', async () => {
+      const ws = await createWorkspace(stack.app, 'agent-deregister-helper-ws');
+      const db = stack.runtime.handle.db;
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_disconnect_alpha',
+        name: 'disconnect-alpha',
+        capabilities: [],
+        maxAgents: 1,
+      });
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1,
+        id: 'agent-register-disconnect',
+        type: 'agent.register',
+        name: 'disconnect-worker',
+        session_ref: 'pty://disconnect/worker',
+      }));
+      const reply = alpha.sock.ofType('reply').find((frame) => frame.id === 'agent-register-disconnect') as {
+        data?: { agent_id?: string; token?: string };
+      };
+      const agentId = reply.data?.agent_id ?? '';
+      expect(agentId.length).toBeGreaterThan(0);
+
+      const beforeNode = await db
+        .select({ activeAgents: nodes.activeAgents })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_disconnect_alpha')))
+        .then((rows) => rows[0]);
+      expect(beforeNode?.activeAgents).toBe(1);
+
+      const disconnect = await stack.app.request('/v1/agents/disconnect', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${reply.data?.token ?? ''}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ deregister: true }),
       });
       expect(disconnect.status).toBe(200);
 

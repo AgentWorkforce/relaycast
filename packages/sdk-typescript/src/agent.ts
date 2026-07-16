@@ -185,9 +185,17 @@ export class AgentClient {
     heartbeat: async (): Promise<void> => {
       await this.client.post('/v1/agents/heartbeat', {});
     },
-    markOffline: async (): Promise<void> => {
+    /**
+     * Mark this agent offline.
+     *
+     * By default this is a presence-only signal: a node-hosted (broker) agent
+     * keeps its node binding, so its still-running session continues to receive
+     * deliveries. Pass `{ deregister: true }` to also tear down the node
+     * binding and re-home the agent to its implicit direct node.
+     */
+    markOffline: async (options?: { deregister?: boolean }): Promise<void> => {
       this.stopAutoHeartbeat();
-      await this.client.post('/v1/agents/disconnect', {});
+      await this.client.post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {});
     },
   };
 
@@ -272,7 +280,15 @@ export class AgentClient {
     await this.presence.heartbeat();
   }
 
-  async disconnect(): Promise<void> {
+  /**
+   * Tear down the WebSocket and mark this agent offline.
+   *
+   * By default the HTTP disconnect is presence-only for node-hosted (broker)
+   * agents: the node binding is left intact so a still-running session keeps
+   * receiving deliveries. Pass `{ deregister: true }` to also deregister the
+   * node binding and re-home the agent to its implicit direct node.
+   */
+  async disconnect(options?: { deregister?: boolean }): Promise<void> {
     this.stopAutoHeartbeat();
     // Wait for any in-flight auto heartbeat to settle at PresenceDO so the
     // HTTP disconnect below is guaranteed to be the last presence mutation.
@@ -294,7 +310,9 @@ export class AgentClient {
     this.activeWsChannels.clear();
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
-    await this.client.post('/v1/agents/disconnect', {}).catch(() => {});
+    await this.client
+      .post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {})
+      .catch(() => {});
   }
 
   subscribe(channels: string[]): void;
