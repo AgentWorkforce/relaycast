@@ -353,6 +353,15 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         }
       }
     }
+    // A re-register on the SAME live connection but with a NEW provider
+    // instance id is a restarted provider whose broker-side cursors are gone.
+    // Reset the ready-set (back to undefined) so the immediately-following
+    // `setProviderDeliveryReadiness('agent_scoped')` starts a fresh empty Set
+    // and every identity must re-announce before deliver frames flow —
+    // preservation applies only to a same-instance reconnect.
+    if (conn.instanceId !== undefined && conn.instanceId !== instanceId) {
+      conn.deliveryReadyAgentIds = undefined;
+    }
     conn.providerName = providerName;
     conn.instanceId = instanceId;
     conn.lastSeen = Date.now();

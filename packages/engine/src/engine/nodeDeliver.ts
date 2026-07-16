@@ -137,9 +137,10 @@ function deliverEventToRecipient(
     recipient.agentId,
   )) {
     // Ephemeral events have no durable delivery row to stamp or retry, so a
-    // not-yet-ready identity is dropped best-effort by design (durable messages
-    // recover via the queued-row sweep). Intentionally not logged: a re-announce
-    // storm would otherwise emit a warn per event per gated agent.
+    // not-yet-ready identity is dropped best-effort by design; durable messages
+    // instead have their own queued delivery rows with stamped retry state and
+    // replay paths. Intentionally not logged: a re-announce storm would
+    // otherwise emit a warn per event per gated agent.
     return Promise.resolve(false);
   }
   return deps.nodeConnections.sendToProvider(deps.workspaceId, recipient.nodeId, recipient.providerName, buildDeliverFrame({

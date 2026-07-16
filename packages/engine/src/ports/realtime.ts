@@ -117,7 +117,14 @@ export interface NodeConnectionRegistry {
     connectionId: string,
   ): { code: string; message: string } | null;
 
-  /** Bind a provider name to a connection, superseding a stale prior attachment. */
+  /**
+   * Bind a provider name to a connection, superseding a stale prior attachment.
+   * When the connection was already bound to a DIFFERENT instance id (a
+   * same-socket re-register by a restarted provider whose broker-side cursors
+   * are gone), reset its delivery ready-set so the following
+   * {@link setProviderDeliveryReadiness} `agent_scoped` call starts empty and
+   * every identity must re-announce. A same-instance re-register keeps it.
+   */
   attachProvider?(
     workspaceId: string,
     nodeId: string,
@@ -132,12 +139,15 @@ export interface NodeConnectionRegistry {
    * legacy connections are immediately ready for every hosted agent.
    *
    * `agent_scoped` must PRESERVE any identities already marked ready on the
-   * resolved connection: a re-register on the same live connection is a
-   * reconnect and does not invalidate broker-side cursors, so wiping the
-   * ready-set would silently gate every in-flight delivery until each agent is
-   * re-announced. A genuinely new connection has no ready-set yet, so it starts
-   * empty; a transition from `immediate` resets to an empty agent-scoped set.
-   * Out-of-process implementers (relaycast-cloud NodeDO) must mirror this.
+   * resolved connection, but ONLY for a same-connection SAME-instance
+   * re-register: that is a reconnect and does not invalidate broker-side
+   * cursors, so wiping the ready-set would silently gate every in-flight
+   * delivery until each agent is re-announced. A re-register with a NEW instance
+   * id is a restarted provider — {@link attachProvider} clears the ready-set
+   * first, so this call starts a fresh empty agent-scoped set. A genuinely new
+   * connection has no ready-set yet, so it also starts empty; a transition from
+   * `immediate` resets to an empty agent-scoped set. Out-of-process implementers
+   * (relaycast-cloud NodeDO) must mirror this.
    */
   setProviderDeliveryReadiness?(
     workspaceId: string,

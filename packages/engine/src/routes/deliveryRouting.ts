@@ -33,7 +33,7 @@ type DeliveryTarget = {
   providerName?: string;
 };
 
-const HTTP_PUSH_RETRY_DELAY_MS = 30_000;
+const DISPATCH_RETRY_DELAY_MS = 30_000;
 
 function routingContextFromHono(c: HonoContext, workspaceIdOverride?: string): RoutingContext {
   const workspaceId = workspaceIdOverride ?? c.get('workspace')?.id;
@@ -233,7 +233,7 @@ async function recordDispatchRetry(
     .set({
       ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
       lastDispatchError: error,
-      nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+      nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
       updatedAt: new Date(),
     })
     .where(and(
@@ -316,7 +316,7 @@ async function dispatchHttpPush(args: {
       .set({
         dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1`,
         lastDispatchError: null,
-        nextAttemptAt: new Date(Date.now() + HTTP_PUSH_RETRY_DELAY_MS),
+        nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
         updatedAt: new Date(),
       })
       .where(and(...claimConditions))
