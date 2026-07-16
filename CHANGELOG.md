@@ -27,7 +27,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Allowed Swift clients to decode hosted agent lifecycle statuses and complete realtime connections.
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
 - Stopped a reconnecting node broker from silently dropping messages: a same-connection `node.register` re-register now preserves already-announced agents' delivery readiness, and readiness-gated skips stamp the delivery row for retry instead of dead-lettering it after the mailbox TTL.
-- Recovered WebSocket node messages whose single live dispatch was lost or failed: the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one, until the node reconnects instead of sitting queued until the mailbox TTL dead-letters them.
+- Recovered WebSocket node messages whose single live dispatch was lost or failed: instead of letting rows sit queued until the mailbox TTL dead-letters them, the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one.
 
 ## [6.0.3] - 2026-07-12
 
