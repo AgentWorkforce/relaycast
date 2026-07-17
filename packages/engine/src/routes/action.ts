@@ -78,20 +78,24 @@ actionRoutes.post('/actions', requireAuth, rateLimit, async (c) => {
       return jsonError(c, 'forbidden', `Agent "${callerAgent.name}" may only register actions it will handle itself`, 403);
     }
 
-    const result = await actionEngine.registerAction(db, workspace.id, parsed.data);
+    const { created, action } = await actionEngine.registerAction(db, workspace.id, parsed.data, {
+      completionDeps: c.get('engine'),
+    });
 
     emitServerEvent(c, workspace.id, 'relaycast_server_action_registered', {
-      action_name: result.name,
+      action_name: action.name,
       handler_agent_name: parsed.data.handler_agent ?? null,
       handler_node_name: parsed.data.handler_node ?? null,
     });
     runInBackground(
       c,
-      fanoutToWorkspace(c, 'action.registered', { action_name: result.name }),
+      fanoutToWorkspace(c, 'action.registered', { action_name: action.name }),
       'fanout action.registered',
     );
 
-    return jsonCreated(c, result);
+    // 201 when the action was created, 200 when an existing registration was
+    // refreshed (idempotent re-register).
+    return created ? jsonCreated(c, action) : jsonOk(c, action);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }
@@ -131,7 +135,9 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
-    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'));
+    const deleted = await actionEngine.deleteAction(db, workspace.id, c.req.param('name'), {
+      completionDeps: c.get('engine'),
+    });
     if (!deleted) {
       return jsonNotFound(c, 'action_not_found', 'Action not found');
     }

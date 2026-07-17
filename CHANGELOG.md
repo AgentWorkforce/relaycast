@@ -36,6 +36,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Node enrollment (`POST /v1/nodes`) now keys on `node_id` when supplied: re-enrolling rotates (and can rename) the same node in place, and a name held by a different node is rejected with `node_name_conflict` (409) instead of silently rewriting the other node.
 - Stopped a same-connection node broker `node.register` re-register from silently gating deliveries: already-announced agents keep their delivery readiness, and readiness-gated skips stamp the delivery row with observable retry metadata instead of failing silently.
 - Recovered WebSocket node messages whose single live dispatch was lost or failed: instead of letting rows sit queued until the mailbox TTL dead-letters them, the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one.
+- `POST /v1/actions` now treats re-registering an existing action name as an idempotent refresh (200) of its description, handler, schemas, `available_to`, and `is_active` instead of failing with a 500 unique-constraint error.
+- Invoking an agent-handled action whose handler has no live connection fails fast with `handler_unavailable` (503), and invocations whose handler stays continuously unreachable past a bounded TTL are failed with an `action.failed` event instead of staying `pending` forever (a brief handler restart never kills an in-flight invocation).
+- The TypeScript SDK no longer rewrites keys inside user-authored JSON: action `input_schema`/`output_schema`, invocation `input`/`output`, and `headers` maps now cross the wire verbatim in both directions.
 
 ## [6.0.3] - 2026-07-12
 

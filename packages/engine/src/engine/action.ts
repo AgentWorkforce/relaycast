@@ -1,13 +1,19 @@
-import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
+import {
+  emitAgentExitedEffects,
+  emitInvocationCompletionEffects,
+  fleetInvocationId,
+  type InvocationCompletionDeps,
+} from './invocationCompletion.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { runAtomic } from '../ports/database.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
-import { emitAgentExitedEffects, fleetInvocationId, type InvocationCompletionDeps } from './invocationCompletion.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -19,11 +25,24 @@ type RetryableInvocationRow = Pick<
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
+/**
+ * How long an agent handler's connection must be CONTINUOUSLY unreachable
+ * before its open invocations are failed with `handler_unavailable`. The clock
+ * starts at the sweep's first unreachable observation and resets when
+ * connectivity recovers — generous enough to ride out a handler restart at any
+ * invocation age, bounded enough that a caller blocked on the invocation gets
+ * a signal instead of an unbounded hang.
+ */
+export const ACTION_HANDLER_UNREACHABLE_TTL_MS = 120_000;
 const ACTION_RETRY_BACKOFF_MS = 5_000;
 const NODE_DRAIN_REQUEUE_RETRY_MS = 5_000;
 
 export interface SweepTimedOutInvocationsOptions {
   timeoutMs?: number;
+  /** Override for {@link ACTION_HANDLER_UNREACHABLE_TTL_MS}. */
+  handlerUnreachableTtlMs?: number;
+  /** When provided, TTL failures emit `action.failed` back to the caller. */
+  completionDeps?: InvocationCompletionDeps;
 }
 
 function capabilityName(capability: string | { name?: string } | null | undefined): string | null {
@@ -193,6 +212,7 @@ export async function registerAction(
     output_schema?: Record<string, unknown>;
     available_to?: string[];
   },
+  options: { completionDeps?: InvocationCompletionDeps } = {},
 ) {
   requireOneHandler(data);
 
@@ -234,33 +254,101 @@ export async function registerAction(
   }
 
   const id = `act_${generateId()}`;
-  const [action] = await db
-    .insert(actions)
-    .values({
-      id,
-      workspaceId,
-      name: data.name,
-      description: data.description,
-      handlerAgentId,
-      handlerNodeId,
-      inputSchema: data.input_schema ?? {},
-      outputSchema: data.output_schema ?? {},
-      availableTo: data.available_to ?? null,
-    })
-    .returning();
+  // Registration is an idempotent assertion (PUT semantics): re-registering an
+  // existing name refreshes the handler pointer, schemas, and visibility so a
+  // reconnecting publisher heals a stale handler instead of surfacing the
+  // unique index as a 500. Provider-owned fields (handlerProvider, isGlobal,
+  // queue) are deliberately not touched — they belong to node-control
+  // registration (materializeProviderActions).
+  const refresh = {
+    description: data.description,
+    handlerAgentId,
+    inputSchema: data.input_schema ?? {},
+    outputSchema: data.output_schema ?? {},
+    availableTo: data.available_to ?? null,
+    isActive: true,
+  };
+  let action: ActionRow;
+  let stranded: InvocationRow[];
+  try {
+    // The read-upsert-strand sequence runs atomically so a concurrent invoke
+    // cannot land between the handler move and the stranded-invocation snapshot
+    // (it either targets the old handler and is swept, or the new handler and
+    // is untouched).
+    ({ action, stranded } = await runAtomic(db, async (tx) => {
+      // Read the row the upsert may refresh so a handler move can be detected.
+      // The agent branch conflicts on the agent-hosted partial index, the node
+      // branch on the per-node index.
+      const [previous] = await tx
+        .select({ id: actions.id, handlerAgentId: actions.handlerAgentId })
+        .from(actions)
+        .where(and(
+          eq(actions.workspaceId, workspaceId),
+          eq(actions.name, data.name),
+          handlerNodeId ? eq(actions.handlerNodeId, handlerNodeId) : isNull(actions.handlerNodeId),
+        ));
+      const [row] = await tx
+        .insert(actions)
+        .values({
+          id,
+          workspaceId,
+          name: data.name,
+          description: data.description,
+          handlerAgentId,
+          handlerNodeId,
+          inputSchema: data.input_schema ?? {},
+          outputSchema: data.output_schema ?? {},
+          availableTo: data.available_to ?? null,
+        })
+        .onConflictDoUpdate(
+          handlerNodeId
+            ? { target: [actions.workspaceId, actions.handlerNodeId, actions.name], set: refresh }
+            // Agent-hosted uniqueness is a partial index, so the conflict target
+            // must carry its WHERE clause to match it.
+            : { target: [actions.workspaceId, actions.name], targetWhere: isNull(actions.handlerNodeId), set: refresh },
+        )
+        .returning();
+
+      // A refresh that moves the handler to a DIFFERENT agent strands
+      // invocations already in flight toward the previous handler: completion
+      // authorization follows actions.handlerAgentId (the old handler's
+      // completion would 403) and the timeout sweep would redeliver them to the
+      // new handler, which never received the original dispatch. Terminally
+      // fail them; the callers are told after commit.
+      let strandedRows: InvocationRow[] = [];
+      if (previous && previous.handlerAgentId && previous.handlerAgentId !== handlerAgentId) {
+        const strandedIds = await openInvocationIdsForActions(tx, workspaceId, [previous.id]);
+        strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'handler_unavailable');
+      }
+      return { action: row, stranded: strandedRows };
+    }));
+  } catch (err) {
+    // A residual uniqueness race must surface as a conflict, never as a 500
+    // internal_error (which reads as a server outage and invites retries).
+    if (err instanceof Error && /unique constraint failed/i.test(err.message)) {
+      throw codedError(`Action "${data.name}" conflicts with an existing action`, 'action_name_conflict', 409);
+    }
+    throw err;
+  }
+  if (options.completionDeps) {
+    await emitFailedInvocationEffects(options.completionDeps, workspaceId, stranded);
+  }
 
   return {
-    id: action.id,
-    name: action.name,
-    description: action.description,
-    handler_agent: handlerAgentName,
-    handler_node: handlerNodeName,
-    handler_node_id: handlerNodeId,
-    input_schema: action.inputSchema,
-    output_schema: action.outputSchema,
-    available_to: action.availableTo ?? null,
-    is_active: action.isActive,
-    created_at: action.createdAt.toISOString(),
+    created: action.id === id,
+    action: {
+      id: action.id,
+      name: action.name,
+      description: action.description,
+      handler_agent: handlerAgentName,
+      handler_node: handlerNodeName,
+      handler_node_id: handlerNodeId,
+      input_schema: action.inputSchema,
+      output_schema: action.outputSchema,
+      available_to: action.availableTo ?? null,
+      is_active: action.isActive,
+      created_at: action.createdAt.toISOString(),
+    },
   };
 }
 
@@ -313,13 +401,35 @@ export async function getAction(db: Db, workspaceId: string, name: string, calle
   return publicAction(row);
 }
 
-export async function deleteAction(db: Db, workspaceId: string, name: string) {
-  const result = await db
-    .delete(actions)
-    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
-    .returning();
+export async function deleteAction(
+  db: Db,
+  workspaceId: string,
+  name: string,
+  options: { completionDeps?: InvocationCompletionDeps } = {},
+) {
+  // Fail open invocations WITH the delete in one atomic step: actionId is set
+  // null on action delete, which would orphan them outside every
+  // handler-resolution join (the TTL sweep included) so they retry forever and
+  // the caller never hears back. Atomicity closes the window where an invoke
+  // lands between the stranded snapshot and the delete.
+  const { deleted, stranded } = await runAtomic(db, async (tx) => {
+    const rows = await tx
+      .select({ id: actions.id })
+      .from(actions)
+      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
+    const strandedIds = await openInvocationIdsForActions(tx, workspaceId, rows.map((row) => row.id));
+    const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
+    const result = await tx
+      .delete(actions)
+      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
+      .returning();
+    return { deleted: result.length > 0, stranded: strandedRows };
+  });
+  if (options.completionDeps) {
+    await emitFailedInvocationEffects(options.completionDeps, workspaceId, stranded);
+  }
 
-  return result.length > 0;
+  return deleted;
 }
 
 async function createInvocation(
@@ -351,6 +461,27 @@ async function createInvocation(
   return invocation;
 }
 
+/**
+ * Liveness rule for the connection that hosts an agent handler, mirroring the
+ * drain-time rule: the provider socket must be connected, and when a provider
+ * row exists and is explicitly attached its heartbeat must say handlers are
+ * live. A missing provider row (direct node, legacy single-socket broker)
+ * keeps connection state as the available liveness signal.
+ */
+async function isHandlerConnectionLive(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+): Promise<boolean> {
+  if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) return false;
+  const provider = await getProvider(db, workspaceId, nodeId, providerName);
+  if (!provider) return true;
+  const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
+  return !explicitlyAttached || isProviderLive(provider);
+}
+
 /** Is a node provider currently invokable — connection up AND heartbeat handlers_live. */
 async function isNodeProviderLive(
   db: Db,
@@ -377,6 +508,105 @@ async function failInvocationForUnavailableProvider(
       eq(actionInvocations.id, invocationId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ));
+}
+
+/**
+ * Terminally fail the given open invocations (no completion emission — call
+ * {@link emitFailedInvocationEffects} with the returned rows after the
+ * enclosing transaction commits). A spawn invocation holding a native node
+ * reservation releases that capacity, mirroring `completeNodeInvocation`.
+ */
+async function failOpenInvocationRows(
+  db: Db,
+  workspaceId: string,
+  invocationIds: string[],
+  error: string,
+): Promise<InvocationRow[]> {
+  if (invocationIds.length === 0) return [];
+  // Capture reservation state before the update clears spawnReservedAt.
+  const held = await db
+    .select({
+      id: actionInvocations.id,
+      actionName: actionInvocations.actionName,
+      dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      spawnReservedAt: actionInvocations.spawnReservedAt,
+    })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.id, invocationIds),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ));
+  const failed = await db
+    .update(actionInvocations)
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.id, invocationIds),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ))
+    .returning();
+  const failedIds = new Set(failed.map((row) => row.id));
+  for (const row of held) {
+    if (failedIds.has(row.id) && isSpawnInvocation(row.actionName) && row.dispatchedNodeId && row.spawnReservedAt) {
+      await releaseNodeCapacity(db, workspaceId, row.dispatchedNodeId);
+    }
+  }
+  return failed;
+}
+
+/** Emit `action.failed` to each failed invocation's caller. Best-effort per row. */
+async function emitFailedInvocationEffects(
+  completionDeps: InvocationCompletionDeps,
+  workspaceId: string,
+  failed: InvocationRow[],
+): Promise<void> {
+  for (const invocation of failed) {
+    try {
+      await emitInvocationCompletionEffects(completionDeps, workspaceId, {
+        invocation_id: invocation.id,
+        action_name: invocation.actionName,
+        caller_id: invocation.callerId,
+        status: 'failed',
+        output: invocation.output,
+        error: invocation.error,
+      });
+    } catch {
+      // Notification is best-effort; the invocation is already terminally failed.
+    }
+  }
+}
+
+/**
+ * Terminally fail the given open invocations, emitting `action.failed` to each
+ * caller when completion deps are provided. Used when an invocation can no
+ * longer reach a handler that will answer: the handler pointer moved to a
+ * different agent (re-register takeover), the action was deleted, or the
+ * handler connection stayed unreachable past the TTL.
+ */
+async function failOpenInvocations(
+  db: Db,
+  workspaceId: string,
+  invocationIds: string[],
+  error: string,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const failed = await failOpenInvocationRows(db, workspaceId, invocationIds, error);
+  if (completionDeps) await emitFailedInvocationEffects(completionDeps, workspaceId, failed);
+}
+
+/** Ids of open invocations pointing at any of the given action rows. */
+async function openInvocationIdsForActions(db: Db, workspaceId: string, actionIds: string[]): Promise<string[]> {
+  if (actionIds.length === 0) return [];
+  const rows = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.actionId, actionIds),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+    ));
+  return rows.map((row) => row.id);
 }
 
 /**
@@ -790,11 +1020,52 @@ export async function invokeAction(
     throw codedError(`Action "${actionName}" handler is not bound to a node`, 'handler_unavailable', 503);
   }
 
+  // Fail fast when the handler agent's connection is not live: an invocation
+  // queued toward a dead handler never completes and the caller gets no signal
+  // — it just hangs on the tool call. An action that opted into `queue` keeps
+  // the queue-and-drain semantics (the TTL sweep still bounds it).
+  if (!action.queue) {
+    const live = await isHandlerConnectionLive(
+      db,
+      options.nodeConnections,
+      workspaceId,
+      handlerAgent.locationNodeId,
+      handlerAgent.providerName,
+    );
+    if (!live) {
+      throw codedError(
+        `Action "${actionName}" handler "${handlerAgent.name}" has no live connection`,
+        'handler_unavailable',
+        503,
+      );
+    }
+  }
+
   const invocation = await createInvocation(db, workspaceId, action, {
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
   });
+  // Re-validate the handler pointer AFTER the insert. A takeover committing
+  // between action resolution above and the insert misses this invocation in
+  // its stranded snapshot (the row was not visible yet), which would leave it
+  // dispatched toward the old handler whose completions no longer authorize.
+  // The two orderings are now both covered: a takeover before the insert is
+  // caught here; a takeover after the insert sees the row and sweeps it.
+  // (A concurrent DELETE needs no equivalent check — the actionId foreign key
+  // rejects an insert that lands after the delete commits.)
+  const [currentHandler] = await db
+    .select({ handlerAgentId: actions.handlerAgentId })
+    .from(actions)
+    .where(and(eq(actions.workspaceId, workspaceId), eq(actions.id, action.id)));
+  if (!currentHandler || currentHandler.handlerAgentId !== handlerAgent.id) {
+    await failOpenInvocationRows(db, workspaceId, [invocation.id], 'handler_unavailable');
+    throw codedError(
+      `Action "${actionName}" handler changed during invoke`,
+      'handler_unavailable',
+      503,
+    );
+  }
   const dispatched = await dispatchNodeInvocation({
     db,
     registry: options.nodeConnections,
@@ -1166,10 +1437,7 @@ export async function drainNodeInvocations(
     // Skip draining to a provider that is disconnected or whose heartbeat says
     // handlers are not live. A missing provider row is a legacy single-socket
     // node, for which connection state remains the available liveness signal.
-    if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) continue;
-    const provider = await getProvider(db, workspaceId, nodeId, providerName);
-    const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
-    if (provider && explicitlyAttached && !isProviderLive(provider)) continue;
+    if (!(await isHandlerConnectionLive(db, registry, workspaceId, nodeId, providerName))) continue;
 
     let reservedForDrain = false;
     try {
@@ -1593,12 +1861,84 @@ export async function completeNodeInvocation(
   return updated ? publicInvocation(updated) : null;
 }
 
+/**
+ * Bound the wait on agent-handled invocations: an open invocation whose handler
+ * agent's connection has been CONTINUOUSLY unreachable for the TTL is failed
+ * with `handler_unavailable` — emitting `action.failed` to the caller when
+ * completion deps are provided — instead of staying `pending`/`dispatched`
+ * forever. The first unreachable observation stamps
+ * `handler_unreachable_since`; a recovered connection clears it, so a brief
+ * handler restart never kills an invocation regardless of its age.
+ */
+async function failUnreachableAgentInvocations(
+  db: Db,
+  registry: NodeConnectionRegistry,
+  ttlMs: number,
+  completionDeps?: InvocationCompletionDeps,
+): Promise<void> {
+  const rows = await db
+    .select({
+      id: actionInvocations.id,
+      workspaceId: actionInvocations.workspaceId,
+      handlerUnreachableSince: actionInvocations.handlerUnreachableSince,
+    })
+    .from(actionInvocations)
+    .innerJoin(actions, eq(actionInvocations.actionId, actions.id))
+    .where(and(
+      inArray(actionInvocations.status, ['pending', 'dispatched']),
+      isNull(actions.handlerNodeId),
+      isNotNull(actions.handlerAgentId),
+    ));
+
+  for (const row of rows) {
+    try {
+      // targetAgentForInvocation returns null when the handler agent is gone or
+      // no longer node-bound — both count as unreachable.
+      const target = await targetAgentForInvocation(db, row);
+      const reachable = !!target
+        && await isHandlerConnectionLive(db, registry, row.workspaceId, target.nodeId, target.providerName);
+      if (reachable) {
+        if (row.handlerUnreachableSince) {
+          await db
+            .update(actionInvocations)
+            .set({ handlerUnreachableSince: null })
+            .where(and(eq(actionInvocations.workspaceId, row.workspaceId), eq(actionInvocations.id, row.id)));
+        }
+        continue;
+      }
+      const since = row.handlerUnreachableSince ?? new Date();
+      if (!row.handlerUnreachableSince) {
+        await db
+          .update(actionInvocations)
+          .set({ handlerUnreachableSince: since })
+          .where(and(
+            eq(actionInvocations.workspaceId, row.workspaceId),
+            eq(actionInvocations.id, row.id),
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          ));
+      }
+      if (Date.now() - since.getTime() >= ttlMs) {
+        await failOpenInvocations(db, row.workspaceId, [row.id], 'handler_unavailable', completionDeps);
+      }
+    } catch {
+      // Leave the invocation for the next sweep.
+    }
+  }
+}
+
 export async function sweepTimedOutInvocations(
   db: Db,
   registry: NodeConnectionRegistry,
   opts: SweepTimedOutInvocationsOptions | number | null = {},
 ) {
-  const timeoutMs = typeof opts === 'number' ? opts : opts?.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
+  const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;
+  const timeoutMs = typeof opts === 'number' ? opts : sweepOpts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
+  await failUnreachableAgentInvocations(
+    db,
+    registry,
+    sweepOpts.handlerUnreachableTtlMs ?? ACTION_HANDLER_UNREACHABLE_TTL_MS,
+    sweepOpts.completionDeps,
+  );
   const now = new Date();
   const cutoff = new Date(Date.now() - timeoutMs);
   const rows = await db

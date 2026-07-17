@@ -837,6 +837,10 @@ export const actionInvocations = sqliteTable(
     // provider-scoped, so node_id alone is insufficient for reconciliation.
     dispatchedProvider: text('dispatched_provider'),
     retryAfterAt: integer('retry_after_at', { mode: 'timestamp' }),
+    // When the TTL sweep first observed the handler's connection unreachable;
+    // cleared when connectivity recovers. Failure requires CONTINUOUS
+    // unreachability for the TTL, giving handler restarts a real grace window.
+    handlerUnreachableSince: integer('handler_unreachable_since', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     completedAt: integer('completed_at', { mode: 'timestamp' }),
   },

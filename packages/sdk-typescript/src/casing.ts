@@ -26,6 +26,24 @@ function toSnakeKey(key: string): string {
   return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
+/**
+ * Fields whose values are user-authored JSON, not wire-protocol shapes: JSON
+ * Schemas (`input_schema`/`output_schema`), action invocation payloads
+ * (`input`/`output`), and HTTP header maps (`headers`). Their keys are data —
+ * transforming them corrupts the document (e.g. a schema's
+ * `properties.batchSize` must not become `properties.batch_size`) — so both
+ * transforms rename the field itself but pass the value through verbatim.
+ */
+const VERBATIM_VALUE_KEYS = new Set([
+  'headers',
+  'input',
+  'output',
+  'input_schema',
+  'inputSchema',
+  'output_schema',
+  'outputSchema',
+]);
+
 export function camelizeKeys<T>(value: T): Camelize<T> {
   if (Array.isArray(value)) {
     return value.map((item) => camelizeKeys(item)) as Camelize<T>;
@@ -33,7 +51,7 @@ export function camelizeKeys<T>(value: T): Camelize<T> {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toCamelKey(key)] = camelizeKeys(val);
+      out[toCamelKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : camelizeKeys(val);
     }
     return out as Camelize<T>;
   }
@@ -47,7 +65,7 @@ export function decamelizeKeys<T>(value: T): unknown {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toSnakeKey(key)] = key === 'headers' && isPlainObject(val) ? val : decamelizeKeys(val);
+      out[toSnakeKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : decamelizeKeys(val);
     }
     return out;
   }
