@@ -419,8 +419,9 @@ function nativeAgentSkills(metadata: unknown): A2aSkill[] {
   });
 }
 
-function isA2aProxyMetadata(metadata: unknown): boolean {
-  return !!metadata
+function isRemovedA2aProxy(type: string, metadata: unknown): boolean {
+  return type === 'external'
+    && !!metadata
     && typeof metadata === 'object'
     && !Array.isArray(metadata)
     && (metadata as Record<string, unknown>).a2a === true;
@@ -494,6 +495,7 @@ export async function listA2aDirectory(
         id: agents.id,
         name: agents.name,
         persona: agents.persona,
+        type: agents.type,
         metadata: agents.metadata,
         status: agents.status,
       })
@@ -524,7 +526,7 @@ export async function listA2aDirectory(
 
   const searchableEntries: Array<{ entry: A2aDirectoryEntry; aliases?: string[] }> = [];
   for (const agent of workspaceAgents) {
-    if (registeredRelayAgentIds.has(agent.id) || isA2aProxyMetadata(agent.metadata)) continue;
+    if (registeredRelayAgentIds.has(agent.id) || isRemovedA2aProxy(agent.type, agent.metadata)) continue;
     const skills = nativeAgentSkills(agent.metadata);
     searchableEntries.push({
       entry: {

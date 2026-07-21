@@ -531,6 +531,7 @@ describe('GET /v1/a2a/directory', () => {
     await stack.runtime.deps.db
       .update(agents)
       .set({
+        type: 'external',
         status: 'offline',
         metadata: { a2a: true, a2a_active: false },
       })
@@ -575,6 +576,12 @@ describe('GET /v1/a2a/directory', () => {
       status: 'active',
       certification: null,
       tags: ['team', 'delivery'],
+      skills: [{
+        id: 'release-coordination',
+        name: 'release-coordination',
+        description: 'Coordinate release pipelines',
+        tags: ['delivery'],
+      }],
     });
     expect(entries.find((entry) => entry.kind === 'a2a')).toMatchObject({
       name: 'ext-infra-watch',
@@ -589,6 +596,9 @@ describe('GET /v1/a2a/directory', () => {
   it('filters by skill, tag, and text and returns an empty list for no match', async () => {
     await expect(getDirectory('?skill=infra-watch')).resolves.toMatchObject([
       { name: 'ext-infra-watch', kind: 'a2a' },
+    ]);
+    await expect(getDirectory('?skill=RELEASE-COORDINATION')).resolves.toMatchObject([
+      { name: 'ReleaseAgent', kind: 'native' },
     ]);
     await expect(getDirectory('?tag=operations')).resolves.toMatchObject([
       { name: 'ext-infra-watch', kind: 'a2a' },

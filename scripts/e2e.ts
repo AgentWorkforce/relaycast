@@ -6,14 +6,19 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e                                   # defaults to the engine dev server (http://localhost:8787)
- *   npm run e2e -- http://localhost:8787 --ci     # self-hosted engine in CI
+ *   npm run e2e                                   # boots an isolated local engine and runs in interactive mode
+ *   npm run e2e -- --ci                           # boots an isolated local engine and runs unattended
+ *   npm run e2e -- http://localhost:8787 --ci     # uses an already-running engine
  *   npm run e2e -- --continue-on-failure          # keep running after step failures
  *   npm run e2e -- https://cast.agentrelay.com --ci
  */
 
 import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { startServer, type RunningServer } from '../packages/engine/src/entrypoints/node.js';
 import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -23,8 +28,62 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
 const DEFAULT_BASE_URL = 'http://localhost:8787';
-const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+let BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
+const BOOT_LOCAL_GATEWAY = args.length === 0;
+
+let localGateway: RunningServer | null = null;
+let localGatewayDir: string | null = null;
+
+async function reserveLocalPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Could not reserve a local port for the E2E gateway');
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  return address.port;
+}
+
+async function startLocalGateway(): Promise<void> {
+  if (!BOOT_LOCAL_GATEWAY) return;
+
+  const port = await reserveLocalPort();
+  BASE_URL = `http://127.0.0.1:${port}`;
+  localGatewayDir = await mkdtemp(join(tmpdir(), 'relaycast-e2e-'));
+  localGateway = startServer({
+    dbPath: ':memory:',
+    port,
+    baseUrl: BASE_URL,
+    fileDir: join(localGatewayDir, 'files'),
+    config: { environment: 'e2e' },
+  });
+
+  const server = localGateway.server as unknown as { listening?: boolean; once(event: string, listener: (...args: any[]) => void): void };
+  if (!server.listening) {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+  }
+}
+
+async function stopLocalGateway(): Promise<void> {
+  const running = localGateway;
+  localGateway = null;
+  if (running) await running.stop();
+
+  const tempDir = localGatewayDir;
+  localGatewayDir = null;
+  if (tempDir) await rm(tempDir, { recursive: true, force: true });
+}
 
 function isLocalHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.localhost');
@@ -275,6 +334,7 @@ const MARKDOWN_CHANNEL_MESSAGES = CHANNEL_MESSAGES.filter((message) =>
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
+  await startLocalGateway();
   console.log(`
 ${B}${CYAN}╔══════════════════════════════════════════════╗
 ║          Relaycast E2E Smoke Test            ║
@@ -794,6 +854,9 @@ ${B}${CYAN}╔══════════════════════
     if (!native || !external) {
       throw new Error(`Expected native ${INFRA} and infra-watch A2A entries: ${JSON.stringify(json.data)}`);
     }
+    if (!native.skills.some((skill: any) => skill.id === 'deploy-operations')) {
+      throw new Error(`Native directory entry is missing deploy-operations: ${JSON.stringify(native)}`);
+    }
     for (const entry of [native, external]) {
       if (!Array.isArray(entry.skills) || typeof entry.url !== 'string' || !entry.url) {
         throw new Error(`Directory entry is missing skills/url: ${JSON.stringify(entry)}`);
@@ -824,6 +887,17 @@ ${B}${CYAN}╔══════════════════════
       throw new Error(`Expected only ${discoveredA2aName}, got ${JSON.stringify(matching.data)}`);
     }
 
+    const nativeMatchingRes = await fetch(`${BASE_URL}/v1/a2a/directory?skill=deploy-operations`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const nativeMatching = await nativeMatchingRes.json() as any;
+    if (!nativeMatchingRes.ok || !nativeMatching.ok || !Array.isArray(nativeMatching.data)) {
+      throw new Error(`Native A2A skill filter failed: ${nativeMatchingRes.status} ${JSON.stringify(nativeMatching)}`);
+    }
+    if (nativeMatching.data.length !== 1 || nativeMatching.data[0]?.name !== INFRA) {
+      throw new Error(`Expected only ${INFRA}, got ${JSON.stringify(nativeMatching.data)}`);
+    }
+
     const emptyRes = await fetch(`${BASE_URL}/v1/a2a/directory?skill=nope`, {
       headers: { Authorization: `Bearer ${workspaceKey}` },
     });
@@ -831,7 +905,7 @@ ${B}${CYAN}╔══════════════════════
     if (!emptyRes.ok || !empty.ok || !Array.isArray(empty.data) || empty.data.length !== 0) {
       throw new Error(`Expected an empty A2A directory match, got ${emptyRes.status} ${JSON.stringify(empty)}`);
     }
-    log('🔍', `Skill filter returned only ${B}${discoveredA2aName}${R}; bogus skill returned []`);
+    log('🔍', `Skill filters returned only ${B}${discoveredA2aName}${R} and ${B}${INFRA}${R}; bogus skill returned []`);
   });
 
   await run('Message the discovered A2A agent and observe the round trip', async () => {
@@ -1652,10 +1726,15 @@ ${B}${CYAN}╔══════════════════════
 `);
 
   await sleep(300);
+  await stopLocalGateway();
   process.exit(failed.length > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(`\n${RED}${B}Fatal:${R}`, err.message ?? err);
+  await Promise.race([
+    stopLocalGateway().catch(() => {}),
+    sleep(1_000),
+  ]);
   process.exit(1);
 });

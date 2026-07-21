@@ -664,7 +664,8 @@ npm run dev
 E2E smoke test:
 
 ```bash
-npm run e2e                              # against the engine dev server (http://localhost:8787)
+npm run e2e                              # boot an isolated local engine and run interactively
+npm run e2e -- --ci                      # boot an isolated local engine and run unattended
 npm run e2e -- http://localhost:8787 --ci
 npm run e2e -- https://cast.agentrelay.com --ci
 ```
