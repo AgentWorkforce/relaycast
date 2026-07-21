@@ -502,32 +502,68 @@ describe('GET /v1/a2a/directory', () => {
     });
     expect(nativeResponse.status).toBe(201);
 
+    for (const identity of [
+      { name: 'HumanOperator', type: 'human' },
+      { name: 'SystemNotifier', type: 'system' },
+    ]) {
+      const identityResponse = await stack.app.request('/v1/agents', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${workspaceKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(identity),
+      });
+      expect(identityResponse.status).toBe(201);
+    }
+
     const proxy = await registerAgent(stack.app, workspaceKey, 'ext-infra-watch');
+    const healthyProxy = await registerAgent(stack.app, workspaceKey, 'ext-capacity-planner');
     const removedProxy = await registerAgent(stack.app, workspaceKey, 'ext-removed-peer');
     const now = new Date();
     const externalUrl = 'https://infra.example/rpc';
-    await stack.runtime.deps.db.insert(a2aAgents).values({
-      id: 'a2a_directory_test',
-      workspaceId: workspace.workspaceId,
-      relayAgentId: proxy.agentId,
-      agentCard: {
-        name: 'Infra Watcher',
-        description: 'Watches infrastructure health and incident signals',
-        url: externalUrl,
-        version: '1.0.0',
-        skills: [{
-          id: 'infra-watch',
-          name: 'infra-watch',
-          description: 'Monitor infrastructure health',
-          tags: ['operations', 'monitoring'],
-        }],
+    await stack.runtime.deps.db.insert(a2aAgents).values([
+      {
+        id: 'a2a_directory_test',
+        workspaceId: workspace.workspaceId,
+        relayAgentId: proxy.agentId,
+        agentCard: {
+          name: 'Infra Watcher',
+          description: 'Watches infrastructure health and incident signals',
+          url: externalUrl,
+          version: '1.0.0',
+          skills: [{
+            id: 'infra-watch',
+            name: 'infra-watch',
+            description: 'Monitor infrastructure health',
+            tags: ['operations', 'monitoring'],
+          }],
+        },
+        externalUrl,
+        status: 'active',
+        lastHealth: now,
+        createdAt: now,
+        updatedAt: now,
       },
-      externalUrl,
-      status: 'active',
-      lastHealth: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+      {
+        id: 'a2a_directory_healthy_test',
+        workspaceId: workspace.workspaceId,
+        relayAgentId: healthyProxy.agentId,
+        agentCard: {
+          name: 'Capacity Planner',
+          description: 'Plans infrastructure capacity',
+          url: 'https://capacity.example/rpc',
+          version: '1.0.0',
+          skills: [{ id: 'capacity-plan', name: 'capacity-plan' }],
+        },
+        externalUrl: 'https://capacity.example/rpc',
+        status: 'active',
+        lastHealth: now,
+        healthFailures: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
     await stack.runtime.deps.db
       .update(agents)
       .set({
@@ -567,7 +603,9 @@ describe('GET /v1/a2a/directory', () => {
   it('merges native and registered A2A agents without duplicating the proxy identity', async () => {
     const entries = await getDirectory();
 
-    expect(entries).toHaveLength(2);
+    expect(entries).toHaveLength(3);
+    expect(entries.find((entry) => entry.name === 'HumanOperator')).toBeUndefined();
+    expect(entries.find((entry) => entry.name === 'SystemNotifier')).toBeUndefined();
     expect(entries.find((entry) => entry.name === 'ext-removed-peer')).toBeUndefined();
     expect(entries.find((entry) => entry.kind === 'native')).toMatchObject({
       name: 'ReleaseAgent',
@@ -583,13 +621,17 @@ describe('GET /v1/a2a/directory', () => {
         tags: ['delivery'],
       }],
     });
-    expect(entries.find((entry) => entry.kind === 'a2a')).toMatchObject({
+    expect(entries.find((entry) => entry.name === 'ext-infra-watch')).toMatchObject({
       name: 'ext-infra-watch',
       description: 'Watches infrastructure health and incident signals',
       url: 'http://localhost/a2a/rpc',
       status: 'active',
       certification: 'level_1',
       tags: ['operations', 'monitoring'],
+    });
+    expect(entries.find((entry) => entry.name === 'ext-capacity-planner')).toMatchObject({
+      kind: 'a2a',
+      certification: 'level_1',
     });
   });
 

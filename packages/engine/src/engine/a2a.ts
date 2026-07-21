@@ -500,7 +500,7 @@ export async function listA2aDirectory(
         status: agents.status,
       })
       .from(agents)
-      .where(eq(agents.workspaceId, workspaceId)),
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.type, 'agent'))),
     listA2aAgents(db, workspaceId),
     db
       .select({
