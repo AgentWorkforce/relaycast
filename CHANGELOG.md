@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- Published `@relaycast/a2a` as the shared agent-card contract and added a unified, filterable A2A team directory for discovering and addressing native and registered agents.
 - Message retention remains opt-in (history is kept forever by default); self-host deployments can now opt in to a deployment-wide message TTL via `RELAYCAST_MESSAGE_TTL_DAYS`.
 - Durable `agent.exited` event when a node-hosted agent leaves (deregister, missing from an inventory sync, or release), carrying `agent_id`, `agent_name`, `node_id`, the spawn `invocation_id`, and a `reason`; the spawn's caller is notified directly.
 - Durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` like `liveness_timeout`). Wildcard webhook subscriptions (`events: ["*"]`) receive all three new events automatically.

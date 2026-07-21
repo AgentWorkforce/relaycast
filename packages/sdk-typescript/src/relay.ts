@@ -1,5 +1,7 @@
 import type {
   A2aAgentCard,
+  A2aDirectoryEntry,
+  A2aDirectoryQuery,
   A2aAgentRecord,
   Agent,
   AgentListQuery,
@@ -514,6 +516,14 @@ export class RelayCast {
 
   listA2aAgents(): Promise<A2aAgentRecord[]> {
     return this.client.get('/v1/a2a/agents');
+  }
+
+  listA2aDirectory(query: A2aDirectoryQuery = {}): Promise<A2aDirectoryEntry[]> {
+    const params: Record<string, string> = {};
+    if (query.skill) params.skill = query.skill;
+    if (query.tag) params.tag = query.tag;
+    if (query.q) params.q = query.q;
+    return this.client.get('/v1/a2a/directory', params);
   }
 
   removeA2aAgent(name: string): Promise<RemoveA2aAgentResponse> {

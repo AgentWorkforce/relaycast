@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
+- Added `GET /v1/a2a/directory` to discover native and registered A2A agents together, filter them by skill, tag, or text, and use the returned relay identity for one-hop engagement.
 - Added durable `agent.exited` events on every node-hosted agent exit (deregistration, missing from an inventory sync, and release), delivered to the durable workspace event log, webhook subscribers, and the spawn caller's mailbox, and carrying `agent_id`, `agent_name`, `node_id`, `invocation_id`, and a `reason`.
 - Added durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` such as `liveness_timeout`, `disconnected`, or `deregistered`), delivered to the workspace event log and webhook subscribers.
 - Message retention remains opt-in (`pruneExpired` still defaults `messageTtlDays` to `null`). Self-host can now opt in to a deployment-wide message TTL: `startServer` accepts `eventQueue` (`DurableEventQueueOptions`, including `retention`), and the `relaycast-engine` CLI exposes `RELAYCAST_MESSAGE_TTL_DAYS` (positive = prune after N days; unset or `0`/negative = keep forever).

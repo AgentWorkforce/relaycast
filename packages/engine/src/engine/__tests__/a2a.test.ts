@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import type { A2aJsonRpcRequest, A2aJsonRpcResponse, A2aTaskState } from '@relaycast/a2a';
 import {
   getWorkspaceAgentCard,
@@ -11,6 +12,7 @@ import {
   type RelayDM,
 } from '../a2a.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from '../../__tests__/conformance/harness.js';
+import { a2aAgents, agents, certifications } from '../../db/schema.js';
 
 describe('translateRelayToA2a', () => {
   it('wraps a plain text DM in a message/send JSON-RPC request', () => {
@@ -468,5 +470,132 @@ describe('getWorkspaceAgentCard', () => {
         tags: ['relaycast', 'workspace'],
       },
     ]);
+  });
+});
+
+describe('GET /v1/a2a/directory', () => {
+  let stack: TestStack;
+  let workspaceKey: string;
+
+  beforeEach(async () => {
+    stack = makeNodeStack();
+    const workspace = await createWorkspace(stack.app, 'a2a-directory-ws');
+    workspaceKey = workspace.workspaceKey;
+
+    const nativeResponse = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'ReleaseAgent',
+        persona: 'Coordinates release pipelines and deployment readiness',
+        metadata: { tags: ['team', 'delivery'] },
+        skills: [{
+          id: 'release-coordination',
+          name: 'release-coordination',
+          description: 'Coordinate release pipelines',
+          tags: ['delivery'],
+        }],
+      }),
+    });
+    expect(nativeResponse.status).toBe(201);
+
+    const proxy = await registerAgent(stack.app, workspaceKey, 'ext-infra-watch');
+    const removedProxy = await registerAgent(stack.app, workspaceKey, 'ext-removed-peer');
+    const now = new Date();
+    const externalUrl = 'https://infra.example/rpc';
+    await stack.runtime.deps.db.insert(a2aAgents).values({
+      id: 'a2a_directory_test',
+      workspaceId: workspace.workspaceId,
+      relayAgentId: proxy.agentId,
+      agentCard: {
+        name: 'Infra Watcher',
+        description: 'Watches infrastructure health and incident signals',
+        url: externalUrl,
+        version: '1.0.0',
+        skills: [{
+          id: 'infra-watch',
+          name: 'infra-watch',
+          description: 'Monitor infrastructure health',
+          tags: ['operations', 'monitoring'],
+        }],
+      },
+      externalUrl,
+      status: 'active',
+      lastHealth: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({
+        status: 'offline',
+        metadata: { a2a: true, a2a_active: false },
+      })
+      .where(eq(agents.id, removedProxy.agentId));
+    await stack.runtime.deps.db.insert(certifications).values({
+      id: 'cert_directory_test',
+      workspaceId: workspace.workspaceId,
+      agentUrl: externalUrl,
+      level: 1,
+      source: 'registration',
+      status: 'completed',
+      passed: true,
+      passedTests: 3,
+      totalTests: 3,
+      results: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+
+  afterEach(() => stack.close());
+
+  async function getDirectory(query = '') {
+    const response = await stack.app.request(`/v1/a2a/directory${query}`, {
+      headers: { authorization: `Bearer ${workspaceKey}` },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { ok: boolean; data: Array<Record<string, unknown>> };
+    expect(body.ok).toBe(true);
+    return body.data;
+  }
+
+  it('merges native and registered A2A agents without duplicating the proxy identity', async () => {
+    const entries = await getDirectory();
+
+    expect(entries).toHaveLength(2);
+    expect(entries.find((entry) => entry.name === 'ext-removed-peer')).toBeUndefined();
+    expect(entries.find((entry) => entry.kind === 'native')).toMatchObject({
+      name: 'ReleaseAgent',
+      description: 'Coordinates release pipelines and deployment readiness',
+      url: 'http://localhost/v1/dm',
+      status: 'active',
+      certification: null,
+      tags: ['team', 'delivery'],
+    });
+    expect(entries.find((entry) => entry.kind === 'a2a')).toMatchObject({
+      name: 'ext-infra-watch',
+      description: 'Watches infrastructure health and incident signals',
+      url: 'http://localhost/a2a/rpc',
+      status: 'active',
+      certification: 'level_1',
+      tags: ['operations', 'monitoring'],
+    });
+  });
+
+  it('filters by skill, tag, and text and returns an empty list for no match', async () => {
+    await expect(getDirectory('?skill=infra-watch')).resolves.toMatchObject([
+      { name: 'ext-infra-watch', kind: 'a2a' },
+    ]);
+    await expect(getDirectory('?tag=operations')).resolves.toMatchObject([
+      { name: 'ext-infra-watch', kind: 'a2a' },
+    ]);
+    await expect(getDirectory('?q=release%20pipelines')).resolves.toMatchObject([
+      { name: 'ReleaseAgent', kind: 'native' },
+    ]);
+    await expect(getDirectory('?skill=nope')).resolves.toEqual([]);
   });
 });

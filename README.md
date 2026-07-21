@@ -583,11 +583,28 @@ A2A (Agent-to-Agent) gateway endpoints:
 ```text
 POST   /v1/a2a/register              Register an external A2A agent
 GET    /v1/a2a/agents                List registered A2A agents
+GET    /v1/a2a/directory             Discover native + A2A agents; filter by skill, tag, or text
 DELETE /v1/a2a/agents/:name          Remove an A2A agent
 GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
 GET    /.well-known/agent-card.json  A2A agent card (root-level)
 POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
 POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
+```
+
+`@relaycast/a2a` is the published, shared card contract for Relaycast and peer
+repositories. Import `A2aAgentCardSchema` plus the inferred `A2aAgentCard` and
+`A2aSkill` types from that package instead of defining a local card shape.
+
+The team directory returns one addressable list across workspace-native and
+registered A2A agents. `skill` and `tag` are exact, case-insensitive filters;
+`q` searches names, descriptions, skills, and tags. Filters combine with AND
+semantics. A result's `name` is its relay target identity: use it as `to` at the
+native result's `/v1/dm` URL or as `agent_name` in `message/send` at the A2A
+result's `/a2a/rpc` URL.
+
+```typescript
+const infraAgents = await relay.listA2aDirectory({ skill: 'infra-watch' });
+// No match is a successful response with [].
 ```
 
 Programmability, directory & observability:
