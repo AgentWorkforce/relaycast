@@ -293,6 +293,17 @@ jobs:
           name: build-output
           path: .
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+
+      # Move the curated [Unreleased] entries under the version being released
+      # and restore a bare [Unreleased], so a published version always has a
+      # heading. Prereleases are left pending.
+      - name: Cut changelogs
+        run: node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}"
+
       - name: Commit and tag
         run: |
           git config user.name "GitHub Actions"
@@ -301,20 +312,35 @@ jobs:
           NEW_VERSION="${{ needs.build.outputs.new_version }}"
 
           git add package.json package-lock.json packages/*/package.json
+          git add CHANGELOG.md packages/*/CHANGELOG.md
           if ! git diff --staged --quiet; then
             git commit -m "chore(release): v${NEW_VERSION}"
             # main can advance during the (multi-minute) build — e.g. a
             # concurrent SDK publish — so rebase onto the latest main and retry
-            # to avoid non-fast-forward rejections. The release commit only
-            # touches version metadata, so it rebases cleanly onto another
-            # release's commit.
+            # to avoid non-fast-forward rejections. Version metadata rebases
+            # cleanly; a changelog can conflict when a PR curated [Unreleased]
+            # during the build, so take main's copy and re-cut it rather than
+            # failing a release whose packages are already published.
             pushed=false
             for attempt in 1 2 3 4 5; do
               git fetch origin main
               if ! git rebase origin/main; then
-                git rebase --abort
-                echo "::error::rebase onto origin/main failed (unexpected conflict)"
-                exit 1
+                conflicted=$(git diff --name-only --diff-filter=U)
+                if [ -z "$conflicted" ] || echo "$conflicted" | grep -qvE '(^|/)CHANGELOG\.md$'; then
+                  git rebase --abort
+                  echo "::error::rebase onto origin/main failed (unexpected conflict)"
+                  exit 1
+                fi
+                echo "changelog conflict on ${conflicted}; re-cutting against main"
+                # During a rebase --ours is the upstream side (origin/main).
+                echo "$conflicted" | xargs git checkout --ours --
+                node scripts/cut-changelog.mjs --version "$NEW_VERSION"
+                echo "$conflicted" | xargs git add --
+                if ! GIT_EDITOR=true git rebase --continue; then
+                  git rebase --abort
+                  echo "::error::failed to resolve changelog conflict during rebase"
+                  exit 1
+                fi
               fi
               if git push origin HEAD:main; then
                 pushed=true
