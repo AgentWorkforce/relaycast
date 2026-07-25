@@ -4,7 +4,9 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [6.1.0] - 2026-07-16
 
 - Allowed agent models to decode the hosted lifecycle statuses used during realtime connection setup.
 
