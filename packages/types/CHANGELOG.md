@@ -11,8 +11,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `AgentExitedEventSchema`, `NodeStatusOnlineEventSchema`, and `NodeStatusOfflineEventSchema` added to `ServerEventSchema` / `WsClientEventSchema`, and `agent.exited` / `node.status.online` / `node.status.offline` added to `SubscribableEventTypeSchema` so webhooks can subscribe to them.
 - `SERVER_TELEMETRY_EVENTS` and `ServerTelemetryEventName` gain the 14 `relaycast_server_*` names the engine emits for actions, routing, the agent directory, channel mute/unmute, and inbound Relayfile delivery; `parseInternalTelemetryEvent` previously rejected them as unknown.
+
+### Fixed
+
+- Corrected the `fleet-wire/deliver.json` fixture payload to the `{type, data}` shape `buildDeliverPayload` emits, replacing the stale flat `{channel, text, sender, ...}` sample.
+
+## [6.2.0] - 2026-07-17
+
+### Added
+
+- `AgentExitedEventSchema`, `NodeStatusOnlineEventSchema`, and `NodeStatusOfflineEventSchema` added to `ServerEventSchema` / `WsClientEventSchema`, and `agent.exited` / `node.status.online` / `node.status.offline` added to `SubscribableEventTypeSchema` so webhooks can subscribe to them.
 
 ## [6.0.3] - 2026-07-12
 

@@ -588,7 +588,9 @@ export async function sweepDueNodeDeliveries(
       httpPushEvents.push(event);
       continue;
     }
-    const key = `${event.workspaceId} ${event.delivery.agentId}`;
+    // Collision-safe key: workspace and agent ids are free-form, so encode the
+    // tuple rather than joining on a separator (matches groupByNodeProvider).
+    const key = JSON.stringify([event.workspaceId, event.delivery.agentId]);
     if (seenWsAgents.has(key)) continue;
     seenWsAgents.add(key);
     wsAgents.push({ workspaceId: event.workspaceId, agentId: event.delivery.agentId });
