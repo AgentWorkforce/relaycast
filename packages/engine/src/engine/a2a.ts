@@ -1,9 +1,10 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import {
   A2aAgentCardSchema,
   A2aMessageSchema,
   A2aPartSchema,
   A2aResponseSchema,
+  A2aSkillSchema,
   A2aTaskSchema,
   A2aTaskStateSchema,
   JsonRpcRequestSchema,
@@ -14,13 +15,14 @@ import {
   type A2aMessage,
   type A2aPart,
   type A2aResponse,
+  type A2aSkill,
   type A2aTask,
   type A2aTaskState,
 } from '@relaycast/a2a';
 import { z } from 'zod';
 import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { a2aAgents, agents } from '../db/schema.js';
+import { a2aAgents, agents, certifications } from '../db/schema.js';
 import { registerAgent, getAgentByName, updateAgent } from './agent.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
@@ -107,6 +109,23 @@ export interface A2aAgentRecord {
   health_failures: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface A2aDirectoryEntry {
+  name: string;
+  description: string | null;
+  skills: A2aSkill[];
+  tags: string[];
+  url: string;
+  kind: 'native' | 'a2a';
+  status: string;
+  certification: `level_${number}` | null;
+}
+
+export interface A2aDirectoryQuery {
+  skill?: string;
+  tag?: string;
+  q?: string;
 }
 
 function ensureString(value: string | undefined, message: string): string {
@@ -387,6 +406,164 @@ export async function listA2aAgents(db: Db, workspaceId: string): Promise<A2aAge
     .where(eq(a2aAgents.workspaceId, workspaceId));
 
   return rows.map(formatA2aRecord);
+}
+
+function nativeAgentSkills(metadata: unknown): A2aSkill[] {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  const skills = (metadata as Record<string, unknown>).skills;
+  if (!Array.isArray(skills)) return [];
+
+  return skills.flatMap((skill) => {
+    const parsed = A2aSkillSchema.safeParse(skill);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+function isRemovedA2aProxy(type: string, metadata: unknown): boolean {
+  return type === 'external'
+    && !!metadata
+    && typeof metadata === 'object'
+    && !Array.isArray(metadata)
+    && (metadata as Record<string, unknown>).a2a === true;
+}
+
+function nativeAgentTags(metadata: unknown, skills: A2aSkill[]): string[] {
+  const metadataTags = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>).tags
+    : undefined;
+  const tags = Array.isArray(metadataTags)
+    ? metadataTags.filter((tag): tag is string => typeof tag === 'string')
+    : [];
+
+  return [...new Set([...tags, ...skills.flatMap((skill) => skill.tags ?? [])])];
+}
+
+function directoryEntryMatches(
+  entry: A2aDirectoryEntry,
+  query: A2aDirectoryQuery,
+  aliases: string[] = [],
+): boolean {
+  const skill = query.skill?.trim().toLowerCase();
+  const tag = query.tag?.trim().toLowerCase();
+  const text = query.q?.trim().toLowerCase();
+
+  if (skill && !entry.skills.some((candidate) =>
+    candidate.name.toLowerCase() === skill || candidate.id?.toLowerCase() === skill)) {
+    return false;
+  }
+
+  if (tag && !entry.tags.some((candidate) => candidate.toLowerCase() === tag)) {
+    return false;
+  }
+
+  if (text) {
+    const haystack = [
+      entry.name,
+      entry.description,
+      ...aliases,
+      ...entry.tags,
+      ...entry.skills.flatMap((candidate) => [
+        candidate.id,
+        candidate.name,
+        candidate.description,
+        ...(candidate.tags ?? []),
+      ]),
+    ]
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n')
+      .toLowerCase();
+    if (!haystack.includes(text)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Return every addressable workspace agent through one discovery surface.
+ * Registered A2A proxy rows are represented only by their A2A entry, avoiding
+ * duplicate native/proxy results for the same relay identity.
+ */
+export async function listA2aDirectory(
+  db: Db,
+  workspaceId: string,
+  baseUrl: string,
+  query: A2aDirectoryQuery = {},
+): Promise<A2aDirectoryEntry[]> {
+  const [workspaceAgents, registeredAgents, certificationRows] = await Promise.all([
+    db
+      .select({
+        id: agents.id,
+        name: agents.name,
+        persona: agents.persona,
+        type: agents.type,
+        metadata: agents.metadata,
+        status: agents.status,
+      })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.type, 'agent'))),
+    listA2aAgents(db, workspaceId),
+    db
+      .select({
+        agentUrl: certifications.agentUrl,
+        level: certifications.level,
+        passed: certifications.passed,
+      })
+      .from(certifications)
+      .where(eq(certifications.workspaceId, workspaceId))
+      .orderBy(desc(certifications.createdAt)),
+  ]);
+
+  const registeredRelayAgentIds = new Set(registeredAgents.map((agent) => agent.relay_agent_id));
+  const certificationByUrl = new Map<string, `level_${number}`>();
+  for (const certification of certificationRows) {
+    if (!certificationByUrl.has(certification.agentUrl)) {
+      certificationByUrl.set(
+        certification.agentUrl,
+        certification.passed ? `level_${certification.level}` : 'level_0',
+      );
+    }
+  }
+
+  const searchableEntries: Array<{ entry: A2aDirectoryEntry; aliases?: string[] }> = [];
+  for (const agent of workspaceAgents) {
+    if (registeredRelayAgentIds.has(agent.id) || isRemovedA2aProxy(agent.type, agent.metadata)) continue;
+    const skills = nativeAgentSkills(agent.metadata);
+    searchableEntries.push({
+      entry: {
+        name: agent.name,
+        description: agent.persona,
+        skills,
+        tags: nativeAgentTags(agent.metadata, skills),
+        url: `${baseUrl}/v1/dm`,
+        kind: 'native',
+        status: agent.status,
+        certification: null,
+      },
+    });
+  }
+
+  for (const agent of registeredAgents) {
+    const card = agent.agent_card;
+    searchableEntries.push({
+      entry: {
+        name: agent.relay_name,
+        description: card.description ?? agent.relay_persona,
+        skills: card.skills,
+        tags: [...new Set(card.skills.flatMap((skill) => skill.tags ?? []))],
+        url: `${baseUrl}/a2a/rpc`,
+        kind: 'a2a',
+        status: agent.status,
+        certification: certificationByUrl.get(agent.external_url)
+          ?? (agent.last_health && agent.health_failures === 0 ? 'level_1' : 'level_0'),
+      },
+      aliases: [card.name],
+    });
+  }
+
+  return searchableEntries
+    .filter(({ entry, aliases }) => directoryEntryMatches(entry, query, aliases))
+    .map(({ entry }) => entry)
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export async function getA2aAgentByRelayName(

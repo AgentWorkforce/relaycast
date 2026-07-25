@@ -485,6 +485,20 @@ describe('RelayCast', () => {
       expect(init.method).toBe('GET');
     });
 
+    it('listA2aDirectory() calls GET /v1/a2a/directory with discovery filters', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await relay.listA2aDirectory({ skill: 'infra-watch', tag: 'operations', q: 'infra health' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe(
+        'https://cast.agentrelay.com/v1/a2a/directory?skill=infra-watch&tag=operations&q=infra+health',
+      );
+      expect(init.method).toBe('GET');
+    });
+
     it('removeA2aAgent() calls DELETE /v1/a2a/agents/:name and returns removal payload', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

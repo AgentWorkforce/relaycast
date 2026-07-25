@@ -6,15 +6,19 @@
  * messages flow in both the terminal and the dashboard.
  *
  * Usage:
- *   npm run e2e                                   # defaults to the engine dev server (http://localhost:8787)
- *   npm run e2e -- http://localhost:8787 --ci     # self-hosted engine in CI
+ *   npm run e2e                                   # boots an isolated local engine and runs in interactive mode
+ *   npm run e2e -- --ci                           # boots an isolated local engine and runs unattended
+ *   npm run e2e -- http://localhost:8787 --ci     # uses an already-running engine
  *   npm run e2e -- --continue-on-failure          # keep running after step failures
  *   npm run e2e -- https://cast.agentrelay.com --ci
  */
 
 import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import WebSocket from 'ws';
+import { startServer, type RunningServer } from '../packages/engine/src/entrypoints/node.js';
 import { RelayCast, AgentClient, RelayError } from '../packages/sdk-typescript/src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -24,8 +28,62 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 const CONTINUE_ON_FAILURE = flags.has('--continue-on-failure');
 const DEFAULT_BASE_URL = 'http://localhost:8787';
-const BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+let BASE_URL = (args[0] ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 const CI = flags.has('--ci') || !!process.env.CI;
+const BOOT_LOCAL_GATEWAY = args.length === 0;
+
+let localGateway: RunningServer | null = null;
+let localGatewayDir: string | null = null;
+
+async function reserveLocalPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Could not reserve a local port for the E2E gateway');
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  return address.port;
+}
+
+async function startLocalGateway(): Promise<void> {
+  if (!BOOT_LOCAL_GATEWAY) return;
+
+  const port = await reserveLocalPort();
+  BASE_URL = `http://127.0.0.1:${port}`;
+  localGatewayDir = await mkdtemp(join(tmpdir(), 'relaycast-e2e-'));
+  localGateway = startServer({
+    dbPath: ':memory:',
+    port,
+    baseUrl: BASE_URL,
+    fileDir: join(localGatewayDir, 'files'),
+    config: { environment: 'e2e' },
+  });
+
+  const server = localGateway.server as unknown as { listening?: boolean; once(event: string, listener: (...args: any[]) => void): void };
+  if (!server.listening) {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+  }
+}
+
+async function stopLocalGateway(): Promise<void> {
+  const running = localGateway;
+  localGateway = null;
+  if (running) await running.stop();
+
+  const tempDir = localGatewayDir;
+  localGatewayDir = null;
+  if (tempDir) await rm(tempDir, { recursive: true, force: true });
+}
 
 function isLocalHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.localhost');
@@ -106,7 +164,12 @@ async function startMockA2aAgent() {
         description: 'Local A2A roundtrip test peer',
         url: `${origin}/rpc`,
         version: '1.0.0',
-        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+        skills: [{
+          id: 'infra-watch',
+          name: 'infra-watch',
+          description: 'Watch infrastructure health and echo a DM back to Relaycast',
+          tags: ['operations', 'monitoring'],
+        }],
       }));
       return;
     }
@@ -120,18 +183,25 @@ async function startMockA2aAgent() {
       requests.push(payload);
 
       const inputText = extractTextPart(payload);
-      const callbackPayload = {
-        jsonrpc: '2.0',
-        id: payload.id,
-        result: {
-          message: {
-            message_id: `mock-${payload.id}`,
-            role: 'agent',
-            context_id: payload?.params?.message?.context_id,
-            parts: [{ kind: 'text', text: `Mock A2A reply: ${inputText}` }],
-          },
-        },
+      const callbackMessage = {
+        message_id: `mock-${payload.id}`,
+        role: 'agent',
+        context_id: payload?.params?.message?.context_id,
+        parts: [{ kind: 'text', text: `Mock A2A reply: ${inputText}` }],
       };
+      const callbackTarget = payload?.params?.callback_target;
+      const callbackPayload = typeof callbackTarget === 'string'
+        ? {
+          jsonrpc: '2.0',
+          id: payload.id,
+          method: 'message/send',
+          params: { target_agent: callbackTarget, message: callbackMessage },
+        }
+        : {
+          jsonrpc: '2.0',
+          id: payload.id,
+          result: { message: callbackMessage },
+        };
 
       if (webhookUrl && relayToken) {
         const callback = fetch(webhookUrl, {
@@ -264,6 +334,7 @@ const MARKDOWN_CHANNEL_MESSAGES = CHANNEL_MESSAGES.filter((message) =>
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
+  await startLocalGateway();
   console.log(`
 ${B}${CYAN}╔══════════════════════════════════════════════╗
 ║          Relaycast E2E Smoke Test            ║
@@ -278,10 +349,6 @@ ${B}${CYAN}╔══════════════════════
   let lead!: AgentClient;
   let infra!: AgentClient;
   let backend!: AgentClient;
-  // Raw agent tokens (captured at registration) for the --next-version actions
-  // section, which calls the /v1/actions HTTP contract directly.
-  let leadToken = '';
-  let backendToken = '';
   const passed: string[] = [];
   const failed: string[] = [];
   const channelName = 'engineering';
@@ -408,7 +475,6 @@ ${B}${CYAN}╔══════════════════════
       metadata: { cli: 'claude' },
     });
     lead = relay.as(res.token);
-    leadToken = res.token;
     log('🤖', `${YELLOW}${B}${LEAD}${R} registered`);
   });
 
@@ -418,6 +484,12 @@ ${B}${CYAN}╔══════════════════════
       type: 'agent',
       persona: 'Senior infrastructure engineer. Owns CI/CD pipelines, deploys, health checks, and cloud resources.',
       metadata: { cli: 'claude' },
+      skills: [{
+        id: 'deploy-operations',
+        name: 'deploy-operations',
+        description: 'Operate deployment pipelines and cloud resources',
+        tags: ['delivery', 'cloud'],
+      }],
     });
     infra = relay.as(res.token);
     log('🤖', `${GREEN}${B}${INFRA}${R} registered`);
@@ -431,7 +503,6 @@ ${B}${CYAN}╔══════════════════════
       metadata: { cli: 'claude' },
     });
     backend = relay.as(res.token);
-    backendToken = res.token;
     log('🤖', `${BLUE}${B}${BACKEND}${R} registered`);
   });
 
@@ -472,7 +543,6 @@ ${B}${CYAN}╔══════════════════════
     if (!res.token) throw new Error('Expected token from registerOrRotate');
     // Update lead client with rotated token (old token is now invalid)
     lead = relay.as(res.token);
-    leadToken = res.token;
     agentMap[LEAD] = lead;
     const channels = await lead.channels.list();
     log('🔑', `registerOrRotate returned token, verified with list channels (${channels.length} channels)`);
@@ -636,7 +706,12 @@ ${B}${CYAN}╔══════════════════════
         description: 'Local A2A roundtrip test peer',
         url: `${mockA2a.baseUrl}/rpc`,
         version: '1.0.0',
-        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+        skills: [{
+          id: 'infra-watch',
+          name: 'infra-watch',
+          description: 'Watch infrastructure health and echo a DM back to Relaycast',
+          tags: ['operations', 'monitoring'],
+        }],
       },
     });
 
@@ -737,7 +812,12 @@ ${B}${CYAN}╔══════════════════════
         description: 'Local A2A roundtrip test peer',
         url: `${mockA2a.baseUrl}/rpc`,
         version: '1.0.0',
-        skills: [{ id: 'echo', name: 'echo', description: 'Echo a DM back to Relaycast' }],
+        skills: [{
+          id: 'infra-watch',
+          name: 'infra-watch',
+          description: 'Watch infrastructure health and echo a DM back to Relaycast',
+          tags: ['operations', 'monitoring'],
+        }],
       },
     });
     mockA2a.configureWebhook(registered.webhookUrl, registered.relayToken);
@@ -745,7 +825,147 @@ ${B}${CYAN}╔══════════════════════
   });
   await pause();
 
-  // ── 7c. Directory ──────────────────────────────────────────────────
+  // ── 7c. Unified A2A team directory ─────────────────────────────────
+  step('A2A team directory');
+  let discoveredA2aName = '';
+
+  await run('Discover native and registered A2A agents', async () => {
+    if (!mockA2a) {
+      if (isLocalHost(new URL(BASE_URL).hostname.toLowerCase())) {
+        throw new Error('Local mock A2A agent was not registered');
+      }
+      log('ℹ️ ', 'Skipping merged A2A directory assertion: remote gateways cannot reach the local mock agent.');
+      return;
+    }
+
+    const res = await fetch(`${BASE_URL}/v1/a2a/directory`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const json = await res.json() as any;
+    if (!res.ok || !json.ok || !Array.isArray(json.data)) {
+      throw new Error(`A2A directory failed: ${res.status} ${JSON.stringify(json)}`);
+    }
+
+    const native = json.data.find((entry: any) => entry.name === INFRA && entry.kind === 'native');
+    const external = json.data.find((entry: any) =>
+      entry.kind === 'a2a'
+      && Array.isArray(entry.skills)
+      && entry.skills.some((skill: any) => skill.name === 'infra-watch'));
+    if (!native || !external) {
+      throw new Error(`Expected native ${INFRA} and infra-watch A2A entries: ${JSON.stringify(json.data)}`);
+    }
+    if (!native.skills.some((skill: any) => skill.id === 'deploy-operations')) {
+      throw new Error(`Native directory entry is missing deploy-operations: ${JSON.stringify(native)}`);
+    }
+    for (const entry of [native, external]) {
+      if (!Array.isArray(entry.skills) || typeof entry.url !== 'string' || !entry.url) {
+        throw new Error(`Directory entry is missing skills/url: ${JSON.stringify(entry)}`);
+      }
+      if (typeof entry.status !== 'string' || !entry.status) {
+        throw new Error(`Directory entry is missing status: ${JSON.stringify(entry)}`);
+      }
+    }
+
+    discoveredA2aName = external.name;
+    log('🧭', `Discovered ${B}${native.name}${R} (${native.kind}) and ${B}${external.name}${R} (${external.kind})`);
+  });
+
+  await run('Filter A2A directory by skill and verify empty matches', async () => {
+    if (!mockA2a) {
+      log('ℹ️ ', 'Skipping A2A directory filters: no local mock agent.');
+      return;
+    }
+
+    const matchingRes = await fetch(`${BASE_URL}/v1/a2a/directory?skill=infra-watch`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const matching = await matchingRes.json() as any;
+    if (!matchingRes.ok || !matching.ok || !Array.isArray(matching.data)) {
+      throw new Error(`A2A skill filter failed: ${matchingRes.status} ${JSON.stringify(matching)}`);
+    }
+    if (matching.data.length !== 1 || matching.data[0]?.name !== discoveredA2aName) {
+      throw new Error(`Expected only ${discoveredA2aName}, got ${JSON.stringify(matching.data)}`);
+    }
+
+    const nativeMatchingRes = await fetch(`${BASE_URL}/v1/a2a/directory?skill=deploy-operations`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const nativeMatching = await nativeMatchingRes.json() as any;
+    if (!nativeMatchingRes.ok || !nativeMatching.ok || !Array.isArray(nativeMatching.data)) {
+      throw new Error(`Native A2A skill filter failed: ${nativeMatchingRes.status} ${JSON.stringify(nativeMatching)}`);
+    }
+    if (nativeMatching.data.length !== 1 || nativeMatching.data[0]?.name !== INFRA) {
+      throw new Error(`Expected only ${INFRA}, got ${JSON.stringify(nativeMatching.data)}`);
+    }
+
+    const emptyRes = await fetch(`${BASE_URL}/v1/a2a/directory?skill=nope`, {
+      headers: { Authorization: `Bearer ${workspaceKey}` },
+    });
+    const empty = await emptyRes.json() as any;
+    if (!emptyRes.ok || !empty.ok || !Array.isArray(empty.data) || empty.data.length !== 0) {
+      throw new Error(`Expected an empty A2A directory match, got ${emptyRes.status} ${JSON.stringify(empty)}`);
+    }
+    log('🔍', `Skill filters returned only ${B}${discoveredA2aName}${R} and ${B}${INFRA}${R}; bogus skill returned []`);
+  });
+
+  await run('Message the discovered A2A agent and observe the round trip', async () => {
+    if (!mockA2a) {
+      log('ℹ️ ', 'Skipping discovered A2A roundtrip: no local mock agent.');
+      return;
+    }
+    if (!discoveredA2aName) throw new Error('No discovered A2A identity available');
+
+    const rpcId = `directory-${Date.now()}`;
+    const text = `Ping discovered agent ${rpcId}`;
+    const expectedReply = `Mock A2A reply: ${text}`;
+    const requestsBefore = mockA2a.requests.length;
+    const res = await fetch(`${BASE_URL}/a2a/rpc`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${workspaceKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpcId,
+        method: 'message/send',
+        params: {
+          agent_name: discoveredA2aName,
+          callback_target: LEAD,
+          message: {
+            message_id: rpcId,
+            role: 'user',
+            context_id: `agent:${LEAD}`,
+            parts: [{ kind: 'text', text }],
+          },
+        },
+      }),
+    });
+    const rpc = await res.json() as any;
+    if (!res.ok || rpc.error || rpc.result?.task?.status?.state !== 'submitted') {
+      throw new Error(`Discovered A2A message was not accepted: ${res.status} ${JSON.stringify(rpc)}`);
+    }
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(250);
+      const conversations = await lead.dms.conversations();
+      const conversation = conversations.find((candidate) =>
+        candidate.participants.some((participant) => participant.agentName === discoveredA2aName));
+      if (conversation) {
+        const messages = await lead.dms.messages(conversation.id, { limit: 20 });
+        if (messages.some((message) => message.text === expectedReply)
+          && mockA2a.requests.length > requestsBefore) {
+          log('🔁', `Directory discover → ${B}${discoveredA2aName}${R} → ${LEAD} round trip verified`);
+          return;
+        }
+      }
+    }
+
+    throw new Error('Timed out waiting for the discovered A2A agent round trip');
+  });
+  await pause();
+
+  // ── 7d. Directory ──────────────────────────────────────────────────
   step('Directory');
   let directorySlug = '';
 
@@ -1132,36 +1352,29 @@ ${B}${CYAN}╔══════════════════════
   // ── 15. Actions (agent-to-agent RPC) ──────────────────────────────────
   step('Actions');
 
-  // Lightweight raw agent WebSocket to verify action.* fanout.
-  const openWs = (token: string) => {
-    const sock = new WebSocket(`${BASE_URL.replace(/^http/, 'ws')}/v1/ws?token=${token}`);
-    const events: any[] = [];
-    sock.on('message', (d) => {
-      // Guard against non-JSON frames so a stray payload can't crash the script.
-      try { events.push(JSON.parse(d.toString())); } catch { /* ignore */ }
-    });
-    const ready = new Promise<void>((resolve, reject) => {
-      sock.on('open', () => resolve());
-      sock.on('error', reject);
-    });
-    const waitFor = (type: string, timeoutMs = 5000) =>
-      new Promise<any>((resolve, reject) => {
-        const found = events.find((e) => e.type === type);
-        if (found) return resolve(found);
-        const start = Date.now();
-        const timer = setInterval(() => {
-          const e = events.find((ev) => ev.type === type);
-          if (e) { clearInterval(timer); resolve(e); }
-          else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error(`timeout waiting for "${type}"`)); }
-        }, 50);
-      });
-    return { ready, waitFor, close: () => sock.close() };
-  };
-
-  const handlerWs = openWs(leadToken);
-  const callerWs = openWs(backendToken);
-  await run('Connect handler + caller WebSockets', async () => {
-    await Promise.all([handlerWs.ready, callerWs.ready]);
+  const handlerActionEvents: any[] = [];
+  const callerActionEvents: any[] = [];
+  const stopHandlerActionEvents = lead.on.actionInvoked((event) => handlerActionEvents.push(event));
+  const stopCallerActionEvents = backend.on.actionCompleted((event) => callerActionEvents.push(event));
+  const waitForActionEvent = (
+    events: any[],
+    type: string,
+    predicate: (event: any) => boolean,
+    timeoutMs = 5000,
+  ) => new Promise<any>((resolve, reject) => {
+    const found = events.find(predicate);
+    if (found) return resolve(found);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const event = events.find(predicate);
+      if (event) {
+        clearInterval(timer);
+        resolve(event);
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(timer);
+        reject(new Error(`timeout waiting for "${type}"`));
+      }
+    }, 50);
   });
   let invocationId = '';
 
@@ -1192,7 +1405,11 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Handler ${LEAD} receives action.invoked over WS`, async () => {
-    await handlerWs.waitFor('action.invoked');
+    await waitForActionEvent(
+      handlerActionEvents,
+      'action.invoked',
+      (event) => event.invocationId === invocationId,
+    );
   });
   await pause();
 
@@ -1205,7 +1422,11 @@ ${B}${CYAN}╔══════════════════════
   });
 
   await run(`Caller ${BACKEND} receives action.completed over WS`, async () => {
-    await callerWs.waitFor('action.completed');
+    await waitForActionEvent(
+      callerActionEvents,
+      'action.completed',
+      (event) => event.invocationId === invocationId,
+    );
   });
 
   await run('Get invocation shows completed + output', async () => {
@@ -1222,8 +1443,8 @@ ${B}${CYAN}╔══════════════════════
     log('🗑️ ', `Deleted deploy action`);
   });
 
-  handlerWs.close();
-  callerWs.close();
+  stopHandlerActionEvents();
+  stopCallerActionEvents();
   await pause();
 
   // ── 16. Inbound Webhooks ──────────────────────────────────────────────
@@ -1505,10 +1726,15 @@ ${B}${CYAN}╔══════════════════════
 `);
 
   await sleep(300);
+  await stopLocalGateway();
   process.exit(failed.length > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(`\n${RED}${B}Fatal:${R}`, err.message ?? err);
+  await Promise.race([
+    stopLocalGateway().catch(() => {}),
+    sleep(1_000),
+  ]);
   process.exit(1);
 });

@@ -1,0 +1,131 @@
+{
+  "version": "1.0.0",
+  "id": "e681308e-c2ce-4d12-bf9f-0fa2fb38ae41",
+  "timestamp": "2026-07-21T23:00:02.623Z",
+  "trajectory": "traj_etjrrjqq3s0w",
+  "files": [
+    {
+      "path": "README.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 664,
+              "end_line": 671,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/__tests__/a2a.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 502,
+              "end_line": 573,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 603,
+              "end_line": 611,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 614,
+              "end_line": 627,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 629,
+              "end_line": 647,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/a2a.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 419,
+              "end_line": 427,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 495,
+              "end_line": 506,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 526,
+              "end_line": 532,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/e2e.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 6,
+              "end_line": 24,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 28,
+              "end_line": 89,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 334,
+              "end_line": 340,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 854,
+              "end_line": 862,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 887,
+              "end_line": 903,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 905,
+              "end_line": 911,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            },
+            {
+              "start_line": 1726,
+              "end_line": 1740,
+              "revision": "0dade1338062fa23bbec4beb9223a0523eda12cc"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

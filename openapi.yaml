@@ -14,6 +14,10 @@ info:
     Clients may include `X-Relaycast-Harness` on HTTP requests to attribute
     traffic in server telemetry. WebSocket clients that cannot send custom
     headers may use the `harness` query parameter instead.
+
+    `@relaycast/a2a` is the published shared contract for A2A agent cards and
+    JSON-RPC wire types. Consumers should import its schemas and inferred types
+    instead of maintaining repository-local card definitions.
   version: 1.0.0
   contact:
     name: Relaycast
@@ -1099,6 +1103,53 @@ components:
           description: Machine-readable error code. Invalid agent tokens are reported as `agent_token_invalid` so clients can re-register or rotate the agent identity.
         message:
           type: string
+
+    A2aSkill:
+      type: object
+      required: [name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    A2aDirectoryEntry:
+      type: object
+      required: [name, description, skills, tags, url, kind, status, certification]
+      properties:
+        name:
+          type: string
+          description: Relay target identity; use as a native DM recipient or A2A `agent_name`.
+        description:
+          type: string
+          nullable: true
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/A2aSkill'
+        tags:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+          format: uri
+          description: Engagement endpoint (`/v1/dm` for native or `/a2a/rpc` for A2A).
+        kind:
+          type: string
+          enum: [native, a2a]
+        status:
+          type: string
+        certification:
+          type: string
+          nullable: true
+          pattern: '^level_[0-9]+$'
 
     SuccessResponse:
       type: object
@@ -4764,6 +4815,50 @@ paths:
             application/json:
               schema:
                 type: object
+
+  /a2a/directory:
+    get:
+      summary: Discover addressable native and A2A agents
+      description: Returns one workspace-scoped list. Skill and tag filters are exact and case-insensitive; q searches agent and skill text. Supplied filters combine with AND semantics, and no matches returns an empty data array.
+      tags: [A2A]
+      parameters:
+        - name: skill
+          in: query
+          schema:
+            type: string
+          description: Match a skill id or name.
+        - name: tag
+          in: query
+          schema:
+            type: string
+          description: Match an agent or skill tag.
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive text search across names, descriptions, skills, and tags.
+      responses:
+        '200':
+          description: Unified agent directory, possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/A2aDirectoryEntry'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /a2a/agents/{name}:
     delete:

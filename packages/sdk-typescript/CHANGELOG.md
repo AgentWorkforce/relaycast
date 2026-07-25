@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased - Minor]
 
 ### Added
+- Added `RelayCast.listA2aDirectory({ skill?, tag?, q? })` for unified native and registered A2A agent discovery.
 - `AgentClient.disconnect()` and `presence.markOffline()` accept an optional `{ deregister?: boolean }`. By default the disconnect is presence-only for node-hosted agents; pass `{ deregister: true }` to tear down the node binding and re-home the agent to its direct node.
 
 ### Fixed
