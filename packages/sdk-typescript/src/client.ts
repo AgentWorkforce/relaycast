@@ -37,6 +37,11 @@ export interface ClientOptions {
    * `agentRelayDistinctId` is unset so both sides report one PostHog person.
    */
   agentRelayUserId?: string;
+  /**
+   * Optional hashed machine id, sent as `X-Agent-Relay-Machine-Id` alongside the
+   * distinct id so machine-level cross-tabs survive after login.
+   */
+  agentRelayMachineId?: string;
   /** Optional Agent Relay Cloud organization id, for group analytics. */
   agentRelayOrgId?: string;
   /** Optional organization slug, for readable analytics breakdowns. */
@@ -205,6 +210,11 @@ export class HttpClient {
     return this._identity.userId;
   }
 
+  /** Sanitized hashed machine id, or `undefined` when none was supplied. */
+  get agentRelayMachineId(): string | undefined {
+    return this._identity.machineId;
+  }
+
   /** Sanitized Agent Relay Cloud organization id, or `undefined`. */
   get agentRelayOrgId(): string | undefined {
     return this._identity.orgId;
@@ -227,6 +237,7 @@ export class HttpClient {
         version: this._originVersion,
         ...(this._originActor ? { originActor: this._originActor } : {}),
         ...(this._identity.distinctId ? { agentRelayDistinctId: this._identity.distinctId } : {}),
+        ...(this._identity.machineId ? { agentRelayMachineId: this._identity.machineId } : {}),
         ...(this._identity.userId ? { agentRelayUserId: this._identity.userId } : {}),
         ...(this._identity.orgId ? { agentRelayOrgId: this._identity.orgId } : {}),
         ...(this._identity.orgSlug ? { agentRelayOrgSlug: this._identity.orgSlug } : {}),

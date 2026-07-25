@@ -23,6 +23,13 @@ export interface InternalOrigin {
    * rather than only workspaces.
    */
   agentRelayUserId?: string;
+  /**
+   * Optional hashed machine id of the host process. Sent alongside the distinct
+   * id, never instead of it: after login the distinct id is the user id, so this
+   * is what keeps machine-level cross-tabs (machines per workspace, accounts per
+   * machine) answerable server-side.
+   */
+  agentRelayMachineId?: string;
   /** Optional Agent Relay Cloud organization id, for group analytics. */
   agentRelayOrgId?: string;
   /** Optional organization slug, for readable analytics breakdowns. */
@@ -42,6 +49,8 @@ export const SDK_ORIGIN: InternalOrigin = Object.freeze({
 export const ORIGIN_ACTOR_HEADER = 'X-Relaycast-Origin-Actor';
 export const AGENT_RELAY_DISTINCT_ID_HEADER = 'X-Agent-Relay-Distinct-Id';
 export const AGENT_RELAY_DISTINCT_ID_QUERY = 'agent_relay_distinct_id';
+export const AGENT_RELAY_MACHINE_ID_HEADER = 'X-Agent-Relay-Machine-Id';
+export const AGENT_RELAY_MACHINE_ID_QUERY = 'agent_relay_machine_id';
 export const AGENT_RELAY_USER_ID_HEADER = 'X-Agent-Relay-User-Id';
 export const AGENT_RELAY_USER_ID_QUERY = 'agent_relay_user_id';
 export const AGENT_RELAY_ORG_ID_HEADER = 'X-Agent-Relay-Org-Id';
@@ -87,6 +96,7 @@ export function sanitizeAgentRelayDistinctId(raw: string | undefined): string | 
 
 /** Identity ids share the distinct-id contract: same charset, same length cap. */
 export const sanitizeAgentRelayUserId = sanitizeAgentRelayDistinctId;
+export const sanitizeAgentRelayMachineId = sanitizeAgentRelayDistinctId;
 export const sanitizeAgentRelayOrgId = sanitizeAgentRelayDistinctId;
 
 export function sanitizeAgentRelayOrgSlug(raw: string | undefined): string | undefined {
@@ -105,6 +115,7 @@ export function sanitizeAgentRelayOrgSlug(raw: string | undefined): string | und
  */
 export interface AgentRelayIdentity {
   distinctId?: string;
+  machineId?: string;
   userId?: string;
   orgId?: string;
   orgSlug?: string;
@@ -122,10 +133,13 @@ export function resolveAgentRelayIdentity(
   };
 
   const userId = sanitizeAgentRelayUserId(pick('agentRelayUserId'));
-  const distinctId = sanitizeAgentRelayDistinctId(pick('agentRelayDistinctId')) ?? userId;
+  const machineId = sanitizeAgentRelayMachineId(pick('agentRelayMachineId'));
+  const distinctId =
+    sanitizeAgentRelayDistinctId(pick('agentRelayDistinctId')) ?? userId ?? machineId;
 
   return {
     ...(distinctId ? { distinctId } : {}),
+    ...(machineId ? { machineId } : {}),
     ...(userId ? { userId } : {}),
     ...(sanitizeAgentRelayOrgId(pick('agentRelayOrgId'))
       ? { orgId: sanitizeAgentRelayOrgId(pick('agentRelayOrgId')) }
@@ -142,6 +156,7 @@ export function agentRelayIdentityHeaders(
 ): Record<string, string> {
   return {
     ...(identity.distinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: identity.distinctId } : {}),
+    ...(identity.machineId ? { [AGENT_RELAY_MACHINE_ID_HEADER]: identity.machineId } : {}),
     ...(identity.userId ? { [AGENT_RELAY_USER_ID_HEADER]: identity.userId } : {}),
     ...(identity.orgId ? { [AGENT_RELAY_ORG_ID_HEADER]: identity.orgId } : {}),
     ...(identity.orgSlug ? { [AGENT_RELAY_ORG_SLUG_HEADER]: identity.orgSlug } : {}),
@@ -158,6 +173,9 @@ export function applyAgentRelayIdentityQuery(
 ): void {
   if (identity.distinctId) {
     url.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, identity.distinctId);
+  }
+  if (identity.machineId) {
+    url.searchParams.set(AGENT_RELAY_MACHINE_ID_QUERY, identity.machineId);
   }
   if (identity.userId) {
     url.searchParams.set(AGENT_RELAY_USER_ID_QUERY, identity.userId);

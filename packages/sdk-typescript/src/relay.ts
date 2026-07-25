@@ -161,6 +161,8 @@ export interface RelayCastOptions {
    * `agentRelayDistinctId` is unset.
    */
   agentRelayUserId?: string;
+  /** Optional hashed machine id, sent as `X-Agent-Relay-Machine-Id`. */
+  agentRelayMachineId?: string;
   /** Optional Agent Relay Cloud organization id, for group analytics. */
   agentRelayOrgId?: string;
   /** Optional organization slug, for readable analytics breakdowns. */
@@ -170,6 +172,7 @@ export interface RelayCastOptions {
 /** Identity fields accepted by the unauthenticated workspace bootstrap calls. */
 export interface WorkspaceIdentityOptions {
   agentRelayDistinctId?: string;
+  agentRelayMachineId?: string;
   agentRelayUserId?: string;
   agentRelayOrgId?: string;
   agentRelayOrgSlug?: string;
@@ -244,6 +247,9 @@ export class RelayCast {
         // `ws_session_started` event anonymous even for a signed-in caller.
         ...(this.client.agentRelayDistinctId
           ? { agentRelayDistinctId: this.client.agentRelayDistinctId }
+          : {}),
+        ...(this.client.agentRelayMachineId
+          ? { agentRelayMachineId: this.client.agentRelayMachineId }
           : {}),
         ...(this.client.agentRelayUserId
           ? { agentRelayUserId: this.client.agentRelayUserId }

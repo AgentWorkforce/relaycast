@@ -51,6 +51,8 @@ export interface WsClientOptions {
    * `agentRelayDistinctId` is unset.
    */
   agentRelayUserId?: string;
+  /** Optional hashed machine id, forwarded as `agent_relay_machine_id`. */
+  agentRelayMachineId?: string;
   /** Optional Agent Relay Cloud organization id, for group analytics. */
   agentRelayOrgId?: string;
   /** Optional organization slug, for readable analytics breakdowns. */

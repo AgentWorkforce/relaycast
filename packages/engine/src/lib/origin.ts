@@ -17,17 +17,19 @@ export const AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id";
 export const AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id";
 
 /**
- * Who — as a person and an organization — is behind this request.
+ * Who — as a machine, a person, and an organization — is behind this request.
  *
  * A relaycast workspace is an API-key row; it has no user table, so the gateway
  * cannot derive a human identity on its own. Callers that *do* know one (the
  * Agent Relay CLI and broker, after `agent-relay cloud login`) forward it here
- * so server-side product events can be grouped by user and org instead of only
- * by workspace.
+ * so server-side product events can be grouped by machine, user, and org
+ * instead of only by workspace.
  *
- * All three are optional and untrusted: they are analytics dimensions only and
+ * All four are optional and untrusted: they are analytics dimensions only and
  * must never gate authorization.
  */
+export const AGENT_RELAY_MACHINE_ID_HEADER = "X-Agent-Relay-Machine-Id";
+export const AGENT_RELAY_MACHINE_ID_QUERY = "agent_relay_machine_id";
 export const AGENT_RELAY_USER_ID_HEADER = "X-Agent-Relay-User-Id";
 export const AGENT_RELAY_USER_ID_QUERY = "agent_relay_user_id";
 export const AGENT_RELAY_ORG_ID_HEADER = "X-Agent-Relay-Org-Id";
@@ -116,6 +118,16 @@ function readIdentityValue(
 }
 
 export interface ActorIdentity {
+  /**
+   * Hashed machine id of the host that made the request.
+   *
+   * Reported alongside the user id rather than instead of it, which is what
+   * makes the cross-tabs possible: how many machines share one workspace
+   * (`actor_machine_id` per `workspace_id`), and whether those machines are
+   * signed into one account or several (`actor_user_id` per
+   * `actor_machine_id`).
+   */
+  actor_machine_id?: string;
   /** Agent Relay Cloud user id of the operator behind the request. */
   actor_user_id?: string;
   /** Agent Relay Cloud organization id, used for PostHog group analytics. */
@@ -130,6 +142,11 @@ export interface ActorIdentity {
  * telemetry properties without emitting empty values.
  */
 export function extractActorIdentity(request: Request): ActorIdentity {
+  const machineId = readIdentityValue(
+    request,
+    AGENT_RELAY_MACHINE_ID_HEADER,
+    AGENT_RELAY_MACHINE_ID_QUERY,
+  );
   const userId = readIdentityValue(
     request,
     AGENT_RELAY_USER_ID_HEADER,
@@ -148,6 +165,7 @@ export function extractActorIdentity(request: Request): ActorIdentity {
   );
 
   return {
+    ...(machineId ? { actor_machine_id: machineId } : {}),
     ...(userId ? { actor_user_id: userId } : {}),
     ...(orgId ? { actor_org_id: orgId } : {}),
     ...(orgSlug ? { actor_org_slug: orgSlug } : {}),

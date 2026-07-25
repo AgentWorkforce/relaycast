@@ -178,6 +178,7 @@ describe("extractActorIdentity", () => {
       extractActorIdentity(
         identityReq({
           query: {
+            agent_relay_machine_id: "abc123def4567890",
             agent_relay_user_id: "usr_abc123",
             agent_relay_org_id: "org_xyz789",
             agent_relay_org_slug: "agentworkforce",
@@ -185,6 +186,7 @@ describe("extractActorIdentity", () => {
         }),
       ),
     ).toEqual({
+      actor_machine_id: "abc123def4567890",
       actor_user_id: "usr_abc123",
       actor_org_id: "org_xyz789",
       actor_org_slug: "agentworkforce",

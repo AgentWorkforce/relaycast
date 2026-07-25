@@ -57,6 +57,44 @@ describe('resolveAgentRelayIdentity', () => {
   });
 });
 
+describe('machine identity', () => {
+  it('is reported alongside the user id, not replaced by it', () => {
+    expect(
+      resolveAgentRelayIdentity({
+        agentRelayUserId: 'usr_abc123',
+        agentRelayMachineId: 'abc123def4567890',
+      }),
+    ).toEqual({
+      // The user is the person key; the machine stays its own dimension.
+      distinctId: 'usr_abc123',
+      machineId: 'abc123def4567890',
+      userId: 'usr_abc123',
+    });
+  });
+
+  it('falls back to the machine id as the distinct id when anonymous', () => {
+    expect(resolveAgentRelayIdentity({ agentRelayMachineId: 'abc123def4567890' })).toEqual({
+      distinctId: 'abc123def4567890',
+      machineId: 'abc123def4567890',
+    });
+  });
+
+  it('sends the machine id as its own header and query param', () => {
+    const identity = resolveAgentRelayIdentity({
+      agentRelayUserId: 'usr_abc123',
+      agentRelayMachineId: 'abc123def4567890',
+    });
+
+    expect(agentRelayIdentityHeaders(identity)['X-Agent-Relay-Machine-Id']).toBe(
+      'abc123def4567890',
+    );
+
+    const url = new URL('wss://cast.agentrelay.com/v1/ws');
+    applyAgentRelayIdentityQuery(url, identity);
+    expect(url.searchParams.get('agent_relay_machine_id')).toBe('abc123def4567890');
+  });
+});
+
 describe('agentRelayIdentityHeaders', () => {
   it('emits only the fields that are set', () => {
     expect(agentRelayIdentityHeaders({ userId: 'usr_1' })).toEqual({
