@@ -12,10 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `AgentExitedEventSchema`, `NodeStatusOnlineEventSchema`, and `NodeStatusOfflineEventSchema` added to `ServerEventSchema` / `WsClientEventSchema`, and `agent.exited` / `node.status.online` / `node.status.offline` added to `SubscribableEventTypeSchema` so webhooks can subscribe to them.
-
-### Fixed
-
-- `SERVER_TELEMETRY_EVENTS` now declares the 14 event names the engine already emits (`relaycast_server_action_*`, `relaycast_server_directory_*`, `relaycast_server_route*`, `relaycast_server_channel_muted` / `_unmuted`, `relaycast_server_relayfile_inbound_delivered`). `parseInternalTelemetryEvent` rejected them as unknown, so every one was dropped instead of captured.
+- `SERVER_TELEMETRY_EVENTS` and `ServerTelemetryEventName` gain the 14 `relaycast_server_*` names the engine emits for actions, routing, the agent directory, channel mute/unmute, and inbound Relayfile delivery; `parseInternalTelemetryEvent` previously rejected them as unknown.
 
 ## [6.0.3] - 2026-07-12
 
