@@ -16,6 +16,25 @@ export const ORIGIN_ACTOR_QUERY = "origin_actor";
 export const AGENT_RELAY_DISTINCT_ID_HEADER = "X-Agent-Relay-Distinct-Id";
 export const AGENT_RELAY_DISTINCT_ID_QUERY = "agent_relay_distinct_id";
 
+/**
+ * Who — as a person and an organization — is behind this request.
+ *
+ * A relaycast workspace is an API-key row; it has no user table, so the gateway
+ * cannot derive a human identity on its own. Callers that *do* know one (the
+ * Agent Relay CLI and broker, after `agent-relay cloud login`) forward it here
+ * so server-side product events can be grouped by user and org instead of only
+ * by workspace.
+ *
+ * All three are optional and untrusted: they are analytics dimensions only and
+ * must never gate authorization.
+ */
+export const AGENT_RELAY_USER_ID_HEADER = "X-Agent-Relay-User-Id";
+export const AGENT_RELAY_USER_ID_QUERY = "agent_relay_user_id";
+export const AGENT_RELAY_ORG_ID_HEADER = "X-Agent-Relay-Org-Id";
+export const AGENT_RELAY_ORG_ID_QUERY = "agent_relay_org_id";
+export const AGENT_RELAY_ORG_SLUG_HEADER = "X-Agent-Relay-Org-Slug";
+export const AGENT_RELAY_ORG_SLUG_QUERY = "agent_relay_org_slug";
+
 /** Fallback value when the origin actor is missing or invalid. */
 export const UNKNOWN_ORIGIN_ACTOR = "unknown";
 
@@ -62,16 +81,77 @@ export function extractOriginActor(request: Request): string {
 export function extractAgentRelayDistinctId(
   request: Request,
 ): string | undefined {
+  return readIdentityValue(
+    request,
+    AGENT_RELAY_DISTINCT_ID_HEADER,
+    AGENT_RELAY_DISTINCT_ID_QUERY,
+  );
+}
+
+/**
+ * Read one identity dimension from a header, falling back to a query param —
+ * WebSocket upgrades from browsers can't set custom headers, so the SDK forwards
+ * these on the query string (mirrors how `origin_actor` works).
+ *
+ * Rejects anything outside the distinct-id charset rather than truncating, which
+ * is what keeps a malformed upstream value from smuggling a header injection or
+ * a misleading id into analytics.
+ */
+function readIdentityValue(
+  request: Request,
+  header: string,
+  query: string,
+  maxLength = 128,
+): string | undefined {
   const raw =
-    request.headers.get(AGENT_RELAY_DISTINCT_ID_HEADER) ??
-    new URL(request.url).searchParams.get(AGENT_RELAY_DISTINCT_ID_QUERY);
+    request.headers.get(header) ??
+    new URL(request.url).searchParams.get(query);
   if (!raw) return undefined;
 
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   if (!AGENT_RELAY_DISTINCT_ID_ALLOWED.test(trimmed)) return undefined;
 
-  return trimmed.slice(0, 128);
+  return trimmed.slice(0, maxLength);
+}
+
+export interface ActorIdentity {
+  /** Agent Relay Cloud user id of the operator behind the request. */
+  actor_user_id?: string;
+  /** Agent Relay Cloud organization id, used for PostHog group analytics. */
+  actor_org_id?: string;
+  /** Organization slug, for breakdowns that shouldn't show opaque ids. */
+  actor_org_slug?: string;
+}
+
+/**
+ * Extract the caller-declared user/org identity. Returns an object with only the
+ * fields that were present and well-formed, so it can be spread straight into
+ * telemetry properties without emitting empty values.
+ */
+export function extractActorIdentity(request: Request): ActorIdentity {
+  const userId = readIdentityValue(
+    request,
+    AGENT_RELAY_USER_ID_HEADER,
+    AGENT_RELAY_USER_ID_QUERY,
+  );
+  const orgId = readIdentityValue(
+    request,
+    AGENT_RELAY_ORG_ID_HEADER,
+    AGENT_RELAY_ORG_ID_QUERY,
+  );
+  const orgSlug = readIdentityValue(
+    request,
+    AGENT_RELAY_ORG_SLUG_HEADER,
+    AGENT_RELAY_ORG_SLUG_QUERY,
+    120,
+  );
+
+  return {
+    ...(userId ? { actor_user_id: userId } : {}),
+    ...(orgId ? { actor_org_id: orgId } : {}),
+    ...(orgSlug ? { actor_org_slug: orgSlug } : {}),
+  };
 }
 
 function sanitizeOriginPart(

@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../env.js";
 import {
+  extractActorIdentity,
   extractAgentRelayDistinctId,
   extractOriginActor,
   requiredOriginInfo,
@@ -56,14 +57,22 @@ export function emitServerEvent(
 
   const origin = requiredOriginInfo(c.req.raw);
   const clientDistinctId = extractAgentRelayDistinctId(c.req.raw);
+  // Caller-declared user/org. Analytics dimensions only — never authorization.
+  const actor = extractActorIdentity(c.req.raw);
   c.get("engine").telemetry.capture({
     name: event,
-    distinctId: clientDistinctId ?? workspaceId,
+    // Prefer the caller's user id: it puts these server events on the same
+    // PostHog person as that user's CLI/broker events. `client_distinct_id` is
+    // already the user id when the CLI is signed in; the explicit fallback
+    // chain also covers callers that send only one of the two headers.
+    distinctId: actor.actor_user_id ?? clientDistinctId ?? workspaceId,
     properties: {
       app: "relaycast-server",
       surface: "cloud",
       workspace_id: workspaceId,
       ...(clientDistinctId ? { client_distinct_id: clientDistinctId } : {}),
+      is_authenticated: Boolean(actor.actor_user_id),
+      ...actor,
       origin_actor: originActor,
       origin_client: origin.origin_client,
       origin_version: origin.origin_version,

@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { ApiErrorSchema } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
 import {
-  AGENT_RELAY_DISTINCT_ID_HEADER,
   ORIGIN_ACTOR_HEADER,
   SDK_ORIGIN,
-  sanitizeAgentRelayDistinctId,
+  agentRelayIdentityHeaders,
+  resolveAgentRelayIdentity,
   sanitizeOriginActor,
+  type AgentRelayIdentity,
   type InternalOrigin,
 } from './origin.js';
 import { camelizeKeys, decamelizeKey, decamelizeKeys, type Camelize } from './casing.js';
@@ -30,6 +31,16 @@ export interface ClientOptions {
    * values are dropped.
    */
   agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator. Sent as the
+   * `X-Agent-Relay-User-Id` header, and used as the distinct id when
+   * `agentRelayDistinctId` is unset so both sides report one PostHog person.
+   */
+  agentRelayUserId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
 export interface RequestOptions {
@@ -146,7 +157,7 @@ export class HttpClient {
   private _originClient: string;
   private _originVersion: string;
   private _originActor?: string;
-  private _agentRelayDistinctId?: string;
+  private _identity: AgentRelayIdentity;
   private _retryPolicy: RetryPolicy;
 
   constructor(options: ClientOptions) {
@@ -158,9 +169,8 @@ export class HttpClient {
     // A wrapping host's internal origin is authoritative about the originActor;
     // fall back to the public `originActor` option for plain consumers.
     this._originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
-    this._agentRelayDistinctId = sanitizeAgentRelayDistinctId(
-      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
-    );
+    // A wrapping host's internal origin wins over the public options.
+    this._identity = resolveAgentRelayIdentity(origin, options);
     this._retryPolicy = normalizeRetryPolicy(options.retryPolicy);
   }
 
@@ -187,7 +197,22 @@ export class HttpClient {
 
   /** Sanitized Agent Relay distinct id, or `undefined` when none was supplied. */
   get agentRelayDistinctId(): string | undefined {
-    return this._agentRelayDistinctId;
+    return this._identity.distinctId;
+  }
+
+  /** Sanitized Agent Relay Cloud user id, or `undefined` when none was supplied. */
+  get agentRelayUserId(): string | undefined {
+    return this._identity.userId;
+  }
+
+  /** Sanitized Agent Relay Cloud organization id, or `undefined`. */
+  get agentRelayOrgId(): string | undefined {
+    return this._identity.orgId;
+  }
+
+  /** Sanitized Agent Relay Cloud organization slug, or `undefined`. */
+  get agentRelayOrgSlug(): string | undefined {
+    return this._identity.orgSlug;
   }
 
   get retryPolicy(): RetryPolicy {
@@ -201,7 +226,10 @@ export class HttpClient {
         client: this._originClient,
         version: this._originVersion,
         ...(this._originActor ? { originActor: this._originActor } : {}),
-        ...(this._agentRelayDistinctId ? { agentRelayDistinctId: this._agentRelayDistinctId } : {}),
+        ...(this._identity.distinctId ? { agentRelayDistinctId: this._identity.distinctId } : {}),
+        ...(this._identity.userId ? { agentRelayUserId: this._identity.userId } : {}),
+        ...(this._identity.orgId ? { agentRelayOrgId: this._identity.orgId } : {}),
+        ...(this._identity.orgSlug ? { agentRelayOrgSlug: this._identity.orgSlug } : {}),
       },
     ));
   }
@@ -226,7 +254,7 @@ export class HttpClient {
       'X-Relaycast-Origin-Client': this._originClient,
       'X-Relaycast-Origin-Version': this._originVersion,
       ...(this._originActor ? { [ORIGIN_ACTOR_HEADER]: this._originActor } : {}),
-      ...(this._agentRelayDistinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: this._agentRelayDistinctId } : {}),
+      ...agentRelayIdentityHeaders(this._identity),
       ...(options?.headers || {}),
     };
 

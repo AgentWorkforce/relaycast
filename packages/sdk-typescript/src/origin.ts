@@ -16,6 +16,17 @@ export interface InternalOrigin {
    * without sending user-identifying data.
    */
   agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator. Relaycast has
+   * no user table of its own, so hosts that know who is driving the process
+   * forward it here to let server-side telemetry report real users and orgs
+   * rather than only workspaces.
+   */
+  agentRelayUserId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
 export const SDK_ORIGIN: InternalOrigin = Object.freeze({
@@ -31,6 +42,12 @@ export const SDK_ORIGIN: InternalOrigin = Object.freeze({
 export const ORIGIN_ACTOR_HEADER = 'X-Relaycast-Origin-Actor';
 export const AGENT_RELAY_DISTINCT_ID_HEADER = 'X-Agent-Relay-Distinct-Id';
 export const AGENT_RELAY_DISTINCT_ID_QUERY = 'agent_relay_distinct_id';
+export const AGENT_RELAY_USER_ID_HEADER = 'X-Agent-Relay-User-Id';
+export const AGENT_RELAY_USER_ID_QUERY = 'agent_relay_user_id';
+export const AGENT_RELAY_ORG_ID_HEADER = 'X-Agent-Relay-Org-Id';
+export const AGENT_RELAY_ORG_ID_QUERY = 'agent_relay_org_id';
+export const AGENT_RELAY_ORG_SLUG_HEADER = 'X-Agent-Relay-Org-Slug';
+export const AGENT_RELAY_ORG_SLUG_QUERY = 'agent_relay_org_slug';
 
 /** Upper bound on the originActor identifier — generous enough for a UA-style token. */
 const ORIGIN_ACTOR_MAX_LENGTH = 128;
@@ -66,4 +83,89 @@ export function sanitizeAgentRelayDistinctId(raw: string | undefined): string | 
   if (!trimmed) return undefined;
   if (!AGENT_RELAY_DISTINCT_ID_ALLOWED.test(trimmed)) return undefined;
   return trimmed.slice(0, AGENT_RELAY_DISTINCT_ID_MAX_LENGTH);
+}
+
+/** Identity ids share the distinct-id contract: same charset, same length cap. */
+export const sanitizeAgentRelayUserId = sanitizeAgentRelayDistinctId;
+export const sanitizeAgentRelayOrgId = sanitizeAgentRelayDistinctId;
+
+export function sanitizeAgentRelayOrgSlug(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (!AGENT_RELAY_DISTINCT_ID_ALLOWED.test(trimmed)) return undefined;
+  return trimmed.slice(0, 120);
+}
+
+/**
+ * Resolved identity for a client, normalized once at construction.
+ *
+ * A signed-in user id doubles as the distinct id, so a host that knows the user
+ * doesn't have to set both — the two sides stay on one PostHog person either way.
+ */
+export interface AgentRelayIdentity {
+  distinctId?: string;
+  userId?: string;
+  orgId?: string;
+  orgSlug?: string;
+}
+
+export function resolveAgentRelayIdentity(
+  ...sources: Array<Partial<InternalOrigin> | undefined>
+): AgentRelayIdentity {
+  const pick = (key: keyof InternalOrigin): string | undefined => {
+    for (const source of sources) {
+      const value = source?.[key];
+      if (typeof value === 'string' && value.trim()) return value;
+    }
+    return undefined;
+  };
+
+  const userId = sanitizeAgentRelayUserId(pick('agentRelayUserId'));
+  const distinctId = sanitizeAgentRelayDistinctId(pick('agentRelayDistinctId')) ?? userId;
+
+  return {
+    ...(distinctId ? { distinctId } : {}),
+    ...(userId ? { userId } : {}),
+    ...(sanitizeAgentRelayOrgId(pick('agentRelayOrgId'))
+      ? { orgId: sanitizeAgentRelayOrgId(pick('agentRelayOrgId')) }
+      : {}),
+    ...(sanitizeAgentRelayOrgSlug(pick('agentRelayOrgSlug'))
+      ? { orgSlug: sanitizeAgentRelayOrgSlug(pick('agentRelayOrgSlug')) }
+      : {}),
+  };
+}
+
+/** Identity headers for an HTTP request. Omits anything unset. */
+export function agentRelayIdentityHeaders(
+  identity: AgentRelayIdentity
+): Record<string, string> {
+  return {
+    ...(identity.distinctId ? { [AGENT_RELAY_DISTINCT_ID_HEADER]: identity.distinctId } : {}),
+    ...(identity.userId ? { [AGENT_RELAY_USER_ID_HEADER]: identity.userId } : {}),
+    ...(identity.orgId ? { [AGENT_RELAY_ORG_ID_HEADER]: identity.orgId } : {}),
+    ...(identity.orgSlug ? { [AGENT_RELAY_ORG_SLUG_HEADER]: identity.orgSlug } : {}),
+  };
+}
+
+/**
+ * Identity query params for a WebSocket upgrade — browsers can't set custom
+ * headers on a WS handshake, so the same values ride the query string.
+ */
+export function applyAgentRelayIdentityQuery(
+  url: URL,
+  identity: AgentRelayIdentity
+): void {
+  if (identity.distinctId) {
+    url.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, identity.distinctId);
+  }
+  if (identity.userId) {
+    url.searchParams.set(AGENT_RELAY_USER_ID_QUERY, identity.userId);
+  }
+  if (identity.orgId) {
+    url.searchParams.set(AGENT_RELAY_ORG_ID_QUERY, identity.orgId);
+  }
+  if (identity.orgSlug) {
+    url.searchParams.set(AGENT_RELAY_ORG_SLUG_QUERY, identity.orgSlug);
+  }
 }

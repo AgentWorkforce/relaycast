@@ -1012,6 +1012,61 @@ describe('RelayCast', () => {
       expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('abc123def4567890');
     });
 
+    it('forwards the cloud user and org identity headers', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('Test', {
+        baseUrl: 'http://localhost:3000',
+        agentRelayUserId: 'usr_abc123',
+        agentRelayOrgId: 'org_xyz789',
+        agentRelayOrgSlug: 'agentworkforce',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Agent-Relay-User-Id']).toBe('usr_abc123');
+      expect(init.headers['X-Agent-Relay-Org-Id']).toBe('org_xyz789');
+      expect(init.headers['X-Agent-Relay-Org-Slug']).toBe('agentworkforce');
+      // A signed-in user id doubles as the distinct id so callers need only one.
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBe('usr_abc123');
+    });
+
+    it('drops a malformed user id rather than forwarding it', async () => {
+      const { RelayCast } = await import('../relay.js');
+
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              data: { workspace_id: 'ws_1', api_key: 'rk_live_new', created_at: '2024-01-01' },
+            }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('Test', {
+        baseUrl: 'http://localhost:3000',
+        agentRelayUserId: 'usr\r\nX-Inject: bad',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['X-Agent-Relay-User-Id']).toBeUndefined();
+      expect(init.headers['X-Agent-Relay-Distinct-Id']).toBeUndefined();
+    });
+
     it('returns an existing workspace on idempotent duplicate create', async () => {
       const { RelayCast } = await import('../relay.js');
 

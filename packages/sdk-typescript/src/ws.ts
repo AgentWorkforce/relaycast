@@ -9,10 +9,11 @@ import type {
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import {
-  AGENT_RELAY_DISTINCT_ID_QUERY,
   SDK_ORIGIN,
-  sanitizeAgentRelayDistinctId,
+  applyAgentRelayIdentityQuery,
+  resolveAgentRelayIdentity,
   sanitizeOriginActor,
+  type AgentRelayIdentity,
   type InternalOrigin,
 } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
@@ -44,6 +45,16 @@ export interface WsClientOptions {
    * headers). Invalid values are dropped.
    */
   agentRelayDistinctId?: string;
+  /**
+   * Optional Agent Relay Cloud user id of the signed-in operator, forwarded as
+   * the `agent_relay_user_id` query param. Doubles as the distinct id when
+   * `agentRelayDistinctId` is unset.
+   */
+  agentRelayUserId?: string;
+  /** Optional Agent Relay Cloud organization id, for group analytics. */
+  agentRelayOrgId?: string;
+  /** Optional organization slug, for readable analytics breakdowns. */
+  agentRelayOrgSlug?: string;
 }
 
 /**
@@ -108,7 +119,7 @@ export class WsClient {
   private originClient: string;
   private originVersion: string;
   private originActor?: string;
-  private agentRelayDistinctId?: string;
+  private identity: AgentRelayIdentity;
   /** Highest `agent_seq` observed across delivered events; null until the first stamped event. */
   private lastSeenSeq: number | null = null;
   /** Receive time of the last seq-stamped event, used as `since` for DB-backed replay. */
@@ -142,9 +153,7 @@ export class WsClient {
     this.originClient = origin.client;
     this.originVersion = origin.version;
     this.originActor = sanitizeOriginActor(origin.originActor ?? options.originActor);
-    this.agentRelayDistinctId = sanitizeAgentRelayDistinctId(
-      origin.agentRelayDistinctId ?? options.agentRelayDistinctId,
-    );
+    this.identity = resolveAgentRelayIdentity(origin, options);
   }
 
   connect(): void {
@@ -178,9 +187,7 @@ export class WsClient {
     if (this.originActor) {
       wsUrl.searchParams.set('origin_actor', this.originActor);
     }
-    if (this.agentRelayDistinctId) {
-      wsUrl.searchParams.set(AGENT_RELAY_DISTINCT_ID_QUERY, this.agentRelayDistinctId);
-    }
+    applyAgentRelayIdentityQuery(wsUrl, this.identity);
 
     const ws = new WebSocket(wsUrl.toString());
     this.ws = ws;
