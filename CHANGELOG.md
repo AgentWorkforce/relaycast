@@ -31,6 +31,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Server telemetry for actions, routing, the agent directory, channel mute/unmute, and inbound Relayfile delivery is no longer discarded before it is emitted — those 14 event names were missing from the shared catalog, so validation rejected them and the hosted sink dropped them silently.
 - Allowed Swift clients to decode hosted agent lifecycle statuses and complete realtime connections.
 - Kept inbox and delivery reads independent from scheduled cleanup while large expired-delivery backlogs drain in bounded batches.
 - Node enrollment (`POST /v1/nodes`) now keys on `node_id` when supplied: re-enrolling rotates (and can rename) the same node in place, and a name held by a different node is rejected with `node_name_conflict` (409) instead of silently rewriting the other node.
