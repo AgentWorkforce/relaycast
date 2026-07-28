@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+- `extractActorIdentity(request)` reads caller-declared identity from `X-Agent-Relay-Machine-Id` / `X-Agent-Relay-User-Id` / `X-Agent-Relay-Org-Id` / `X-Agent-Relay-Org-Slug`, falling back to the `agent_relay_machine_id` / `agent_relay_user_id` / `agent_relay_org_id` / `agent_relay_org_slug` query params for WebSocket upgrades (browsers cannot set custom headers on a handshake). Returns only the fields that were present and well-formed; malformed values are dropped rather than truncated.
+- `emitServerEvent` folds those into every server event as `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug`, plus `is_authenticated`, and resolves the distinct id as `actor_user_id ?? client_distinct_id ?? workspace_id`. Alongside the existing `workspace_id` this makes machines-per-workspace, accounts-per-machine, and machines-per-account answerable. These are analytics dimensions only and never affect authorization.
 
 ## [6.2.0] - 2026-07-17
 

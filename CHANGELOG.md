@@ -16,11 +16,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Callers can declare who is behind a request with `X-Agent-Relay-Machine-Id` / `X-Agent-Relay-User-Id` / `X-Agent-Relay-Org-Id` / `X-Agent-Relay-Org-Slug` (or the matching `agent_relay_*` query params on a WebSocket upgrade). Server telemetry records them as `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug` and keys events by the user instead of the workspace, so hosted usage can be reported per machine, per person, and per organization — including how many machines share a workspace and whether they are signed into one account or several. The SDK accepts `agentRelayMachineId` / `agentRelayUserId` / `agentRelayOrgId` / `agentRelayOrgSlug`; a supplied user id doubles as the distinct id, and the machine id is always sent alongside it rather than instead of it. These are analytics dimensions only and never affect authorization.
 
 ### Fixed
 
 - Corrected the canonical `deliver` wire fixture in `@relaycast/types` to the `{type, data}` payload the engine actually emits, so SDK authors are not coding against a stale flat shape.
+- SDK telemetry identity now reaches the WebSocket connection, not just HTTP requests — `ws_session_started` events were anonymous even when the caller supplied `agentRelayDistinctId`.
+- SDK identity now also reaches agent (`/v1/node/ws`) sockets, not only the workspace observer socket, so an agent session's `ws_session_started` carries the same actor dimensions its HTTP requests do.
 
 ## [6.2.0] - 2026-07-17
 
@@ -29,7 +35,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Durable `agent.exited` event when a node-hosted agent leaves (deregister, missing from an inventory sync, or release), carrying `agent_id`, `agent_name`, `node_id`, the spawn `invocation_id`, and a `reason`; the spawn's caller is notified directly.
 - Durable `node.status.online` / `node.status.offline` events on node liveness transitions (offline carries a `reason` like `liveness_timeout`). Wildcard webhook subscriptions (`events: ["*"]`) receive all three new events automatically.
 - `POST /v1/agents/disconnect` accepts an optional `deregister` flag; SDK `disconnect()` and `presence.markOffline()` take `{ deregister?: boolean }` to opt into full node teardown.
-- Callers can declare who is behind a request with `X-Agent-Relay-Machine-Id` / `X-Agent-Relay-User-Id` / `X-Agent-Relay-Org-Id` / `X-Agent-Relay-Org-Slug` (or the matching `agent_relay_*` query params on a WebSocket upgrade). Server telemetry records them as `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug` and keys events by the user instead of the workspace, so hosted usage can be reported per machine, per person, and per organization — including how many machines share a workspace and whether they are signed into one account or several. The SDK accepts `agentRelayMachineId` / `agentRelayUserId` / `agentRelayOrgId` / `agentRelayOrgSlug`; a supplied user id doubles as the distinct id, and the machine id is always sent alongside it rather than instead of it. These are analytics dimensions only and never affect authorization.
 
 ### Changed
 
@@ -37,7 +42,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- SDK telemetry identity now reaches the WebSocket connection, not just HTTP requests — `ws_session_started` events were anonymous even when the caller supplied `agentRelayDistinctId`.
 - Node enrollment (`POST /v1/nodes`) now keys on `node_id` when supplied: re-enrolling rotates (and can rename) the same node in place, and a name held by a different node is rejected with `node_name_conflict` (409) instead of silently rewriting the other node.
 - Stopped a same-connection node broker `node.register` re-register from silently gating deliveries: already-announced agents keep their delivery readiness, and readiness-gated skips stamp the delivery row with observable retry metadata instead of failing silently.
 - Recovered WebSocket node messages whose single live dispatch was lost or failed: instead of letting rows sit queued until the mailbox TTL dead-letters them, the periodic delivery sweep now redrives queued ws-node rows (not just `http_push`), replaying each agent's backlog in ascending order so a later message never outruns an earlier one.

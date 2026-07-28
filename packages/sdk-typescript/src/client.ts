@@ -5,6 +5,7 @@ import {
   ORIGIN_ACTOR_HEADER,
   SDK_ORIGIN,
   agentRelayIdentityHeaders,
+  agentRelayIdentityOrigin,
   resolveAgentRelayIdentity,
   sanitizeOriginActor,
   type AgentRelayIdentity,
@@ -229,19 +230,24 @@ export class HttpClient {
     return this._retryPolicy;
   }
 
+  /**
+   * This client's full origin — client/version, origin actor, and every
+   * identity dimension — for handing to a derived HTTP or WebSocket client.
+   * Single source so a newly added dimension reaches every socket at once.
+   */
+  get internalOrigin(): InternalOrigin {
+    return {
+      client: this._originClient,
+      version: this._originVersion,
+      ...(this._originActor ? { originActor: this._originActor } : {}),
+      ...agentRelayIdentityOrigin(this._identity),
+    };
+  }
+
   withApiKey(apiKey: string): HttpClient {
     return new HttpClient(withInternalOrigin(
       { apiKey, baseUrl: this._baseUrl, retryPolicy: this._retryPolicy },
-      {
-        client: this._originClient,
-        version: this._originVersion,
-        ...(this._originActor ? { originActor: this._originActor } : {}),
-        ...(this._identity.distinctId ? { agentRelayDistinctId: this._identity.distinctId } : {}),
-        ...(this._identity.machineId ? { agentRelayMachineId: this._identity.machineId } : {}),
-        ...(this._identity.userId ? { agentRelayUserId: this._identity.userId } : {}),
-        ...(this._identity.orgId ? { agentRelayOrgId: this._identity.orgId } : {}),
-        ...(this._identity.orgSlug ? { agentRelayOrgSlug: this._identity.orgSlug } : {}),
-      },
+      this.internalOrigin,
     ));
   }
 

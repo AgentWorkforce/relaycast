@@ -150,6 +150,26 @@ export function resolveAgentRelayIdentity(
   };
 }
 
+/**
+ * Project a resolved identity back onto the {@link InternalOrigin} fields.
+ *
+ * Every place that hands identity to another client (`withApiKey`, and the
+ * WebSocket clients built by `RelayCast` and `AgentClient`) goes through this
+ * rather than spreading the fields by hand — that duplication is how the agent
+ * socket silently missed the user/machine/org dimensions when they were added.
+ */
+export function agentRelayIdentityOrigin(
+  identity: AgentRelayIdentity
+): Partial<InternalOrigin> {
+  return {
+    ...(identity.distinctId ? { agentRelayDistinctId: identity.distinctId } : {}),
+    ...(identity.machineId ? { agentRelayMachineId: identity.machineId } : {}),
+    ...(identity.userId ? { agentRelayUserId: identity.userId } : {}),
+    ...(identity.orgId ? { agentRelayOrgId: identity.orgId } : {}),
+    ...(identity.orgSlug ? { agentRelayOrgSlug: identity.orgSlug } : {}),
+  };
+}
+
 /** Identity headers for an HTTP request. Omits anything unset. */
 export function agentRelayIdentityHeaders(
   identity: AgentRelayIdentity

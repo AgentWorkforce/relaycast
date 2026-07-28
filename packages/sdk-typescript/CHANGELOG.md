@@ -7,7 +7,14 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+- `RelayCastOptions`, `ClientOptions`, `WsClientOptions`, and the workspace bootstrap options accept `agentRelayMachineId`, `agentRelayUserId`, `agentRelayOrgId`, and `agentRelayOrgSlug`. They are sent as `X-Agent-Relay-Machine-Id` / `-User-Id` / `-Org-Id` / `-Org-Slug` on HTTP requests and as the matching `agent_relay_*` query params on WebSocket upgrades. A supplied `agentRelayUserId` doubles as the distinct id when `agentRelayDistinctId` is unset, so a host that knows the user only sets one field; the machine id is always sent alongside the distinct id, never instead of it.
+- `HttpClient.internalOrigin` exposes the client's full origin (client/version, origin actor, and every identity dimension) as the single source both WebSocket clients build from, so a newly added dimension reaches every socket at once.
+
+### Fixed
+- Identity now reaches WebSocket connections, not just HTTP requests. `RelayCast` never forwarded `agentRelayDistinctId` to its observer socket, and `AgentClient` forwarded only the distinct id to its `/v1/node/ws` socket — so agent sessions reported `ws_session_started` as unauthenticated and without actor dimensions even when the corresponding HTTP requests carried them.
 
 ## [6.2.0] - 2026-07-17
 

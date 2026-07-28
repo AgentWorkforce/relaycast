@@ -239,26 +239,7 @@ export class RelayCast {
         token: this.client.apiKey,
         baseUrl: this.client.baseUrl,
       },
-      {
-        client: this.client.originClient,
-        version: this.client.originVersion,
-        ...(this.client.originActor ? { originActor: this.client.originActor } : {}),
-        // Identity was only reaching HTTP requests, leaving every
-        // `ws_session_started` event anonymous even for a signed-in caller.
-        ...(this.client.agentRelayDistinctId
-          ? { agentRelayDistinctId: this.client.agentRelayDistinctId }
-          : {}),
-        ...(this.client.agentRelayMachineId
-          ? { agentRelayMachineId: this.client.agentRelayMachineId }
-          : {}),
-        ...(this.client.agentRelayUserId
-          ? { agentRelayUserId: this.client.agentRelayUserId }
-          : {}),
-        ...(this.client.agentRelayOrgId ? { agentRelayOrgId: this.client.agentRelayOrgId } : {}),
-        ...(this.client.agentRelayOrgSlug
-          ? { agentRelayOrgSlug: this.client.agentRelayOrgSlug }
-          : {}),
-      },
+      this.client.internalOrigin,
     ));
   }
 

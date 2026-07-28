@@ -174,6 +174,81 @@ describe('RelayCast WebSocket identity', () => {
     vi.unstubAllGlobals();
   });
 
+  it('forwards identity onto an agent socket too, not just the observer socket', async () => {
+    const { RelayCast } = await import('../relay.js');
+
+    // The agent socket fetches a direct-node token before opening.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            data: { token: 'nt_live_1', node_id: 'nd_1', node_name: 'sdk-direct' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const relay = new RelayCast({
+      apiKey: 'rk_live_1',
+      baseUrl: 'http://localhost:8080',
+      agentRelayUserId: 'usr_abc123',
+      agentRelayMachineId: 'abc123def4567890',
+      agentRelayOrgId: 'org_xyz789',
+      agentRelayOrgSlug: 'agentworkforce',
+    });
+
+    const agent = relay.as('at_live_worker');
+    agent.connect();
+
+    // Opening is async behind the token fetch; wait for the socket to appear.
+    for (let i = 0; i < 50 && MockWebSocket.instances.length < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const agentSocket = MockWebSocket.instances.find((ws) => ws.url.includes('/v1/node/ws'));
+    expect(agentSocket, 'agent node socket was never opened').toBeDefined();
+
+    const url = new URL(agentSocket!.url);
+    expect(url.searchParams.get('agent_relay_user_id')).toBe('usr_abc123');
+    expect(url.searchParams.get('agent_relay_machine_id')).toBe('abc123def4567890');
+    expect(url.searchParams.get('agent_relay_org_id')).toBe('org_xyz789');
+    expect(url.searchParams.get('agent_relay_org_slug')).toBe('agentworkforce');
+    expect(url.searchParams.get('agent_relay_distinct_id')).toBe('usr_abc123');
+
+    agent.disconnect();
+    relay.disconnect();
+  });
+
+  it('exposes one origin carrying every dimension, so new fields reach all sockets', async () => {
+    const { HttpClient } = await import('../client.js');
+
+    const client = new HttpClient({
+      apiKey: 'rk_live_1',
+      originActor: 'agent-relay-cli/cli',
+      agentRelayUserId: 'usr_abc123',
+      agentRelayMachineId: 'abc123def4567890',
+      agentRelayOrgId: 'org_xyz789',
+      agentRelayOrgSlug: 'agentworkforce',
+    });
+
+    // Both WebSocket clients (RelayCast's observer socket and AgentClient's
+    // node socket) build their internal origin from exactly this, so a
+    // dimension present here cannot be missing from one socket and not the
+    // other — the drift that left agent sockets unauthenticated.
+    expect(client.internalOrigin).toMatchObject({
+      client: '@relaycast/sdk',
+      originActor: 'agent-relay-cli/cli',
+      agentRelayDistinctId: 'usr_abc123',
+      agentRelayMachineId: 'abc123def4567890',
+      agentRelayUserId: 'usr_abc123',
+      agentRelayOrgId: 'org_xyz789',
+      agentRelayOrgSlug: 'agentworkforce',
+    });
+  });
+
   it('forwards identity onto the socket, not just HTTP requests', async () => {
     const { RelayCast } = await import('../relay.js');
 
