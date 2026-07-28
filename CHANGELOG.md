@@ -16,11 +16,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Callers can attribute requests to a machine, user, and organization via `X-Agent-Relay-Machine-Id` / `-User-Id` / `-Org-Id` / `-Org-Slug` headers (or `agent_relay_*` query params on WebSocket upgrades), so hosted usage is reported per person and per customer rather than only per workspace. Analytics only — never affects authorization. See the README's Telemetry Attribution section.
 
 ### Fixed
 
 - Corrected the canonical `deliver` wire fixture in `@relaycast/types` to the `{type, data}` payload the engine actually emits, so SDK authors are not coding against a stale flat shape.
+- SDK telemetry identity now reaches WebSocket connections, both the workspace observer stream and agent sockets. `ws_session_started` was previously anonymous for identified callers.
 
 ## [6.2.0] - 2026-07-17
 

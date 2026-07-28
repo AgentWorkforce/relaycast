@@ -125,11 +125,51 @@ API errors use `{ ok: false, error: { code, message } }`. Invalid or expired age
 
 ## Telemetry Attribution
 
-SDK and wrapper clients may set a `harness` option, such as `codex` or
-`claude-code/2.3 (model=opus-4.8)`, to attribute traffic in server telemetry.
-The TypeScript SDK sends this as `X-Relaycast-Harness` for HTTP requests and as
-the `harness` query parameter for WebSocket connections. Invalid values are
-omitted.
+Clients may declare who is driving a request so server-side product telemetry
+can attribute it. Everything here is optional and analytics-only — it never
+affects authentication, authorization, or routing.
+
+```ts
+const relay = new RelayCast({
+  apiKey: process.env.RELAY_API_KEY!,
+  originActor: 'agent-relay-cli/agent/claude-code',
+  agentRelayUserId: 'usr_abc123',      // signed-in user, if your product has one
+  agentRelayMachineId: 'a1b2c3d4e5f6', // anonymous hashed machine id
+  agentRelayOrgId: 'org_xyz789',
+  agentRelayOrgSlug: 'acme',
+});
+```
+
+| Option | HTTP header | WS query parameter |
+| --- | --- | --- |
+| `originActor` | `X-Relaycast-Origin-Actor` | `origin_actor` |
+| `agentRelayDistinctId` | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` |
+| `agentRelayMachineId` | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` |
+| `agentRelayUserId` | `X-Agent-Relay-User-Id` | `agent_relay_user_id` |
+| `agentRelayOrgId` | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` |
+| `agentRelayOrgSlug` | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` |
+
+`originActor` is a UA-style path, `{app}/{type}[/{name}]` — for example
+`agent-relay-cli/agent/claude-code` or `pear/user/send-message-box`. (It
+replaced the older `harness` option and its `X-Relaycast-Harness` header.)
+
+Relaycast has no user table of its own — a workspace is an API-key row — so
+these identity fields are the only way hosted usage can be reported per person
+or per organization rather than only per workspace. `agentRelayUserId` doubles
+as the analytics person key when `agentRelayDistinctId` is unset, so a host that
+knows the user only has to set one field. `agentRelayMachineId` is sent
+*alongside* the person key rather than instead of it, which is what makes
+"how many machines share this workspace" and "are they one account or several"
+answerable.
+
+The query-parameter forms exist because browsers cannot set custom headers on a
+WebSocket upgrade; the SDK applies them automatically to both the workspace
+observer socket and agent sockets.
+
+Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
+slug, 128 for the rest. Anything else is dropped — identity values are never
+truncated to fit, since a shortened id would be a different id and could
+attribute usage to the wrong person or organization.
 
 ## Core Concepts
 

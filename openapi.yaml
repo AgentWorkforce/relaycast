@@ -11,9 +11,36 @@ info:
     - Success: `{ ok: true, data: ... }`
     - Error: `{ ok: false, error: { code, message } }`
 
-    Clients may include `X-Relaycast-Harness` on HTTP requests to attribute
-    traffic in server telemetry. WebSocket clients that cannot send custom
-    headers may use the `harness` query parameter instead.
+    Telemetry attribution (optional, all requests):
+
+    Clients may declare who is driving a request so server-side product
+    telemetry can attribute it. These are analytics dimensions only — they
+    never affect authentication, authorization, or routing, and are safe to
+    omit entirely.
+
+    | Header | Query parameter | Meaning |
+    | --- | --- | --- |
+    | `X-Relaycast-Origin-Actor` | `origin_actor` | UA-style path identifying the caller, `{app}/{type}[/{name}]` (e.g. `agent-relay-cli/agent/claude-code`). Supersedes the former `X-Relaycast-Harness`. |
+    | `X-Agent-Relay-Distinct-Id` | `agent_relay_distinct_id` | Analytics person key for the caller. |
+    | `X-Agent-Relay-Machine-Id` | `agent_relay_machine_id` | Anonymous hashed id of the host machine. Sent alongside the distinct id, not instead of it. |
+    | `X-Agent-Relay-User-Id` | `agent_relay_user_id` | Signed-in user id from the calling product's own account system. Used as the person key when present. |
+    | `X-Agent-Relay-Org-Id` | `agent_relay_org_id` | Organization id, for per-customer rollups. |
+    | `X-Agent-Relay-Org-Slug` | `agent_relay_org_slug` | Human-readable organization slug. |
+
+    Relaycast has no user table of its own — a workspace is an API-key row — so
+    these are the only way hosted usage can be reported per person or per
+    organization rather than only per workspace.
+
+    The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
+    `/v1/node/ws`), where browsers cannot set custom headers; the header wins
+    when both are present.
+
+    Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the
+    org slug, 128 for the rest. A value that fails either rule is ignored, and
+    only that dimension is dropped — the request itself is unaffected. Identity
+    values are never truncated to fit: a shortened id would be a different id
+    and could attribute usage to the wrong person or organization.
+    (`X-Agent-Relay-Distinct-Id` predates this rule and still truncates at 128.)
   version: 1.0.0
   contact:
     name: Relaycast

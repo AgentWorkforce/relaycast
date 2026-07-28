@@ -7,7 +7,14 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+- Client and workspace-bootstrap options accept `agentRelayMachineId`, `agentRelayUserId`, `agentRelayOrgId`, and `agentRelayOrgSlug`, sent as `X-Agent-Relay-*` headers on HTTP and as `agent_relay_*` query params on WebSocket upgrades. `agentRelayUserId` doubles as the distinct id when `agentRelayDistinctId` is unset; the machine id is always sent alongside the distinct id, never instead of it.
+
+### Fixed
+- Identity now reaches WebSocket connections, not just HTTP requests: `RelayCast` never forwarded it to its observer socket, and `AgentClient` forwarded only the distinct id to its `/v1/node/ws` socket, so agent sessions reported `ws_session_started` as unauthenticated.
+- A malformed higher-priority identity value no longer shadows a valid lower-priority one; each source is validated before it wins.
 
 ## [6.2.0] - 2026-07-17
 

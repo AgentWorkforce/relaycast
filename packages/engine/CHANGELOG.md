@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+- `extractActorIdentity(request)` reads caller-declared identity from the `X-Agent-Relay-Machine-Id` / `-User-Id` / `-Org-Id` / `-Org-Slug` headers, falling back to the matching `agent_relay_*` query params for WebSocket upgrades. Malformed or oversized values are dropped rather than truncated.
+- Server events carry `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug` and `is_authenticated`, and key on the caller's user id when present (`actor_user_id ?? client_distinct_id ?? workspace_id`). Analytics dimensions only; they never affect authorization.
 
 ## [6.2.0] - 2026-07-17
 

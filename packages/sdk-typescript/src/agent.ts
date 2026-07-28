@@ -263,12 +263,7 @@ export class AgentClient {
         nodeRegistration: () => this.directNodeRegistration(),
         autoAckDeliveries: true,
       },
-      {
-        client: this.client.originClient,
-        version: this.client.originVersion,
-        ...(this.client.originActor ? { originActor: this.client.originActor } : {}),
-        ...(this.client.agentRelayDistinctId ? { agentRelayDistinctId: this.client.agentRelayDistinctId } : {}),
-      },
+      this.client.internalOrigin,
     ));
     this.ws.on('open', () => {
       void this.presence.markOnline().catch(() => {});

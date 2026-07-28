@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractActorIdentity,
   extractAgentRelayDistinctId,
   extractOriginActor,
   UNKNOWN_ORIGIN_ACTOR,
@@ -137,5 +138,133 @@ describe("extractAgentRelayDistinctId", () => {
     expect(
       extractAgentRelayDistinctId(req({ agentRelayDistinctId: "a".repeat(200) })),
     ).toBe("a".repeat(128));
+  });
+});
+
+function identityReq(
+  init: {
+    headers?: Record<string, string>;
+    query?: Record<string, string>;
+  } = {},
+): Request {
+  const url = new URL("https://cast.agentrelay.com/v1/activity");
+  for (const [key, value] of Object.entries(init.query ?? {})) {
+    url.searchParams.set(key, value);
+  }
+  return new Request(url, { headers: new Headers(init.headers ?? {}) });
+}
+
+describe("extractActorIdentity", () => {
+  it("reads user, org, and slug from headers", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          headers: {
+            "X-Agent-Relay-User-Id": "usr_abc123",
+            "X-Agent-Relay-Org-Id": "org_xyz789",
+            "X-Agent-Relay-Org-Slug": "agentworkforce",
+          },
+        }),
+      ),
+    ).toEqual({
+      actor_user_id: "usr_abc123",
+      actor_org_id: "org_xyz789",
+      actor_org_slug: "agentworkforce",
+    });
+  });
+
+  it("falls back to query params for WebSocket upgrades", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          query: {
+            agent_relay_machine_id: "abc123def4567890",
+            agent_relay_user_id: "usr_abc123",
+            agent_relay_org_id: "org_xyz789",
+            agent_relay_org_slug: "agentworkforce",
+          },
+        }),
+      ),
+    ).toEqual({
+      actor_machine_id: "abc123def4567890",
+      actor_user_id: "usr_abc123",
+      actor_org_id: "org_xyz789",
+      actor_org_slug: "agentworkforce",
+    });
+  });
+
+  it("prefers the header over the query param", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          headers: { "X-Agent-Relay-User-Id": "usr_header" },
+          query: { agent_relay_user_id: "usr_query" },
+        }),
+      ).actor_user_id,
+    ).toBe("usr_header");
+  });
+
+  it("omits fields entirely when absent, so no empty props are emitted", () => {
+    expect(extractActorIdentity(identityReq())).toEqual({});
+  });
+
+  it("drops malformed values rather than forwarding them", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          headers: {
+            "X-Agent-Relay-User-Id": "usr/abc",
+            "X-Agent-Relay-Org-Id": "   ",
+            "X-Agent-Relay-Org-Slug": "fine-slug",
+          },
+        }),
+      ),
+    ).toEqual({ actor_org_slug: "fine-slug" });
+  });
+
+  // A truncated id is a *different* id — it can collide with a real one and
+  // attribute usage to the wrong person or company. Dropping it means the event
+  // is keyed by workspace, which is merely less specific rather than wrong.
+  it("drops an oversized id instead of truncating it into a different id", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({ headers: { "X-Agent-Relay-User-Id": "u".repeat(129) } }),
+      ).actor_user_id,
+    ).toBeUndefined();
+  });
+
+  it("drops an oversized org slug", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({ headers: { "X-Agent-Relay-Org-Slug": "s".repeat(121) } }),
+      ).actor_org_slug,
+    ).toBeUndefined();
+  });
+
+  it("keeps values exactly at the limit", () => {
+    const identity = extractActorIdentity(
+      identityReq({
+        headers: {
+          "X-Agent-Relay-User-Id": "u".repeat(128),
+          "X-Agent-Relay-Org-Slug": "s".repeat(120),
+        },
+      }),
+    );
+
+    expect(identity.actor_user_id).toHaveLength(128);
+    expect(identity.actor_org_slug).toHaveLength(120);
+  });
+
+  it("drops only the oversized dimension, keeping its siblings", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          headers: {
+            "X-Agent-Relay-User-Id": "u".repeat(200),
+            "X-Agent-Relay-Org-Id": "org_xyz789",
+          },
+        }),
+      ),
+    ).toEqual({ actor_org_id: "org_xyz789" });
   });
 });
