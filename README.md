@@ -164,8 +164,12 @@ answerable.
 
 The query-parameter forms exist because browsers cannot set custom headers on a
 WebSocket upgrade; the SDK applies them automatically to both the workspace
-observer socket and agent sockets. Invalid values are dropped rather than
-truncated.
+observer socket and agent sockets.
+
+Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the org
+slug, 128 for the rest. Anything else is dropped — identity values are never
+truncated to fit, since a shortened id would be a different id and could
+attribute usage to the wrong person or organization.
 
 ## Core Concepts
 

@@ -87,6 +87,7 @@ export function extractAgentRelayDistinctId(
     request,
     AGENT_RELAY_DISTINCT_ID_HEADER,
     AGENT_RELAY_DISTINCT_ID_QUERY,
+    { maxLength: 128, onOversize: "truncate" },
   );
 }
 
@@ -95,15 +96,23 @@ export function extractAgentRelayDistinctId(
  * WebSocket upgrades from browsers can't set custom headers, so the SDK forwards
  * these on the query string (mirrors how `origin_actor` works).
  *
- * Rejects anything outside the distinct-id charset rather than truncating, which
- * is what keeps a malformed upstream value from smuggling a header injection or
- * a misleading id into analytics.
+ * Anything outside the distinct-id charset is dropped, which keeps a malformed
+ * upstream value from smuggling a header injection or a misleading id into
+ * analytics.
+ *
+ * `onOversize` differs by dimension on purpose:
+ *   - `reject` for the actor dimensions. A truncated user or org id is a
+ *     *different* id that can collide with a real one and attribute usage to
+ *     the wrong person or company, so no attribution beats wrong attribution.
+ *     Every SDK caps well below these limits, so only a malformed caller hits it.
+ *   - `truncate` for `agent_relay_distinct_id`, whose cap-at-128 behaviour is
+ *     already shipped and covered by a test; changing it is out of scope here.
  */
 function readIdentityValue(
   request: Request,
   header: string,
   query: string,
-  maxLength = 128,
+  { maxLength, onOversize }: { maxLength: number; onOversize: "reject" | "truncate" },
 ): string | undefined {
   const raw =
     request.headers.get(header) ??
@@ -113,8 +122,11 @@ function readIdentityValue(
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   if (!AGENT_RELAY_DISTINCT_ID_ALLOWED.test(trimmed)) return undefined;
+  if (trimmed.length > maxLength) {
+    return onOversize === "reject" ? undefined : trimmed.slice(0, maxLength);
+  }
 
-  return trimmed.slice(0, maxLength);
+  return trimmed;
 }
 
 export interface ActorIdentity {
@@ -146,22 +158,25 @@ export function extractActorIdentity(request: Request): ActorIdentity {
     request,
     AGENT_RELAY_MACHINE_ID_HEADER,
     AGENT_RELAY_MACHINE_ID_QUERY,
+    { maxLength: 128, onOversize: "reject" },
   );
   const userId = readIdentityValue(
     request,
     AGENT_RELAY_USER_ID_HEADER,
     AGENT_RELAY_USER_ID_QUERY,
+    { maxLength: 128, onOversize: "reject" },
   );
   const orgId = readIdentityValue(
     request,
     AGENT_RELAY_ORG_ID_HEADER,
     AGENT_RELAY_ORG_ID_QUERY,
+    { maxLength: 128, onOversize: "reject" },
   );
   const orgSlug = readIdentityValue(
     request,
     AGENT_RELAY_ORG_SLUG_HEADER,
     AGENT_RELAY_ORG_SLUG_QUERY,
-    120,
+    { maxLength: 120, onOversize: "reject" },
   );
 
   return {

@@ -20,13 +20,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Callers can declare who is behind a request with `X-Agent-Relay-Machine-Id` / `X-Agent-Relay-User-Id` / `X-Agent-Relay-Org-Id` / `X-Agent-Relay-Org-Slug` (or the matching `agent_relay_*` query params on a WebSocket upgrade). Server telemetry records them as `actor_machine_id` / `actor_user_id` / `actor_org_id` / `actor_org_slug` and keys events by the user instead of the workspace, so hosted usage can be reported per machine, per person, and per organization — including how many machines share a workspace and whether they are signed into one account or several. The SDK accepts `agentRelayMachineId` / `agentRelayUserId` / `agentRelayOrgId` / `agentRelayOrgSlug`; a supplied user id doubles as the distinct id, and the machine id is always sent alongside it rather than instead of it. These are analytics dimensions only and never affect authorization.
+- Callers can attribute requests to a machine, user, and organization via `X-Agent-Relay-Machine-Id` / `-User-Id` / `-Org-Id` / `-Org-Slug` headers (or `agent_relay_*` query params on WebSocket upgrades), so hosted usage is reported per person and per customer rather than only per workspace. Analytics only — never affects authorization. See the README's Telemetry Attribution section.
 
 ### Fixed
 
 - Corrected the canonical `deliver` wire fixture in `@relaycast/types` to the `{type, data}` payload the engine actually emits, so SDK authors are not coding against a stale flat shape.
-- SDK telemetry identity now reaches the WebSocket connection, not just HTTP requests — `ws_session_started` events were anonymous even when the caller supplied `agentRelayDistinctId`.
-- SDK identity now also reaches agent (`/v1/node/ws`) sockets, not only the workspace observer socket, so an agent session's `ws_session_started` carries the same actor dimensions its HTTP requests do.
+- SDK telemetry identity now reaches WebSocket connections, both the workspace observer stream and agent sockets. `ws_session_started` was previously anonymous for identified callers.
 
 ## [6.2.0] - 2026-07-17
 

@@ -124,29 +124,40 @@ export interface AgentRelayIdentity {
 export function resolveAgentRelayIdentity(
   ...sources: Array<Partial<InternalOrigin> | undefined>
 ): AgentRelayIdentity {
-  const pick = (key: keyof InternalOrigin): string | undefined => {
+  /**
+   * First candidate that survives sanitization wins.
+   *
+   * Sanitizing inside the loop rather than after it matters: a malformed
+   * higher-priority value would otherwise shadow a valid lower-priority one and
+   * drop the dimension entirely, so a wrapping host with a bad internal value
+   * silently lost identity the caller had supplied correctly.
+   */
+  const pick = (
+    key: keyof InternalOrigin,
+    sanitize: (raw: string | undefined) => string | undefined
+  ): string | undefined => {
     for (const source of sources) {
       const value = source?.[key];
-      if (typeof value === 'string' && value.trim()) return value;
+      if (typeof value !== 'string') continue;
+      const sanitized = sanitize(value);
+      if (sanitized) return sanitized;
     }
     return undefined;
   };
 
-  const userId = sanitizeAgentRelayUserId(pick('agentRelayUserId'));
-  const machineId = sanitizeAgentRelayMachineId(pick('agentRelayMachineId'));
+  const userId = pick('agentRelayUserId', sanitizeAgentRelayUserId);
+  const machineId = pick('agentRelayMachineId', sanitizeAgentRelayMachineId);
+  const orgId = pick('agentRelayOrgId', sanitizeAgentRelayOrgId);
+  const orgSlug = pick('agentRelayOrgSlug', sanitizeAgentRelayOrgSlug);
   const distinctId =
-    sanitizeAgentRelayDistinctId(pick('agentRelayDistinctId')) ?? userId ?? machineId;
+    pick('agentRelayDistinctId', sanitizeAgentRelayDistinctId) ?? userId ?? machineId;
 
   return {
     ...(distinctId ? { distinctId } : {}),
     ...(machineId ? { machineId } : {}),
     ...(userId ? { userId } : {}),
-    ...(sanitizeAgentRelayOrgId(pick('agentRelayOrgId'))
-      ? { orgId: sanitizeAgentRelayOrgId(pick('agentRelayOrgId')) }
-      : {}),
-    ...(sanitizeAgentRelayOrgSlug(pick('agentRelayOrgSlug'))
-      ? { orgSlug: sanitizeAgentRelayOrgSlug(pick('agentRelayOrgSlug')) }
-      : {}),
+    ...(orgId ? { orgId } : {}),
+    ...(orgSlug ? { orgSlug } : {}),
   };
 }
 

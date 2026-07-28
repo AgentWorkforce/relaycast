@@ -33,9 +33,14 @@ info:
 
     The query-parameter forms exist for WebSocket upgrades (`/v1/ws`,
     `/v1/node/ws`), where browsers cannot set custom headers; the header wins
-    when both are present. Values must match `[A-Za-z0-9._:-]+` (org slug up to
-    120 characters, the rest up to 128). Malformed values are ignored rather
-    than truncated.
+    when both are present.
+
+    Values must match `[A-Za-z0-9._:-]+` and stay within 120 characters for the
+    org slug, 128 for the rest. A value that fails either rule is ignored, and
+    only that dimension is dropped — the request itself is unaffected. Identity
+    values are never truncated to fit: a shortened id would be a different id
+    and could attribute usage to the wrong person or organization.
+    (`X-Agent-Relay-Distinct-Id` predates this rule and still truncates at 128.)
   version: 1.0.0
   contact:
     name: Relaycast

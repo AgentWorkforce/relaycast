@@ -222,19 +222,49 @@ describe("extractActorIdentity", () => {
     ).toEqual({ actor_org_slug: "fine-slug" });
   });
 
-  it("caps ids at the wire contract length", () => {
+  // A truncated id is a *different* id — it can collide with a real one and
+  // attribute usage to the wrong person or company. Dropping it means the event
+  // is keyed by workspace, which is merely less specific rather than wrong.
+  it("drops an oversized id instead of truncating it into a different id", () => {
     expect(
       extractActorIdentity(
-        identityReq({ headers: { "X-Agent-Relay-User-Id": "u".repeat(200) } }),
+        identityReq({ headers: { "X-Agent-Relay-User-Id": "u".repeat(129) } }),
       ).actor_user_id,
-    ).toHaveLength(128);
+    ).toBeUndefined();
   });
 
-  it("caps the org slug at 120 characters", () => {
+  it("drops an oversized org slug", () => {
     expect(
       extractActorIdentity(
-        identityReq({ headers: { "X-Agent-Relay-Org-Slug": "s".repeat(200) } }),
+        identityReq({ headers: { "X-Agent-Relay-Org-Slug": "s".repeat(121) } }),
       ).actor_org_slug,
-    ).toHaveLength(120);
+    ).toBeUndefined();
+  });
+
+  it("keeps values exactly at the limit", () => {
+    const identity = extractActorIdentity(
+      identityReq({
+        headers: {
+          "X-Agent-Relay-User-Id": "u".repeat(128),
+          "X-Agent-Relay-Org-Slug": "s".repeat(120),
+        },
+      }),
+    );
+
+    expect(identity.actor_user_id).toHaveLength(128);
+    expect(identity.actor_org_slug).toHaveLength(120);
+  });
+
+  it("drops only the oversized dimension, keeping its siblings", () => {
+    expect(
+      extractActorIdentity(
+        identityReq({
+          headers: {
+            "X-Agent-Relay-User-Id": "u".repeat(200),
+            "X-Agent-Relay-Org-Id": "org_xyz789",
+          },
+        }),
+      ),
+    ).toEqual({ actor_org_id: "org_xyz789" });
   });
 });

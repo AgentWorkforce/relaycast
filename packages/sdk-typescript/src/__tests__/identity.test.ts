@@ -38,6 +38,27 @@ describe('resolveAgentRelayIdentity', () => {
     ).toMatchObject({ distinctId: 'abc123def4567890', userId: 'usr_abc123' });
   });
 
+  it('falls through to a valid lower-priority source when the first is malformed', () => {
+    // A wrapping host's internal origin normally wins, but a malformed value
+    // there must not shadow a valid one the caller supplied — that silently
+    // dropped identity the caller had provided correctly.
+    expect(
+      resolveAgentRelayIdentity(
+        { agentRelayUserId: 'usr\r\nX-Inject: bad', agentRelayOrgId: 'org/slash' },
+        { agentRelayUserId: 'usr_valid', agentRelayOrgId: 'org_valid' },
+      ),
+    ).toMatchObject({ userId: 'usr_valid', orgId: 'org_valid' });
+  });
+
+  it('still prefers a valid higher-priority source', () => {
+    expect(
+      resolveAgentRelayIdentity(
+        { agentRelayUserId: 'usr_internal' },
+        { agentRelayUserId: 'usr_public' },
+      ).userId,
+    ).toBe('usr_internal');
+  });
+
   it('drops malformed values instead of forwarding them', () => {
     expect(
       resolveAgentRelayIdentity({
