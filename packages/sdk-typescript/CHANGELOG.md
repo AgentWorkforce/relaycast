@@ -7,7 +7,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [6.3.0] - 2026-07-28
 
 ### Added
 - Client and workspace-bootstrap options accept `agentRelayMachineId`, `agentRelayUserId`, `agentRelayOrgId`, and `agentRelayOrgSlug`, sent as `X-Agent-Relay-*` headers on HTTP and as `agent_relay_*` query params on WebSocket upgrades. `agentRelayUserId` doubles as the distinct id when `agentRelayDistinctId` is unset; the machine id is always sent alongside the distinct id, never instead of it.
