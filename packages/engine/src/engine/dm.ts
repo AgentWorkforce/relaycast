@@ -78,14 +78,24 @@ async function resolveConversation(
       dmType: '1:1',
     }).onConflictDoNothing();
 
+    // Clear `left_at` rather than no-op on conflict. Reaching this branch for an
+    // id that already exists means the lookup above missed, and the only way it
+    // can miss for an existing 1:1 is a participant marked departed. Leaving the
+    // marker set would resolve the conversation while its roster disagreed —
+    // see invariant DM-1 in __tests__/dm.test.ts.
+    const rejoin = {
+      target: [dmParticipants.conversationId, dmParticipants.agentId],
+      set: { leftAt: null },
+    };
+
     await db.insert(dmParticipants).values({
       conversationId: deterministicConversationId,
       agentId: fromAgentId,
-    }).onConflictDoNothing();
+    }).onConflictDoUpdate(rejoin);
     await db.insert(dmParticipants).values({
       conversationId: deterministicConversationId,
       agentId: toAgentId,
-    }).onConflictDoNothing();
+    }).onConflictDoUpdate(rejoin);
 
     conversationId = deterministicConversationId;
   }
