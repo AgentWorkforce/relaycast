@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `sendDm` re-resolving a 1:1 conversation now clears `dm_participants.left_at` for both participants instead of no-opping on conflict. A 1:1 with a departed participant previously resolved to the same conversation while its roster still showed the departure; the conversation id is unchanged either way, since it derives only from the workspace and the sorted agent pair.
 
 ## [6.3.0] - 2026-07-28
 

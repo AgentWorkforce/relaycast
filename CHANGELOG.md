@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Sending into a 1:1 DM whose participant is marked as departed now restores that participant, instead of resolving the conversation while its roster still shows the departure.
 
 ## [6.3.0] - 2026-07-28
 
