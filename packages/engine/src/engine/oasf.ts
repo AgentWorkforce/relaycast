@@ -8,7 +8,7 @@ export const OASF_SCHEMA_VERSION = '1.1.0';
 
 export const OasfLocatorSchema = z.object({
   type: z.enum(['binary', 'container_image', 'helm_chart', 'package', 'source_code', 'unspecified', 'url']).optional(),
-  urls: z.array(z.string().min(1)).min(1),
+  urls: z.array(z.string().url()).min(1),
   annotations: z.record(z.string(), z.string()).optional(),
 }).passthrough();
 export type OasfLocator = z.infer<typeof OasfLocatorSchema>;
@@ -85,8 +85,11 @@ export interface OasfExportableAgent {
   created_at: string;
 }
 
+// Only a `url`-typed locator is a reachable HTTP endpoint — a container_image,
+// helm_chart, or source_code locator is a place to *get* the agent, not a
+// place to *call* it, so those must never populate endpoint_url.
 function firstLocatorUrl(locators?: OasfLocator[]): string | undefined {
-  return locators?.find((locator) => locator.urls.length > 0)?.urls[0];
+  return locators?.find((locator) => locator.type === 'url' && locator.urls.length > 0)?.urls[0];
 }
 
 /**

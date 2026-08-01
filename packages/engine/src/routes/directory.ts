@@ -43,18 +43,22 @@ const flatCreateDirectoryAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   status: z.string().min(1).optional(),
   skills: z.array(skillSchema).optional(),
-});
+}).strict();
 
 // Publishing an OASF Agent Record directly — e.g. one discovered via an
 // AGNTCY/OASF or ANP registry — needs zero translation: post it as-is under
 // `oasf`, optionally overriding the directory-specific fields OASF has no
-// equivalent for.
+// equivalent for. Both branches are `.strict()` so a body mixing `oasf` with
+// flat fields like `name` is rejected instead of silently picking one side
+// and discarding the other (the default z.object() behavior strips unknown
+// keys rather than erroring, which would otherwise drop `oasf` silently
+// whenever a caller also sent `name`).
 const oasfCreateDirectoryAgentSchema = z.object({
   oasf: OasfRecordSchema,
   source_agent_name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
   status: z.string().min(1).optional(),
-});
+}).strict();
 
 const createDirectoryAgentSchema = z.union([flatCreateDirectoryAgentSchema, oasfCreateDirectoryAgentSchema]);
 

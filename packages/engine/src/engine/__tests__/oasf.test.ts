@@ -75,6 +75,40 @@ describe('oasfRecordToDirectoryAgentInput', () => {
     expect(stored.annotations).toEqual({ region: 'us-east' });
   });
 
+  it('never picks a non-url locator (container image, helm chart, etc) as the endpoint_url', () => {
+    const record = OasfRecordSchema.parse({
+      schema_version: '1.1.0',
+      name: 'Billing Agent',
+      description: 'Handles billing lookups',
+      version: '1.0.0',
+      authors: [],
+      skills: [],
+      locators: [
+        { type: 'container_image', urls: ['https://registry.example.com/billing:latest'] },
+        { type: 'helm_chart', urls: ['https://charts.example.com/billing'] },
+        { type: 'url', urls: ['https://billing.example.com'] },
+      ],
+    });
+
+    const input = oasfRecordToDirectoryAgentInput(record);
+    expect(input.endpoint_url).toBe('https://billing.example.com');
+  });
+
+  it('leaves endpoint_url unset when no locator is url-typed', () => {
+    const record = OasfRecordSchema.parse({
+      schema_version: '1.1.0',
+      name: 'Billing Agent',
+      description: 'Handles billing lookups',
+      version: '1.0.0',
+      authors: [],
+      skills: [],
+      locators: [{ type: 'container_image', urls: ['https://registry.example.com/billing:latest'] }],
+    });
+
+    const input = oasfRecordToDirectoryAgentInput(record);
+    expect(input.endpoint_url).toBeUndefined();
+  });
+
   it('omits endpoint_url and tags when no locators or domains are given', () => {
     const record = OasfRecordSchema.parse({
       schema_version: '1.1.0',
