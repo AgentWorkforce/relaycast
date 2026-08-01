@@ -630,6 +630,9 @@ POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
 POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 ```
 
+Where plain A2A hits a wall (group communication, discovery at scale, delivery guarantees, generic
+RPC, conformance) and how Relaycast resolves it: [`docs/a2a-and-relaycast.md`](./docs/a2a-and-relaycast.md).
+
 Programmability, directory & observability:
 
 ```text
