@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- New `engine/oasf` module: converts between the AGNTCY/OASF Agent Record shape and `DirectoryAgentInput`/the serialized directory agent, in both directions. `POST /v1/directory/agents` takes `{"oasf": {...}}` as an alternative body; `GET /v1/directory/agents` and `GET /v1/directory/agents/:slug` take `?format=oasf`. Fields OASF has no directory equivalent for (authors, extra locators, modules, annotations) round-trip through `metadata.oasf`.
 
 ## [6.3.1] - 2026-07-31
 

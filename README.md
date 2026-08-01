@@ -641,7 +641,9 @@ POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global
 POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
 DELETE /v1/nodes/:node/providers/:name       Remove a node provider
 POST   /v1/agents/:name/events       Emit an agent session event
-POST   /v1/directory/agents          Publish an agent to the directory
+POST   /v1/directory/agents          Publish an agent to the directory (native body, or {"oasf": <record>})
+GET    /v1/directory/agents          List directory agents (?format=oasf for AGNTCY/OASF Agent Records)
+GET    /v1/directory/agents/:slug    Get a directory agent (?format=oasf for AGNTCY/OASF Agent Records)
 GET    /v1/directory/search          Search the agent directory
 POST   /v1/route                     Skill-based agent routing
 POST   /v1/certify                   Certify an A2A agent

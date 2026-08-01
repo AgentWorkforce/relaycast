@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import * as directoryEngine from '../engine/directory.js';
+import { directoryAgentToOasfRecord, OasfRecordSchema, oasfRecordToDirectoryAgentInput } from '../engine/oasf.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -28,7 +29,7 @@ const skillSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-const createDirectoryAgentSchema = z.object({
+const flatCreateDirectoryAgentSchema = z.object({
   source_agent_name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -43,6 +44,19 @@ const createDirectoryAgentSchema = z.object({
   status: z.string().min(1).optional(),
   skills: z.array(skillSchema).optional(),
 });
+
+// Publishing an OASF Agent Record directly — e.g. one discovered via an
+// AGNTCY/OASF or ANP registry — needs zero translation: post it as-is under
+// `oasf`, optionally overriding the directory-specific fields OASF has no
+// equivalent for.
+const oasfCreateDirectoryAgentSchema = z.object({
+  oasf: OasfRecordSchema,
+  source_agent_name: z.string().min(1).optional(),
+  slug: z.string().min(1).optional(),
+  status: z.string().min(1).optional(),
+});
+
+const createDirectoryAgentSchema = z.union([flatCreateDirectoryAgentSchema, oasfCreateDirectoryAgentSchema]);
 
 const updateDirectoryAgentSchema = z.object({
   source_agent_name: z.string().min(1).nullable().optional(),
@@ -67,6 +81,7 @@ const ratingSchema = z.object({
 
 const listDirectoryAgentsQuerySchema = LimitQuerySchema.extend({
   status: z.string().optional(),
+  format: z.string().optional(),
 });
 
 const searchDirectoryQuerySchema = LimitQuerySchema.extend({
@@ -87,16 +102,26 @@ function handleError(c: Context<AppEnv>, err: unknown) {
 
 directoryRoutes.post('/directory/agents', requireWorkspaceKey, rateLimit, async (c) => {
   try {
-    const parsed = await parseJsonBody(c, createDirectoryAgentSchema, 'name is required');
+    const parsed = await parseJsonBody(c, createDirectoryAgentSchema, 'name is required, or oasf with a valid OASF record');
     if (!parsed.ok) {
       return parsed.response;
     }
 
+    const input = 'oasf' in parsed.data
+      ? {
+        ...oasfRecordToDirectoryAgentInput(parsed.data.oasf),
+        source_agent_name: parsed.data.source_agent_name,
+        slug: parsed.data.slug,
+        status: parsed.data.status,
+      }
+      : parsed.data;
+
     const workspace = c.get('workspace');
-    const result = await directoryEngine.createDirectoryAgent(c.get('db'), workspace.id, parsed.data);
+    const result = await directoryEngine.createDirectoryAgent(c.get('db'), workspace.id, input);
     emitServerEvent(c, workspace.id, 'relaycast_server_directory_agent_created', {
       slug: result?.slug,
       skill_count: result?.skills.length ?? 0,
+      source: 'oasf' in parsed.data ? 'oasf' : 'native',
     });
     return jsonCreated(c, result);
   } catch (err: unknown) {
@@ -111,12 +136,15 @@ directoryRoutes.get('/directory/agents', requireAuth, rateLimit, async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const { status, limit } = parsed.data;
+    const { status, limit, format } = parsed.data;
+    if (format && format !== 'oasf') {
+      return jsonInvalidRequest(c, 'format must be "oasf" if provided');
+    }
     const result = await directoryEngine.listDirectoryAgents(c.get('db'), workspace.id, {
       status: status || undefined,
       limit,
     });
-    return jsonOk(c, result);
+    return jsonOk(c, format === 'oasf' ? result.map(directoryAgentToOasfRecord) : result);
   } catch (err: unknown) {
     return handleError(c, err);
   }
@@ -154,12 +182,17 @@ directoryRoutes.get('/directory/search', requireAuth, rateLimit, async (c) => {
 
 directoryRoutes.get('/directory/agents/:slug', requireAuth, rateLimit, async (c) => {
   try {
+    const format = c.req.query('format');
+    if (format && format !== 'oasf') {
+      return jsonInvalidRequest(c, 'format must be "oasf" if provided');
+    }
+
     const workspace = c.get('workspace');
     const result = await directoryEngine.getDirectoryAgent(c.get('db'), workspace.id, c.req.param('slug'));
     if (!result) {
       return jsonNotFound(c, 'directory_agent_not_found', 'Directory agent not found');
     }
-    return jsonOk(c, result);
+    return jsonOk(c, format === 'oasf' ? directoryAgentToOasfRecord(result) : result);
   } catch (err: unknown) {
     return handleError(c, err);
   }

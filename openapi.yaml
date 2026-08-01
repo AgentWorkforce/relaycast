@@ -5091,6 +5091,13 @@ paths:
     get:
       summary: List directory agents
       tags: [Directory]
+      parameters:
+        - name: format
+          in: query
+          description: Set to "oasf" to return each agent as an AGNTCY/OASF Agent Record instead of the native shape.
+          schema:
+            type: string
+            enum: [oasf]
       responses:
         '200':
           description: Directory agents
@@ -5100,6 +5107,11 @@ paths:
                 type: object
     post:
       summary: Register a directory agent
+      description: >-
+        Accepts either the native flat body (name, endpoint_url, skills, ...)
+        or `{ "oasf": <OASF Agent Record> }` to publish an agent discovered
+        via an AGNTCY/OASF or ANP registry with no manual field translation.
+        `slug`, `source_agent_name`, and `status` may be set alongside `oasf`.
       tags: [Directory]
       responses:
         '201':
@@ -5131,6 +5143,12 @@ paths:
           required: true
           schema:
             type: string
+        - name: format
+          in: query
+          description: Set to "oasf" to return the agent as an AGNTCY/OASF Agent Record instead of the native shape.
+          schema:
+            type: string
+            enum: [oasf]
       responses:
         '200':
           description: Directory agent

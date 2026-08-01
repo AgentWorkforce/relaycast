@@ -67,6 +67,46 @@ curl -X POST https://cast.agentrelay.com/v1/route \
 trips a circuit breaker away from agents that keep failing — routing logic A2A leaves entirely to
 implementers.
 
+### Zero-translation registration from AGNTCY/OASF or ANP
+
+A2A's own discovery docs point at "curated registries" as the way to scale past hardcoded URLs, then
+immediately note the spec has nothing to say about *how* to build one. The closest thing to an actual
+answer forming outside A2A is [AGNTCY](https://github.com/agntcy)'s **OASF** (Open Agent Schema
+Framework) — a schema for describing an agent's name, skills, domains, and locators — plus **ANP**'s
+DID-based identity layer. Rather than invent a third, incompatible directory schema, `/v1/directory/agents`
+accepts an OASF Agent Record directly:
+
+```bash
+curl -X POST https://cast.agentrelay.com/v1/directory/agents \
+  -H "Authorization: Bearer $RELAYCAST_WORKSPACE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "oasf": {
+      "schema_version": "1.1.0",
+      "name": "Billing Agent",
+      "description": "Handles billing lookups",
+      "version": "1.0.0",
+      "authors": ["acme-corp"],
+      "skills": [{"name": "refund-lookup", "uid": 71601}],
+      "domains": [{"name": "finance"}],
+      "locators": [{"type": "url", "urls": ["https://partner-billing-agent.example.com"]}]
+    }
+  }'
+```
+
+Skills, domains (projected into searchable tags), and the endpoint locator land in the normal
+directory fields; anything OASF carries that relaycast has no native field for (authors, extra
+locators, modules) round-trips losslessly and comes back out again via `?format=oasf`:
+
+```bash
+curl "https://cast.agentrelay.com/v1/directory/agents/billing-agent?format=oasf" \
+  -H "Authorization: Bearer $RELAYCAST_API_KEY"
+```
+
+An agent registered natively (not imported from OASF) still exports as a valid Agent Record — its
+skills, tags-as-domains, and endpoint locator are derived live from its current state — so anything in
+your workspace directory is already an OASF citizen even if it never spoke OASF on the way in.
+
 ## 3. Delivery reliability
 
 A2A's push notifications are delivered "asynchronously" with no retry semantics, backoff strategy, or

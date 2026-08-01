@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/directory/agents` accepts an AGNTCY/OASF Agent Record via `{"oasf": {...}}` as an alternative to the native body, and `GET /v1/directory/agents`/`/v1/directory/agents/:slug` accept `?format=oasf` to export any directory agent (native or OASF-imported) as an Agent Record — registering an agent discovered via an OASF or ANP registry needs no manual field translation.
 
 ## [6.3.1] - 2026-07-31
 
