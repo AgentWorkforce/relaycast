@@ -79,17 +79,50 @@ async function loadRows(argv) {
   if (argv.includes('--stdin')) {
     const raw = await readStdin();
     if (!raw.trim()) usage('nothing on stdin');
+    // Tolerate a preamble. wrangler emits banners and warnings on stdout
+    // depending on version and TTY attachment, and an operator running this as a
+    // deploy gate should not have to care. A brittle parser here fails exactly
+    // when it matters most.
+    const start = raw.search(/[[{]/);
+    if (start === -1) usage(`stdin contained no JSON. First 200 chars:\n${raw.slice(0, 200)}`);
+
     let parsed;
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      usage('stdin was not JSON (expected `wrangler d1 execute --json` output)');
+      parsed = JSON.parse(raw.slice(start));
+    } catch (err) {
+      usage(`stdin was not valid JSON (${err.message}). First 200 chars:\n${raw.slice(start, start + 200)}`);
     }
-    // wrangler wraps results as [{ results: [...] }]; accept a bare array too.
-    const rows = Array.isArray(parsed)
-      ? (parsed[0]?.results ?? parsed)
-      : (parsed.results ?? parsed.result?.[0]?.results);
-    if (!Array.isArray(rows)) usage('could not find a results array in the JSON');
+
+    // Envelope shapes seen in the wild: [{results:[...]}], {results:[...]},
+    // {result:[{results:[...]}]}, and a bare array of rows. Rather than enumerate
+    // them forever, find the first array whose members look like our rows.
+    const looksLikeRows = (v) =>
+      Array.isArray(v) && v.length > 0 && typeof v[0] === 'object' && v[0] !== null
+      && ('agent_id' in v[0]) && ('workspace_id' in v[0]);
+
+    const seen = new Set();
+    const find = (node, depth = 0) => {
+      if (depth > 6 || node === null || typeof node !== 'object') return null;
+      if (seen.has(node)) return null;
+      seen.add(node);
+      if (looksLikeRows(node)) return node;
+      for (const value of Array.isArray(node) ? node : Object.values(node)) {
+        const hit = find(value, depth + 1);
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    const rows = find(parsed);
+    if (!rows) {
+      // An empty result set is legitimate: a deployment with no 1:1 DMs at all.
+      if (JSON.stringify(parsed).includes('"results":[]')) return [];
+      usage(
+        'could not find a row array containing agent_id and workspace_id.\n'
+        + `Received (first 300 chars): ${JSON.stringify(parsed).slice(0, 300)}\n`
+        + 'Check the SELECT aliases match: id, workspace_id, agent_id.',
+      );
+    }
     return rows;
   }
 
