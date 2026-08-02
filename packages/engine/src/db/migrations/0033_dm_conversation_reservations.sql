@@ -14,11 +14,17 @@ CREATE TABLE dm_conversation_reservations (
 CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
   ON dm_conversation_reservations (workspace_id, participant_one_id, participant_two_id);
 
--- PRE-FLIGHT AUDIT (run this read-only query BEFORE applying this migration).
--- The backfill below aborts the whole migration if any single legacy 1:1 has a
--- roster that is not 1 or 2 distinct participants. That is deliberate - inventing
--- a tuple would bind a conversation to the wrong pair - but it means one corrupt
--- row blocks the deployment, so find them first:
+-- PRE-FLIGHT AUDIT (run BOTH read-only queries BEFORE applying this migration).
+-- The backfill can abort for two independent reasons, and each needs its own
+-- check. An earlier version of this comment shipped only query (a) and claimed an
+-- empty result meant the migration would apply cleanly. That was wrong: a
+-- duplicate pair passes (a) and still aborts the backfill on the pair-uniqueness
+-- index. Raised in review of PR #303.
+--
+-- (a) Roster shape. The backfill aborts if any single legacy 1:1 has a roster
+--     that is not 1 or 2 distinct participants. That is deliberate - inventing a
+--     tuple would bind a conversation to the wrong pair - but one corrupt row
+--     blocks the whole deployment.
 --
 --   SELECT dc.id, dc.workspace_id, COUNT(DISTINCT dp.agent_id) AS participants
 --   FROM dm_conversations dc
@@ -27,8 +33,30 @@ CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
 --   GROUP BY dc.id, dc.workspace_id
 --   HAVING participants NOT BETWEEN 1 AND 2;
 --
--- An empty result means this migration will apply cleanly. Remediate any rows it
--- returns and re-run the audit before the cutover.
+-- (b) Duplicate pairs. Two DISTINCT legacy 1:1 conversations in one workspace
+--     that resolve to the same sorted pair both satisfy (a), but only one can be
+--     reserved - the second violates dm_conversation_reservations_pair_unique and
+--     aborts the migration. This is exactly what a pre-deterministic id scheme
+--     leaves behind, so it is the likelier of the two in practice.
+--
+--   SELECT workspace_id, participant_one_id, participant_two_id,
+--          COUNT(*) AS conversations
+--   FROM (
+--     SELECT dc.workspace_id,
+--            MIN(dp.agent_id) AS participant_one_id,
+--            MAX(dp.agent_id) AS participant_two_id
+--     FROM dm_conversations dc
+--     JOIN dm_participants dp ON dp.conversation_id = dc.id
+--     WHERE dc.dm_type = '1:1'
+--     GROUP BY dc.id, dc.workspace_id
+--     HAVING COUNT(DISTINCT dp.agent_id) BETWEEN 1 AND 2
+--   )
+--   GROUP BY workspace_id, participant_one_id, participant_two_id
+--   HAVING conversations > 1;
+--
+-- Both queries empty means this migration will apply cleanly. Remediate anything
+-- either one returns - for (b) that means deciding which conversation survives,
+-- since the reservation can only bind one - and re-run both before the cutover.
 
 -- Existing self-DMs have one roster row, while ordinary 1:1 DMs have two.
 -- MIN/MAX produces the canonical sorted pair for both shapes. A malformed 1:1
