@@ -11,9 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `sendDm` atomically resolves or reserves deterministic 1:1 conversation IDs against the workspace and sorted participant pair; migration `0033` backfills existing reservations, and a digest collision now fails with `dm_conversation_id_collision` instead of resolving to another pair's conversation.
-- `POST /dm` returns a documented `409 dm_conversation_id_collision` for both collision shapes — an identifier already bound to a different pair, and a pair already bound to a different identifier. The second violated the pair-uniqueness index rather than the primary key and previously surfaced as an uncaught `SQLITE_CONSTRAINT_UNIQUE`.
-- The `409` is detected across better-sqlite3, D1, and drizzle-wrapped error shapes by walking the `.cause` chain, so the hosted engine returns the coded collision rather than an uncaught `500` — the same regression class as `agent.ts`'s `isUniqueConstraintError` (PR #193).
+- `sendDm` atomically reserves each deterministic 1:1 conversation ID for its workspace and sorted participant pair, so a collision returns `409 dm_conversation_id_collision` on every driver instead of resolving to another pair's conversation or failing with an uncaught database error. Migration `0033` adds `dm_conversation_reservations` and backfills existing 1:1 DMs; see the migration header for the pre-flight audit to run before applying it.
 
 ## [6.3.1] - 2026-07-31
 
