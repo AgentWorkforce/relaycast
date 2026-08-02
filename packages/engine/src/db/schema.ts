@@ -7,6 +7,7 @@ import {
   uniqueIndex,
   primaryKey,
   foreignKey,
+  check,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
@@ -599,6 +600,33 @@ export const dmConversations = sqliteTable(
   },
   (table) => [
     index('idx_dm_conversations_workspace').on(table.workspaceId),
+  ],
+);
+
+// ============================================
+// 1:1 DM Conversation Reservations
+// ============================================
+export const dmConversationReservations = sqliteTable(
+  'dm_conversation_reservations',
+  {
+    conversationId: text('conversation_id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    participantOneId: text('participant_one_id').notNull(),
+    participantTwoId: text('participant_two_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    check(
+      'dm_conversation_reservations_sorted_pair_check',
+      sql`${table.participantOneId} <= ${table.participantTwoId}`,
+    ),
+    uniqueIndex('dm_conversation_reservations_pair_unique').on(
+      table.workspaceId,
+      table.participantOneId,
+      table.participantTwoId,
+    ),
   ],
 );
 

@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `sendDm` atomically reserves each deterministic 1:1 conversation ID for its workspace and sorted participant pair, so a collision returns `409 dm_conversation_id_collision` on every driver instead of resolving to another pair's conversation or failing with an uncaught database error. Migration `0033` adds `dm_conversation_reservations` and backfills existing 1:1 DMs; see the migration header for the pre-flight audit to run before applying it.
 
 ## [6.3.1] - 2026-07-31
 

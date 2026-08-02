@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- 1:1 DM resolution now atomically reserves each deterministic conversation ID for its workspace and participant pair. A collision returns `409 dm_conversation_id_collision` instead of silently aliasing another conversation.
 
 ## [6.3.1] - 2026-07-31
 

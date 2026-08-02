@@ -6,6 +6,7 @@ import {
   channels,
   agents,
   dmConversations,
+  dmConversationReservations,
   dmParticipants,
   messageAttachments,
 } from '../db/schema.js';
@@ -30,9 +31,147 @@ interface SendDmOptions {
   mailbox?: MailboxConfig;
 }
 
-async function getDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {
+/**
+ * Derivation only: this digest does not resolve or claim a conversation.
+ * Callers must atomically reserve the derived id before using it.
+ */
+async function deriveDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {
   const [first, second] = [agentA, agentB].sort();
   return (await sha256Hex(`${workspaceId}:${first}:${second}`)).slice(0, 24);
+}
+
+/**
+ * Recognize a unique-constraint violation on `dm_conversation_reservations`
+ * across every driver this engine actually runs on.
+ *
+ * THIS ENGINE HAS ALREADY REGRESSED THIS EXACT BUG CLASS ONCE. `engine/agent.ts`
+ * gained `isUniqueConstraintError` in PR #193 after clean 409 handling silently
+ * became an uncaught 500 against D1, because detection only matched
+ * better-sqlite3's error shape. `engine/observerToken.ts` documents the same
+ * trap. A first version of this handler matched `.code` and `.message` on the
+ * top-level error only — which passes against better-sqlite3 in tests and would
+ * have reproduced that regression in the hosted engine, where the driver differs
+ * from the one the test suite exercises.
+ *
+ * Self-hosted runs on better-sqlite3: `.code` is `SQLITE_CONSTRAINT_UNIQUE` and
+ * `.message` reads `UNIQUE constraint failed: dm_conversation_reservations...`.
+ * The hosted engine runs Cloudflare D1 via `drizzle-orm/d1`, which prefixes
+ * `D1_ERROR: ` and may re-wrap the driver error under `.cause` rather than
+ * surfacing it at the top level. So the chain has to be walked.
+ *
+ * Two conditions must BOTH hold somewhere in the chain: the failure is a unique
+ * violation, and it names this table. The table check is what stops an unrelated
+ * constraint failure on this insert — a FK or NOT NULL on `workspace_id` — from
+ * being laundered into a tidy 409 that says something untrue about participant
+ * pairs. They are tracked independently across the walk because a wrapper may
+ * carry the code while only the wrapped cause carries the message.
+ *
+ * The walk is iterative and records every object visited in a `WeakSet`,
+ * breaking on any revisit rather than only a direct self-reference: a multi-step
+ * cycle (`A -> B -> A`) would otherwise blow the stack and turn the check meant
+ * to prevent a 500 into one itself. Same reasoning as `isObserverTokenNameConflict`.
+ */
+export function isPairReservationConflict(err: unknown): boolean {
+  const visited = new WeakSet<object>();
+  let current: unknown = err;
+  let sawUniqueViolation = false;
+  let namesReservationTable = false;
+
+  while (current && typeof current === 'object') {
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    const candidate = current as { code?: string; message?: string; cause?: unknown };
+    const message = candidate.message ?? '';
+    const lowerMessage = message.toLowerCase();
+
+    if (
+      candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || lowerMessage.includes('unique constraint failed')
+      || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
+    ) {
+      sawUniqueViolation = true;
+    }
+    if (lowerMessage.includes('dm_conversation_reservations')) {
+      namesReservationTable = true;
+    }
+
+    current = candidate.cause;
+  }
+
+  return sawUniqueViolation && namesReservationTable;
+}
+
+/**
+ * Atomically resolve or reserve a deterministic 1:1 DM id for one exact tuple.
+ *
+ * The primary-key conflict and conditional no-op update are one SQL statement.
+ * An identical tuple returns the existing reservation; a digest collision makes
+ * the conflict predicate false, returns no row, and fails closed.
+ *
+ * TWO DISTINCT COLLISIONS, and both must fail closed with the same coded 409:
+ *
+ *   1. Same conversation_id, different pair. Caught by the PRIMARY KEY conflict
+ *      target: the conditional update predicate is false, no row is returned.
+ *
+ *   2. Same pair, different conversation_id. This violates the pair_unique
+ *      index, which is NOT the conflict target - SQLite only accepts one - so
+ *      the statement raises SQLITE_CONSTRAINT_UNIQUE. Raised in review of PR
+ *      #303 and reachable in practice: migration 0033 backfills whatever `dc.id`
+ *      a legacy 1:1 already had, without requiring it to equal the current
+ *      derivation, so the pair can be reserved under an id the next send will
+ *      not re-derive. Left unhandled that surfaced as a 500.
+ *
+ * Failing closed is not sufficient on its own. It has to fail closed with the
+ * documented code, or a caller cannot tell a refused collision from an engine
+ * fault - which is the same distinction the rest of this seam exists to make.
+ */
+async function resolveOrReserveConversation(
+  db: Db,
+  conversationId: string,
+  workspaceId: string,
+  sortedPair: readonly [string, string],
+): Promise<void> {
+  const [participantOneId, participantTwoId] = sortedPair;
+
+  let reservation: { conversationId: string } | undefined;
+  try {
+    [reservation] = await db
+      .insert(dmConversationReservations)
+      .values({
+        conversationId,
+        workspaceId,
+        participantOneId,
+        participantTwoId,
+      })
+      .onConflictDoUpdate({
+        target: dmConversationReservations.conversationId,
+        set: { conversationId: sql`excluded.conversation_id` },
+        setWhere: and(
+          eq(dmConversationReservations.workspaceId, workspaceId),
+          eq(dmConversationReservations.participantOneId, participantOneId),
+          eq(dmConversationReservations.participantTwoId, participantTwoId),
+        ),
+      })
+      .returning({ conversationId: dmConversationReservations.conversationId });
+  } catch (err) {
+    // Collision (2) above.
+    if (!isPairReservationConflict(err)) throw err;
+
+    throw codedError(
+      'DM participant pair is already reserved under a different conversation identifier',
+      'dm_conversation_id_collision',
+      409,
+    );
+  }
+
+  if (!reservation) {
+    throw codedError(
+      'DM conversation identifier is already reserved for a different participant pair',
+      'dm_conversation_id_collision',
+      409,
+    );
+  }
 }
 
 async function resolveConversation(
@@ -41,64 +180,44 @@ async function resolveConversation(
   fromAgentId: string,
   toAgentId: string,
 ) {
-  const existing = await db.all<{ id: string; channel_id: string }>(sql`
-    SELECT dc.id, dc.channel_id
-    FROM dm_conversations dc
-    JOIN dm_participants p1
-      ON p1.conversation_id = dc.id
-     AND p1.agent_id = ${fromAgentId}
-     AND p1.left_at IS NULL
-    JOIN dm_participants p2
-      ON p2.conversation_id = dc.id
-     AND p2.agent_id = ${toAgentId}
-     AND p2.left_at IS NULL
-    WHERE dc.workspace_id = ${workspaceId}
-      AND dc.dm_type = '1:1'
-    LIMIT 1
-  `);
+  const sortedPair = [fromAgentId, toAgentId].sort() as [string, string];
+  const pairKey = await deriveDmPairKey(workspaceId, sortedPair[0], sortedPair[1]);
+  const conversationId = `dm_${pairKey}`;
+  const channelId = `dmch_${pairKey}`;
 
-  let conversationId = existing[0]?.id;
+  // This is the mandatory resolution seam. It must happen before any metadata
+  // creation so exactly one tuple can win a digest collision.
+  await resolveOrReserveConversation(db, conversationId, workspaceId, sortedPair);
 
-  if (!conversationId) {
-    const pairKey = await getDmPairKey(workspaceId, fromAgentId, toAgentId);
-    const deterministicConversationId = `dm_${pairKey}`;
-    const deterministicChannelId = `dmch_${pairKey}`;
+  await db.insert(channels).values({
+    id: channelId,
+    workspaceId,
+    name: `dm-${pairKey}`,
+    channelType: 1,
+  }).onConflictDoNothing();
 
-    await db.insert(channels).values({
-      id: deterministicChannelId,
-      workspaceId,
-      name: `dm-${pairKey}`,
-      channelType: 1,
-    }).onConflictDoNothing();
+  await db.insert(dmConversations).values({
+    id: conversationId,
+    workspaceId,
+    channelId,
+    dmType: '1:1',
+  }).onConflictDoNothing();
 
-    await db.insert(dmConversations).values({
-      id: deterministicConversationId,
-      workspaceId,
-      channelId: deterministicChannelId,
-      dmType: '1:1',
-    }).onConflictDoNothing();
+  // A deterministic 1:1 is a durable relationship. Re-resolution restores a
+  // stale departure marker instead of letting roster state disagree with it.
+  const rejoin = {
+    target: [dmParticipants.conversationId, dmParticipants.agentId],
+    set: { leftAt: null },
+  };
 
-    // Clear `left_at` rather than no-op on conflict. Reaching this branch for an
-    // id that already exists means the lookup above missed, and the only way it
-    // can miss for an existing 1:1 is a participant marked departed. Leaving the
-    // marker set would resolve the conversation while its roster disagreed —
-    // see invariant DM-1 in __tests__/dm.test.ts.
-    const rejoin = {
-      target: [dmParticipants.conversationId, dmParticipants.agentId],
-      set: { leftAt: null },
-    };
-
-    await db.insert(dmParticipants).values({
-      conversationId: deterministicConversationId,
-      agentId: fromAgentId,
-    }).onConflictDoUpdate(rejoin);
-    await db.insert(dmParticipants).values({
-      conversationId: deterministicConversationId,
-      agentId: toAgentId,
-    }).onConflictDoUpdate(rejoin);
-
-    conversationId = deterministicConversationId;
-  }
+  await db.insert(dmParticipants).values({
+    conversationId,
+    agentId: fromAgentId,
+  }).onConflictDoUpdate(rejoin);
+  await db.insert(dmParticipants).values({
+    conversationId,
+    agentId: toAgentId,
+  }).onConflictDoUpdate(rejoin);
 
   const [conv] = await db
     .select({ id: dmConversations.id, channelId: dmConversations.channelId })

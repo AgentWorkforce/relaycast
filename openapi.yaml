@@ -2687,6 +2687,20 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/DmSendResponse'
+        '409':
+          description: |
+            `dm_conversation_id_collision` — the deterministic 1:1 conversation
+            identifier could not be reserved for this exact
+            `(workspace, sorted agent pair)` tuple. A 1:1 DM id is derived from
+            that tuple, and the reservation is atomic, so the request fails
+            closed rather than resolving to another pair's conversation. Two
+            cases produce it: the identifier is already bound to a different
+            pair, or the pair is already bound to a different identifier. It is
+            not retryable — the same inputs will collide again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /dm/conversations:
     get:
