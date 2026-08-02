@@ -54,9 +54,25 @@ CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
 --   GROUP BY workspace_id, participant_one_id, participant_two_id
 --   HAVING conversations > 1;
 --
--- Both queries empty means this migration will apply cleanly. Remediate anything
--- either one returns - for (b) that means deciding which conversation survives,
--- since the reservation can only bind one - and re-run both before the cutover.
+-- (c) Ids that do not match the CURRENT derivation. This one cannot be written
+--     in SQL - it needs SHA-256, which SQLite does not have - and it is the check
+--     that matters most operationally, because it is the only failure that is
+--     INVISIBLE AT MIGRATION TIME. (a) and (b) abort the migration loudly. (c)
+--     lets it succeed, and then every subsequent DM between that pair returns 409
+--     forever, because the backfill reserved the pair under an id the send path
+--     will never re-derive.
+--
+--     Run:  node scripts/audit-dm-reservations.mjs --sqlite <path>
+--     D1:   wrangler d1 execute <DB> --json --command "<see script header>" \
+--             | node scripts/audit-dm-reservations.mjs --stdin
+--
+--     That script also re-runs (a) and (b), so it is the single command to trust.
+--
+-- All three clean means this migration will apply AND no existing pair will start
+-- failing afterwards. Remediate anything any of them returns - for (b) that means
+-- deciding which conversation survives, since the reservation can only bind one;
+-- for (c) it means re-keying the conversation to the derived id, or seeding its
+-- reservation under the derived id, before deploying the code that reserves.
 
 -- Existing self-DMs have one roster row, while ordinary 1:1 DMs have two.
 -- MIN/MAX produces the canonical sorted pair for both shapes. A malformed 1:1
