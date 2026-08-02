@@ -41,6 +41,68 @@ async function deriveDmPairKey(workspaceId: string, agentA: string, agentB: stri
 }
 
 /**
+ * Recognize a unique-constraint violation on `dm_conversation_reservations`
+ * across every driver this engine actually runs on.
+ *
+ * THIS ENGINE HAS ALREADY REGRESSED THIS EXACT BUG CLASS ONCE. `engine/agent.ts`
+ * gained `isUniqueConstraintError` in PR #193 after clean 409 handling silently
+ * became an uncaught 500 against D1, because detection only matched
+ * better-sqlite3's error shape. `engine/observerToken.ts` documents the same
+ * trap. A first version of this handler matched `.code` and `.message` on the
+ * top-level error only — which passes against better-sqlite3 in tests and would
+ * have reproduced that regression in the hosted engine, where the driver differs
+ * from the one the test suite exercises.
+ *
+ * Self-hosted runs on better-sqlite3: `.code` is `SQLITE_CONSTRAINT_UNIQUE` and
+ * `.message` reads `UNIQUE constraint failed: dm_conversation_reservations...`.
+ * The hosted engine runs Cloudflare D1 via `drizzle-orm/d1`, which prefixes
+ * `D1_ERROR: ` and may re-wrap the driver error under `.cause` rather than
+ * surfacing it at the top level. So the chain has to be walked.
+ *
+ * Two conditions must BOTH hold somewhere in the chain: the failure is a unique
+ * violation, and it names this table. The table check is what stops an unrelated
+ * constraint failure on this insert — a FK or NOT NULL on `workspace_id` — from
+ * being laundered into a tidy 409 that says something untrue about participant
+ * pairs. They are tracked independently across the walk because a wrapper may
+ * carry the code while only the wrapped cause carries the message.
+ *
+ * The walk is iterative and records every object visited in a `WeakSet`,
+ * breaking on any revisit rather than only a direct self-reference: a multi-step
+ * cycle (`A -> B -> A`) would otherwise blow the stack and turn the check meant
+ * to prevent a 500 into one itself. Same reasoning as `isObserverTokenNameConflict`.
+ */
+export function isPairReservationConflict(err: unknown): boolean {
+  const visited = new WeakSet<object>();
+  let current: unknown = err;
+  let sawUniqueViolation = false;
+  let namesReservationTable = false;
+
+  while (current && typeof current === 'object') {
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    const candidate = current as { code?: string; message?: string; cause?: unknown };
+    const message = candidate.message ?? '';
+    const lowerMessage = message.toLowerCase();
+
+    if (
+      candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || lowerMessage.includes('unique constraint failed')
+      || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
+    ) {
+      sawUniqueViolation = true;
+    }
+    if (lowerMessage.includes('dm_conversation_reservations')) {
+      namesReservationTable = true;
+    }
+
+    current = candidate.cause;
+  }
+
+  return sawUniqueViolation && namesReservationTable;
+}
+
+/**
  * Atomically resolve or reserve a deterministic 1:1 DM id for one exact tuple.
  *
  * The primary-key conflict and conditional no-op update are one SQL statement.
@@ -93,13 +155,8 @@ async function resolveOrReserveConversation(
       })
       .returning({ conversationId: dmConversationReservations.conversationId });
   } catch (err) {
-    // Collision (2) above. Narrowed to this table so an unrelated constraint
-    // failure is never laundered into a tidy 409.
-    const failure = err as { code?: string; message?: string };
-    const isPairCollision =
-      failure.code === 'SQLITE_CONSTRAINT_UNIQUE' &&
-      (failure.message ?? '').includes('dm_conversation_reservations');
-    if (!isPairCollision) throw err;
+    // Collision (2) above.
+    if (!isPairReservationConflict(err)) throw err;
 
     throw codedError(
       'DM participant pair is already reserved under a different conversation identifier',

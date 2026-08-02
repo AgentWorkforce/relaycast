@@ -20,7 +20,7 @@ import {
   dmParticipants,
   workspaces,
 } from '../../db/schema.js';
-import { sendDm } from '../dm.js';
+import { isPairReservationConflict, sendDm } from '../dm.js';
 
 type Db = SqliteDbHandle['db'];
 
@@ -112,6 +112,73 @@ describe('1:1 DM conversation identity', () => {
   });
 
   /**
+   * The 409 above must survive the driver change between self-hosted and hosted.
+   *
+   * This engine has already regressed this exact class once: PR #193 added
+   * `isUniqueConstraintError` to agent.ts after clean 409 handling became an
+   * uncaught 500 on D1, because detection only matched better-sqlite3's shape.
+   * The first version of the reservation handler made the same mistake, and the
+   * suite could not see it because the suite runs better-sqlite3.
+   *
+   * So the shapes are asserted directly rather than only through the send path.
+   */
+  it('recognises the pair conflict across driver error shapes', () => {
+    // better-sqlite3 (what this suite actually runs)
+    expect(isPairReservationConflict({
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'UNIQUE constraint failed: dm_conversation_reservations.workspace_id',
+    })).toBe(true);
+
+    // D1, top level
+    expect(isPairReservationConflict({
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'D1_ERROR: UNIQUE constraint failed: dm_conversation_reservations.workspace_id',
+    })).toBe(true);
+
+    // D1 re-wrapped by drizzle: neither code nor table name at the top level
+    expect(isPairReservationConflict({
+      message: 'Failed query: insert into "dm_conversation_reservations"',
+      cause: {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+        message: 'D1_ERROR: UNIQUE constraint failed: dm_conversation_reservations.workspace_id',
+      },
+    })).toBe(true);
+
+    // Split across the chain: code on the wrapper, table name on the cause
+    expect(isPairReservationConflict({
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'Failed query',
+      cause: { message: 'UNIQUE constraint failed: dm_conversation_reservations.workspace_id' },
+    })).toBe(true);
+  });
+
+  it('does not launder unrelated failures into a pair conflict', () => {
+    // A different table's unique violation is not ours.
+    expect(isPairReservationConflict({
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'UNIQUE constraint failed: observer_tokens.workspace_id',
+    })).toBe(false);
+
+    // A non-unique constraint on OUR table is not a pair collision either -
+    // reporting a FK failure as a participant-pair conflict would be a lie.
+    expect(isPairReservationConflict({
+      code: 'SQLITE_CONSTRAINT_FOREIGNKEY',
+      message: 'FOREIGN KEY constraint failed: dm_conversation_reservations.workspace_id',
+    })).toBe(false);
+
+    expect(isPairReservationConflict(null)).toBe(false);
+    expect(isPairReservationConflict(new Error('boom'))).toBe(false);
+  });
+
+  it('terminates on a cyclic cause chain instead of blowing the stack', () => {
+    const a: { message: string; cause?: unknown } = { message: 'wrapper a' };
+    const b: { message: string; cause?: unknown } = { message: 'wrapper b', cause: a };
+    a.cause = b; // A -> B -> A, which a self-reference-only guard would miss
+    expect(() => isPairReservationConflict(a)).not.toThrow();
+    expect(isPairReservationConflict(a)).toBe(false);
+  });
+
+  /**
    * A legacy 1:1 conversation whose id is NOT the current derivation is backfilled
    * by migration 0033 under its own id, so the PAIR is reserved while the
    * deterministic id is not. The next send derives a different conversation_id for
@@ -152,7 +219,23 @@ describe('1:1 DM conversation identity', () => {
     expect(status).toBe(409);
   });
 
-  it('atomically rejects one of two concurrent pairs whose digests collide', async () => {
+  /**
+   * NOTE ON WHAT THIS DOES AND DOES NOT PROVE, raised in review of PR #303.
+   *
+   * Both real `sendDm` paths are launched before either is awaited, so this
+   * exercises the production path with a forced digest collision. But
+   * better-sqlite3 is a single synchronous connection, so the two sends
+   * serialize and there is no genuine database contention. It proves the
+   * collision branch and that the reservation is consulted before any
+   * conversation state is created. It does NOT prove multi-writer atomicity
+   * against a networked engine.
+   *
+   * The DB constraint is what makes the operation atomic; this test proves the
+   * constraint is load-bearing, which the negative control (dropping to a silent
+   * ON CONFLICT DO NOTHING) confirms by producing two winners. Named for what it
+   * demonstrates rather than for the mechanism it relies on.
+   */
+  it('rejects the losing pair when two colliding sends interleave', async () => {
     const { db, ws, alice, bob } = seed();
     const suffix = ws.slice(3);
     const carol = `ag_carol_${suffix}`;
