@@ -112,6 +112,38 @@ describe('1:1 DM conversation identity', () => {
   });
 
   /**
+   * Migration 0033 deliberately does NOT reserve one-row rosters, because agent
+   * deletion cascades `dm_participants` and collapses an ordinary two-party 1:1
+   * into a single row whose id still encodes the original pair. Reserving those
+   * as (X, X) collided on production data.
+   *
+   * The safety of skipping them rests entirely on this: an existing, UNRESERVED
+   * conversation must be adopted by the first send, not duplicated. A genuine
+   * self-DM's id already equals its derivation, so the reservation claims that
+   * same id and the conversation is reused.
+   *
+   * If this ever regressed, every pre-migration self-DM would silently fork into
+   * a second conversation on first use and the old history would disappear from
+   * the user's view.
+   */
+  it('adopts an existing unreserved conversation instead of duplicating it', async () => {
+    const { db, ws, alice } = seed();
+
+    // Create it, then drop the reservation to model a pre-0033 conversation.
+    await sendDm(db, ws, alice, { to: '@self', text: 'before the migration' });
+    const original = db.select().from(dmConversations).all();
+    expect(original).toHaveLength(1);
+    db.delete(dmConversationReservations).run();
+
+    await sendDm(db, ws, alice, { to: '@self', text: 'after the migration' });
+
+    const after = db.select().from(dmConversations).all();
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe(original[0].id);
+    expect(db.select().from(dmConversationReservations).all()).toHaveLength(1);
+  });
+
+  /**
    * A self-DM is one roster row, so the reservation stores the same agent as
    * both participants. That has to satisfy the sorted-pair CHECK
    * (participant_one_id <= participant_two_id), which it does only because the

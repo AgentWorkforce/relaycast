@@ -74,10 +74,36 @@ CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
 -- for (c) it means re-keying the conversation to the derived id, or seeding its
 -- reservation under the derived id, before deploying the code that reserves.
 
--- Existing self-DMs have one roster row, while ordinary 1:1 DMs have two.
--- MIN/MAX produces the canonical sorted pair for both shapes. A malformed 1:1
--- with zero or more than two distinct participants deliberately yields NULL and
--- aborts this migration at the NOT NULL constraint instead of inventing a tuple.
+-- Backfill ONLY conversations with exactly two distinct participants.
+--
+-- A one-row roster is ambiguous and MUST NOT be reserved. It looks like a
+-- self-DM, but `dm_participants.agent_id` cascades on agent deletion, so a
+-- perfectly ordinary two-party 1:1 collapses to a single row the moment one
+-- participant's agent is deleted - while its id still encodes the ORIGINAL pair.
+--
+-- Reading those as (X, X) is wrong twice over. Several orphans belonging to the
+-- same surviving agent all collapse to the same (workspace, X, X) tuple and
+-- collide on the pair-uniqueness index, aborting the migration; and any that
+-- survived would reserve a self-DM tuple against an id no derivation produces,
+-- so that agent's next self-DM would 409 forever.
+--
+-- This is not hypothetical. An earlier version of this backfill used
+-- MIN/MAX over 1-2 participants; audited against production it produced 4
+-- colliding pair groups and 30 mismatched ids, all of them orphaned two-party
+-- conversations, and would have failed the deployment. Restricted to exactly two
+-- participants the same data yields zero findings across 3425 conversations.
+--
+-- Skipping is safe rather than merely convenient. An unreserved conversation is
+-- in exactly the state every conversation was in before this migration: the
+-- first send through the reservation path claims it, and because a genuine
+-- self-DM's id already equals its derivation, that claim adopts the existing
+-- conversation instead of creating a second one. Orphaned two-party rows are
+-- simply never re-derived, so they stay readable and inert.
+--
+-- Malformed rosters (zero, or more than two) are skipped for the same reason.
+-- The earlier version aborted the whole migration on them; skipping avoids
+-- inventing a tuple just as effectively without blocking a deployment, and any
+-- future send still goes through the reservation path.
 INSERT INTO dm_conversation_reservations (
   conversation_id,
   workspace_id,
@@ -88,10 +114,11 @@ INSERT INTO dm_conversation_reservations (
 SELECT
   dc.id,
   dc.workspace_id,
-  CASE WHEN COUNT(DISTINCT dp.agent_id) BETWEEN 1 AND 2 THEN MIN(dp.agent_id) END,
-  CASE WHEN COUNT(DISTINCT dp.agent_id) BETWEEN 1 AND 2 THEN MAX(dp.agent_id) END,
+  MIN(dp.agent_id),
+  MAX(dp.agent_id),
   dc.created_at
 FROM dm_conversations dc
-LEFT JOIN dm_participants dp ON dp.conversation_id = dc.id
+JOIN dm_participants dp ON dp.conversation_id = dc.id
 WHERE dc.dm_type = '1:1'
-GROUP BY dc.id, dc.workspace_id, dc.created_at;
+GROUP BY dc.id, dc.workspace_id, dc.created_at
+HAVING COUNT(DISTINCT dp.agent_id) = 2;

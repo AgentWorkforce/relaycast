@@ -6,26 +6,33 @@
  *
  * WHY THIS EXISTS AS A SCRIPT AND NOT SQL
  * ───────────────────────────────────────
- * Two of the three checks are plain SQL and live in the migration header. The
- * third cannot be: it has to recompute the deterministic conversation id, and
- * SQLite has no SHA-256. It is also the check that matters most operationally,
- * because it is the only one whose failure is INVISIBLE AT MIGRATION TIME.
+ * The interesting check needs SHA-256 to recompute the deterministic
+ * conversation id, and SQLite does not have it. It is also the check whose
+ * failure is INVISIBLE AT MIGRATION TIME:
  *
- *   (a) malformed roster   -> migration aborts loudly. You find out immediately.
- *   (b) duplicate pair     -> migration aborts loudly. You find out immediately.
- *   (c) id != derivation   -> migration SUCCEEDS, and then every subsequent DM
- *                             between that pair returns 409 forever.
+ *   (b) duplicate pair    -> migration aborts loudly. You find out immediately.
+ *   (c) id != derivation  -> migration SUCCEEDS, and then every subsequent DM
+ *                            between that pair returns 409 forever, because the
+ *                            backfill reserved the pair under an id the send
+ *                            path will never re-derive.
  *
- * (c) happens because the backfill reserves whatever `dc.id` a conversation
- * already had. If that id is not what `deriveDmPairKey` produces today, the next
- * send derives a different id for the same pair, hits the pair-uniqueness index,
- * and fails closed. The pair can never DM again.
+ * IT ALSO EARNED ITS KEEP. Run against production it found 4 colliding pair
+ * groups and 30 mismatched ids that would have aborted the deployment. All 30
+ * were ORPHANED TWO-PARTY conversations, not self-DMs: `dm_participants.agent_id`
+ * cascades on agent deletion, so an ordinary 1:1 collapses to a one-row roster
+ * while its id still encodes the original pair. The backfill was reading those
+ * as (X, X). Migration 0033 now reserves only exactly-two-participant
+ * conversations, and the same production data yields zero findings.
+ *
+ * So one-row rosters are reported, not flagged — and the derivation is used to
+ * say which are genuine self-DMs and which are orphans, since the roster alone
+ * cannot tell them apart.
  *
  * Git history says the derivation never changed — the only edit swapped node
- * crypto for web crypto with a byte-identical input string. This script exists
- * because "the derivation looks stable in git history" and "zero rows in
- * production disagree" are different claims, and only the second one is
- * evidence.
+ * crypto for web crypto with a byte-identical input string, and production
+ * confirms it: 3425 two-party conversations, zero mismatches. This script exists
+ * because "stable in git history" and "zero rows in production disagree" are
+ * different claims, and only the second one is evidence.
  *
  * USAGE
  * ─────
@@ -126,16 +133,37 @@ const malformed = [];
 const mismatched = [];
 const pairIndex = new Map(); // workspace|a|b -> [conversationId]
 
+const skipped = [];
+
 for (const conv of conversations.values()) {
   const agents = [...conv.agents].sort();
 
-  // (a) roster shape. A self-DM legitimately has one participant.
-  if (agents.length < 1 || agents.length > 2) {
-    malformed.push({ id: conv.id, workspaceId: conv.workspaceId, participants: agents.length });
+  // Migration 0033 reserves ONLY exactly-two-participant conversations. Anything
+  // else is skipped by the backfill, so it cannot abort the migration and cannot
+  // create a wrong binding. Recorded, not flagged.
+  //
+  // A one-row roster is genuinely ambiguous: `dm_participants.agent_id` cascades
+  // on agent deletion, so an ordinary two-party 1:1 collapses to one row while
+  // its id still encodes the original pair. It is indistinguishable from a real
+  // self-DM by roster alone -- but the derivation tells them apart, so this
+  // reports which is which.
+  if (agents.length !== 2) {
+    const solo = agents[0];
+    const looksLikeSelfDm = agents.length === 1
+      && conv.id === deriveConversationId(conv.workspaceId, solo, solo);
+    skipped.push({
+      id: conv.id,
+      workspaceId: conv.workspaceId,
+      participants: agents.length,
+      kind: agents.length === 1 ? (looksLikeSelfDm ? 'self-DM' : 'orphaned two-party') : 'malformed',
+    });
+    if (agents.length === 0 || agents.length > 2) {
+      malformed.push({ id: conv.id, workspaceId: conv.workspaceId, participants: agents.length });
+    }
     continue;
   }
 
-  const [first, second] = agents.length === 2 ? agents : [agents[0], agents[0]];
+  const [first, second] = agents;
 
   // (b) duplicate pair within a workspace.
   const pairKey = `${conv.workspaceId}|${first}|${second}`;
@@ -167,13 +195,27 @@ const section = (label, items, render) => {
   return items.length;
 };
 
+const reserved = conversations.size - skipped.length;
+console.log(`  ${reserved} will be reserved by the backfill; ${skipped.length} skipped (not exactly two participants).\n`);
+
 let findings = 0;
-findings += section('(a) malformed rosters — migration will ABORT', malformed,
+section('(a) malformed rosters — skipped by the backfill, but worth knowing about', malformed,
   (m) => `${m.id} (workspace ${m.workspaceId}, ${m.participants} participants)`);
-findings += section('(b) duplicate pairs — migration will ABORT', duplicates,
+findings += section('(b) duplicate pairs among reserved conversations — migration will ABORT', duplicates,
   (d) => `${d.pair} -> ${d.conversations.join(', ')}`);
 findings += section('(c) id does not match the current derivation — migration SUCCEEDS, then DMs 409', mismatched,
   (m) => `${m.id} should be ${m.expected} (workspace ${m.workspaceId}, pair ${m.pair.join(' + ')})`);
+
+const byKind = skipped.reduce((acc, s) => ({ ...acc, [s.kind]: (acc[s.kind] ?? 0) + 1 }), {});
+if (skipped.length > 0) {
+  console.log('');
+  console.log('  skipped breakdown (informational — none of these block the migration):');
+  for (const [kind, count] of Object.entries(byKind)) console.log(`    ${count} ${kind}`);
+  if (byKind['orphaned two-party']) {
+    console.log('    an orphaned two-party 1:1 is one whose peer agent was deleted;');
+    console.log('    dm_participants cascades on agent delete, leaving a one-row roster.');
+  }
+}
 
 console.log('');
 if (findings === 0) {
