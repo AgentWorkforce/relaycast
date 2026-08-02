@@ -112,6 +112,43 @@ describe('1:1 DM conversation identity', () => {
   });
 
   /**
+   * A self-DM is one roster row, so the reservation stores the same agent as
+   * both participants. That has to satisfy the sorted-pair CHECK
+   * (participant_one_id <= participant_two_id), which it does only because the
+   * comparison is non-strict. Untested before, and `@self` is a documented
+   * request shape, so a stricter constraint would have broken a live feature.
+   */
+  it('reserves a self-DM without violating the sorted-pair constraint', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: '@self', text: 'note to self' });
+
+    const rows = db.select().from(dmConversationReservations).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].participantOneId).toBe(rows[0].participantTwoId);
+  });
+
+  /**
+   * The reservation and the conversation/roster inserts are NOT one transaction,
+   * so a crash between them leaves a reservation with no conversation behind it.
+   * That must be self-healing rather than a permanent 409: the retry presents the
+   * identical tuple, which the conditional upsert accepts.
+   *
+   * Asserted rather than assumed. If re-resolution ever stopped accepting an
+   * identical tuple, a single mid-write crash would lock that pair out of DMs
+   * for good, and nothing else in this suite would notice.
+   */
+  it('recovers when a reservation outlives its conversation', async () => {
+    const { db, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'one' });
+    const reserved = db.select().from(dmConversationReservations).all()[0].conversationId;
+
+    db.delete(dmConversations).run(); // conversation gone, reservation remains
+
+    await expect(sendDm(db, ws, alice, { to: 'bob', text: 'two' })).resolves.toBeTruthy();
+    expect(db.select().from(dmConversations).all()[0].id).toBe(reserved);
+  });
+
+  /**
    * The 409 above must survive the driver change between self-hosted and hosted.
    *
    * This engine has already regressed this exact class once: PR #193 added
