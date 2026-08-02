@@ -9,11 +9,17 @@
  * are a compatibility surface, not just internal behaviour.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, dmConversations, dmParticipants, workspaces } from '../../db/schema.js';
+import {
+  agents,
+  dmConversationReservations,
+  dmConversations,
+  dmParticipants,
+  workspaces,
+} from '../../db/schema.js';
 import { sendDm } from '../dm.js';
 
 type Db = SqliteDbHandle['db'];
@@ -56,7 +62,7 @@ function seed(): Fixture {
   return { db: handle.db, ws, alice, bob };
 }
 
-/** Mirrors `getDmPairKey` — kept independent so a change to the algorithm fails here. */
+/** Mirrors the derivation helper — kept independent so an algorithm change fails here. */
 async function expectedConversationId(ws: string, a: string, b: string): Promise<string> {
   const [first, second] = [a, b].sort();
   const digest = await crypto.subtle.digest(
@@ -103,6 +109,68 @@ describe('1:1 DM conversation identity', () => {
       .from(dmParticipants)
       .where(eq(dmParticipants.conversationId, first.conversation_id));
     expect(participants).toHaveLength(2);
+  });
+
+  it('atomically rejects one of two concurrent pairs whose digests collide', async () => {
+    const { db, ws, alice, bob } = seed();
+    const suffix = ws.slice(3);
+    const carol = `ag_carol_${suffix}`;
+    const dave = `ag_dave_${suffix}`;
+
+    db.insert(agents).values({
+      id: carol,
+      workspaceId: ws,
+      name: 'carol',
+      tokenHash: `tok_c_${suffix}`,
+    }).run();
+    db.insert(agents).values({
+      id: dave,
+      workspaceId: ws,
+      name: 'dave',
+      tokenHash: `tok_d_${suffix}`,
+    }).run();
+
+    const forcedDigest = new Uint8Array(32).fill(0x5a).buffer;
+    const digestSpy = vi.spyOn(globalThis.crypto.subtle, 'digest').mockResolvedValue(forcedDigest);
+
+    let outcomes: PromiseSettledResult<Awaited<ReturnType<typeof sendDm>>>[];
+    try {
+      // Deliberately launch both real send paths before awaiting either one.
+      outcomes = await Promise.allSettled([
+        sendDm(db, ws, alice, { to: 'bob', text: 'alice to bob' }),
+        sendDm(db, ws, carol, { to: 'dave', text: 'carol to dave' }),
+      ]);
+    } finally {
+      digestSpy.mockRestore();
+    }
+
+    const winners = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+    const losers = outcomes.filter((outcome) => outcome.status === 'rejected');
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect((losers[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'dm_conversation_id_collision',
+      status: 409,
+    });
+
+    const winner = (winners[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof sendDm>>>).value;
+    const roster = await db
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(eq(dmParticipants.conversationId, winner.conversation_id));
+    const rosterIds = roster.map((row) => row.agentId).sort();
+    expect([
+      [alice, bob].sort(),
+      [carol, dave].sort(),
+    ]).toContainEqual(rosterIds);
+
+    const reservations = await db.select().from(dmConversationReservations);
+    expect(reservations).toHaveLength(1);
+    expect([
+      reservations[0].participantOneId,
+      reservations[0].participantTwoId,
+    ]).toEqual(rosterIds);
   });
 });
 

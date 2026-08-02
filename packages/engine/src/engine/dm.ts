@@ -6,6 +6,7 @@ import {
   channels,
   agents,
   dmConversations,
+  dmConversationReservations,
   dmParticipants,
   messageAttachments,
 } from '../db/schema.js';
@@ -30,9 +31,55 @@ interface SendDmOptions {
   mailbox?: MailboxConfig;
 }
 
-async function getDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {
+/**
+ * Derivation only: this digest does not resolve or claim a conversation.
+ * Callers must atomically reserve the derived id before using it.
+ */
+async function deriveDmPairKey(workspaceId: string, agentA: string, agentB: string): Promise<string> {
   const [first, second] = [agentA, agentB].sort();
   return (await sha256Hex(`${workspaceId}:${first}:${second}`)).slice(0, 24);
+}
+
+/**
+ * Atomically resolve or reserve a deterministic 1:1 DM id for one exact tuple.
+ *
+ * The primary-key conflict and conditional no-op update are one SQL statement.
+ * An identical tuple returns the existing reservation; a digest collision makes
+ * the conflict predicate false, returns no row, and fails closed.
+ */
+async function resolveOrReserveConversation(
+  db: Db,
+  conversationId: string,
+  workspaceId: string,
+  sortedPair: readonly [string, string],
+): Promise<void> {
+  const [participantOneId, participantTwoId] = sortedPair;
+  const [reservation] = await db
+    .insert(dmConversationReservations)
+    .values({
+      conversationId,
+      workspaceId,
+      participantOneId,
+      participantTwoId,
+    })
+    .onConflictDoUpdate({
+      target: dmConversationReservations.conversationId,
+      set: { conversationId: sql`excluded.conversation_id` },
+      setWhere: and(
+        eq(dmConversationReservations.workspaceId, workspaceId),
+        eq(dmConversationReservations.participantOneId, participantOneId),
+        eq(dmConversationReservations.participantTwoId, participantTwoId),
+      ),
+    })
+    .returning({ conversationId: dmConversationReservations.conversationId });
+
+  if (!reservation) {
+    throw codedError(
+      'DM conversation identifier is already reserved for a different participant pair',
+      'dm_conversation_id_collision',
+      409,
+    );
+  }
 }
 
 async function resolveConversation(
@@ -41,64 +88,44 @@ async function resolveConversation(
   fromAgentId: string,
   toAgentId: string,
 ) {
-  const existing = await db.all<{ id: string; channel_id: string }>(sql`
-    SELECT dc.id, dc.channel_id
-    FROM dm_conversations dc
-    JOIN dm_participants p1
-      ON p1.conversation_id = dc.id
-     AND p1.agent_id = ${fromAgentId}
-     AND p1.left_at IS NULL
-    JOIN dm_participants p2
-      ON p2.conversation_id = dc.id
-     AND p2.agent_id = ${toAgentId}
-     AND p2.left_at IS NULL
-    WHERE dc.workspace_id = ${workspaceId}
-      AND dc.dm_type = '1:1'
-    LIMIT 1
-  `);
+  const sortedPair = [fromAgentId, toAgentId].sort() as [string, string];
+  const pairKey = await deriveDmPairKey(workspaceId, sortedPair[0], sortedPair[1]);
+  const conversationId = `dm_${pairKey}`;
+  const channelId = `dmch_${pairKey}`;
 
-  let conversationId = existing[0]?.id;
+  // This is the mandatory resolution seam. It must happen before any metadata
+  // creation so exactly one tuple can win a digest collision.
+  await resolveOrReserveConversation(db, conversationId, workspaceId, sortedPair);
 
-  if (!conversationId) {
-    const pairKey = await getDmPairKey(workspaceId, fromAgentId, toAgentId);
-    const deterministicConversationId = `dm_${pairKey}`;
-    const deterministicChannelId = `dmch_${pairKey}`;
+  await db.insert(channels).values({
+    id: channelId,
+    workspaceId,
+    name: `dm-${pairKey}`,
+    channelType: 1,
+  }).onConflictDoNothing();
 
-    await db.insert(channels).values({
-      id: deterministicChannelId,
-      workspaceId,
-      name: `dm-${pairKey}`,
-      channelType: 1,
-    }).onConflictDoNothing();
+  await db.insert(dmConversations).values({
+    id: conversationId,
+    workspaceId,
+    channelId,
+    dmType: '1:1',
+  }).onConflictDoNothing();
 
-    await db.insert(dmConversations).values({
-      id: deterministicConversationId,
-      workspaceId,
-      channelId: deterministicChannelId,
-      dmType: '1:1',
-    }).onConflictDoNothing();
+  // A deterministic 1:1 is a durable relationship. Re-resolution restores a
+  // stale departure marker instead of letting roster state disagree with it.
+  const rejoin = {
+    target: [dmParticipants.conversationId, dmParticipants.agentId],
+    set: { leftAt: null },
+  };
 
-    // Clear `left_at` rather than no-op on conflict. Reaching this branch for an
-    // id that already exists means the lookup above missed, and the only way it
-    // can miss for an existing 1:1 is a participant marked departed. Leaving the
-    // marker set would resolve the conversation while its roster disagreed —
-    // see invariant DM-1 in __tests__/dm.test.ts.
-    const rejoin = {
-      target: [dmParticipants.conversationId, dmParticipants.agentId],
-      set: { leftAt: null },
-    };
-
-    await db.insert(dmParticipants).values({
-      conversationId: deterministicConversationId,
-      agentId: fromAgentId,
-    }).onConflictDoUpdate(rejoin);
-    await db.insert(dmParticipants).values({
-      conversationId: deterministicConversationId,
-      agentId: toAgentId,
-    }).onConflictDoUpdate(rejoin);
-
-    conversationId = deterministicConversationId;
-  }
+  await db.insert(dmParticipants).values({
+    conversationId,
+    agentId: fromAgentId,
+  }).onConflictDoUpdate(rejoin);
+  await db.insert(dmParticipants).values({
+    conversationId,
+    agentId: toAgentId,
+  }).onConflictDoUpdate(rejoin);
 
   const [conv] = await db
     .select({ id: dmConversations.id, channelId: dmConversations.channelId })
