@@ -14,30 +14,15 @@ CREATE TABLE dm_conversation_reservations (
 CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
   ON dm_conversation_reservations (workspace_id, participant_one_id, participant_two_id);
 
--- PRE-FLIGHT AUDIT (run BOTH read-only queries BEFORE applying this migration).
--- The backfill can abort for two independent reasons, and each needs its own
--- check. An earlier version of this comment shipped only query (a) and claimed an
--- empty result meant the migration would apply cleanly. That was wrong: a
--- duplicate pair passes (a) and still aborts the backfill on the pair-uniqueness
--- index. Raised in review of PR #303.
+-- PRE-FLIGHT AUDIT — run BEFORE applying this migration.
 --
--- (a) Roster shape. The backfill aborts if any single legacy 1:1 has a roster
---     that is not 1 or 2 distinct participants. That is deliberate - inventing a
---     tuple would bind a conversation to the wrong pair - but one corrupt row
---     blocks the whole deployment.
+-- The single command to trust is the script in (b); it runs both checks. The SQL
+-- in (a) is here so the cheap check can be run by hand without Node.
 --
---   SELECT dc.id, dc.workspace_id, COUNT(DISTINCT dp.agent_id) AS participants
---   FROM dm_conversations dc
---   LEFT JOIN dm_participants dp ON dp.conversation_id = dc.id
---   WHERE dc.dm_type = '1:1'
---   GROUP BY dc.id, dc.workspace_id
---   HAVING participants NOT BETWEEN 1 AND 2;
---
--- (b) Duplicate pairs. Two DISTINCT legacy 1:1 conversations in one workspace
---     that resolve to the same sorted pair both satisfy (a), but only one can be
---     reserved - the second violates dm_conversation_reservations_pair_unique and
---     aborts the migration. This is exactly what a pre-deterministic id scheme
---     leaves behind, so it is the likelier of the two in practice.
+-- (a) DUPLICATE PAIRS among the conversations that will be reserved. Two
+--     distinct 1:1 conversations in one workspace resolving to the same sorted
+--     pair can only yield one reservation; the second violates
+--     dm_conversation_reservations_pair_unique and ABORTS this migration.
 --
 --   SELECT workspace_id, participant_one_id, participant_two_id,
 --          COUNT(*) AS conversations
@@ -49,30 +34,35 @@ CREATE UNIQUE INDEX dm_conversation_reservations_pair_unique
 --     JOIN dm_participants dp ON dp.conversation_id = dc.id
 --     WHERE dc.dm_type = '1:1'
 --     GROUP BY dc.id, dc.workspace_id
---     HAVING COUNT(DISTINCT dp.agent_id) BETWEEN 1 AND 2
+--     HAVING COUNT(DISTINCT dp.agent_id) = 2
 --   )
 --   GROUP BY workspace_id, participant_one_id, participant_two_id
 --   HAVING conversations > 1;
 --
--- (c) Ids that do not match the CURRENT derivation. This one cannot be written
---     in SQL - it needs SHA-256, which SQLite does not have - and it is the check
---     that matters most operationally, because it is the only failure that is
---     INVISIBLE AT MIGRATION TIME. (a) and (b) abort the migration loudly. (c)
---     lets it succeed, and then every subsequent DM between that pair returns 409
---     forever, because the backfill reserved the pair under an id the send path
---     will never re-derive.
+--     The `= 2` must match the backfill below. An earlier revision of this
+--     comment carried `BETWEEN 1 AND 2`, left over from when the backfill also
+--     reserved one-row rosters; run by hand it reports phantom blockers, because
+--     one-row rosters are no longer reserved and cannot collide.
+--
+-- (b) IDS THAT DO NOT MATCH THE CURRENT DERIVATION. This cannot be expressed in
+--     SQL — it needs SHA-256, which SQLite does not have — and it is the check
+--     that matters most, because it is the only failure that is INVISIBLE AT
+--     MIGRATION TIME. (a) aborts loudly. (b) lets the migration succeed, and then
+--     every subsequent DM between that pair returns 409 forever, because the pair
+--     was reserved under an id the send path will never re-derive.
 --
 --     Run:  node scripts/audit-dm-reservations.mjs --sqlite <path>
 --     D1:   wrangler d1 execute <DB> --json --command "<see script header>" \
 --             | node scripts/audit-dm-reservations.mjs --stdin
 --
---     That script also re-runs (a) and (b), so it is the single command to trust.
+--     The script runs (a) as well, and additionally reports the skipped one-row
+--     rosters split into genuine self-DMs and orphaned two-party conversations.
 --
--- All three clean means this migration will apply AND no existing pair will start
--- failing afterwards. Remediate anything any of them returns - for (b) that means
--- deciding which conversation survives, since the reservation can only bind one;
--- for (c) it means re-keying the conversation to the derived id, or seeding its
--- reservation under the derived id, before deploying the code that reserves.
+-- Clean means this migration applies AND no existing pair starts failing
+-- afterwards. Remediate anything either check returns — for (a) that means
+-- deciding which conversation survives, since a pair can hold only one
+-- reservation; for (b) it means re-keying the conversation to the derived id, or
+-- seeding its reservation under the derived id, before deploying.
 
 -- Backfill ONLY conversations with exactly two distinct participants.
 --
