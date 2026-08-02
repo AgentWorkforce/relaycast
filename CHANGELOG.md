@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - 1:1 DM resolution now atomically reserves each deterministic conversation ID for its workspace and participant pair, rejecting digest collisions instead of silently aliasing another conversation.
+- `POST /dm` documents `409 dm_conversation_id_collision` in `openapi.yaml` and `README.md`, and returns it for both collision shapes rather than surfacing a raw database constraint error.
 
 ## [6.3.1] - 2026-07-31
 

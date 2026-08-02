@@ -46,6 +46,23 @@ async function deriveDmPairKey(workspaceId: string, agentA: string, agentB: stri
  * The primary-key conflict and conditional no-op update are one SQL statement.
  * An identical tuple returns the existing reservation; a digest collision makes
  * the conflict predicate false, returns no row, and fails closed.
+ *
+ * TWO DISTINCT COLLISIONS, and both must fail closed with the same coded 409:
+ *
+ *   1. Same conversation_id, different pair. Caught by the PRIMARY KEY conflict
+ *      target: the conditional update predicate is false, no row is returned.
+ *
+ *   2. Same pair, different conversation_id. This violates the pair_unique
+ *      index, which is NOT the conflict target - SQLite only accepts one - so
+ *      the statement raises SQLITE_CONSTRAINT_UNIQUE. Raised in review of PR
+ *      #303 and reachable in practice: migration 0033 backfills whatever `dc.id`
+ *      a legacy 1:1 already had, without requiring it to equal the current
+ *      derivation, so the pair can be reserved under an id the next send will
+ *      not re-derive. Left unhandled that surfaced as a 500.
+ *
+ * Failing closed is not sufficient on its own. It has to fail closed with the
+ * documented code, or a caller cannot tell a refused collision from an engine
+ * fault - which is the same distinction the rest of this seam exists to make.
  */
 async function resolveOrReserveConversation(
   db: Db,
@@ -54,24 +71,42 @@ async function resolveOrReserveConversation(
   sortedPair: readonly [string, string],
 ): Promise<void> {
   const [participantOneId, participantTwoId] = sortedPair;
-  const [reservation] = await db
-    .insert(dmConversationReservations)
-    .values({
-      conversationId,
-      workspaceId,
-      participantOneId,
-      participantTwoId,
-    })
-    .onConflictDoUpdate({
-      target: dmConversationReservations.conversationId,
-      set: { conversationId: sql`excluded.conversation_id` },
-      setWhere: and(
-        eq(dmConversationReservations.workspaceId, workspaceId),
-        eq(dmConversationReservations.participantOneId, participantOneId),
-        eq(dmConversationReservations.participantTwoId, participantTwoId),
-      ),
-    })
-    .returning({ conversationId: dmConversationReservations.conversationId });
+
+  let reservation: { conversationId: string } | undefined;
+  try {
+    [reservation] = await db
+      .insert(dmConversationReservations)
+      .values({
+        conversationId,
+        workspaceId,
+        participantOneId,
+        participantTwoId,
+      })
+      .onConflictDoUpdate({
+        target: dmConversationReservations.conversationId,
+        set: { conversationId: sql`excluded.conversation_id` },
+        setWhere: and(
+          eq(dmConversationReservations.workspaceId, workspaceId),
+          eq(dmConversationReservations.participantOneId, participantOneId),
+          eq(dmConversationReservations.participantTwoId, participantTwoId),
+        ),
+      })
+      .returning({ conversationId: dmConversationReservations.conversationId });
+  } catch (err) {
+    // Collision (2) above. Narrowed to this table so an unrelated constraint
+    // failure is never laundered into a tidy 409.
+    const failure = err as { code?: string; message?: string };
+    const isPairCollision =
+      failure.code === 'SQLITE_CONSTRAINT_UNIQUE' &&
+      (failure.message ?? '').includes('dm_conversation_reservations');
+    if (!isPairCollision) throw err;
+
+    throw codedError(
+      'DM participant pair is already reserved under a different conversation identifier',
+      'dm_conversation_id_collision',
+      409,
+    );
+  }
 
   if (!reservation) {
     throw codedError(

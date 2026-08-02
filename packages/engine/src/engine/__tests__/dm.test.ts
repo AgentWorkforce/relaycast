@@ -111,6 +111,47 @@ describe('1:1 DM conversation identity', () => {
     expect(participants).toHaveLength(2);
   });
 
+  /**
+   * A legacy 1:1 conversation whose id is NOT the current derivation is backfilled
+   * by migration 0033 under its own id, so the PAIR is reserved while the
+   * deterministic id is not. The next send derives a different conversation_id for
+   * the same pair, which violates the pair_unique index rather than the primary
+   * key. The upsert only names conversation_id as its conflict target, so that
+   * surfaced as a raw SQLITE_CONSTRAINT_UNIQUE (500) instead of the controlled
+   * 409 this whole seam exists to produce.
+   *
+   * Raised in review of PR #303. Failing closed is not enough on its own - it has
+   * to fail closed with the documented code, or callers cannot distinguish it
+   * from an engine fault.
+   */
+  it('reports a controlled collision when the pair is reserved under a different id', async () => {
+    const { db, ws, alice, bob } = seed();
+    const [first, second] = [alice, bob].sort();
+
+    // Simulate the 0033 backfill of a pre-deterministic conversation id.
+    db.insert(dmConversationReservations).values({
+      conversationId: 'dm_legacy_nondeterministic_id',
+      workspaceId: ws,
+      participantOneId: first,
+      participantTwoId: second,
+    }).run();
+
+    let code: string | undefined;
+    let status: number | undefined;
+    let raw: string | undefined;
+    try {
+      await sendDm(db, ws, alice, { to: 'bob', text: 'hello' });
+    } catch (err) {
+      const e = err as { code?: string; status?: number; message?: string };
+      code = e.code;
+      status = e.status;
+      raw = e.message;
+    }
+
+    expect(code, `expected a coded collision, got: ${raw}`).toBe('dm_conversation_id_collision');
+    expect(status).toBe(409);
+  });
+
   it('atomically rejects one of two concurrent pairs whose digests collide', async () => {
     const { db, ws, alice, bob } = seed();
     const suffix = ws.slice(3);
