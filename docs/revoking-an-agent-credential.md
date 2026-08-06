@@ -39,10 +39,17 @@ where there is one.
 
 ## Do not rotate
 
-Do not re-register the seat to "replace" the credential. `register_agent`
-returns the live token in its reply (relay#1389), so a replacement lands straight
-back into a transcript — the leak you are containing. Revoke without replacement;
-issue a new seat separately if the work still needs doing.
+`POST /v1/agents/:name/rotate-token` will look like the answer. It does
+invalidate the leaked credential — it overwrites `token_hash`, so the old token
+stops authenticating immediately. Do not use it for containment anyway: it
+returns the replacement token in its response body, and `register_agent` returns
+a live token in its reply too (relay#1389). Both put a working credential
+straight back into a transcript, which is the leak you are containing. You would
+trade a known-leaked token for a freshly-leaked one and call it done.
+
+Rotation is the right tool when a seat must keep working and you control where
+the new token lands. It is the wrong tool when the goal is containment. Revoke
+without replacement; issue a new seat separately if the work still needs doing.
 
 ## Handling the token safely
 
