@@ -146,6 +146,11 @@ components:
         status:
           type: string
           enum: [active, idle, blocked, waiting, offline, online]
+          description: >-
+            Presence-aware lifecycle status. `active` means the engine observed
+            authenticated activity within the five-minute agent liveness TTL;
+            a persisted active/legacy-online row older than that is reported and
+            durably swept as `offline`.
         token:
           type: string
           description: Agent token (only returned on registration)
@@ -226,7 +231,10 @@ components:
           additionalProperties: true
         status:
           type: string
-          description: Invocation dispatch state, typically `pending` or `dispatched`.
+          description: >-
+            Invocation lifecycle state. `pending` or `dispatched` means a live
+            host owns the request; `completed` can be returned immediately when
+            release reaps an agent that has no live host.
         created_at:
           type: string
           format: date-time
@@ -1695,7 +1703,11 @@ paths:
 
     get:
       summary: List agents
-      description: List all agents in the workspace. Observer tokens require `agents:read`.
+      description: >-
+        List all agents in the workspace. Active presence is derived from
+        server-observed `last_seen` using a five-minute TTL, so stale persisted
+        active rows are returned as offline and swept durably. Observer tokens
+        require `agents:read`.
       tags:
         - Agents
       security:
@@ -1706,7 +1718,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [online, offline]
+            enum: [active, idle, blocked, waiting, offline, online, all]
       responses:
         '200':
           description: List of agents
@@ -1875,9 +1887,13 @@ paths:
     post:
       summary: Request agent release
       description: |
-        Request the node that owns an agent to release it by dispatching the
-        built-in `release` action. The engine marks or deletes the agent only
-        after the node reports successful completion.
+        If the agent has a live host, request release by dispatching the built-in
+        `release` action and apply the lifecycle change after the host confirms.
+        If no host is bound or the hosting connection is not live, a normal
+        release fails explicitly with `503 agent_host_unavailable`; it never
+        creates an ownerless pending invocation. With `delete_agent`, the engine
+        can reap the database record directly and returns a completed invocation,
+        deleting the agent and any implicit direct node.
       tags:
         - Agents
       security:
@@ -1904,7 +1920,7 @@ paths:
                   description: If true, permanently delete the agent
       responses:
         '201':
-          description: Release action invoked
+          description: Release dispatched to a live host or completed locally
           content:
             application/json:
               schema:
@@ -1916,6 +1932,12 @@ paths:
                     $ref: '#/components/schemas/LifecycleActionInvocation'
         '404':
           description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Agent has no live host to receive a normal release
           content:
             application/json:
               schema:

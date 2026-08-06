@@ -8,7 +8,24 @@ import { directNodeIdForAgent, ensureDirectNodeForAgent } from './node.js';
 
 type Db = ReturnType<typeof getDb>;
 
-const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+/** How long an authenticated agent can be silent before it is no longer present. */
+export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
+
+type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
+
+/**
+ * Resolve the public presence status from server-observed activity. Persisted
+ * `active` is only the last reported state; it is not proof of current life.
+ */
+export function effectiveAgentStatus(agent: AgentPresenceRow, now = Date.now()): string {
+  if (
+    (agent.status === 'active' || agent.status === 'online')
+    && now - agent.lastSeen.getTime() > AGENT_LIVENESS_TTL_MS
+  ) {
+    return 'offline';
+  }
+  return agent.status === 'online' ? 'active' : agent.status;
+}
 
 /** Detect unique constraint violations across D1, SQLite, and drizzle error shapes. */
 function isUniqueConstraintError(err: unknown): boolean {
@@ -107,33 +124,27 @@ export async function registerAgent(
 }
 
 export async function listAgents(db: Db, workspaceId: string, status?: string) {
-  let rows;
-  if (status && status !== 'all') {
-    rows = await db
-      .select()
-      .from(agents)
-      .where(
-        and(eq(agents.workspaceId, workspaceId), eq(agents.status, status)),
-      );
-  } else {
-    rows = await db
-      .select()
-      .from(agents)
-      .where(eq(agents.workspaceId, workspaceId));
-  }
+  // Keep the durable state aligned as a cleanup side effect, while still
+  // deriving below so correctness never depends on a cron/sweep having run.
+  await sweepStaleAgents(db, workspaceId);
+  const rows = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.workspaceId, workspaceId));
+  const requestedStatus = status === 'online' ? 'active' : status;
 
   return rows.map((a) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
     type: a.type,
-    status: a.status,
+    status: effectiveAgentStatus(a),
     persona: a.persona,
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  }));
+  })).filter((agent) => !requestedStatus || requestedStatus === 'all' || agent.status === requestedStatus);
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
@@ -202,7 +213,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
     type: agent.type,
-    status: agent.status,
+    status: effectiveAgentStatus(agent),
     persona: agent.persona,
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
@@ -266,7 +277,7 @@ export async function updateAgent(
     name: updated.name,
     handle: `@${updated.name}`,
     type: updated.type,
-    status: updated.status,
+    status: effectiveAgentStatus(updated),
     persona: updated.persona,
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
@@ -295,14 +306,19 @@ export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
     .where(eq(agents.id, agentId));
 }
 
-export async function sweepStaleAgents(db: Db): Promise<number> {
-  const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<number> {
+  const cutoff = new Date(Date.now() - AGENT_LIVENESS_TTL_MS);
+  const stale = and(
+    inArray(agents.status, ['active', 'online']),
+    lt(agents.lastSeen, cutoff),
+    ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
+  );
 
   const result = await db
     .update(agents)
     .set({ status: 'offline' })
     // Sweep both 'active' and legacy 'online' agents during the transition period
-    .where(and(inArray(agents.status, ['active', 'online']), lt(agents.lastSeen, cutoff)))
+    .where(stale)
     .returning({ id: agents.id });
 
   return result.length;

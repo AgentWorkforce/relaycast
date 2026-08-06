@@ -662,6 +662,7 @@ async function dispatchNodeProviderInvocation(args: {
 async function dispatchRelease(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
+  completionDeps?: InvocationCompletionDeps;
   workspaceId: string;
   data: {
     input?: Record<string, unknown>;
@@ -669,9 +670,6 @@ async function dispatchRelease(args: {
     caller_name?: string;
   };
 }) {
-  if (!args.registry) {
-    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
-  }
   const input = recordInput(args.data.input);
   const name = typeof input.name === 'string' ? input.name : null;
   if (!name) {
@@ -685,35 +683,106 @@ async function dispatchRelease(args: {
   if (!agent) {
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
   }
-  if (agent.locationType !== 'via_node' || !agent.locationNodeId) {
-    throw codedError(`Agent "${name}" is not bound to a node`, 'agent_not_node_bound', 409);
-  }
-
   const invocation = await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
     action_name: 'release',
   });
+  const completeLocally = async () => {
+    await applyReleaseCompletionEffect(
+      args.db,
+      args.workspaceId,
+      agent.locationNodeId,
+      invocation,
+      {},
+      args.completionDeps,
+      { allowMissingBinding: true, expectedAgentId: agent.id },
+    );
+    await args.db
+      .update(actionInvocations)
+      .set({
+        status: 'completed',
+        output: { released: true, deleted: input.delete_agent === true, reaped_locally: true },
+        completedAt: new Date(),
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ));
+    return {
+      invocation_id: invocation.id,
+      action_name: 'release',
+      handler_agent_id: null,
+      handler_node_id: agent.locationNodeId,
+      dispatched_node_id: null,
+      input,
+      status: 'completed',
+      created_at: invocation.createdAt.toISOString(),
+    };
+  };
+  const failClosed = async (): Promise<never> => {
+    await args.db
+      .update(actionInvocations)
+      .set({ status: 'failed', error: 'agent_host_unavailable', completedAt: new Date() })
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ));
+    throw codedError(
+      `Agent "${name}" has no live host node; cannot dispatch release`,
+      'agent_host_unavailable',
+      503,
+    );
+  };
+
+  const registry = args.registry;
+  const nodeId = agent.locationNodeId;
+  const hostLive = !!registry
+    && agent.locationType === 'via_node'
+    && !!nodeId
+    && await isHandlerConnectionLive(
+      args.db,
+      registry,
+      args.workspaceId,
+      nodeId,
+      agent.providerName,
+    );
+
+  if (!hostLive) {
+    return input.delete_agent === true ? completeLocally() : failClosed();
+  }
+
+  if (!registry || !nodeId) {
+    throw codedError(`Agent "${name}" has no live host node`, 'agent_host_unavailable', 503);
+  }
 
   // Release is a capacity operation handled by the provider hosting the agent.
   const dispatched = await dispatchNodeInvocation({
     db: args.db,
-    registry: args.registry,
+    registry,
     workspaceId: args.workspaceId,
     invocationId: invocation.id,
-    nodeId: agent.locationNodeId,
+    nodeId,
     providerName: agent.providerName,
     action: 'release',
     input,
   });
 
+  // The provider can disconnect between the liveness check and send. Complete
+  // the DB lifecycle locally instead of creating an ownerless pending request.
+  if (!dispatched.accepted) {
+    return input.delete_agent === true ? completeLocally() : failClosed();
+  }
+
   return {
     invocation_id: invocation.id,
     action_name: 'release',
     handler_agent_id: null,
-    handler_node_id: agent.locationNodeId,
-    dispatched_node_id: dispatched.accepted ? agent.locationNodeId : null,
+    handler_node_id: nodeId,
+    dispatched_node_id: dispatched.accepted ? nodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
@@ -917,6 +986,7 @@ export async function invokeAction(
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
+    completionDeps?: InvocationCompletionDeps;
     /** Resolve plain node-scoped actions too (message triggers bind by name
      * without a node); the resolved row is dispatched node-addressed. */
     includeNodeScoped?: boolean;
@@ -937,6 +1007,7 @@ export async function invokeAction(
     return dispatchRelease({
       db,
       registry: options.nodeConnections,
+      completionDeps: options.completionDeps,
       workspaceId,
       data,
     });
@@ -1111,16 +1182,17 @@ function publicInvocation(row: InvocationRow) {
 async function applyReleaseCompletionEffect(
   db: Db,
   workspaceId: string,
-  nodeId: string,
+  nodeId: string | null,
   invocation: Pick<InvocationRow, 'actionName' | 'input'>,
   data: { error?: string },
   deps?: InvocationCompletionDeps,
-): Promise<void> {
-  if (!isReleaseInvocation(invocation.actionName) || data.error) return;
+  options: { allowMissingBinding?: boolean; expectedAgentId?: string } = {},
+): Promise<boolean> {
+  if (!isReleaseInvocation(invocation.actionName) || data.error) return false;
 
   const input = recordInput(invocation.input);
   const name = typeof input.name === 'string' ? input.name : null;
-  if (!name) return;
+  if (!name) return false;
 
   const [agent] = await db
     .select()
@@ -1128,39 +1200,47 @@ async function applyReleaseCompletionEffect(
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.name, name),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
+      ...(options.expectedAgentId ? [eq(agents.id, options.expectedAgentId)] : []),
+      ...(!options.allowMissingBinding && nodeId ? [
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+      ] : []),
     ));
-  if (!agent) return;
+  if (!agent) return false;
 
   // Only proceed if an active binding actually flipped to inactive. This guards
   // against a second release (e.g. a retry) double-decrementing activeAgents for
   // an agent that was already released from this node.
-  const [deactivatedBinding] = await db
+  const deactivatedBindings = await db
     .update(agentNodeBindings)
     .set({ status: 'inactive', updatedAt: new Date() })
     .where(and(
       eq(agentNodeBindings.workspaceId, workspaceId),
-      eq(agentNodeBindings.nodeId, nodeId),
       eq(agentNodeBindings.agentId, agent.id),
       eq(agentNodeBindings.status, 'active'),
+      ...(nodeId ? [eq(agentNodeBindings.nodeId, nodeId)] : []),
     ))
-    .returning({ id: agentNodeBindings.id });
-  if (!deactivatedBinding) return;
+    .returning({ nodeId: agentNodeBindings.nodeId });
+  if (deactivatedBindings.length === 0 && !options.allowMissingBinding) return false;
 
   // Capture exit correlation BEFORE the mutation deletes the row or strips the
   // spawn/cli metadata, so a durable agent.exited can still be emitted.
   const exited = { agentId: agent.id, agentName: agent.name, invocationId: fleetInvocationId(agent.metadata) };
 
-  await db
-    .update(nodes)
-    .set({
-      activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
-    })
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const deactivatedNodeIds = Array.from(new Set(deactivatedBindings.map((binding) => binding.nodeId)));
+  if (deactivatedNodeIds.length > 0) {
+    await db
+      .update(nodes)
+      .set({
+        activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+      })
+      .where(and(eq(nodes.workspaceId, workspaceId), inArray(nodes.id, deactivatedNodeIds)));
+  }
 
   if (input.delete_agent === true) {
     await db.delete(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+    const implicitNodeId = `node_direct_${agent.id}`;
+    await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
   } else {
     const existingMetadata = agent.metadata ?? {};
     const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
@@ -1184,7 +1264,7 @@ async function applyReleaseCompletionEffect(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
   }
 
-  if (deps) {
+  if (deps && nodeId) {
     await emitAgentExitedEffects(deps, workspaceId, {
       agentId: exited.agentId,
       agentName: exited.agentName,
@@ -1193,6 +1273,7 @@ async function applyReleaseCompletionEffect(
       reason: 'released',
     });
   }
+  return true;
 }
 
 async function dispatchNodeAttempt(
