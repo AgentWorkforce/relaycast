@@ -11,7 +11,7 @@ import {
   type InvocationCompletionDeps,
 } from './invocationCompletion.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { runAtomic } from '../ports/database.js';
+import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 
@@ -690,27 +690,127 @@ async function dispatchRelease(args: {
     action_name: 'release',
   });
   const completeLocally = async () => {
-    await applyReleaseCompletionEffect(
-      args.db,
-      args.workspaceId,
-      agent.locationNodeId,
-      invocation,
-      {},
-      args.completionDeps,
-      { allowMissingBinding: true, expectedAgentId: agent.id },
-    );
-    await args.db
-      .update(actionInvocations)
-      .set({
-        status: 'completed',
-        output: { released: true, deleted: input.delete_agent === true, reaped_locally: true },
-        completedAt: new Date(),
-      })
+    const activeBindings = await args.db
+      .select({ nodeId: agentNodeBindings.nodeId })
+      .from(agentNodeBindings)
       .where(and(
-        eq(actionInvocations.workspaceId, args.workspaceId),
-        eq(actionInvocations.id, invocation.id),
-        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        eq(agentNodeBindings.workspaceId, args.workspaceId),
+        eq(agentNodeBindings.agentId, agent.id),
+        eq(agentNodeBindings.status, 'active'),
       ));
+    const activeNodeIds = Array.from(new Set(activeBindings.map((binding) => binding.nodeId)));
+    const completedAt = new Date();
+    const invocationIsOpen = sql`EXISTS (
+      SELECT 1 FROM ${actionInvocations}
+      WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
+        AND ${actionInvocations.id} = ${invocation.id}
+        AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
+    )`;
+
+    const results = await runAtomicWrites(args.db, (writeDb) => {
+      const writes: AtomicWrite[] = [];
+
+      if (activeNodeIds.length > 0) {
+        // Decrement only nodes whose binding is still active when this atomic
+        // unit begins, so a retry cannot consume another agent's capacity.
+        writes.push(writeDb
+          .update(nodes)
+          .set({
+            activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+          })
+          .where(and(
+            eq(nodes.workspaceId, args.workspaceId),
+            inArray(nodes.id, activeNodeIds),
+            invocationIsOpen,
+            sql`EXISTS (
+              SELECT 1 FROM ${agentNodeBindings}
+              WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
+                AND ${agentNodeBindings.agentId} = ${agent.id}
+                AND ${agentNodeBindings.nodeId} = ${nodes.id}
+                AND ${agentNodeBindings.status} = 'active'
+            )`,
+          )));
+      }
+
+      writes.push(writeDb
+        .update(agentNodeBindings)
+        .set({ status: 'inactive', updatedAt: completedAt })
+        .where(and(
+          eq(agentNodeBindings.workspaceId, args.workspaceId),
+          eq(agentNodeBindings.agentId, agent.id),
+          eq(agentNodeBindings.status, 'active'),
+          invocationIsOpen,
+        )));
+
+      if (input.delete_agent === true) {
+        writes.push(writeDb
+          .delete(agents)
+          .where(and(
+            eq(agents.workspaceId, args.workspaceId),
+            eq(agents.id, agent.id),
+            invocationIsOpen,
+          )));
+        writes.push(writeDb
+          .delete(nodes)
+          .where(and(
+            eq(nodes.workspaceId, args.workspaceId),
+            eq(nodes.id, `node_direct_${agent.id}`),
+            invocationIsOpen,
+          )));
+      } else {
+        const existingMetadata = agent.metadata ?? {};
+        const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
+        writes.push(writeDb
+          .update(agents)
+          .set({
+            status: 'offline',
+            locationType: 'self_connected',
+            locationNodeId: null,
+            lastSeen: completedAt,
+            metadata: {
+              ...restMetadata,
+              release: {
+                reason: typeof input.reason === 'string' ? input.reason : null,
+                released_at: completedAt.toISOString(),
+              },
+            },
+          })
+          .where(and(
+            eq(agents.workspaceId, args.workspaceId),
+            eq(agents.id, agent.id),
+            invocationIsOpen,
+          )));
+      }
+
+      writes.push(writeDb
+        .update(actionInvocations)
+        .set({
+          status: 'completed',
+          output: { released: true, deleted: input.delete_agent === true, reaped_locally: true },
+          completedAt,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ))
+        .returning({ id: actionInvocations.id }));
+
+      return writes;
+    });
+    const completed = results.at(-1) as Array<{ id: string }>;
+
+    // External completion effects belong after the durable atomic unit: an
+    // aborted local reap must never publish agent.exited.
+    if (completed.length > 0 && args.completionDeps && agent.locationNodeId) {
+      await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
+        agentId: agent.id,
+        agentName: agent.name,
+        nodeId: agent.locationNodeId,
+        invocationId: fleetInvocationId(agent.metadata),
+        reason: 'released',
+      });
+    }
     return {
       invocation_id: invocation.id,
       action_name: 'release',
@@ -739,9 +839,20 @@ async function dispatchRelease(args: {
   };
 
   const registry = args.registry;
-  const nodeId = agent.locationNodeId;
+  const activeBindings = await args.db
+    .select({ nodeId: agentNodeBindings.nodeId })
+    .from(agentNodeBindings)
+    .where(and(
+      eq(agentNodeBindings.workspaceId, args.workspaceId),
+      eq(agentNodeBindings.agentId, agent.id),
+      eq(agentNodeBindings.status, 'active'),
+    ));
+  const implicitDirectNodeId = `node_direct_${agent.id}`;
+  const nodeId = activeBindings.find((binding) => binding.nodeId === agent.locationNodeId)?.nodeId
+    ?? activeBindings.find((binding) => binding.nodeId === implicitDirectNodeId)?.nodeId
+    ?? activeBindings[0]?.nodeId
+    ?? (agent.locationType === 'via_node' ? agent.locationNodeId : null);
   const hostLive = !!registry
-    && agent.locationType === 'via_node'
     && !!nodeId
     && await isHandlerConnectionLive(
       args.db,
