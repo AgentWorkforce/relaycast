@@ -5,6 +5,10 @@ export type RelayErrorCode =
   | 'backpressure'
   | 'unauthorized'
   | 'agent_token_invalid'
+  // Distinct from `agent_token_invalid`: the credential existed and was
+  // deliberately revoked. Retrying or re-registering under the same identity is
+  // not the recovery path — the seat was contained on purpose.
+  | 'agent_token_revoked'
   | 'workspace_mismatch'
   | 'transport_error';
 
@@ -26,6 +30,7 @@ const RAW_CODE_MAP: Record<string, RelayErrorCode> = {
   workspace_stream_backpressure: 'backpressure',
   unauthorized: 'unauthorized',
   agent_token_invalid: 'agent_token_invalid',
+  agent_token_revoked: 'agent_token_revoked',
   workspace_mismatch: 'workspace_mismatch',
   workspace_not_found: 'workspace_mismatch',
 };

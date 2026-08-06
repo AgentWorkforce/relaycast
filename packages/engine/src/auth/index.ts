@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { workspaces, agents, nodes } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
+import { revokeAgentToken } from '../engine/agent.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
@@ -28,6 +29,19 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     return hashToken(token);
   }
 
+  /**
+   * This provider owns `agents.token_hash`, so it can enforce revocation itself
+   * — the check lives in `authenticate` below, which every path resolving an
+   * agent token goes through.
+   */
+  revokeAgentCredential(args: {
+    workspaceId: string;
+    agentName: string;
+    db: EngineDb;
+  }): Promise<{ revokedAt: Date; alreadyRevoked: boolean } | null> {
+    return revokeAgentToken(args.db as Parameters<typeof revokeAgentToken>[0], args.workspaceId, args.agentName);
+  }
+
   async authenticate(args: { token: string; require: AuthRequire; db: EngineDb }): Promise<AuthResult> {
     const { token, require, db } = args;
     const parsedToken = parseAuthToken(token);
@@ -51,12 +65,15 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     if (parsedToken.kind === 'agent') {
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
-      // A revoked credential is refused here and nowhere else: this is the only
-      // lookup that resolves an `at_live_` token to an identity. The realtime WS
-      // path rejects agent tokens outright (see engine/wsAuth.ts), so there is no
-      // second door. Distinct code from `agent_token_invalid` so an operator can
-      // tell "revoked" from "never existed" — a deleted row would report the
-      // latter, and the difference is the whole point of keeping the record.
+      // Refuse a revoked credential. This is the main lookup resolving an
+      // `at_live_` token to an identity, and the realtime WS path rejects agent
+      // tokens outright (see engine/wsAuth.ts) — but it is NOT the only one. The
+      // A2A webhook (`routes/a2a.ts`) compares the stored hash directly without
+      // going through this provider and carries its own check; any new path that
+      // matches on `agents.token_hash` must do the same, or revocation silently
+      // stops covering it. Distinct code from `agent_token_invalid` so an
+      // operator can tell "revoked" from "never existed" — a deleted row reports
+      // the latter, and that difference is the point of keeping the record.
       if (agent.revokedAt) return unauthorized('Agent token revoked', 'agent_token_revoked');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');

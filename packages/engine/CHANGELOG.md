@@ -7,7 +7,17 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /agents/{name}/revoke` invalidates an agent credential while leaving the agent row, its messages, and every record referencing it in place. Enforcement is a new `revoked_at` column checked in the agent branch of `SqliteApiKeyAuthProvider.authenticate`; refused requests return `agent_token_revoked` (401), distinct from `agent_token_invalid`. Requires migration `0034`, which must be applied **before or with** this release — the schema enumerates every column per query, so the code cannot talk to an `agents` table without it. Prefer this to `DELETE /agents/{name}`, which fails for any agent that has posted a message (four foreign keys onto `agents.id` are ON DELETE NO ACTION) and cascades away DM history where it succeeds.
+- `AuthProvider.revokeAgentCredential` (optional). Providers backed by an external identity store leave it undefined and the endpoint refuses with `revocation_unsupported` (501) rather than recording a revocation their authenticator never consults.
+
+### Changed
+
+- The A2A webhook resolves its bearer token through the configured `AuthProvider` instead of comparing `agents.token_hash` directly, so provider-level checks apply to that route. Previously a revoked A2A proxy credential still authenticated there.
+
 
 ## [6.3.2] - 2026-08-02
 

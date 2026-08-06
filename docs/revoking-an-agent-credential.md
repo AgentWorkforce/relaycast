@@ -101,7 +101,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")" \
 
 Expected — and the only acceptable result:
 
-```
+```text
 {"ok":false,"error":{"code":"agent_token_revoked","message":"Agent token revoked"}}
 401
 ```

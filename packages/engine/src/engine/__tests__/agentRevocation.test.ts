@@ -17,9 +17,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, channels, messages, workspaces } from '../../db/schema.js';
+import { agents, channels, messages, nodes, workspaces } from '../../db/schema.js';
 import { SqliteApiKeyAuthProvider, hashToken } from '../../auth/index.js';
 import { deleteAgent, revokeAgentToken } from '../agent.js';
+import { registerAgentViaNode } from '../node.js';
 
 type Db = SqliteDbHandle['db'];
 
@@ -64,6 +65,26 @@ async function seed(): Promise<Fixture> {
     .run();
 
   return { db: handle.db, ws, agentId, token };
+}
+
+/**
+ * Wrap a db so the guarded UPDATE inside `revokeAgentToken` is replaced by
+ * `interfere` — the window between reading the active row and writing to it.
+ * Everything else passes through to the real database.
+ */
+function raceDb(db: Db, interfere: () => Promise<void>): Db {
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'update') {
+        return () => ({
+          set: () => ({
+            where: () => ({ returning: async () => { await interfere(); return []; } }),
+          }),
+        });
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as Db;
 }
 
 /** Give the seat the audit history that makes it undeletable. */
@@ -158,6 +179,50 @@ describe('agent token revocation — history survives', () => {
   });
 });
 
+describe('agent token revocation — survives re-registration', () => {
+  /**
+   * `registerAgentViaNode` upserts on `(workspace_id, name)` and its `setWhere`
+   * fires for any seat whose status is not 'active'. Its `set` clause rewrites
+   * `token_hash`, so a containment marker stored *in that column* — a sentinel
+   * hash, say — is silently overwritten the next time any node registers the
+   * name, and the seat comes back live.
+   *
+   * `revoked_at` is not in that `set` clause. This test is what holds that true:
+   * if someone adds it, containment becomes undoable by a heartbeat and this
+   * fails. Do not "fix" it by clearing `revoked_at` on registration.
+   */
+  it('a node re-registering the name does not resurrect a revoked credential', async () => {
+    const { db, ws, agentId, token } = await seed();
+    await revokeAgentToken(db, ws, 'seat');
+
+    // An *offline* seat is what makes the upsert fire: `setWhere` matches on
+    // `status != 'active'`, so any node can reclaim the name — not just the one
+    // the seat was bound to. Four of the seats this was built for are offline.
+    db.update(agents).set({ status: 'offline' }).where(eq(agents.id, agentId)).run();
+    db.insert(nodes)
+      .values({ id: 'nd_1', workspaceId: ws, name: 'node-1', tokenHash: 'node-hash-1' })
+      .run();
+
+    // Same workspace, same name — the upsert path, on an offline seat.
+    const reregistered = await registerAgentViaNode(db, ws, 'nd_1', 'default', {
+      name: 'seat',
+    } as Parameters<typeof registerAgentViaNode>[4]);
+
+    // Registration hands back a fresh token, and `token_hash` really was rewritten.
+    expect(reregistered.token).toBeTruthy();
+
+    // But the seat stays contained: the marker survived, so the brand-new
+    // credential is refused exactly like the old one.
+    const [row] = await db.select().from(agents).where(eq(agents.workspaceId, ws));
+    expect(row.revokedAt).toBeInstanceOf(Date);
+    expect(await auth.authenticate({ token: reregistered.token, require: 'agent', db })).toMatchObject({
+      ok: false,
+      code: 'agent_token_revoked',
+    });
+    expect(await auth.authenticate({ token, require: 'agent', db })).toMatchObject({ ok: false });
+  });
+});
+
 describe('agent token revocation — operational properties', () => {
   it('is idempotent and preserves the original timestamp', async () => {
     const { db, ws } = await seed();
@@ -176,6 +241,50 @@ describe('agent token revocation — operational properties', () => {
     const { db, ws } = await seed();
 
     await expect(revokeAgentToken(db, ws, 'no-such-seat')).resolves.toBeNull();
+  });
+
+  it('issues no receipt when the row is deleted mid-operation', async () => {
+    const { db, ws, agentId } = await seed();
+
+    // The row disappears between the initial read and the guarded update, so the
+    // update matches nothing and there is no persisted `revoked_at` to report.
+    // Returning a locally-generated timestamp here would be a receipt for a
+    // revocation that never happened.
+    const raced = raceDb(db, async () => {
+      await db.delete(agents).where(eq(agents.id, agentId));
+    });
+
+    await expect(revokeAgentToken(raced, ws, 'seat')).resolves.toBeNull();
+  });
+
+  it('issues no receipt when the update does not land', async () => {
+    const { db, ws, token } = await seed();
+
+    const swallowed = raceDb(db, async () => {
+      /* drop the write on the floor */
+    });
+
+    await expect(revokeAgentToken(swallowed, ws, 'seat')).resolves.toBeNull();
+    // And the credential must still work — no silent half-revocation.
+    expect(await auth.authenticate({ token, require: 'agent', db })).toMatchObject({ ok: true });
+  });
+
+  it('marks the loser of a concurrent revoke as already revoked', async () => {
+    const { db, ws } = await seed();
+
+    // Another operator's revoke lands after this call has read the active row,
+    // so this call's guarded update matches nothing. Both used to claim to have
+    // performed the fresh revocation.
+    let other: Date | undefined;
+    const raced = raceDb(db, async () => {
+      other = new Date(Date.now() - 1000);
+      await db.update(agents).set({ revokedAt: other }).where(eq(agents.workspaceId, ws));
+    });
+
+    const result = await revokeAgentToken(raced, ws, 'seat');
+
+    expect(result).toMatchObject({ alreadyRevoked: true });
+    expect(result!.revokedAt.getTime()).toBe(Math.floor(other!.getTime() / 1000) * 1000);
   });
 
   it('does not revoke across workspace boundaries', async () => {

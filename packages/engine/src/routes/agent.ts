@@ -365,7 +365,23 @@ agentRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
-      const result = await agentEngine.revokeAgentToken(db, workspace.id, name);
+
+      // Delegate to the configured auth provider rather than writing the engine
+      // row directly. A deployment with a provider backed by an external identity
+      // store would otherwise get a clean receipt from a column its authenticator
+      // never reads — containment on paper, live credential in fact. Fail closed
+      // instead: no capability, no receipt.
+      const revoke = c.get('engine').auth.revokeAgentCredential;
+      if (!revoke) {
+        return jsonError(
+          c,
+          'revocation_unsupported',
+          'The configured authentication provider cannot revoke agent credentials',
+          501,
+        );
+      }
+
+      const result = await revoke.call(c.get('engine').auth, { workspaceId: workspace.id, agentName: name, db });
       if (!result) {
         return agentNotFound(c, name);
       }

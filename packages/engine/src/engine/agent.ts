@@ -311,19 +311,27 @@ export async function revokeAgentToken(
     return { revokedAt: agent.revokedAt, alreadyRevoked: true };
   }
 
-  const revokedAt = new Date();
-  await db
+  // `returning()` tells us whether *this* call was the one that set the column.
+  // Under a concurrent revoke the guarded UPDATE matches no row and comes back
+  // empty, which is what distinguishes the winner from the loser.
+  const applied = await db
     .update(agents)
-    .set({ revokedAt })
-    .where(and(eq(agents.id, agent.id), isNull(agents.revokedAt)));
+    .set({ revokedAt: new Date() })
+    .where(and(eq(agents.id, agent.id), isNull(agents.revokedAt)))
+    .returning();
 
-  // Re-read rather than trusting the write: under a concurrent revoke the
-  // guarded UPDATE is a no-op and the stored timestamp is the other caller's.
-  // The receipt has to report what the row actually holds.
+  // Re-read rather than trusting the write. A receipt must report what the row
+  // actually holds, so if there is no persisted `revoked_at` — the row was
+  // deleted from under us, or the update never landed — report no revocation at
+  // all. Returning a locally-generated timestamp here would hand back a receipt
+  // for something that did not happen, which is the exact failure this endpoint
+  // exists to make impossible.
   const [settled] = await db.select().from(agents).where(eq(agents.id, agent.id));
+  if (!settled?.revokedAt) return null;
+
   return {
-    revokedAt: settled?.revokedAt ?? revokedAt,
-    alreadyRevoked: false,
+    revokedAt: settled.revokedAt,
+    alreadyRevoked: applied.length === 0,
   };
 }
 

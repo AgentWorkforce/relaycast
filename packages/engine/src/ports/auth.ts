@@ -37,4 +37,25 @@ export interface AuthProvider {
    * the token unchanged.
    */
   hashToken(token: string): Promise<string>;
+
+  /**
+   * Invalidate an agent's credential while leaving the agent and its history in
+   * place. Returns `null` if there is no such agent, or if the invalidation
+   * could not be confirmed against stored state.
+   *
+   * Optional, and deliberately so: a provider backed by an external identity
+   * store may have no authority to invalidate a credential it did not issue.
+   * Such a provider must leave this undefined rather than implementing a no-op —
+   * `POST /agents/{name}/revoke` refuses outright when it is absent, because a
+   * successful-looking response from a provider that cannot enforce revocation
+   * is a false containment receipt, which is worse than no revoke at all.
+   *
+   * Implementations must be idempotent and must not move the original
+   * invalidation timestamp on a repeat call.
+   */
+  revokeAgentCredential?(args: {
+    workspaceId: string;
+    agentName: string;
+    db: EngineDb;
+  }): Promise<{ revokedAt: Date; alreadyRevoked: boolean } | null>;
 }
