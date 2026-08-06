@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- `NodeRosterEntry.load` is now `number | null`; provider heartbeats omit placeholder load values, while direct-agent heartbeats explicitly report their measured full utilization.
+
 ## [6.3.0] - 2026-07-28
 
 ### Added

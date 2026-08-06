@@ -520,7 +520,7 @@ class NodeRosterEntry(BaseModel):
     status: str
     live: bool
     handlers_live: bool
-    load: float
+    load: float | None
     active_agents: int
     max_agents: int
     last_heartbeat_at: str | None = None

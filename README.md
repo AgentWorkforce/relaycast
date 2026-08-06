@@ -466,6 +466,10 @@ ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
 tags, `load`, `active_agents`/`max_agents`, `handlers_live`,
 `last_heartbeat_at`), so a single event fully refreshes a node's row.
+`load` is normalized managed-agent capacity utilization and remains `null`
+unless a direct node, or every constituent provider of a broker node,
+explicitly reports a genuine measurement;
+`max_agents: 0` means unlimited capacity, not zero capacity.
 
 Nodes are first-class delivery hosts and every agent has a node route. `kind`
 describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership

@@ -34,11 +34,13 @@ export function isProviderLive(
   provider: Pick<ProviderRow, 'status' | 'handlersLive' | 'lastHeartbeatAt'>,
   now = Date.now(),
 ): boolean {
+  const age = provider.lastHeartbeatAt ? now - provider.lastHeartbeatAt.getTime() : null;
   return (
     provider.status === 'online' &&
     provider.handlersLive &&
-    !!provider.lastHeartbeatAt &&
-    now - provider.lastHeartbeatAt.getTime() <= NODE_LIVENESS_TTL_MS
+    age !== null &&
+    age >= 0 &&
+    age <= NODE_LIVENESS_TTL_MS
   );
 }
 
@@ -105,6 +107,8 @@ export async function upsertProvider(
         capabilities: data.capabilities,
         maxAgents: data.maxAgents,
         version: data.version,
+        load: 0,
+        loadReported: false,
         handlersLive: data.handlersLive,
         status: 'online',
         lastHeartbeatAt: now,
@@ -122,6 +126,7 @@ export async function upsertProvider(
     maxAgents: data.maxAgents,
     activeAgents: 0,
     load: 0,
+    loadReported: false,
     handlersLive: data.handlersLive,
     status: 'online',
     version: data.version,
@@ -135,12 +140,22 @@ export async function heartbeatProvider(
   workspaceId: string,
   nodeId: string,
   name: string,
-  data: { load: number; activeAgents: number; handlersLive: boolean },
+  data: { load?: number | null; loadReported?: boolean; activeAgents: number; handlersLive: boolean },
 ): Promise<void> {
+  const provider = await getProvider(db, workspaceId, nodeId, name);
+  // Every released provider sent placeholder zeroes. Only the additive
+  // load_reported signal can turn a numeric value into a measurement.
+  const reportedLoad = provider !== null
+    && provider.maxAgents > 0
+    && data.loadReported === true
+    && typeof data.load === 'number'
+    ? data.load
+    : undefined;
   await db
     .update(nodeProviders)
     .set({
-      load: data.load,
+      load: reportedLoad ?? 0,
+      loadReported: reportedLoad !== undefined,
       activeAgents: data.activeAgents,
       handlersLive: data.handlersLive,
       status: 'online',
@@ -159,7 +174,7 @@ export async function markProviderOffline(db: Db, workspaceId: string, nodeId: s
   // on the node. A reconnect/heartbeat repopulates it from the provider's report.
   await db
     .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, activeAgents: 0, lastHeartbeatAt: new Date() })
+    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
     .where(and(
       eq(nodeProviders.workspaceId, workspaceId),
       eq(nodeProviders.nodeId, nodeId),
@@ -306,9 +321,17 @@ export async function recomputeNodeAggregate(
     }
   }
 
-  const maxAgents = providers.reduce((sum, p) => sum + p.maxAgents, 0);
+  // A single unbounded provider makes the aggregate node unbounded. Treating
+  // its sentinel 0 as additive zero would falsely cap a mixed node at the sum
+  // of only its finite providers.
+  const maxAgents = providers.some((p) => p.maxAgents === 0)
+    ? 0
+    : providers.reduce((sum, p) => sum + p.maxAgents, 0);
   const activeAgents = providers.reduce((sum, p) => sum + p.activeAgents, 0);
-  const load = providers.reduce((max, p) => Math.max(max, p.load), 0);
+  // A max is only a measurement when every constituent is measured; one
+  // unknown provider could be busier than every reported provider.
+  const loadReported = providers.length > 0 && providers.every((p) => p.loadReported);
+  const load = loadReported ? Math.max(...providers.map((p) => p.load)) : 0;
   const handlersLive = online.some((p) => p.handlersLive);
   // Node liveness must reflect an online provider's heartbeat. An offline
   // provider's disconnect timestamp is fresh, so including it here could keep a
@@ -323,6 +346,7 @@ export async function recomputeNodeAggregate(
     maxAgents,
     activeAgents,
     load,
+    loadReported,
     handlersLive,
     status: online.length > 0 ? 'online' : 'offline',
     lastHeartbeatAt: lastHeartbeatAt ?? new Date(),

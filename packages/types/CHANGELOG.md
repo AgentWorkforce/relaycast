@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- `node.heartbeat.load` may be absent or null when capacity utilization is unreported; `load_reported: true` explicitly identifies a numeric `[0,1]` value as a measurement while legacy placeholder numbers remain accepted but untrusted.
+
 ## [6.3.0] - 2026-07-28
 
 ### Added

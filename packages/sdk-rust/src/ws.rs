@@ -482,7 +482,8 @@ impl WsClient {
                                 serde_json::json!({
                                     "v": 1,
                                     "type": "node.heartbeat",
-                                    "load": 0,
+                                    "load": 1,
+                                    "load_reported": true,
                                     "active_agents": 1,
                                     "handlers_live": false,
                                     "node_id": registration.node_id,

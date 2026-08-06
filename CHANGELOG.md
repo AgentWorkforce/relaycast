@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- Fleet node rosters now return `load: null` until a provider explicitly marks a normalized capacity-utilization measurement as reported, instead of rendering legacy placeholder zeroes as confidently idle. `max_agents: 0` is consistently treated as unlimited.
+
 ## [6.3.2] - 2026-08-02
 
 ### Fixed

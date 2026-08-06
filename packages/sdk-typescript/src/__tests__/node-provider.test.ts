@@ -205,8 +205,8 @@ describe('NodeProviderClient', () => {
     expect(sock.sentOfType('action.result').at(-1)).toMatchObject({ invocation_id: 'inv-x', error: expect.stringContaining('nope') });
   });
 
-  it('sends provider-scoped heartbeats while serving', async () => {
-    const node = new NodeProviderClient({ ...baseOptions, heartbeatIntervalMs: 1_000 });
+  it('sends provider-scoped heartbeats without inventing finite-capacity load', async () => {
+    const node = new NodeProviderClient({ ...baseOptions, maxAgents: 4, heartbeatIntervalMs: 1_000 });
     node.serve();
     const sock = newSocket();
     sock.open();
@@ -215,7 +215,8 @@ describe('NodeProviderClient', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     const hb = sock.sentOfType('node.heartbeat').at(-1)!;
-    expect(hb).toMatchObject({ provider: { name: 'py' }, load: 0, active_agents: 0, handlers_live: true });
+    expect(hb).toMatchObject({ provider: { name: 'py' }, active_agents: 0, handlers_live: true });
+    expect(hb).not.toHaveProperty('load');
     expect(hb).not.toHaveProperty('last_heartbeat_at');
   });
 

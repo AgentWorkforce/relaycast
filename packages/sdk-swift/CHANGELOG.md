@@ -6,6 +6,8 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 ## [Unreleased]
 
+- `NodeRosterEntry.load` is optional; provider heartbeats omit placeholder load values, while direct-agent heartbeats explicitly report their measured full utilization.
+
 ## [6.1.0] - 2026-07-16
 
 - Allowed agent models to decode the hosted lifecycle statuses used during realtime connection setup.

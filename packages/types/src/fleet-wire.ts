@@ -138,7 +138,11 @@ export const FleetNodeHeartbeatMessageSchema = z
     // synthetic `default` provider. Load/active_agents/handlers_live describe
     // the sending provider, and the node figures aggregate across providers.
     provider: FleetProviderIdentitySchema.optional(),
-    load: z.number().finite().nonnegative(),
+    // Capacity utilization is absent/null until the provider has a genuine
+    // measurement. Numeric values from legacy clients remain accepted for wire
+    // compatibility but are only trusted when load_reported is explicitly true.
+    load: z.number().finite().min(0).max(1).nullable().optional(),
+    load_reported: z.boolean().optional(),
     active_agents: z.number().int().nonnegative(),
     handlers_live: z.boolean(),
     // Roster snapshot carried for liveness: lets the engine refresh a node's
@@ -155,6 +159,15 @@ export const FleetNodeHeartbeatMessageSchema = z
     capabilities: z.array(FleetCapabilitySchema).optional(),
     max_agents: z.number().int().nonnegative().optional(),
     version: z.string().optional(),
+  })
+  .superRefine((message, ctx) => {
+    if (message.load_reported === true && typeof message.load !== 'number') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['load'],
+        message: 'load must be numeric when load_reported is true',
+      });
+    }
   })
   .strict();
 export type FleetNodeHeartbeatMessage = z.infer<typeof FleetNodeHeartbeatMessageSchema>;

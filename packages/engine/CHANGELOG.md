@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Node heartbeats accept absent/null `load` and require the additive `load_reported` signal before trusting a numeric measurement. Migration `0034` leaves all historic placeholder values unreported, `GET /v1/nodes` returns null when any constituent provider is unmeasured, future-dated heartbeats are not fresh, and any unbounded provider keeps aggregate capacity unbounded.
+
 ## [6.3.2] - 2026-08-02
 
 ### Fixed

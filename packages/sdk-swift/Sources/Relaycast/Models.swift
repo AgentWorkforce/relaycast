@@ -1674,7 +1674,7 @@ public struct NodeRosterEntry: Codable, Equatable, Sendable {
     public let status: String
     public let live: Bool
     public let handlersLive: Bool
-    public let load: Double
+    public let load: Double?
     public let activeAgents: Int
     public let maxAgents: Int
     public let lastHeartbeatAt: String?
@@ -1793,7 +1793,7 @@ public struct CreateNodeResponse: Codable, Equatable, Sendable {
     public let status: String
     public let live: Bool
     public let handlersLive: Bool
-    public let load: Double
+    public let load: Double?
     public let activeAgents: Int
     public let maxAgents: Int
     public let lastHeartbeatAt: String?

@@ -396,13 +396,14 @@ final class NodeProviderTests: XCTestCase {
         try await serveTask.value
     }
 
-    func testSendsProviderScopedHeartbeatsWhileServing() async throws {
+    func testSendsFiniteProviderScopedHeartbeatsWithoutPlaceholderLoad() async throws {
         let factory = FakeTransportFactory()
         let node = NodeProvider(
             nodeToken: baseOptions.nodeToken,
             nodeID: baseOptions.nodeID,
             nodeName: baseOptions.nodeName,
             provider: (name: "py", instanceID: nil),
+            maxAgents: 4,
             heartbeatIntervalMilliseconds: 30,
             transport: { factory.make() }
         )
@@ -414,7 +415,7 @@ final class NodeProviderTests: XCTestCase {
         let heartbeat = await transport.sentOfType("node.heartbeat").last!
         guard case .object(let provider)? = heartbeat["provider"] else { return XCTFail("missing provider") }
         XCTAssertEqual(provider["name"], .string("py"))
-        XCTAssertEqual(heartbeat["load"], .int(0))
+        XCTAssertNil(heartbeat["load"])
         XCTAssertEqual(heartbeat["active_agents"], .int(0))
         XCTAssertEqual(heartbeat["handlers_live"], .bool(true))
         XCTAssertNil(heartbeat["last_heartbeat_at"])

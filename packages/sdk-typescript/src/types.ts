@@ -342,7 +342,8 @@ export interface NodeRosterEntry {
   status: 'online' | 'offline' | string;
   live: boolean;
   handlersLive: boolean;
-  load: number;
+  /** Managed-agent capacity utilization in [0,1], or null when unreported. */
+  load: number | null;
   activeAgents: number;
   maxAgents: number;
   lastHeartbeatAt: string | null;

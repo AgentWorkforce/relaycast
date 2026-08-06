@@ -613,15 +613,12 @@ class NodeProvider:
         try:
             while True:
                 await asyncio.sleep(self._heartbeat_interval)
-                await self._send_frame(
-                    {
-                        "type": "node.heartbeat",
-                        "provider": self._provider_identity(),
-                        "load": 0,
-                        "active_agents": 0,
-                        "handlers_live": True,
-                    }
-                )
+                await self._send_frame({
+                    "type": "node.heartbeat",
+                    "provider": self._provider_identity(),
+                    "active_agents": 0,
+                    "handlers_live": True,
+                })
         except asyncio.CancelledError:
             raise
 

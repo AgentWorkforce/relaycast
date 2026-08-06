@@ -563,7 +563,6 @@ export class NodeProviderClient {
       this.sendFrame({
         type: 'node.heartbeat',
         provider: this.providerIdentity(),
-        load: 0,
         active_agents: 0,
         handlers_live: true,
       });
