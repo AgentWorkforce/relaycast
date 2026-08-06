@@ -220,6 +220,60 @@ describe('agent presence and release lifecycle', () => {
     expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
   });
 
+  it('releases capacity from the binding that local reaping deactivates', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-binding-capacity');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'reap-bound-agent');
+    const enrolled = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        node_id: 'node_reap_target',
+        name: 'reap-target',
+        role: 'broker',
+        max_agents: 1,
+      }),
+    });
+    expect(enrolled.status).toBe(201);
+    const bound = await stack.app.request('/v1/nodes/reap-target/agents', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ agent_name: target.name }),
+    });
+    expect(bound.status).toBe(201);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+
+    const [node] = await stack.runtime.deps.db
+      .select({ activeAgents: nodes.activeAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_reap_target')));
+    expect(node.activeAgents).toBe(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, 'node_reap_target'),
+        eq(agentNodeBindings.status, 'active'),
+      )))
+      .toHaveLength(0);
+  });
+
   it('rolls back every local reap mutation when invocation completion fails', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-delete-rollback');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'keep-me');

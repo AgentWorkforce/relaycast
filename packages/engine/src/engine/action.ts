@@ -690,15 +690,6 @@ async function dispatchRelease(args: {
     action_name: 'release',
   });
   const completeLocally = async () => {
-    const activeBindings = await args.db
-      .select({ nodeId: agentNodeBindings.nodeId })
-      .from(agentNodeBindings)
-      .where(and(
-        eq(agentNodeBindings.workspaceId, args.workspaceId),
-        eq(agentNodeBindings.agentId, agent.id),
-        eq(agentNodeBindings.status, 'active'),
-      ));
-    const activeNodeIds = Array.from(new Set(activeBindings.map((binding) => binding.nodeId)));
     const completedAt = new Date();
     const invocationIsOpen = sql`EXISTS (
       SELECT 1 FROM ${actionInvocations}
@@ -710,27 +701,25 @@ async function dispatchRelease(args: {
     const results = await runAtomicWrites(args.db, (writeDb) => {
       const writes: AtomicWrite[] = [];
 
-      if (activeNodeIds.length > 0) {
-        // Decrement only nodes whose binding is still active when this atomic
-        // unit begins, so a retry cannot consume another agent's capacity.
-        writes.push(writeDb
-          .update(nodes)
-          .set({
-            activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
-          })
-          .where(and(
-            eq(nodes.workspaceId, args.workspaceId),
-            inArray(nodes.id, activeNodeIds),
-            invocationIsOpen,
-            sql`EXISTS (
-              SELECT 1 FROM ${agentNodeBindings}
-              WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
-                AND ${agentNodeBindings.agentId} = ${agent.id}
-                AND ${agentNodeBindings.nodeId} = ${nodes.id}
-                AND ${agentNodeBindings.status} = 'active'
-            )`,
-          )));
-      }
+      // Resolve the active binding in this atomic unit instead of from a
+      // pre-transaction snapshot. A concurrent rebind therefore decrements
+      // the node that is actually deactivated below.
+      writes.push(writeDb
+        .update(nodes)
+        .set({
+          activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+        })
+        .where(and(
+          eq(nodes.workspaceId, args.workspaceId),
+          invocationIsOpen,
+          sql`EXISTS (
+            SELECT 1 FROM ${agentNodeBindings}
+            WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
+              AND ${agentNodeBindings.agentId} = ${agent.id}
+              AND ${agentNodeBindings.nodeId} = ${nodes.id}
+              AND ${agentNodeBindings.status} = 'active'
+          )`,
+        )));
 
       writes.push(writeDb
         .update(agentNodeBindings)
@@ -742,51 +731,28 @@ async function dispatchRelease(args: {
           invocationIsOpen,
         )));
 
-      if (input.delete_agent === true) {
-        writes.push(writeDb
-          .delete(agents)
-          .where(and(
-            eq(agents.workspaceId, args.workspaceId),
-            eq(agents.id, agent.id),
-            invocationIsOpen,
-          )));
-        writes.push(writeDb
-          .delete(nodes)
-          .where(and(
-            eq(nodes.workspaceId, args.workspaceId),
-            eq(nodes.id, `node_direct_${agent.id}`),
-            invocationIsOpen,
-          )));
-      } else {
-        const existingMetadata = agent.metadata ?? {};
-        const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
-        writes.push(writeDb
-          .update(agents)
-          .set({
-            status: 'offline',
-            locationType: 'self_connected',
-            locationNodeId: null,
-            lastSeen: completedAt,
-            metadata: {
-              ...restMetadata,
-              release: {
-                reason: typeof input.reason === 'string' ? input.reason : null,
-                released_at: completedAt.toISOString(),
-              },
-            },
-          })
-          .where(and(
-            eq(agents.workspaceId, args.workspaceId),
-            eq(agents.id, agent.id),
-            invocationIsOpen,
-          )));
-      }
+      // This helper is only used for delete_agent releases. Non-delete
+      // releases fail closed when no live host can receive the invocation.
+      writes.push(writeDb
+        .delete(agents)
+        .where(and(
+          eq(agents.workspaceId, args.workspaceId),
+          eq(agents.id, agent.id),
+          invocationIsOpen,
+        )));
+      writes.push(writeDb
+        .delete(nodes)
+        .where(and(
+          eq(nodes.workspaceId, args.workspaceId),
+          eq(nodes.id, `node_direct_${agent.id}`),
+          invocationIsOpen,
+        )));
 
       writes.push(writeDb
         .update(actionInvocations)
         .set({
           status: 'completed',
-          output: { released: true, deleted: input.delete_agent === true, reaped_locally: true },
+          output: { released: true, deleted: true, reaped_locally: true },
           completedAt,
         })
         .where(and(
@@ -864,10 +830,6 @@ async function dispatchRelease(args: {
 
   if (!hostLive) {
     return input.delete_agent === true ? completeLocally() : failClosed();
-  }
-
-  if (!registry || !nodeId) {
-    throw codedError(`Agent "${name}" has no live host node`, 'agent_host_unavailable', 503);
   }
 
   // Release is a capacity operation handled by the provider hosting the agent.
