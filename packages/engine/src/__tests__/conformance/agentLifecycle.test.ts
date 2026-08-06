@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
 import {
   attachDirectNodeSocket,
@@ -214,10 +214,23 @@ describe('agent presence and release lifecycle', () => {
       body: JSON.stringify({ name: target.name, delete_agent: true }),
     });
     expect(response.status).toBe(201);
-    expect((await response.json() as { data: { status: string } }).data.status).toBe('completed');
+    expect((await response.json() as { data: { status: string; handler_node_id: string | null } }).data)
+      .toMatchObject({ status: 'completed', handler_node_id: nodeId });
 
     expect(await stack.runtime.deps.db.select().from(agents).where(eq(agents.id, target.agentId))).toHaveLength(0);
     expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
+    const [exited] = await stack.runtime.deps.db
+      .select({ payload: workspaceEvents.payload })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.exited'),
+      ));
+    expect(JSON.parse(exited.payload)).toMatchObject({
+      agent_id: target.agentId,
+      node_id: nodeId,
+      reason: 'released',
+    });
   });
 
   it('releases capacity from the binding that local reaping deactivates', async () => {

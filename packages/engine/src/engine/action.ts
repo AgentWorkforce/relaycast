@@ -768,11 +768,12 @@ async function dispatchRelease(args: {
 
     // External completion effects belong after the durable atomic unit: an
     // aborted local reap must never publish agent.exited.
-    if (completed.length > 0 && args.completionDeps && agent.locationNodeId) {
+    const exitNodeId = nodeId ?? agent.locationNodeId;
+    if (completed.length > 0 && args.completionDeps && exitNodeId) {
       await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
         agentId: agent.id,
         agentName: agent.name,
-        nodeId: agent.locationNodeId,
+        nodeId: exitNodeId,
         invocationId: fleetInvocationId(agent.metadata),
         reason: 'released',
       });
@@ -781,7 +782,7 @@ async function dispatchRelease(args: {
       invocation_id: invocation.id,
       action_name: 'release',
       handler_agent_id: null,
-      handler_node_id: agent.locationNodeId,
+      handler_node_id: exitNodeId,
       dispatched_node_id: null,
       input,
       status: 'completed',
