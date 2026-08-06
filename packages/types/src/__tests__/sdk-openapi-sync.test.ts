@@ -44,6 +44,14 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // node-providers work; the engine surface ships first.
   '/v1/nodes/{param}/actions/{param}/invoke',
   '/v1/nodes/{param}/providers/{param}',
+  // Operator containment, driven from a runbook with a workspace key rather
+  // than by an agent. Note this is a deliberate scoping decision and not an
+  // oversight: `rotate-token` sits in CORE_SDK_PATHS, so the parity argument for
+  // SDK coverage is real, but exposing revoke means a method across all four
+  // SDKs and that is a product decision rather than part of the engine change.
+  // Revoking is also break-glass — an agent runtime has no reason to reach for
+  // it, and the operator path is `docs/revoking-an-agent-credential.md`.
+  '/v1/agents/{param}/revoke',
 ]);
 
 const CORE_SDK_PATHS = new Set([
