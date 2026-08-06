@@ -107,10 +107,25 @@ agent.
 and that code. Do not record the token.
 
 If you get `200`, the credential is live and the seat is **not** contained —
-check you targeted the right workspace, and that the deployed build includes
-migration 0034 and the enforcement in `SqliteApiKeyAuthProvider.authenticate`.
-An unmigrated deployment accepts the revoke call and still authenticates the
-token: the write lands in a column nothing reads.
+check you targeted the right workspace and that the deployed build includes the
+enforcement in `SqliteApiKeyAuthProvider.authenticate`. If the endpoint 404s, the
+code is not deployed and no revocation has occurred, whatever else you saw.
+
+## Deploy ordering (read before shipping this)
+
+**Migration 0034 must be applied before or with the code, never after.** The
+drizzle schema enumerates every column on each query, so a build that knows about
+`revoked_at` cannot talk to an `agents` table that lacks it — verified: an insert
+against an unmigrated schema fails with `table agents has no column named
+revoked_at`. That is agent registration and agent authentication down, not a
+degraded revoke. The failure is at least loud rather than silent, but the
+ordering is not optional.
+
+Confirm which database you are migrating. Production is the D1 instance the
+worker binds — resolve it through the SST resource `RelaycastDatabase`, never by
+the name that happens to match the repo, and pass `--remote`. Two live instances
+carry this data under confusingly similar names and audits have been run against
+the wrong one before.
 
 **3. Confirm history survived.** The agent row and its messages must still be
 present. Revocation that took history with it has traded one problem for a worse
