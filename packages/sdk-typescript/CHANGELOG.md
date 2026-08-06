@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `agent_token_revoked` is recognized as a distinct `RelayErrorCode` instead of collapsing to `unauthorized`. It means the credential was deliberately revoked: retrying or re-registering the same identity will not clear it.
+
 
 ## [6.3.0] - 2026-07-28
 

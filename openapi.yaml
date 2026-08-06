@@ -1123,7 +1123,12 @@ components:
       properties:
         code:
           type: string
-          description: Machine-readable error code. Invalid agent tokens are reported as `agent_token_invalid` so clients can re-register or rotate the agent identity.
+          description: >-
+            Machine-readable error code. Invalid agent tokens are reported as
+            `agent_token_invalid` so clients can re-register or rotate the agent
+            identity. A deliberately revoked token is reported as
+            `agent_token_revoked` instead — a permanent refusal that retrying or
+            re-registering the same identity will not clear.
         message:
           type: string
 
@@ -2958,6 +2963,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /agents/{name}/revoke:
+    post:
+      summary: Revoke agent token
+      description: >-
+        Invalidate an agent's token while keeping the agent and its history on
+        the record. The credential stops authenticating immediately and
+        subsequent requests carrying it are refused with `agent_token_revoked`.
+
+        Prefer this to `DELETE /agents/{name}` for credential containment:
+        deletion fails outright for any agent that has posted a message (foreign
+        keys onto `agents.id` are declared ON DELETE NO ACTION) and destroys
+        audit history where it does succeed.
+
+        Prefer this to `POST /agents/{name}/rotate-token` when the goal is
+        containment rather than continuity: rotation also invalidates the old
+        token, but returns a live replacement in its response body.
+
+        Idempotent — repeating the call reports `already_revoked` and preserves
+        the original `revoked_at`. There is no un-revoke; issue a new agent
+        instead.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: >-
+            Token revoked. Returns `revoked_at` and `already_revoked`. A success
+            response means the revocation is persisted; it is not by itself
+            proof of containment — confirm by presenting the credential and
+            observing the 401.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: No such agent, or the revocation could not be confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /agents/{name}/rotate-token:
     post:

@@ -1,0 +1,22 @@
+-- Agent token revocation.
+--
+-- WHY THIS IS NOT A DELETE. `DELETE FROM agents` cannot contain a leaked agent
+-- credential, because four foreign keys onto `agents(id)` are declared
+-- ON DELETE NO ACTION in 0000: `messages.agent_id`, `channels.created_by`,
+-- `files.uploaded_by` and `webhooks.created_by`. Any seat that has ever posted a
+-- message therefore fails the delete outright with a FOREIGN KEY constraint
+-- error. The delete only succeeds for a seat with no history — that is, exactly
+-- when there is nothing to contain and nothing worth keeping. Worse, the deletes
+-- that do land take history with them: `dm_participants.agent_id` cascades, which
+-- is how ordinary two-party DMs collapsed to one-row rosters (see the note in
+-- scripts/audit-dm-reservations.mjs).
+--
+-- So revocation is a state on the row, not the absence of the row. The agent and
+-- every message it sent stay on the record; the credential stops authenticating.
+-- Enforcement lives in the agent branch of SqliteApiKeyAuthProvider.authenticate
+-- — the single lookup that turns an `at_live_` token into an identity.
+--
+-- Additive and reversible: a NULL `revoked_at` is an active credential, so
+-- existing rows keep their current behaviour with no backfill.
+
+ALTER TABLE agents ADD COLUMN revoked_at INTEGER;

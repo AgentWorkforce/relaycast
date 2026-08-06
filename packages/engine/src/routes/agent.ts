@@ -347,6 +347,60 @@ agentRoutes.patch(
   },
 );
 
+// POST /v1/agents/:name/revoke - invalidate the agent's token, keep the record.
+//
+// Prefer this to DELETE for credential containment. DELETE cannot contain a
+// leaked token on any seat that has posted a message (FK, ON DELETE NO ACTION)
+// and destroys audit history on the seats where it does succeed. This endpoint
+// always works and always keeps the record.
+//
+// Workspace key only: an agent must not be able to revoke itself or a peer.
+// Returns the revocation timestamp so the caller has a receipt to record.
+agentRoutes.post(
+  '/agents/:name/revoke',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+
+      // Delegate to the configured auth provider rather than writing the engine
+      // row directly. A deployment with a provider backed by an external identity
+      // store would otherwise get a clean receipt from a column its authenticator
+      // never reads — containment on paper, live credential in fact. Fail closed
+      // instead: no capability, no receipt.
+      const revoke = c.get('engine').auth.revokeAgentCredential;
+      if (!revoke) {
+        return jsonError(
+          c,
+          'revocation_unsupported',
+          'The configured authentication provider cannot revoke agent credentials',
+          501,
+        );
+      }
+
+      const result = await revoke.call(c.get('engine').auth, { workspaceId: workspace.id, agentName: name, db });
+      if (!result) {
+        return agentNotFound(c, name);
+      }
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_revoked', {
+        agent_name: name,
+        already_revoked: result.alreadyRevoked,
+      });
+      return jsonOk(c, {
+        name,
+        revoked: true,
+        revoked_at: result.revokedAt.toISOString(),
+        already_revoked: result.alreadyRevoked,
+      });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
 // DELETE /v1/agents/:name - delete agent
 agentRoutes.delete(
   '/agents/:name',

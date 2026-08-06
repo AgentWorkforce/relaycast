@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /agents/{name}/revoke` invalidates an agent's token while keeping the agent and its history on the record. Requests carrying a revoked credential are refused with `agent_token_revoked` (HTTP 401), which is distinct from `agent_token_invalid` so a deliberate revocation is not mistaken for an unknown token. Use it instead of `DELETE /agents/{name}` to contain a leaked credential — deletion fails for any agent that has posted a message and destroys audit history where it succeeds — and instead of `POST /agents/{name}/rotate-token`, which also invalidates but returns a live replacement token in its response. Requires migration `0034`, which must be applied before or with this release; see `docs/revoking-an-agent-credential.md` for the operator runbook.
 
 ## [6.3.2] - 2026-08-02
 

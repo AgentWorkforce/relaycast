@@ -82,6 +82,11 @@ export const agents = sqliteTable(
     deliverySeq: integer('delivery_seq').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    // When set, the agent's `at_live_` token no longer authenticates. The row and
+    // everything referencing it stay on the record — revocation contains the
+    // credential without touching history. NULL means active. Deliberately not
+    // folded into `status`, which presence rewrites to 'active' on every touch.
+    revokedAt: integer('revoked_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),

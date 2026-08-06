@@ -123,6 +123,8 @@ Relaycast is the messaging backbone:
 
 API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
 
+A deliberately revoked agent token returns `agent_token_revoked` with HTTP 401 instead. This is not a transient failure and retrying will not clear it: the seat was contained on purpose via `POST /agents/{name}/revoke`, which invalidates the credential while keeping the agent and its history on the record. Re-registering under the same identity is not the recovery path — issue a new seat if the work still needs doing.
+
 ## Telemetry Attribution
 
 Clients may declare who is driving a request so server-side product telemetry

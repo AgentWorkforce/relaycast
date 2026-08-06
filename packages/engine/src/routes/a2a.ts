@@ -4,7 +4,8 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
-import { requireAuth, hashToken } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as a2aEngine from '../engine/a2a.js';
@@ -122,7 +123,6 @@ async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: 
       workspaceId: a2aAgents.workspaceId,
       relayAgentId: a2aAgents.relayAgentId,
       relayName: agents.name,
-      tokenHash: agents.tokenHash,
     })
     .from(a2aAgents)
     .innerJoin(agents, eq(a2aAgents.relayAgentId, agents.id))
@@ -312,8 +312,21 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
     const token = c.req.header('Authorization')?.startsWith('Bearer ')
       ? c.req.header('Authorization')!.slice(7)
       : null;
-    const tokenHash = token ? await hashToken(token) : null;
-    if (!tokenHash || tokenHash !== relayAgent.tokenHash) {
+    if (!token) {
+      return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
+    }
+
+    // Resolve through the auth provider rather than comparing `agents.token_hash`
+    // here. Comparing the hash directly authenticates the credential without
+    // consulting the provider, so every check the provider owns — revocation
+    // today, anything added later, and whatever a custom provider enforces — is
+    // silently skipped on this route. Binding is then re-checked explicitly:
+    // the token must resolve to *this* proxy's relay agent.
+    const authResult = await c.get('engine').auth.authenticate({ token, require: 'agent', db });
+    if (!authResult.ok) {
+      return jsonError(c, authResult.code, authResult.message, authResult.status as ContentfulStatusCode);
+    }
+    if (authResult.agent?.id !== relayAgent.relayAgentId) {
       return jsonError(c, 'unauthorized', 'Missing or invalid bearer token', 401);
     }
 
