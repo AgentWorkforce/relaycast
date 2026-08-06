@@ -347,6 +347,44 @@ agentRoutes.patch(
   },
 );
 
+// POST /v1/agents/:name/revoke - invalidate the agent's token, keep the record.
+//
+// Prefer this to DELETE for credential containment. DELETE cannot contain a
+// leaked token on any seat that has posted a message (FK, ON DELETE NO ACTION)
+// and destroys audit history on the seats where it does succeed. This endpoint
+// always works and always keeps the record.
+//
+// Workspace key only: an agent must not be able to revoke itself or a peer.
+// Returns the revocation timestamp so the caller has a receipt to record.
+agentRoutes.post(
+  '/agents/:name/revoke',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const result = await agentEngine.revokeAgentToken(db, workspace.id, name);
+      if (!result) {
+        return agentNotFound(c, name);
+      }
+      emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_revoked', {
+        agent_name: name,
+        already_revoked: result.alreadyRevoked,
+      });
+      return jsonOk(c, {
+        name,
+        revoked: true,
+        revoked_at: result.revokedAt.toISOString(),
+        already_revoked: result.alreadyRevoked,
+      });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
 // DELETE /v1/agents/:name - delete agent
 agentRoutes.delete(
   '/agents/:name',

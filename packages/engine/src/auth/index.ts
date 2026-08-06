@@ -51,6 +51,13 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     if (parsedToken.kind === 'agent') {
       const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
+      // A revoked credential is refused here and nowhere else: this is the only
+      // lookup that resolves an `at_live_` token to an identity. The realtime WS
+      // path rejects agent tokens outright (see engine/wsAuth.ts), so there is no
+      // second door. Distinct code from `agent_token_invalid` so an operator can
+      // tell "revoked" from "never existed" — a deleted row would report the
+      // latter, and the difference is the whole point of keeping the record.
+      if (agent.revokedAt) return unauthorized('Agent token revoked', 'agent_token_revoked');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');
       return { ok: true, workspace, agent };

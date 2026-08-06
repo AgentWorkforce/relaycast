@@ -1,4 +1,4 @@
-import { eq, and, lt, inArray } from 'drizzle-orm';
+import { eq, and, lt, inArray, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -272,6 +272,58 @@ export async function updateAgent(
     created_at: updated.createdAt.toISOString(),
     last_seen: updated.lastSeen.toISOString(),
     metadata: updated.metadata,
+  };
+}
+
+/**
+ * Revoke an agent's credential without deleting anything.
+ *
+ * The token stops authenticating at the next request; the agent row, its
+ * messages, the channels it created and the files it uploaded all stay exactly
+ * where they are. This is the containment primitive `deleteAgent` cannot be:
+ * that one fails outright on any seat with message history (four FKs onto
+ * `agents(id)` are ON DELETE NO ACTION), and destroys history on the seats where
+ * it does succeed.
+ *
+ * Idempotent by design. Re-revoking preserves the original `revoked_at` rather
+ * than sliding it forward, so the timestamp remains an accurate record of when
+ * containment actually took effect — an operator re-running the runbook must not
+ * be able to rewrite that. `alreadyRevoked` lets the caller tell a fresh
+ * revocation from a repeat without a second query.
+ *
+ * Note the deliberate scope limit: this invalidates the agent's own credential.
+ * A node token that posts on this agent's behalf is a separate credential and
+ * needs its own decision.
+ */
+export async function revokeAgentToken(
+  db: Db,
+  workspaceId: string,
+  name: string,
+): Promise<{ revokedAt: Date; alreadyRevoked: boolean } | null> {
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+
+  if (!agent) return null;
+
+  if (agent.revokedAt) {
+    return { revokedAt: agent.revokedAt, alreadyRevoked: true };
+  }
+
+  const revokedAt = new Date();
+  await db
+    .update(agents)
+    .set({ revokedAt })
+    .where(and(eq(agents.id, agent.id), isNull(agents.revokedAt)));
+
+  // Re-read rather than trusting the write: under a concurrent revoke the
+  // guarded UPDATE is a no-op and the stored timestamp is the other caller's.
+  // The receipt has to report what the row actually holds.
+  const [settled] = await db.select().from(agents).where(eq(agents.id, agent.id));
+  return {
+    revokedAt: settled?.revokedAt ?? revokedAt,
+    alreadyRevoked: false,
   };
 }
 
