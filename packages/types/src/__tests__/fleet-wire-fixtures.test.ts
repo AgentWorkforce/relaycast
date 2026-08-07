@@ -120,6 +120,29 @@ describe('fleet wire fixtures', () => {
     });
   }
 
+  it('accepts unreported heartbeat load and rejects values outside [0,1]', () => {
+    const heartbeat = {
+      v: 1 as const,
+      type: 'node.heartbeat' as const,
+      active_agents: 25,
+      handlers_live: true,
+    };
+    expect(parseFleetBrokerToRelaycastMessage(heartbeat)).toEqual(heartbeat);
+    expect(parseFleetBrokerToRelaycastMessage({ ...heartbeat, load: null })).toEqual({
+      ...heartbeat,
+      load: null,
+    });
+    expect(parseFleetBrokerToRelaycastMessage({ ...heartbeat, load: 0.25, load_reported: true })).toEqual({
+      ...heartbeat,
+      load: 0.25,
+      load_reported: true,
+    });
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...heartbeat, load_reported: true })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...heartbeat, load: null, load_reported: true })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...heartbeat, load: -0.01 })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...heartbeat, load: 1.01 })).toThrow();
+  });
+
   it('accepts action.result error variants as the same message type', () => {
     expect(
       parseFleetBrokerToRelaycastMessage({

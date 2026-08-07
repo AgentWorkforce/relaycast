@@ -62,16 +62,54 @@ describe('node providers', () => {
     nodeName: string,
     providerName: string | undefined,
     capabilities: Cap[],
-    opts: { instanceId?: string; maxAgents?: number } = {},
+    opts: { instanceId?: string; maxAgents?: number; load?: number | null } = {},
   ) {
     const provider = providerName ? { name: providerName, instance_id: opts.instanceId ?? `${providerName}-i1` } : undefined;
     const { sock, handle } = attachSocket(workspaceId, nodeId);
     await handle.handleMessage(registerFrame(nodeId, nodeName, provider, capabilities, opts.maxAgents));
     await handle.handleMessage(JSON.stringify({
-      v: 1, type: 'node.heartbeat', ...(provider ? { provider } : {}), load: 0, active_agents: 0, handlers_live: true,
+      v: 1,
+      type: 'node.heartbeat',
+      ...(provider ? { provider } : {}),
+      ...(typeof opts.load === 'number' ? { load: opts.load, load_reported: true } : {}),
+      active_agents: 0,
+      handlers_live: true,
     }));
     return { sock, handle };
   }
+
+  it('keeps a mixed finite and unbounded provider aggregate unlimited with unreported load', async () => {
+    const ws = await createWorkspace(stack.app, 'np-unbounded-load');
+    await enrollNode(ws, 'node_a', 'alpha');
+    await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'finite',
+      [{ name: 'run-etl', kind: 'action' }],
+      { maxAgents: 4, load: 0.5 },
+    );
+    await attachProvider(
+      ws.workspaceId,
+      'node_a',
+      'alpha',
+      'unbounded',
+      [{ name: 'spawn:codex', kind: 'capacity' }],
+      { maxAgents: 0, load: 0 },
+    );
+
+    const [node] = await stack.runtime.handle.db
+      .select({ maxAgents: nodes.maxAgents, load: nodes.load, loadReported: nodes.loadReported })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_a')));
+    expect(node).toEqual({ maxAgents: 0, load: 0, loadReported: false });
+
+    const roster = await stack.app.request('/v1/nodes?name=alpha', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const body = await roster.json() as { data: Array<Record<string, unknown>> };
+    expect(body.data[0]).toMatchObject({ max_agents: 0, load: null });
+  });
 
   it('keys a registration with no provider field to the synthetic default provider', async () => {
     const ws = await createWorkspace(stack.app, 'np-default');

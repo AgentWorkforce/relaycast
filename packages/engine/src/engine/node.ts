@@ -125,7 +125,7 @@ function publicNode(row: NodeRow) {
     status: live ? 'online' : 'offline',
     live,
     handlers_live: live && row.handlersLive,
-    load: row.load,
+    load: row.loadReported ? row.load : null,
     active_agents: row.activeAgents,
     max_agents: row.maxAgents,
     last_heartbeat_at: row.lastHeartbeatAt?.toISOString() ?? null,
@@ -264,6 +264,8 @@ export async function createNodeToken(
         version: data.version ?? existing.version,
         status: 'offline',
         handlersLive: false,
+        load: 0,
+        loadReported: false,
       })
       .where(eq(nodes.id, existing.id))
       .returning();
@@ -288,6 +290,7 @@ export async function createNodeToken(
       status: 'offline',
       handlersLive: false,
       load: 0,
+      loadReported: false,
       activeAgents: 0,
       createdAt: now,
     })
@@ -384,6 +387,8 @@ export async function registerNode(
         version: message.version,
         status: 'online',
         handlersLive: false,
+        load: 0,
+        loadReported: false,
         lastHeartbeatAt: now,
       })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)))
@@ -455,7 +460,8 @@ export async function heartbeatNode(
       .set({
         ...rosterUpdate,
         status: 'online',
-        load: message.load,
+        load: message.load_reported === true && typeof message.load === 'number' ? message.load : 0,
+        loadReported: message.load_reported === true && typeof message.load === 'number',
         activeAgents: 1,
         handlersLive: false,
         lastHeartbeatAt: new Date(),
@@ -486,6 +492,7 @@ export async function heartbeatNode(
       });
       await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
         load: message.load,
+        loadReported: message.load_reported,
         activeAgents: message.active_agents,
         handlersLive: message.handlers_live,
       });
@@ -493,6 +500,7 @@ export async function heartbeatNode(
     } else {
       await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
         load: message.load,
+        loadReported: message.load_reported,
         activeAgents: message.active_agents,
         handlersLive: message.handlers_live,
       });
@@ -531,6 +539,7 @@ export async function markNodeOffline(
       status: 'offline',
       handlersLive: false,
       load: 0,
+      loadReported: false,
       activeAgents: 0,
       lastHeartbeatAt: new Date(),
     })
@@ -541,7 +550,7 @@ export async function markNodeOffline(
   // recomputeNodeAggregate never resurrects a dropped provider's agent count.
   await db
     .update(nodeProviders)
-    .set({ status: 'offline', handlersLive: false, load: 0, activeAgents: 0, lastHeartbeatAt: new Date() })
+    .set({ status: 'offline', handlersLive: false, load: 0, loadReported: false, activeAgents: 0, lastHeartbeatAt: new Date() })
     .where(and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId)));
 
   await db
@@ -844,6 +853,7 @@ async function ensureDirectNodeForAgentInTx(
       version: 'implicit',
       handlersLive: false,
       load: 0,
+      loadReported: false,
     };
     if (opts.online) {
       update.status = 'online';
@@ -889,6 +899,7 @@ async function ensureDirectNodeForAgentInTx(
         status: opts.online ? 'online' : 'offline',
         handlersLive: false,
         load: 0,
+        loadReported: false,
         lastHeartbeatAt: opts.online ? now : null,
         createdAt: now,
       })
@@ -910,6 +921,7 @@ async function ensureDirectNodeForAgentInTx(
       version: 'implicit',
       handlersLive: false,
       load: 0,
+      loadReported: false,
     };
     if (opts.online) {
       update.status = 'online';
@@ -956,6 +968,7 @@ export async function markDirectNodeOfflineForAgent(
       status: 'offline',
       handlersLive: false,
       load: 0,
+      loadReported: false,
       lastHeartbeatAt: new Date(),
     })
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));

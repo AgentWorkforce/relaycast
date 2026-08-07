@@ -282,7 +282,7 @@ class WsClient:
                         "type": "node.heartbeat",
                         "node_id": node_registration.get("node_id"),
                         "name": node_registration.get("name"),
-                        "load": 0,
+                        "load": None,
                         "active_agents": 1,
                         "handlers_live": False,
                     })

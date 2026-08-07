@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Fixed
+
+- Fleet node rosters now return `load: null` until a direct node, or every constituent provider of a broker node, explicitly reports a genuine normalized capacity-utilization measurement.
+- Fleet capacity now treats `max_agents: 0` consistently as unlimited.
 
 ## [6.3.2] - 2026-08-02
 

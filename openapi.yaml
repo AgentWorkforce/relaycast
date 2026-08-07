@@ -740,10 +740,16 @@ components:
           type: boolean
         load:
           type: number
+          nullable: true
+          minimum: 0
+          maximum: 1
+          description: Normalized managed-agent capacity utilization. Null unless a direct node, or every constituent provider of a broker node, explicitly reports a genuine measurement.
         active_agents:
           type: integer
         max_agents:
           type: integer
+          minimum: 0
+          description: Maximum managed agents. Zero means unlimited capacity.
         last_heartbeat_at:
           type: string
           format: date-time

@@ -1,0 +1,77 @@
+{
+  "id": "traj_ae0vmeog5qmo",
+  "version": 1,
+  "task": {
+    "title": "Make node load telemetry honest and explicit"
+  },
+  "status": "completed",
+  "startedAt": "2026-08-06T10:58:56.890Z",
+  "completedAt": "2026-08-06T11:00:17.298Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-06T10:59:06.998Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_x6t8c9x0k1a9",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-06T10:59:06.998Z",
+      "endedAt": "2026-08-06T11:00:17.298Z",
+      "events": [
+        {
+          "ts": 1786013947002,
+          "type": "decision",
+          "content": "Require an explicit load_reported signal before trusting numeric node load: Require an explicit load_reported signal before trusting numeric node load",
+          "raw": {
+            "question": "Require an explicit load_reported signal before trusting numeric node load",
+            "chosen": "Require an explicit load_reported signal before trusting numeric node load",
+            "alternatives": [],
+            "reasoning": "Every released provider hard-coded numeric placeholders, including finite-capacity providers, so neither legacy zero nor max_agents alone proves a measurement; explicit additive provenance preserves compatibility and honesty."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1786013948396,
+          "type": "decision",
+          "content": "Keep max_agents zero as unlimited and aggregate mixed providers as unlimited: Keep max_agents zero as unlimited and aggregate mixed providers as unlimited",
+          "raw": {
+            "question": "Keep max_agents zero as unlimited and aggregate mixed providers as unlimited",
+            "chosen": "Keep max_agents zero as unlimited and aggregate mixed providers as unlimited",
+            "alternatives": [],
+            "reasoning": "Placement already treats zero as unlimited, and a single unlimited provider makes the node aggregate unbounded; additive zero previously produced a false finite cap."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1786013949800,
+          "type": "decision",
+          "content": "Reject negative heartbeat ages as fresh: Reject negative heartbeat ages as fresh",
+          "raw": {
+            "question": "Reject negative heartbeat ages as fresh",
+            "chosen": "Reject negative heartbeat ages as fresh",
+            "alternatives": [],
+            "reasoning": "Node timestamps are server-stamped, but persisted future timestamps can still occur; an explicit lower bound prevents future data from bypassing the freshness TTL."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Made node load unavailable by default, require explicit measurement provenance, keep max_agents=0 consistently unlimited, guard future heartbeat timestamps, and update all SDK/API types with comprehensive tests.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "f0b084bd7e8e849bfa122c097a23d60cec0a4399",
+    "endRef": "f0b084bd7e8e849bfa122c097a23d60cec0a4399"
+  }
+}

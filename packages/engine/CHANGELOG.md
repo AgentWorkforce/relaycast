@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Fixed
+
+- Node heartbeats now accept absent/null `load` and require `load_reported` before trusting a numeric measurement.
+- Migration `0034` leaves historical placeholder load values unreported.
+- `GET /v1/nodes` now returns null load until a direct node, or every constituent provider of a broker node, reports a genuine measurement.
+- Future-dated heartbeats no longer count as fresh.
+- Broker capacity remains unlimited when any constituent provider is unbounded.
 
 ## [6.3.2] - 2026-08-02
 

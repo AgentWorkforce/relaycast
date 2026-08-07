@@ -438,7 +438,7 @@ describe('node adapter conformance', () => {
         id: string;
         name: string;
         capabilities: Array<ReturnType<typeof capability>>;
-        load?: number;
+        load?: number | null;
         maxAgents?: number;
       },
     ) {
@@ -497,12 +497,106 @@ describe('node adapter conformance', () => {
       await handle.handleMessage(JSON.stringify({
         v: 1,
         type: 'node.heartbeat',
-        load: opts.load ?? 0,
+        ...(typeof opts.load === 'number' ? { load: opts.load, load_reported: true } : {}),
         active_agents: 0,
         handlers_live: true,
       }));
       return { sock, handle };
     }
+
+    it('reports placeholder load as unavailable until a finite node explicitly marks it measured', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-unreported-load-ws');
+      const unbounded = await enrollAndAttachNode(ws, {
+        id: 'node_unbounded',
+        name: 'unbounded',
+        capabilities: [capability('spawn:codex', 'spawn')],
+        maxAgents: 0,
+        load: null,
+      });
+
+      const roster = await stack.app.request('/v1/nodes?name=unbounded', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      expect(roster.status).toBe(200);
+      const body = await roster.json() as { data: Array<Record<string, unknown>> };
+      expect(body.data[0]).toMatchObject({
+        name: 'unbounded',
+        load: null,
+        active_agents: 0,
+        max_agents: 0,
+      });
+
+      const [stored] = await stack.runtime.handle.db
+        .select({ load: nodes.load, loadReported: nodes.loadReported })
+        .from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_unbounded')));
+      expect(stored).toEqual({ load: 0, loadReported: false });
+
+      // An unbounded node cannot report normalized utilization because it has
+      // no finite denominator, even when a client incorrectly claims it did.
+      await unbounded.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0.75,
+        load_reported: true,
+        active_agents: 25,
+        handlers_live: true,
+      }));
+      const explicitlyReportedRoster = await stack.app.request('/v1/nodes?name=unbounded', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      const explicitlyReportedBody = await explicitlyReportedRoster.json() as { data: Array<Record<string, unknown>> };
+      expect(explicitlyReportedBody.data[0]).toMatchObject({ load: null, active_agents: 25, max_agents: 0 });
+
+      // Older brokers sent a literal zero for the same unbounded state. The
+      // engine knows the denominator is absent and must keep treating it as
+      // unreported during the rolling upgrade.
+      await unbounded.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 25,
+        handlers_live: true,
+      }));
+      const legacyRoster = await stack.app.request('/v1/nodes?name=unbounded', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      const legacyBody = await legacyRoster.json() as { data: Array<Record<string, unknown>> };
+      expect(legacyBody.data[0]).toMatchObject({ load: null, active_agents: 25, max_agents: 0 });
+
+      const finite = await enrollAndAttachNode(ws, {
+        id: 'node_finite',
+        name: 'finite',
+        capabilities: [capability('spawn:claude', 'spawn')],
+        maxAgents: 4,
+      });
+      await finite.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      let finiteRoster = await stack.app.request('/v1/nodes?name=finite', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      let finiteBody = await finiteRoster.json() as { data: Array<Record<string, unknown>> };
+      expect(finiteBody.data[0]).toMatchObject({ load: null, max_agents: 4 });
+
+      await finite.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        load_reported: true,
+        active_agents: 0,
+        handlers_live: true,
+      }));
+      finiteRoster = await stack.app.request('/v1/nodes?name=finite', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      finiteBody = await finiteRoster.json() as { data: Array<Record<string, unknown>> };
+      expect(finiteBody.data[0]).toMatchObject({ load: 0, max_agents: 4 });
+    });
 
     it('drives node control directly without the websocket route wrapper', async () => {
       const ws = await createWorkspace(stack.app, 'node-control-direct-dispatch');
@@ -586,6 +680,7 @@ describe('node adapter conformance', () => {
         id: 'control-broker-heartbeat',
         type: 'node.heartbeat',
         load: 0.25,
+        load_reported: true,
         active_agents: 1,
         handlers_live: true,
         node_id: 'node_control_broker',
@@ -671,6 +766,7 @@ describe('node adapter conformance', () => {
         id: 'control-direct-heartbeat',
         type: 'node.heartbeat',
         load: 0.5,
+        load_reported: true,
         active_agents: 7,
         handlers_live: true,
         node_id: 'node_control_direct',
@@ -1692,6 +1788,7 @@ describe('node adapter conformance', () => {
         v: 1,
         type: 'node.heartbeat',
         load: 0.5,
+        load_reported: true,
         active_agents: 1,
         handlers_live: true,
         node_id: 'node_alpha',
@@ -1749,6 +1846,7 @@ describe('node adapter conformance', () => {
         v: 1,
         type: 'node.heartbeat',
         load: 0.1,
+        load_reported: true,
         active_agents: 0,
         handlers_live: true,
       }));

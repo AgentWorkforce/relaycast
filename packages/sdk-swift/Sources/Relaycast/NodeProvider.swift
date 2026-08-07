@@ -633,7 +633,6 @@ public actor NodeProvider {
             "v": .int(1),
             "type": .string("node.heartbeat"),
             "provider": .object(["name": .string(providerName), "instance_id": .string(instanceID)]),
-            "load": .int(0),
             "active_agents": .int(0),
             "handlers_live": .bool(true)
         ]

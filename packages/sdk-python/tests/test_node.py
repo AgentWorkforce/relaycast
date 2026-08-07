@@ -321,9 +321,9 @@ async def test_unknown_action_errors_rather_than_dropping():
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_is_provider_scoped_with_no_last_heartbeat_at():
+async def test_finite_heartbeat_is_provider_scoped_without_placeholder_load_or_last_heartbeat_at():
     server = FakeNodeServer()
-    node = NodeProvider(**base_kwargs(server, heartbeat_interval=0.02))
+    node = NodeProvider(**base_kwargs(server, max_agents=4, heartbeat_interval=0.02))
 
     task = asyncio.create_task(node.serve())
     conn = await server.next_connection()
@@ -333,7 +333,7 @@ async def test_heartbeat_is_provider_scoped_with_no_last_heartbeat_at():
     await wait_until(lambda: len(conn.sent_of_type("node.heartbeat")) >= 1)
     hb = conn.sent_of_type("node.heartbeat")[-1]
     assert hb["provider"] == {"name": "py", "instance_id": node._instance_id}
-    assert hb["load"] == 0
+    assert "load" not in hb
     assert hb["active_agents"] == 0
     assert hb["handlers_live"] is True
     assert "last_heartbeat_at" not in hb

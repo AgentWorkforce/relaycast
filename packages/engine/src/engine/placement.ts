@@ -69,10 +69,12 @@ export function providerAttachDecision(input: ProviderAttachDecisionInput): Prov
 }
 
 export function isNodeLive(node: Pick<NodeRow, 'status' | 'lastHeartbeatAt'>, now = Date.now()): boolean {
+  const age = node.lastHeartbeatAt ? now - node.lastHeartbeatAt.getTime() : null;
   return (
     node.status === 'online' &&
-    !!node.lastHeartbeatAt &&
-    now - node.lastHeartbeatAt.getTime() <= NODE_LIVENESS_TTL_MS
+    age !== null &&
+    age >= 0 &&
+    age <= NODE_LIVENESS_TTL_MS
   );
 }
 
@@ -86,6 +88,16 @@ export function nodeHasCapability(node: Pick<NodeRow, 'capabilities'>, capabilit
 
 export function nodeHasCapacity(node: Pick<NodeRow, 'maxAgents' | 'activeAgents' | 'reservedAgents'>): boolean {
   return node.maxAgents === 0 || node.activeAgents + (node.reservedAgents ?? 0) < node.maxAgents;
+}
+
+function compareNodeCapacityLoad(a: NodeRow, b: NodeRow): number {
+  // Prefer measured load over unknown load, then preserve the existing
+  // utilization/count/name ordering. Unbounded nodes still participate via
+  // activeAgents instead of masquerading as perfectly idle.
+  return Number(b.loadReported) - Number(a.loadReported)
+    || (a.load - b.load)
+    || (a.activeAgents - b.activeAgents)
+    || a.name.localeCompare(b.name);
 }
 
 function normalizeTarget(target: unknown): string | undefined {
@@ -248,7 +260,7 @@ export async function claimSpawnNode(
         node.handlersLive &&
         nodeHasCapacity(node),
       )
-      .sort((a, b) => (a.load - b.load) || (a.activeAgents - b.activeAgents) || a.name.localeCompare(b.name));
+      .sort(compareNodeCapacityLoad);
 
     for (const node of eligible) {
       const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
@@ -350,7 +362,7 @@ export async function chooseNodeForAction(
       node.handlersLive &&
       nodeHasCapacity(node),
     )
-    .sort((a, b) => (a.load - b.load) || (a.activeAgents - b.activeAgents) || a.name.localeCompare(b.name));
+    .sort(compareNodeCapacityLoad);
 
   const node = eligible[0];
   if (!node) {

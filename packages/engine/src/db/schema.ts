@@ -111,6 +111,7 @@ export const nodes = sqliteTable(
     deliveryAdapter: text('delivery_adapter').notNull().default('ws.node.v1'),
     deliveryConfig: text('delivery_config', { mode: 'json' }).$type<Record<string, unknown>>(),
     capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
+    // Zero is the fleet-wide sentinel for unlimited capacity.
     maxAgents: integer('max_agents').notNull().default(0),
     activeAgents: integer('active_agents').notNull().default(0),
     reservedAgents: integer('reserved_agents').notNull().default(0),
@@ -119,6 +120,7 @@ export const nodes = sqliteTable(
     status: text('status').notNull().default('offline'),
     handlersLive: integer('handlers_live', { mode: 'boolean' }).notNull().default(false),
     load: real('load').notNull().default(0),
+    loadReported: integer('load_reported', { mode: 'boolean' }).notNull().default(false),
     lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
@@ -155,9 +157,11 @@ export const nodeProviders = sqliteTable(
     name: text('name').notNull(),
     instanceId: text('instance_id').notNull(),
     capabilities: text('capabilities', { mode: 'json' }).$type<FleetCapability[]>().notNull().default([]),
+    // Zero is the fleet-wide sentinel for unlimited provider capacity.
     maxAgents: integer('max_agents').notNull().default(0),
     activeAgents: integer('active_agents').notNull().default(0),
     load: real('load').notNull().default(0),
+    loadReported: integer('load_reported', { mode: 'boolean' }).notNull().default(false),
     handlersLive: integer('handlers_live', { mode: 'boolean' }).notNull().default(false),
     status: text('status').notNull().default('offline'),
     version: text('version').notNull().default('unknown'),

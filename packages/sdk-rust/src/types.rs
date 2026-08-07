@@ -1879,7 +1879,7 @@ pub struct NodeRosterEntry {
     pub status: String,
     pub live: bool,
     pub handlers_live: bool,
-    pub load: f64,
+    pub load: Option<f64>,
     pub active_agents: i64,
     pub max_agents: i64,
     #[serde(default)]

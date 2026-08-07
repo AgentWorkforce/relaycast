@@ -113,6 +113,20 @@ describe('AgentClient WebSocket integration', () => {
     expect(url.searchParams.get('origin_version')).toBeDefined();
   });
 
+  it('keeps direct-node heartbeat load explicitly unreported', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const frames = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)) as Record<string, unknown>);
+    const heartbeat = frames.find((frame) => frame.type === 'node.heartbeat');
+
+    expect(heartbeat).toMatchObject({ load: null, active_agents: 1, handlers_live: false });
+    expect(heartbeat).not.toHaveProperty('load_reported');
+  });
+
   it('connect() normalizes trailing slash base URL', async () => {
     const client = new HttpClient({
       apiKey: 'at_live_test',
