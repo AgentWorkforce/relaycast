@@ -756,7 +756,7 @@ mod tests {
             agent_name: "alice".to_string(),
         });
 
-        assert_eq!(heartbeat["load"], serde_json::Value::Null);
+        assert_eq!(heartbeat.get("load"), Some(&serde_json::Value::Null));
         assert!(heartbeat.get("load_reported").is_none());
     }
 
