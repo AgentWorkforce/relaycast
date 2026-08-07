@@ -4,7 +4,9 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased - Major]
+## [Unreleased]
+
+## [7.0.0] - 2026-08-07
 
 - `NodeRosterEntry.load` is optional; provider and direct-agent heartbeats no longer label placeholder utilization as measured.
 
