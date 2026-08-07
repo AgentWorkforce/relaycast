@@ -2,6 +2,8 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
@@ -691,6 +693,13 @@ async function dispatchRelease(args: {
   });
   const completeLocally = async () => {
     const completedAt = new Date();
+    // Keyed on the agent id, not on the clock: the id is already unique per
+    // workspace, so the tombstone can never collide with an existing row (a
+    // second release of the same row is idempotent). A timestamped name would
+    // reintroduce a unique-constraint abort into the very path this is fixing.
+    // The release time is preserved in `metadata.release.releasedAt`.
+    const releasedName = releasedAgentName(agent.name, agent.id);
+    const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
     const invocationIsOpen = sql`EXISTS (
       SELECT 1 FROM ${actionInvocations}
       WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
@@ -733,8 +742,32 @@ async function dispatchRelease(args: {
 
       // This helper is only used for delete_agent releases. Non-delete
       // releases fail closed when no live host can receive the invocation.
+      //
+      // Tombstone-rename rather than DELETE (relaycast#309). Four FKs reference
+      // `agents.id` without `onDelete` — channels.created_by (schema.ts:455),
+      // messages.agent_id (:503), files.uploaded_by (:666),
+      // webhooks.created_by (:759) — so a bare DELETE is refused for any agent
+      // that has ever spoken, and inside this atomic unit that refusal aborts
+      // the binding update and the invocation completion along with it. Cascade
+      // is not an option either: it would destroy the agent's message history,
+      // and `messages.agent_id` is NOT NULL so `set null` cannot apply.
+      //
+      // Renaming frees the unique `(workspace_id, name)` immediately while
+      // every FK target stays valid and every message keeps its sender.
       writes.push(writeDb
-        .delete(agents)
+        .update(agents)
+        .set({
+          name: releasedName,
+          handle: `@${releasedName}`,
+          status: RELEASED_AGENT_STATUS,
+          // The row survives, so its credential must not. `token_hash` is
+          // NOT NULL UNIQUE and cannot be cleared, so rotate it to a value
+          // nobody holds; the released agent's old token stops authenticating.
+          tokenHash: releasedTokenHash,
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+            release: { reason: 'released', releasedAt: completedAt.toISOString(), previousName: agent.name },
+          })})`,
+        })
         .where(and(
           eq(agents.workspaceId, args.workspaceId),
           eq(agents.id, agent.id),
@@ -752,7 +785,14 @@ async function dispatchRelease(args: {
         .update(actionInvocations)
         .set({
           status: 'completed',
-          output: { released: true, deleted: true, reaped_locally: true },
+          output: {
+            released: true,
+            // The roster row is retained as a tombstone so the agent's history
+            // keeps its author; the name is what the caller gets back.
+            deleted: false,
+            reaped_locally: true,
+            released_name: releasedName,
+          },
           completedAt,
         })
         .where(and(

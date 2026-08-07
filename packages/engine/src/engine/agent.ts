@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, inArray } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -13,6 +13,25 @@ type Db = ReturnType<typeof getDb>;
 export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
 
 type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
+
+/**
+ * Status of a row whose name has been released back to the workspace
+ * (relaycast#309). The row is retained so the four RESTRICT foreign keys to
+ * `agents.id` stay valid and the agent's history keeps its author; only the
+ * name is freed. A released row is not a roster member and never serves as a
+ * delivery target.
+ */
+export const RELEASED_AGENT_STATUS = 'released';
+
+/**
+ * Tombstone name for a released agent. Keyed on the agent id rather than a
+ * timestamp so it is unique by construction and idempotent on repeat release —
+ * the reap runs inside an atomic batch where a unique-constraint violation
+ * would abort the whole unit rather than fail just this statement.
+ */
+export function releasedAgentName(name: string, agentId: string): string {
+  return `${name}#released-${agentId}`;
+}
 
 /**
  * Resolve the public presence status from server-observed activity. Persisted
@@ -170,7 +189,9 @@ export async function listAgents(db: Db, workspaceId: string, status?: string) {
   const rows = await db
     .select()
     .from(agents)
-    .where(eq(agents.workspaceId, workspaceId));
+    // Released rows are tombstones retained only to keep history attributable;
+    // they are not roster members, so `agent list` must not fill with them.
+    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)));
   const requestedStatus = status === 'online' ? 'active' : status;
 
   return rows.map((a) => ({

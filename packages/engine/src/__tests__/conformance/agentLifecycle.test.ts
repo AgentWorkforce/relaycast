@@ -217,7 +217,21 @@ describe('agent presence and release lifecycle', () => {
     expect((await response.json() as { data: { status: string; handler_node_id: string | null } }).data)
       .toMatchObject({ status: 'completed', handler_node_id: nodeId });
 
-    expect(await stack.runtime.deps.db.select().from(agents).where(eq(agents.id, target.agentId))).toHaveLength(0);
+    // The name is freed; the row is retained as a tombstone so the agent's
+    // history keeps its author (relaycast#309).
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    const [tombstone] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(tombstone).toMatchObject({
+      name: `${target.name}#released-${target.agentId}`,
+      status: 'released',
+    });
     expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
     const [exited] = await stack.runtime.deps.db
       .select({ payload: workspaceEvents.payload })
@@ -231,6 +245,62 @@ describe('agent presence and release lifecycle', () => {
       node_id: nodeId,
       reason: 'released',
     });
+  });
+
+  it('reaps a hostless agent that has already spoken', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-delete-with-history');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'talkative-agent');
+    const nodeId = `node_direct_${target.agentId}`;
+
+    // Every agent worth reaping has history. Four FKs reference agents.id
+    // without onDelete (channels.created_by, messages.agent_id, files.uploaded_by,
+    // webhooks.created_by), so a bare DELETE on the row is refused for any agent
+    // that has ever spoken — and inside runAtomicWrites that refusal aborts the
+    // binding update and the invocation completion along with it.
+    const posted = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${target.token}`,
+      },
+      body: JSON.stringify({ text: 'i have said something' }),
+    });
+    expect(posted.status).toBe(201);
+
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string } }).data)
+      .toMatchObject({ status: 'completed' });
+
+    // The name is released and the implicit direct node is gone...
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
+
+    // ...and the invocation actually completed rather than being aborted.
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation.status).toBe('completed');
   });
 
   it('releases capacity from the binding that local reaping deactivates', async () => {
