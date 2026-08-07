@@ -2,6 +2,8 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
+import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
@@ -11,7 +13,7 @@ import {
   type InvocationCompletionDeps,
 } from './invocationCompletion.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
-import { runAtomic } from '../ports/database.js';
+import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
 
@@ -662,6 +664,7 @@ async function dispatchNodeProviderInvocation(args: {
 async function dispatchRelease(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
+  completionDeps?: InvocationCompletionDeps;
   workspaceId: string;
   data: {
     input?: Record<string, unknown>;
@@ -669,9 +672,6 @@ async function dispatchRelease(args: {
     caller_name?: string;
   };
 }) {
-  if (!args.registry) {
-    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
-  }
   const input = recordInput(args.data.input);
   const name = typeof input.name === 'string' ? input.name : null;
   if (!name) {
@@ -685,35 +685,224 @@ async function dispatchRelease(args: {
   if (!agent) {
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
   }
-  if (agent.locationType !== 'via_node' || !agent.locationNodeId) {
-    throw codedError(`Agent "${name}" is not bound to a node`, 'agent_not_node_bound', 409);
-  }
-
   const invocation = await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
     action_name: 'release',
   });
+  const completeLocally = async () => {
+    const completedAt = new Date();
+    // Keyed on the agent id, not on the clock: the id is already unique per
+    // workspace, so the tombstone can never collide with an existing row (a
+    // second release of the same row is idempotent). A timestamped name would
+    // reintroduce a unique-constraint abort into the very path this is fixing.
+    // The release time is preserved in `metadata.release.releasedAt`.
+    const releasedName = releasedAgentName(agent.name, agent.id);
+    const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
+    const invocationIsOpen = sql`EXISTS (
+      SELECT 1 FROM ${actionInvocations}
+      WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
+        AND ${actionInvocations.id} = ${invocation.id}
+        AND ${actionInvocations.status} IN ('pending', 'dispatched', 'invoked')
+    )`;
+
+    const results = await runAtomicWrites(args.db, (writeDb) => {
+      const writes: AtomicWrite[] = [];
+
+      // Resolve the active binding in this atomic unit instead of from a
+      // pre-transaction snapshot. A concurrent rebind therefore decrements
+      // the node that is actually deactivated below.
+      writes.push(writeDb
+        .update(nodes)
+        .set({
+          activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+        })
+        .where(and(
+          eq(nodes.workspaceId, args.workspaceId),
+          invocationIsOpen,
+          sql`EXISTS (
+            SELECT 1 FROM ${agentNodeBindings}
+            WHERE ${agentNodeBindings.workspaceId} = ${args.workspaceId}
+              AND ${agentNodeBindings.agentId} = ${agent.id}
+              AND ${agentNodeBindings.nodeId} = ${nodes.id}
+              AND ${agentNodeBindings.status} = 'active'
+          )`,
+        )));
+
+      writes.push(writeDb
+        .update(agentNodeBindings)
+        .set({ status: 'inactive', updatedAt: completedAt })
+        .where(and(
+          eq(agentNodeBindings.workspaceId, args.workspaceId),
+          eq(agentNodeBindings.agentId, agent.id),
+          eq(agentNodeBindings.status, 'active'),
+          invocationIsOpen,
+        )));
+
+      // This helper is only used for delete_agent releases. Non-delete
+      // releases fail closed when no live host can receive the invocation.
+      //
+      // Tombstone-rename rather than DELETE (relaycast#309). Four FKs reference
+      // `agents.id` without `onDelete` — channels.created_by (schema.ts:455),
+      // messages.agent_id (:503), files.uploaded_by (:666),
+      // webhooks.created_by (:759) — so a bare DELETE is refused for any agent
+      // that has ever spoken, and inside this atomic unit that refusal aborts
+      // the binding update and the invocation completion along with it. Cascade
+      // is not an option either: it would destroy the agent's message history,
+      // and `messages.agent_id` is NOT NULL so `set null` cannot apply.
+      //
+      // Renaming frees the unique `(workspace_id, name)` immediately while
+      // every FK target stays valid and every message keeps its sender.
+      writes.push(writeDb
+        .update(agents)
+        .set({
+          name: releasedName,
+          handle: `@${releasedName}`,
+          status: RELEASED_AGENT_STATUS,
+          // The row survives, so its credential must not. `token_hash` is
+          // NOT NULL UNIQUE and cannot be cleared, so rotate it to a value
+          // nobody holds; the released agent's old token stops authenticating.
+          tokenHash: releasedTokenHash,
+          // Same `release` shape the dispatched path writes, so an audit does
+          // not have to know which path released the agent.
+          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+            release: {
+              reason: typeof input.reason === 'string' ? input.reason : null,
+              released_at: completedAt.toISOString(),
+              previous_name: agent.name,
+            },
+          })})`,
+        })
+        .where(and(
+          eq(agents.workspaceId, args.workspaceId),
+          eq(agents.id, agent.id),
+          invocationIsOpen,
+        )));
+      writes.push(writeDb
+        .delete(nodes)
+        .where(and(
+          eq(nodes.workspaceId, args.workspaceId),
+          eq(nodes.id, `node_direct_${agent.id}`),
+          invocationIsOpen,
+        )));
+
+      writes.push(writeDb
+        .update(actionInvocations)
+        .set({
+          status: 'completed',
+          output: {
+            released: true,
+            // The roster row is retained as a tombstone so the agent's history
+            // keeps its author; the name is what the caller gets back.
+            deleted: false,
+            reaped_locally: true,
+            released_name: releasedName,
+          },
+          completedAt,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        ))
+        .returning({ id: actionInvocations.id }));
+
+      return writes;
+    });
+    const completed = results.at(-1) as Array<{ id: string }>;
+
+    // External completion effects belong after the durable atomic unit: an
+    // aborted local reap must never publish agent.exited.
+    const exitNodeId = nodeId ?? agent.locationNodeId;
+    if (completed.length > 0 && args.completionDeps && exitNodeId) {
+      await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
+        agentId: agent.id,
+        agentName: agent.name,
+        nodeId: exitNodeId,
+        invocationId: fleetInvocationId(agent.metadata),
+        reason: 'released',
+      });
+    }
+    return {
+      invocation_id: invocation.id,
+      action_name: 'release',
+      handler_agent_id: null,
+      handler_node_id: exitNodeId,
+      dispatched_node_id: null,
+      input,
+      status: 'completed',
+      created_at: invocation.createdAt.toISOString(),
+    };
+  };
+  const failClosed = async (): Promise<never> => {
+    await args.db
+      .update(actionInvocations)
+      .set({ status: 'failed', error: 'agent_host_unavailable', completedAt: new Date() })
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      ));
+    throw codedError(
+      `Agent "${name}" has no live host node; cannot dispatch release`,
+      'agent_host_unavailable',
+      503,
+    );
+  };
+
+  const registry = args.registry;
+  const activeBindings = await args.db
+    .select({ nodeId: agentNodeBindings.nodeId })
+    .from(agentNodeBindings)
+    .where(and(
+      eq(agentNodeBindings.workspaceId, args.workspaceId),
+      eq(agentNodeBindings.agentId, agent.id),
+      eq(agentNodeBindings.status, 'active'),
+    ));
+  const implicitDirectNodeId = `node_direct_${agent.id}`;
+  const nodeId = activeBindings.find((binding) => binding.nodeId === agent.locationNodeId)?.nodeId
+    ?? activeBindings.find((binding) => binding.nodeId === implicitDirectNodeId)?.nodeId
+    ?? activeBindings[0]?.nodeId
+    ?? (agent.locationType === 'via_node' ? agent.locationNodeId : null);
+  const hostLive = !!registry
+    && !!nodeId
+    && await isHandlerConnectionLive(
+      args.db,
+      registry,
+      args.workspaceId,
+      nodeId,
+      agent.providerName,
+    );
+
+  if (!hostLive) {
+    return input.delete_agent === true ? completeLocally() : failClosed();
+  }
 
   // Release is a capacity operation handled by the provider hosting the agent.
   const dispatched = await dispatchNodeInvocation({
     db: args.db,
-    registry: args.registry,
+    registry,
     workspaceId: args.workspaceId,
     invocationId: invocation.id,
-    nodeId: agent.locationNodeId,
+    nodeId,
     providerName: agent.providerName,
     action: 'release',
     input,
   });
 
+  // The provider can disconnect between the liveness check and send. Complete
+  // the DB lifecycle locally instead of creating an ownerless pending request.
+  if (!dispatched.accepted) {
+    return input.delete_agent === true ? completeLocally() : failClosed();
+  }
+
   return {
     invocation_id: invocation.id,
     action_name: 'release',
     handler_agent_id: null,
-    handler_node_id: agent.locationNodeId,
-    dispatched_node_id: dispatched.accepted ? agent.locationNodeId : null,
+    handler_node_id: nodeId,
+    dispatched_node_id: dispatched.accepted ? nodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
@@ -917,6 +1106,7 @@ export async function invokeAction(
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
+    completionDeps?: InvocationCompletionDeps;
     /** Resolve plain node-scoped actions too (message triggers bind by name
      * without a node); the resolved row is dispatched node-addressed. */
     includeNodeScoped?: boolean;
@@ -937,6 +1127,7 @@ export async function invokeAction(
     return dispatchRelease({
       db,
       registry: options.nodeConnections,
+      completionDeps: options.completionDeps,
       workspaceId,
       data,
     });
@@ -1111,16 +1302,17 @@ function publicInvocation(row: InvocationRow) {
 async function applyReleaseCompletionEffect(
   db: Db,
   workspaceId: string,
-  nodeId: string,
+  nodeId: string | null,
   invocation: Pick<InvocationRow, 'actionName' | 'input'>,
   data: { error?: string },
   deps?: InvocationCompletionDeps,
-): Promise<void> {
-  if (!isReleaseInvocation(invocation.actionName) || data.error) return;
+  options: { allowMissingBinding?: boolean; expectedAgentId?: string } = {},
+): Promise<boolean> {
+  if (!isReleaseInvocation(invocation.actionName) || data.error) return false;
 
   const input = recordInput(invocation.input);
   const name = typeof input.name === 'string' ? input.name : null;
-  if (!name) return;
+  if (!name) return false;
 
   const [agent] = await db
     .select()
@@ -1128,39 +1320,47 @@ async function applyReleaseCompletionEffect(
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.name, name),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
+      ...(options.expectedAgentId ? [eq(agents.id, options.expectedAgentId)] : []),
+      ...(!options.allowMissingBinding && nodeId ? [
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+      ] : []),
     ));
-  if (!agent) return;
+  if (!agent) return false;
 
   // Only proceed if an active binding actually flipped to inactive. This guards
   // against a second release (e.g. a retry) double-decrementing activeAgents for
   // an agent that was already released from this node.
-  const [deactivatedBinding] = await db
+  const deactivatedBindings = await db
     .update(agentNodeBindings)
     .set({ status: 'inactive', updatedAt: new Date() })
     .where(and(
       eq(agentNodeBindings.workspaceId, workspaceId),
-      eq(agentNodeBindings.nodeId, nodeId),
       eq(agentNodeBindings.agentId, agent.id),
       eq(agentNodeBindings.status, 'active'),
+      ...(nodeId ? [eq(agentNodeBindings.nodeId, nodeId)] : []),
     ))
-    .returning({ id: agentNodeBindings.id });
-  if (!deactivatedBinding) return;
+    .returning({ nodeId: agentNodeBindings.nodeId });
+  if (deactivatedBindings.length === 0 && !options.allowMissingBinding) return false;
 
   // Capture exit correlation BEFORE the mutation deletes the row or strips the
   // spawn/cli metadata, so a durable agent.exited can still be emitted.
   const exited = { agentId: agent.id, agentName: agent.name, invocationId: fleetInvocationId(agent.metadata) };
 
-  await db
-    .update(nodes)
-    .set({
-      activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
-    })
-    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  const deactivatedNodeIds = Array.from(new Set(deactivatedBindings.map((binding) => binding.nodeId)));
+  if (deactivatedNodeIds.length > 0) {
+    await db
+      .update(nodes)
+      .set({
+        activeAgents: sql`CASE WHEN ${nodes.activeAgents} > 0 THEN ${nodes.activeAgents} - 1 ELSE 0 END`,
+      })
+      .where(and(eq(nodes.workspaceId, workspaceId), inArray(nodes.id, deactivatedNodeIds)));
+  }
 
   if (input.delete_agent === true) {
     await db.delete(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+    const implicitNodeId = `node_direct_${agent.id}`;
+    await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
   } else {
     const existingMetadata = agent.metadata ?? {};
     const { spawn: _spawn, cli: _cli, ...restMetadata } = existingMetadata;
@@ -1184,7 +1384,7 @@ async function applyReleaseCompletionEffect(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
   }
 
-  if (deps) {
+  if (deps && nodeId) {
     await emitAgentExitedEffects(deps, workspaceId, {
       agentId: exited.agentId,
       agentName: exited.agentName,
@@ -1193,6 +1393,7 @@ async function applyReleaseCompletionEffect(
       reason: 'released',
     });
   }
+  return true;
 }
 
 async function dispatchNodeAttempt(

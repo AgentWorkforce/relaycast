@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { agents } from '../db/schema.js';
 import type { getDb } from '../db/index.js';
 import type { PresenceTracker } from '../ports/presence.js';
+import { RELEASED_AGENT_STATUS } from './agent.js';
 
 /**
  * Get presence status for all agents in a workspace.
@@ -16,7 +17,9 @@ export async function getPresence(
     db
       .select({ id: agents.id, name: agents.name })
       .from(agents)
-      .where(eq(agents.workspaceId, workspaceId)),
+      // Released rows are tombstones kept only so history stays attributable.
+      // They are not roster members and must not appear as presence entries.
+      .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS))),
     presence.getOnline(workspaceId),
   ]);
 

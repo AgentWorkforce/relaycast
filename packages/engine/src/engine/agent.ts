@@ -1,14 +1,110 @@
-import { eq, and, lt, inArray } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
-import { directNodeIdForAgent, ensureDirectNodeForAgent } from './node.js';
+import { directNodeIdForAgent } from './node.js';
+import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
-const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+/** How long an authenticated agent can be silent before it is no longer present. */
+export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * How long an agent must be silent before a DIFFERENT node may reclaim its
+ * name and overwrite its `token_hash` (`registerAgentViaNode`).
+ *
+ * Deliberately NOT `AGENT_LIVENESS_TTL_MS`, and deliberately not the `status`
+ * column. Presence and identity are different questions: "should the roster
+ * show this agent as here" is cheap to get wrong and self-corrects on the next
+ * heartbeat, whereas "may another node take this name and be issued a working
+ * token for it" is a credential handover that cannot be undone. They must not
+ * share a threshold, and they must not share a field that a roster read can
+ * write — gating identity on `status` meant a stale-agent sweep, triggered by
+ * an `agent list`, silently made records claimable.
+ *
+ * 24h chosen against measured production data (relaycast-cloud, 2026-08-07):
+ * of the 1,578 records whose reclaim eligibility this governs, silence was
+ * <5m: 5, 5m-24h: 9, 1d-7d: 1, >7d: 1,568. So 99.4% have been silent over a
+ * week and a 24h grace costs essentially nothing steady-state (1,569 eligible
+ * vs 1,578) while protecting the ~14 identities a human would still call live.
+ *
+ * Lower this only with fresh measurements — shortening it converts live agents
+ * into reclaimable ones.
+ */
+export const AGENT_RECLAIM_GRACE_MS = 24 * 60 * 60 * 1000;
+
+type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
+
+/**
+ * Status of a row whose name has been released back to the workspace
+ * (relaycast#309). The row is retained so the four RESTRICT foreign keys to
+ * `agents.id` stay valid and the agent's history keeps its author; only the
+ * name is freed. A released row is not a roster member and never serves as a
+ * delivery target.
+ */
+export const RELEASED_AGENT_STATUS = 'released';
+
+/**
+ * Marker separating a released agent's original name from its tombstone
+ * suffix. Reserved: registration rejects it, which is what makes
+ * {@link releasedAgentName} collision-free (see {@link assertRegistrableAgentName}).
+ */
+export const RELEASED_NAME_MARKER = '#released-';
+
+/**
+ * Tombstone name for a released agent.
+ *
+ * Keyed on the agent id, not a timestamp: the release runs inside an atomic
+ * batch where a `UNIQUE(workspace_id, name)` violation aborts the WHOLE unit
+ * rather than failing just this statement — which is the exact defect the
+ * tombstone exists to avoid. A timestamped name can collide; an id-keyed one
+ * cannot, because the id is already unique per workspace.
+ *
+ * That argument only holds while no ordinary agent can occupy this namespace.
+ * Agent names are otherwise arbitrary strings, so without the registration
+ * guard a caller could pre-register `<name>#released-<victimId>` and make the
+ * victim's release abort. Hence the reserved marker.
+ */
+export function releasedAgentName(name: string, agentId: string): string {
+  return `${name}${RELEASED_NAME_MARKER}${agentId}`;
+}
+
+/**
+ * Reject names that would land in the reserved tombstone namespace.
+ *
+ * Called on every registration path. Without it the release path is not
+ * atomic-safe: see {@link releasedAgentName}.
+ */
+export function assertRegistrableAgentName(name: string): void {
+  if (name.includes(RELEASED_NAME_MARKER)) {
+    throw codedError(
+      `Agent name "${name}" is reserved: "${RELEASED_NAME_MARKER}" marks a released agent`,
+      'invalid_agent_name',
+      400,
+    );
+  }
+}
+
+/**
+ * Resolve the public presence status from server-observed activity. Persisted
+ * `active` is only the last reported state; it is not proof of current life.
+ */
+export function effectiveAgentStatus(agent: AgentPresenceRow, now = Date.now()): string {
+  // A client-supplied/faulty clock must not create a negative age. The
+  // workspace sweep durably clamps future timestamps to its server clock so
+  // they subsequently expire normally after one TTL window.
+  const observedAt = Math.min(agent.lastSeen.getTime(), now);
+  if (
+    (agent.status === 'active' || agent.status === 'online')
+    && now - observedAt > AGENT_LIVENESS_TTL_MS
+  ) {
+    return 'offline';
+  }
+  return agent.status === 'online' ? 'active' : agent.status;
+}
 
 /** Detect unique constraint violations across D1, SQLite, and drizzle error shapes. */
 function isUniqueConstraintError(err: unknown): boolean {
@@ -37,32 +133,86 @@ export async function registerAgent(
     capabilities?: Record<string, unknown>;
   },
 ) {
+  assertRegistrableAgentName(data.name);
   const agentId = generateId();
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
+  const directNodeId = directNodeIdForAgent(agentId);
+  const directNodeTokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agentId}:${randomHex(16)}`);
+  const now = new Date();
 
-  // Use INSERT directly and let the unique index (workspace_id, name) enforce
-  // uniqueness. Avoids TOCTOU race between SELECT check and INSERT that causes
-  // false "already exists" errors on D1 read replicas after delete+re-register.
+  const [generalChannel] = await db
+    .select()
+    .from(channels)
+    .where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general')));
+
+  // Register the identity, implicit direct node, active binding, and default
+  // membership as one atomic unit. A failed direct-node write must not leave a
+  // live but undispatchable roster row behind.
   let agent;
   try {
-    [agent] = await db
-      .insert(agents)
-      .values({
-        id: agentId,
+    const results = await runAtomicWrites(db, (writeDb) => {
+      const writes: AtomicWrite[] = [writeDb.insert(nodes).values({
+        id: directNodeId,
         workspaceId,
-        name: data.name,
-        handle: `@${data.name}`,
-        type: data.type || 'agent',
-        // Set status explicitly: the column DEFAULT is the deprecated 'online'
-        // on databases migrated before 0013, and SQLite can't ALTER a default.
+        name: `direct-${agentId}`,
+        tokenHash: directNodeTokenHash,
+        kind: 'ws',
+        role: 'direct',
+        deliveryAdapter: 'ws.node.v1',
+        deliveryConfig: { implicit: true, agent_id: agentId, agent_name: data.name },
+        capabilities: [],
+        maxAgents: 1,
+        activeAgents: 1,
+        tags: ['implicit', 'direct'],
+        version: 'implicit',
+        status: 'offline',
+        handlersLive: false,
+        load: 0,
+        lastHeartbeatAt: null,
+        createdAt: now,
+      }), writeDb
+        .insert(agents)
+        .values({
+          id: agentId,
+          workspaceId,
+          name: data.name,
+          handle: `@${data.name}`,
+          type: data.type || 'agent',
+          // Set status explicitly: the column DEFAULT is the deprecated 'online'
+          // on databases migrated before 0013, and SQLite can't ALTER a default.
+          status: 'active',
+          tokenHash,
+          persona: data.persona ?? null,
+          metadata: data.metadata ?? {},
+          capabilities: data.capabilities ?? null,
+          locationType: 'via_node',
+          locationNodeId: directNodeId,
+        })
+        .returning()];
+
+      if (generalChannel) {
+        writes.push(writeDb.insert(channelMembers).values({
+          channelId: generalChannel.id,
+          agentId,
+          role: 'member',
+        }));
+      }
+
+      writes.push(writeDb.insert(agentNodeBindings).values({
+        id: `anb_${generateId()}`,
+        workspaceId,
+        agentId,
+        nodeId: directNodeId,
         status: 'active',
-        tokenHash,
-        persona: data.persona ?? null,
-        metadata: data.metadata ?? {},
-        capabilities: data.capabilities ?? null,
-      })
-      .returning();
+        sessionRef: null,
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      return writes;
+    });
+    [agent] = results[1] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
     // Unique constraint violation on (workspace_id, name) → agent already exists
     // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
@@ -72,24 +222,6 @@ export async function registerAgent(
     }
     throw insertErr;
   }
-
-  // Auto-join #general
-  const [generalChannel] = await db
-    .select()
-    .from(channels)
-    .where(
-      and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general')),
-    );
-
-  if (generalChannel) {
-    await db.insert(channelMembers).values({
-      channelId: generalChannel.id,
-      agentId,
-      role: 'member',
-    });
-  }
-
-  await ensureDirectNodeForAgent(db, workspaceId, agent);
 
   return {
     id: agentId,
@@ -107,36 +239,35 @@ export async function registerAgent(
 }
 
 export async function listAgents(db: Db, workspaceId: string, status?: string) {
-  let rows;
-  if (status && status !== 'all') {
-    rows = await db
-      .select()
-      .from(agents)
-      .where(
-        and(eq(agents.workspaceId, workspaceId), eq(agents.status, status)),
-      );
-  } else {
-    rows = await db
-      .select()
-      .from(agents)
-      .where(eq(agents.workspaceId, workspaceId));
-  }
+  // Keep the durable state aligned as a cleanup side effect, while still
+  // deriving below so correctness never depends on a cron/sweep having run.
+  await sweepStaleAgents(db, workspaceId);
+  const rows = await db
+    .select()
+    .from(agents)
+    // Released rows are tombstones retained only to keep history attributable;
+    // they are not roster members, so `agent list` must not fill with them.
+    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, RELEASED_AGENT_STATUS)));
+  const requestedStatus = status === 'online' ? 'active' : status;
 
   return rows.map((a) => ({
     id: a.id,
     name: a.name,
     handle: `@${a.name}`,
     type: a.type,
-    status: a.status,
+    status: effectiveAgentStatus(a),
     persona: a.persona,
     capabilities: a.capabilities ?? null,
     created_at: a.createdAt.toISOString(),
     last_seen: a.lastSeen.toISOString(),
     metadata: a.metadata,
-  }));
+  })).filter((agent) => !requestedStatus || requestedStatus === 'all' || agent.status === requestedStatus);
 }
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
+  // Match roster reads: detail consumers should observe both derived and
+  // durable presence consistently within this workspace.
+  await sweepStaleAgents(db, workspaceId);
   const [agent] = await db
     .select()
     .from(agents)
@@ -202,7 +333,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
     name: agent.name,
     handle: agent.handle ?? `@${agent.name}`,
     type: agent.type,
-    status: agent.status,
+    status: effectiveAgentStatus(agent),
     persona: agent.persona,
     capabilities: agent.capabilities ?? null,
     created_at: agent.createdAt.toISOString(),
@@ -266,7 +397,7 @@ export async function updateAgent(
     name: updated.name,
     handle: `@${updated.name}`,
     type: updated.type,
-    status: updated.status,
+    status: effectiveAgentStatus(updated),
     persona: updated.persona,
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
@@ -295,15 +426,31 @@ export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
     .where(eq(agents.id, agentId));
 }
 
-export async function sweepStaleAgents(db: Db): Promise<number> {
-  const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<number> {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - AGENT_LIVENESS_TTL_MS);
+  const future = and(
+    inArray(agents.status, ['active', 'online']),
+    gt(agents.lastSeen, now),
+    ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
+  );
+  const normalized = await db
+    .update(agents)
+    .set({ lastSeen: now })
+    .where(future)
+    .returning({ id: agents.id });
+  const stale = and(
+    inArray(agents.status, ['active', 'online']),
+    lt(agents.lastSeen, cutoff),
+    ...(workspaceId ? [eq(agents.workspaceId, workspaceId)] : []),
+  );
 
   const result = await db
     .update(agents)
     .set({ status: 'offline' })
     // Sweep both 'active' and legacy 'online' agents during the transition period
-    .where(and(inArray(agents.status, ['active', 'online']), lt(agents.lastSeen, cutoff)))
+    .where(stale)
     .returning({ id: agents.id });
 
-  return result.length;
+  return normalized.length + result.length;
 }

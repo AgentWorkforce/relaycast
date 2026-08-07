@@ -1,0 +1,512 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
+import { actionInvocations, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
+import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
+import {
+  attachDirectNodeSocket,
+  createWorkspace,
+  makeNodeStack,
+  registerAgent,
+  type TestStack,
+} from './harness.js';
+
+describe('agent presence and release lifecycle', () => {
+  let stack: TestStack;
+
+  beforeEach(() => { stack = makeNodeStack(); });
+  afterEach(() => stack.close());
+
+  it('derives presence from last_seen and persists stale active agents offline', async () => {
+    const ws = await createWorkspace(stack.app, 'agent-presence-expiry');
+    const stale = await registerAgent(stack.app, ws.workspaceKey, 'stale-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({
+        status: 'active',
+        lastSeen: new Date(Date.now() - AGENT_LIVENESS_TTL_MS - 1_000),
+      })
+      .where(eq(agents.id, stale.agentId));
+
+    const response = await stack.app.request('/v1/agents?status=active', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: Array<{ name: string }> };
+    expect(body.data.map((agent) => agent.name)).not.toContain('stale-agent');
+
+    const [persisted] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, stale.agentId));
+    expect(persisted.status).toBe('offline');
+  });
+
+  it('persists stale presence before returning agent detail', async () => {
+    const ws = await createWorkspace(stack.app, 'agent-detail-presence-expiry');
+    const stale = await registerAgent(stack.app, ws.workspaceKey, 'stale-detail-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({
+        status: 'active',
+        lastSeen: new Date(Date.now() - AGENT_LIVENESS_TTL_MS - 1_000),
+      })
+      .where(eq(agents.id, stale.agentId));
+
+    const response = await stack.app.request(`/v1/agents/${stale.name}`, {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { data: { status: string } }).data.status).toBe('offline');
+
+    const [persisted] = await stack.runtime.deps.db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, stale.agentId));
+    expect(persisted.status).toBe('offline');
+  });
+
+  it('clamps a future last_seen before applying the liveness window', async () => {
+    const ws = await createWorkspace(stack.app, 'agent-future-presence');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'future-agent');
+    const beforeRead = Date.now();
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({
+        status: 'active',
+        lastSeen: new Date(beforeRead + 14 * 60 * 1000),
+      })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request(`/v1/agents/${target.name}`, {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { data: { status: string } }).data.status).toBe('active');
+
+    const afterRead = Date.now();
+    const [persisted] = await stack.runtime.deps.db
+      .select({ lastSeen: agents.lastSeen })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    // SQLite timestamp mode stores whole seconds.
+    expect(persisted.lastSeen.getTime()).toBeGreaterThanOrEqual(beforeRead - 1_000);
+    expect(persisted.lastSeen.getTime()).toBeLessThanOrEqual(afterRead);
+  });
+
+  it('atomically registers human rows with an implicit direct binding', async () => {
+    const ws = await createWorkspace(stack.app, 'human-direct-registration');
+    const response = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: 'direct-human', type: 'human' }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json() as { data: { id: string } };
+    const nodeId = `node_direct_${body.data.id}`;
+
+    const [agent] = await stack.runtime.deps.db
+      .select({ type: agents.type, locationType: agents.locationType, locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, body.data.id));
+    expect(agent).toEqual({ type: 'human', locationType: 'via_node', locationNodeId: nodeId });
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId))))
+      .toHaveLength(1);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, body.data.id),
+        eq(agentNodeBindings.nodeId, nodeId),
+        eq(agentNodeBindings.status, 'active'),
+      )))
+      .toHaveLength(1);
+
+    const duplicate = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: 'direct-human', type: 'human' }),
+    });
+    expect(duplicate.status).toBe(409);
+    // The failed batch inserted its generated direct node before it hit the
+    // duplicate agent name; rollback must leave no orphan node behind.
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(nodes)
+      .where(eq(nodes.workspaceId, ws.workspaceId)))
+      .toHaveLength(1);
+  });
+
+  it('fails release explicitly when the agent has no live host', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-release');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'hostless-agent');
+    const nodeId = `node_direct_${target.agentId}`;
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, reason: 'stale cleanup' }),
+    });
+    expect(response.status).toBe(503);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: 'agent_host_unavailable',
+      message: 'Agent "hostless-agent" has no live host node; cannot dispatch release',
+    });
+
+    const [agent] = await stack.runtime.deps.db
+      .select({ status: agents.status, locationNodeId: agents.locationNodeId })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(agent).toMatchObject({ status: 'active', locationNodeId: nodeId });
+
+    const [binding] = await stack.runtime.deps.db
+      .select({ status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, nodeId),
+      ));
+    expect(binding.status).toBe('active');
+
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation).toMatchObject({
+      status: 'failed',
+      error: 'agent_host_unavailable',
+    });
+  });
+
+  it('deletes a hostless agent and its implicit direct node', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-delete');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'delete-me');
+    const nodeId = `node_direct_${target.agentId}`;
+    // Reproduce a legacy/orphaned roster row with no dispatchable location.
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string; handler_node_id: string | null } }).data)
+      .toMatchObject({ status: 'completed', handler_node_id: nodeId });
+
+    // The name is freed; the row is retained as a tombstone so the agent's
+    // history keeps its author (relaycast#309).
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    const [tombstone] = await stack.runtime.deps.db
+      .select({ name: agents.name, status: agents.status, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    expect(tombstone).toMatchObject({
+      name: `${target.name}#released-${target.agentId}`,
+      status: 'released',
+    });
+    expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
+    const [exited] = await stack.runtime.deps.db
+      .select({ payload: workspaceEvents.payload })
+      .from(workspaceEvents)
+      .where(and(
+        eq(workspaceEvents.workspaceId, ws.workspaceId),
+        eq(workspaceEvents.type, 'agent.exited'),
+      ));
+    expect(JSON.parse(exited.payload)).toMatchObject({
+      agent_id: target.agentId,
+      node_id: nodeId,
+      reason: 'released',
+    });
+  });
+
+  it('reaps a hostless agent that has already spoken', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-delete-with-history');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'talkative-agent');
+    const nodeId = `node_direct_${target.agentId}`;
+
+    // Every agent worth reaping has history. Four FKs reference agents.id
+    // without onDelete (channels.created_by, messages.agent_id, files.uploaded_by,
+    // webhooks.created_by), so a bare DELETE on the row is refused for any agent
+    // that has ever spoken — and inside runAtomicWrites that refusal aborts the
+    // binding update and the invocation completion along with it.
+    const posted = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${target.token}`,
+      },
+      body: JSON.stringify({ text: 'i have said something' }),
+    });
+    expect(posted.status).toBe(201);
+
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { data: { status: string } }).data)
+      .toMatchObject({ status: 'completed' });
+
+    // The name is released and the implicit direct node is gone...
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.name, target.name))))
+      .toHaveLength(0);
+    expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(0);
+
+    // ...and the invocation actually completed rather than being aborted.
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation.status).toBe('completed');
+  });
+
+  it('refuses to register into the reserved released-agent namespace', async () => {
+    const ws = await createWorkspace(stack.app, 'reserved-tombstone-namespace');
+    // The tombstone name is only collision-free while nothing else can occupy
+    // that namespace. Agent names are otherwise arbitrary strings, so without
+    // this guard a caller could pre-register `<victim>#released-<victimId>`
+    // and make the victim's release abort the whole atomic unit — the exact
+    // failure the tombstone exists to avoid.
+    const squatted = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'victim#released-12345' }),
+    });
+    expect(squatted.status).toBe(400);
+    expect((await squatted.json() as { error: { code: string } }).error.code).toBe('invalid_agent_name');
+  });
+
+  it('keeps released tombstones out of the roster and the presence view', async () => {
+    const ws = await createWorkspace(stack.app, 'tombstone-not-a-roster-member');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'ghost-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const released = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(released.status).toBe(201);
+
+    // A tombstone is retained only so history stays attributable. Every
+    // consumer that answers "who is in this workspace" must exclude it —
+    // otherwise releasing a name makes it look like a second, permanently
+    // offline agent rather than making it disappear.
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const rosterNames = (await roster.json() as { data: Array<{ name: string }> }).data.map((a) => a.name);
+    expect(rosterNames).not.toContain(target.name);
+    expect(rosterNames.some((n) => n.includes('#released-'))).toBe(false);
+
+    const presence = await stack.app.request('/v1/agents/presence', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(presence.status).toBe(200);
+    const presenceNames = (await presence.json() as { data: Array<{ agent_name: string }> })
+      .data.map((p) => p.agent_name);
+    expect(presenceNames).not.toContain(target.name);
+    expect(presenceNames.some((n) => n.includes('#released-'))).toBe(false);
+  });
+
+  it('records the caller-supplied release reason on the tombstone', async () => {
+    const ws = await createWorkspace(stack.app, 'tombstone-release-reason');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'audited-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: target.name, delete_agent: true, reason: 'node decommissioned' }),
+    });
+    expect(response.status).toBe(201);
+
+    const [tombstone] = await stack.runtime.deps.db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    // Same `release` shape the dispatched path writes, so an audit does not
+    // have to know which path released the agent.
+    expect((tombstone.metadata as { release?: Record<string, unknown> }).release)
+      .toMatchObject({ reason: 'node decommissioned', previous_name: target.name });
+  });
+
+  it('releases capacity from the binding that local reaping deactivates', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-binding-capacity');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'reap-bound-agent');
+    const enrolled = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({
+        node_id: 'node_reap_target',
+        name: 'reap-target',
+        role: 'broker',
+        max_agents: 1,
+      }),
+    });
+    expect(enrolled.status).toBe(201);
+    const bound = await stack.app.request('/v1/nodes/reap-target/agents', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ agent_name: target.name }),
+    });
+    expect(bound.status).toBe(201);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(201);
+
+    const [node] = await stack.runtime.deps.db
+      .select({ activeAgents: nodes.activeAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_reap_target')));
+    expect(node.activeAgents).toBe(0);
+    expect(await stack.runtime.deps.db
+      .select()
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, 'node_reap_target'),
+        eq(agentNodeBindings.status, 'active'),
+      )))
+      .toHaveLength(0);
+  });
+
+  it('rolls back every local reap mutation when invocation completion fails', async () => {
+    const ws = await createWorkspace(stack.app, 'hostless-agent-delete-rollback');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'keep-me');
+    const nodeId = `node_direct_${target.agentId}`;
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+    stack.runtime.handle.sqlite.exec(`
+      CREATE TRIGGER fail_local_release_completion
+      BEFORE UPDATE ON action_invocations
+      WHEN NEW.status = 'completed' AND NEW.action_name = 'release'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced invocation completion failure');
+      END
+    `);
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(response.status).toBe(500);
+
+    expect(await stack.runtime.deps.db.select().from(agents).where(eq(agents.id, target.agentId))).toHaveLength(1);
+    expect(await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, nodeId))).toHaveLength(1);
+    const [binding] = await stack.runtime.deps.db
+      .select({ status: agentNodeBindings.status })
+      .from(agentNodeBindings)
+      .where(and(
+        eq(agentNodeBindings.workspaceId, ws.workspaceId),
+        eq(agentNodeBindings.agentId, target.agentId),
+        eq(agentNodeBindings.nodeId, nodeId),
+      ));
+    expect(binding.status).toBe('active');
+    const [invocation] = await stack.runtime.deps.db
+      .select({ status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, ws.workspaceId),
+        eq(actionInvocations.actionName, 'release'),
+      ));
+    expect(invocation.status).toBe('pending');
+  });
+
+  it('dispatches release through a live implicit direct binding', async () => {
+    const ws = await createWorkspace(stack.app, 'live-agent-release');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'live-agent');
+    const { sock, handle, nodeId } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
+    // Legacy directly registered rows can lack a durable location even though
+    // their implicit node binding and connection are both live.
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: target.name }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json() as {
+      data: { status: string; dispatched_node_id: string | null };
+    };
+    expect(body.data).toMatchObject({ status: 'dispatched', dispatched_node_id: nodeId });
+    expect(sock.ofType('action.invoke').at(-1)).toMatchObject({ action: 'release' });
+    await handle.handleClose();
+  });
+});

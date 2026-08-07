@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type {
   FleetAgentRegisterMessage,
   FleetBrokerToRelaycastMessage,
@@ -22,6 +22,7 @@ import { runAtomic } from '../ports/database.js';
 import type { EngineDb } from '../ports/database.js';
 import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
+import { AGENT_RECLAIM_GRACE_MS, assertRegistrableAgentName } from './agent.js';
 import { isNodeLive, nodeHasCapability } from './placement.js';
 import {
   DEFAULT_PROVIDER_NAME,
@@ -1123,6 +1124,7 @@ export async function registerAgentViaNode(
   message: FleetAgentRegisterMessage,
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
+  assertRegistrableAgentName(message.name);
   return runAtomic(db, async (tx) => {
     const [node] = await tx
       .select()
@@ -1182,8 +1184,38 @@ export async function registerAgentViaNode(
           resumable: message.resumable ?? false,
           sessionRef: message.session_ref ?? null,
         },
+        // Who may take this name and be issued a token for it.
+        //
+        // The first disjunct gates on OBSERVED SILENCE (`last_seen`), not on
+        // the `status` column. Those are not the same question and must not
+        // share a field. `status` is maintained by `sweepStaleAgents`, which
+        // runs on every roster read — so while identity was gated on it, an
+        // `agent list` flipped records to 'offline' and thereby moved them
+        // from "reclaimable only by their own node" to "reclaimable by any
+        // node, on name alone, with a `token_hash` overwrite". A read must
+        // never widen who may claim an identity.
+        //
+        // Precisely: the sweep's status update cannot affect this gate at all
+        // any more. The sweep does also clamp a FUTURE `last_seen` back to the
+        // server clock, which is a write — but it can only move the reclaim
+        // moment later-or-equal relative to that bogus timestamp, never make a
+        // row claimable now, since the clamped value is `now` and this
+        // predicate needs `now - AGENT_RECLAIM_GRACE_MS`. That clamp exists so
+        // a client with a skewed clock cannot make its name permanently
+        // unreclaimable; it is deliberate, and it is the only path by which a
+        // read touches this column.
+        //
+        // The grace window is far longer than the presence TTL: an agent goes
+        // 'offline' on the roster after 5 minutes of silence, but its name is
+        // not reclaimable by a stranger until AGENT_RECLAIM_GRACE_MS. Between
+        // those two points the agent reads as away and its identity is still
+        // its own.
+        //
+        // The second disjunct is unchanged: the agent's own node may always
+        // re-register it, so a node restart or reconnect is never blocked by
+        // the grace window.
         setWhere: or(
-          ne(agents.status, 'active'),
+          lt(agents.lastSeen, new Date(Date.now() - AGENT_RECLAIM_GRACE_MS)),
           and(
             eq(agents.locationType, 'via_node'),
             or(

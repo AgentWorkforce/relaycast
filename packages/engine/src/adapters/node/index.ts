@@ -14,6 +14,7 @@ import { InProcessKeyValueStore } from './kv.js';
 import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions } from './event-queue.js';
 import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
+import { sweepStaleAgents } from '../../engine/agent.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
@@ -164,6 +165,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 
   const sweepTimer = setInterval(() => {
+    void sweepStaleAgents(db).catch(() => {});
     void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime, { completionDeps: deps }).catch(() => {});
     void runDeliveryMaintenance();

@@ -461,6 +461,17 @@ caller also receives it directly. `node.status.online` / `node.status.offline`
 durably record node liveness transitions (offline carries a `reason` such as
 `liveness_timeout` | `disconnected` | `deregistered`).
 
+Agent roster presence is lease-based, not a write-once registration flag.
+`active` means Relaycast observed authenticated agent activity within the last
+five minutes (`last_seen`); an older persisted `active` (or legacy `online`)
+record is reported and durably swept as `offline`. Registration or subsequent
+authenticated activity renews the lease. Releasing an agent dispatches to its
+live host when one exists. If the host is absent or offline, a normal release
+fails explicitly with `agent_host_unavailable` instead of creating an ownerless
+pending invocation. A `delete_agent` request can be completed locally in that
+case: Relaycast deactivates bindings and deletes the record and its implicit
+direct node.
+
 Fleet node presence is also published to workspace-key observer streams as the
 ephemeral `node.online`, `node.heartbeat`, and `node.offline` events. Each
 carries a `node` payload matching the `GET /nodes` roster entry (capabilities,
@@ -567,6 +578,8 @@ immediate delivery and receive a rejected capability result.
 Queue/cron-backed adapters that own node dispatch outside the Node adapter should call
 `drainNodeInvocations` after node reconnect/register/heartbeat and
 `sweepTimedOutInvocations` from cron via `@relaycast/engine/node-invocations`.
+They should also call `sweepStaleAgents` from `@relaycast/engine` to persist
+agent lease expiry; roster reads derive the same status even before that sweep.
 
 Actions are async fire-and-forget: invoking an action returns an ack with
 `invocation_id` and dispatches an `action.invoke` frame to the handler's node. Agent

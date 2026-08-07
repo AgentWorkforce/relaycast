@@ -621,7 +621,10 @@ agentRoutes.post(
           caller_id: callerAgent?.id,
           caller_name: callerAgent?.name ?? callerNode?.name ?? 'workspace',
         },
-        { nodeConnections: c.get('engine').nodeConnections },
+        {
+          nodeConnections: c.get('engine').nodeConnections,
+          completionDeps: c.get('engine'),
+        },
       );
 
       const eventData = {
