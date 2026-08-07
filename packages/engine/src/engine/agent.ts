@@ -48,13 +48,44 @@ type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
 export const RELEASED_AGENT_STATUS = 'released';
 
 /**
- * Tombstone name for a released agent. Keyed on the agent id rather than a
- * timestamp so it is unique by construction and idempotent on repeat release —
- * the reap runs inside an atomic batch where a unique-constraint violation
- * would abort the whole unit rather than fail just this statement.
+ * Marker separating a released agent's original name from its tombstone
+ * suffix. Reserved: registration rejects it, which is what makes
+ * {@link releasedAgentName} collision-free (see {@link assertRegistrableAgentName}).
+ */
+export const RELEASED_NAME_MARKER = '#released-';
+
+/**
+ * Tombstone name for a released agent.
+ *
+ * Keyed on the agent id, not a timestamp: the release runs inside an atomic
+ * batch where a `UNIQUE(workspace_id, name)` violation aborts the WHOLE unit
+ * rather than failing just this statement — which is the exact defect the
+ * tombstone exists to avoid. A timestamped name can collide; an id-keyed one
+ * cannot, because the id is already unique per workspace.
+ *
+ * That argument only holds while no ordinary agent can occupy this namespace.
+ * Agent names are otherwise arbitrary strings, so without the registration
+ * guard a caller could pre-register `<name>#released-<victimId>` and make the
+ * victim's release abort. Hence the reserved marker.
  */
 export function releasedAgentName(name: string, agentId: string): string {
-  return `${name}#released-${agentId}`;
+  return `${name}${RELEASED_NAME_MARKER}${agentId}`;
+}
+
+/**
+ * Reject names that would land in the reserved tombstone namespace.
+ *
+ * Called on every registration path. Without it the release path is not
+ * atomic-safe: see {@link releasedAgentName}.
+ */
+export function assertRegistrableAgentName(name: string): void {
+  if (name.includes(RELEASED_NAME_MARKER)) {
+    throw codedError(
+      `Agent name "${name}" is reserved: "${RELEASED_NAME_MARKER}" marks a released agent`,
+      'invalid_agent_name',
+      400,
+    );
+  }
 }
 
 /**
@@ -102,6 +133,7 @@ export async function registerAgent(
     capabilities?: Record<string, unknown>;
   },
 ) {
+  assertRegistrableAgentName(data.name);
   const agentId = generateId();
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);

@@ -764,8 +764,14 @@ async function dispatchRelease(args: {
           // NOT NULL UNIQUE and cannot be cleared, so rotate it to a value
           // nobody holds; the released agent's old token stops authenticating.
           tokenHash: releasedTokenHash,
+          // Same `release` shape the dispatched path writes, so an audit does
+          // not have to know which path released the agent.
           metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
-            release: { reason: 'released', releasedAt: completedAt.toISOString(), previousName: agent.name },
+            release: {
+              reason: typeof input.reason === 'string' ? input.reason : null,
+              released_at: completedAt.toISOString(),
+              previous_name: agent.name,
+            },
           })})`,
         })
         .where(and(

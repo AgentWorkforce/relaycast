@@ -303,6 +303,83 @@ describe('agent presence and release lifecycle', () => {
     expect(invocation.status).toBe('completed');
   });
 
+  it('refuses to register into the reserved released-agent namespace', async () => {
+    const ws = await createWorkspace(stack.app, 'reserved-tombstone-namespace');
+    // The tombstone name is only collision-free while nothing else can occupy
+    // that namespace. Agent names are otherwise arbitrary strings, so without
+    // this guard a caller could pre-register `<victim>#released-<victimId>`
+    // and make the victim's release abort the whole atomic unit — the exact
+    // failure the tombstone exists to avoid.
+    const squatted = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: 'victim#released-12345' }),
+    });
+    expect(squatted.status).toBe(400);
+    expect((await squatted.json() as { error: { code: string } }).error.code).toBe('invalid_agent_name');
+  });
+
+  it('keeps released tombstones out of the roster and the presence view', async () => {
+    const ws = await createWorkspace(stack.app, 'tombstone-not-a-roster-member');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'ghost-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const released = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: target.name, delete_agent: true }),
+    });
+    expect(released.status).toBe(201);
+
+    // A tombstone is retained only so history stays attributable. Every
+    // consumer that answers "who is in this workspace" must exclude it —
+    // otherwise releasing a name makes it look like a second, permanently
+    // offline agent rather than making it disappear.
+    const roster = await stack.app.request('/v1/agents', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const rosterNames = (await roster.json() as { data: Array<{ name: string }> }).data.map((a) => a.name);
+    expect(rosterNames).not.toContain(target.name);
+    expect(rosterNames.some((n) => n.includes('#released-'))).toBe(false);
+
+    const presence = await stack.app.request('/v1/agents/presence', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(presence.status).toBe(200);
+    const presenceNames = (await presence.json() as { data: Array<{ agent_name: string }> })
+      .data.map((p) => p.agent_name);
+    expect(presenceNames).not.toContain(target.name);
+    expect(presenceNames.some((n) => n.includes('#released-'))).toBe(false);
+  });
+
+  it('records the caller-supplied release reason on the tombstone', async () => {
+    const ws = await createWorkspace(stack.app, 'tombstone-release-reason');
+    const target = await registerAgent(stack.app, ws.workspaceKey, 'audited-agent');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ locationType: 'self_connected', locationNodeId: null })
+      .where(eq(agents.id, target.agentId));
+
+    const response = await stack.app.request('/v1/agents/release', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ name: target.name, delete_agent: true, reason: 'node decommissioned' }),
+    });
+    expect(response.status).toBe(201);
+
+    const [tombstone] = await stack.runtime.deps.db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(eq(agents.id, target.agentId));
+    // Same `release` shape the dispatched path writes, so an audit does not
+    // have to know which path released the agent.
+    expect((tombstone.metadata as { release?: Record<string, unknown> }).release)
+      .toMatchObject({ reason: 'node decommissioned', previous_name: target.name });
+  });
+
   it('releases capacity from the binding that local reaping deactivates', async () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-binding-capacity');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'reap-bound-agent');
