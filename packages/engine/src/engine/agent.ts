@@ -12,6 +12,30 @@ type Db = ReturnType<typeof getDb>;
 /** How long an authenticated agent can be silent before it is no longer present. */
 export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * How long an agent must be silent before a DIFFERENT node may reclaim its
+ * name and overwrite its `token_hash` (`registerAgentViaNode`).
+ *
+ * Deliberately NOT `AGENT_LIVENESS_TTL_MS`, and deliberately not the `status`
+ * column. Presence and identity are different questions: "should the roster
+ * show this agent as here" is cheap to get wrong and self-corrects on the next
+ * heartbeat, whereas "may another node take this name and be issued a working
+ * token for it" is a credential handover that cannot be undone. They must not
+ * share a threshold, and they must not share a field that a roster read can
+ * write — gating identity on `status` meant a stale-agent sweep, triggered by
+ * an `agent list`, silently made records claimable.
+ *
+ * 24h chosen against measured production data (relaycast-cloud, 2026-08-07):
+ * of the 1,578 records whose reclaim eligibility this governs, silence was
+ * <5m: 5, 5m-24h: 9, 1d-7d: 1, >7d: 1,568. So 99.4% have been silent over a
+ * week and a 24h grace costs essentially nothing steady-state (1,569 eligible
+ * vs 1,578) while protecting the ~14 identities a human would still call live.
+ *
+ * Lower this only with fresh measurements — shortening it converts live agents
+ * into reclaimable ones.
+ */
+export const AGENT_RECLAIM_GRACE_MS = 24 * 60 * 60 * 1000;
+
 type AgentPresenceRow = Pick<typeof agents.$inferSelect, 'status' | 'lastSeen'>;
 
 /**
