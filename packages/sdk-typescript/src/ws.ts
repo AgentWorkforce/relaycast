@@ -612,8 +612,7 @@ export class WsClient {
           v: 1,
           type: 'node.heartbeat',
           ...(nodeId ? { node_id: nodeId } : {}),
-          load: 1,
-          load_reported: true,
+          load: null,
           active_agents: 1,
           handlers_live: false,
         });

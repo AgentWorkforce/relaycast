@@ -1,5 +1,6 @@
 """Tests for WsClient."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -145,6 +146,21 @@ class TestWsClientSend:
         ws = WsClient(token="at_xxx")
         # _ws is None; should not raise
         await ws.send({"type": "custom"})
+
+    @pytest.mark.asyncio
+    async def test_direct_node_ping_keeps_load_unreported(self):
+        ws = WsClient(token="at_xxx")
+        ws._ws = MagicMock()
+        ws._ws.send = AsyncMock()
+        registration = {"node_id": "node_1", "name": "direct-alice"}
+
+        sleep = AsyncMock(side_effect=[None, asyncio.CancelledError])
+        with patch("relay_sdk.ws.asyncio.sleep", sleep):
+            await ws._ping_loop(registration)
+
+        heartbeat = json.loads(ws._ws.send.await_args.args[0])
+        assert heartbeat["load"] is None
+        assert "load_reported" not in heartbeat
 
 
 class TestWsClientAutoPong:

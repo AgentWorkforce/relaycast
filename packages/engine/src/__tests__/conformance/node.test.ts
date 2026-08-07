@@ -532,6 +532,22 @@ describe('node adapter conformance', () => {
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_unbounded')));
       expect(stored).toEqual({ load: 0, loadReported: false });
 
+      // An unbounded node cannot report normalized utilization because it has
+      // no finite denominator, even when a client incorrectly claims it did.
+      await unbounded.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0.75,
+        load_reported: true,
+        active_agents: 25,
+        handlers_live: true,
+      }));
+      const explicitlyReportedRoster = await stack.app.request('/v1/nodes?name=unbounded', {
+        headers: { authorization: `Bearer ${ws.workspaceKey}` },
+      });
+      const explicitlyReportedBody = await explicitlyReportedRoster.json() as { data: Array<Record<string, unknown>> };
+      expect(explicitlyReportedBody.data[0]).toMatchObject({ load: null, active_agents: 25, max_agents: 0 });
+
       // Older brokers sent a literal zero for the same unbounded state. The
       // engine knows the denominator is absent and must keep treating it as
       // unreported during the rolling upgrade.

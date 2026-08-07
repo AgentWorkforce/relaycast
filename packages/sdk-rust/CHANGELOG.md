@@ -6,11 +6,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [Unreleased - Major]
 
 ### Changed
 
-- `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats report their measured full utilization.
+- `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
 ## [4.2.0] - 2026-06-24
 

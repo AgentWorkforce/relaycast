@@ -740,6 +740,7 @@ components:
           type: integer
         max_agents:
           type: integer
+          minimum: 0
           description: Maximum managed agents. Zero means unlimited capacity.
         last_heartbeat_at:
           type: string

@@ -13,7 +13,8 @@ ALTER TABLE node_providers ADD COLUMN load_reported INTEGER NOT NULL DEFAULT 0;
 -- additive-zero behavior before deciding whether their load was measured.
 UPDATE nodes
 SET max_agents = 0
-WHERE EXISTS (
+WHERE role = 'broker'
+  AND EXISTS (
   SELECT 1
   FROM node_providers
   WHERE node_providers.workspace_id = nodes.workspace_id
