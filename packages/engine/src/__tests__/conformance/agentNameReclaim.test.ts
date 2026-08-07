@@ -134,8 +134,20 @@ describe('agent name reclaim across nodes', () => {
     const before = await agentRow(ws.workspaceId, 'restarted');
     await silentFor(before.id, AGENT_LIVENESS_TTL_MS * 2);
 
-    // A node restart must never be blocked by the grace window — that would
-    // make the guard a fail-closed gate with no recovery path.
+    // This test passes both before and after the guard change, deliberately.
+    // It does not assert new behaviour — it pins a DECISION.
+    //
+    // The alternative considered for the reclaim guard was to drop the status
+    // disjunct entirely and gate on node identity alone. That was rejected
+    // because it takes hostages: an agent whose broker node dies and respawns
+    // elsewhere could never reclaim its own name, and there is no recovery
+    // path for a stranded name short of relaycast#309's tombstone. A guard
+    // that protects an identity by making it unrecoverable has traded one
+    // outage for another.
+    //
+    // So this asserts the honest caller's path stays open. Anyone later
+    // "simplifying" the owning-node disjunct away turns this red, and finds
+    // this comment, rather than discovering the consequence in production.
     await registerViaNode(alpha, 'restarted');
 
     const after = await agentRow(ws.workspaceId, 'restarted');
