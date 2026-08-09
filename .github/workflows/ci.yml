@@ -61,9 +61,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          refusal_index=0
           assert_refused() {
-            if docker run --rm "$IMAGE" "$@" >refusal.log 2>&1; then
+            refusal_index=$((refusal_index + 1))
+            refusal_container="relaycast-refusal-$ARCH-$refusal_index"
+            if timeout --signal=TERM --kill-after=2s 10s \
+              docker run --rm --name "$refusal_container" "$IMAGE" "$@" \
+              >refusal.log 2>&1; then
               cat refusal.log
+              return 1
+            else
+              refusal_status=$?
+            fi
+            docker rm --force --volumes "$refusal_container" 2>/dev/null || true
+            if test "$refusal_status" -eq 124; then
+              cat refusal.log
+              echo 'container did not refuse startup within 10 seconds' >&2
               return 1
             fi
             grep --fixed-strings 'refused to start' refusal.log
