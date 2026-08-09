@@ -38,6 +38,7 @@ the public connection.
 From a clean checkout of this repository:
 
 ```bash
+test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.ratifyprotocol.com' > .env
 printf '%s\n' 'RELAYCAST_PORT=8787' >> .env
 docker compose build --pull
@@ -78,6 +79,24 @@ The response contains the only copy of the `rk_live_...` workspace admin key.
 Move it into Ratify's secret manager, then securely remove the bootstrap file.
 Do not repeat this command: workspace names are not unique, so a repeat creates
 another workspace and key.
+
+Engine 7.0.0 has a known agent-card discovery defect: the bare standard path
+`GET /.well-known/agent-card.json` interprets the leftmost hostname label as the
+workspace name. At `relay.ratifyprotocol.com` it therefore looks for `relay`,
+not the meaningful workspace name `ratify-protocol`. Host inference also
+shadows the documented `/:workspace/.well-known/agent-card.json` route on this
+three-label hostname. The only working unauthenticated interim form is:
+
+```text
+https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol
+```
+
+A mismatch returns `workspace_not_found` even while authenticated
+`POST /a2a/rpc` works. The query form is documented only as an interim operator
+check. A standards-following counterparty will try the bare well-known path, so
+do not treat this deployment as federation-ready until the single-tenant
+sole-workspace resolver fix is released, this image is pinned to that exact
+engine version, and `cast.agentrelay.com` is confirmed on the same version.
 
 In engine 7.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
 initial bootstrap. The tunnel rule below blocks that exact path before the
@@ -132,6 +151,12 @@ From another terminal or machine:
 
 ```bash
 curl --fail --silent --show-error https://relay.ratifyprotocol.com/health
+curl --fail --silent --show-error \
+  'https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol'
+curl --fail --silent --show-error \
+  'https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol' \
+  | grep --fixed-strings \
+      '"url":"https://relay.ratifyprotocol.com/a2a/rpc"'
 workspace_create_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --request POST https://relay.ratifyprotocol.com/v1/workspaces \
   --header 'content-type: application/json' \
@@ -157,7 +182,10 @@ for distribution-specific details.
 
 ## State and backups
 
-The named Docker volume is `relaycast-data` and is mounted at `/data`:
+Compose manages a named volume with the logical name `relaycast-data` and mounts
+it at `/data`. Docker applies the Compose project prefix to the physical volume
+name (typically `<project>_relaycast-data`); use the Compose commands below
+instead of guessing that physical name.
 
 - `/data/relaycast.db` is the SQLite database.
 - `/data/relaycast.db-wal` and `/data/relaycast.db-shm` may exist while running.

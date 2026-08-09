@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_ENGINE_BINARY = '/opt/relaycast/node_modules/.bin/relaycast-engine';
 const CONFIG_EXIT_CODE = 64;
+
+const HELP = `relaycast container — run a self-hosted Relaycast server
+
+Usage:
+  docker run <image> --base-url <https-origin> [--db <path>] [--port <n>] [--env <name>]
+
+Options:
+  --base-url <url>   Required public HTTPS origin
+  --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
+  --port <n>         HTTP port inside the container (default: $PORT or 8787)
+  --env <name>       Environment label (default: production)
+  -h, --help         Show this help
+`;
 
 export class BaseUrlError extends Error {
   constructor(code, message) {
@@ -36,7 +47,10 @@ function expandedIpv6(hostname) {
   const missing = 8 - left.length - right.length;
   if (missing < 0 || (halves.length === 1 && missing !== 0)) return null;
   const parts = [...left, ...Array(missing).fill('0'), ...right];
-  if (parts.length !== 8 || parts.some((part) => !/^[0-9a-f]{1,4}$/i.test(part))) {
+  if (
+    parts.length !== 8 ||
+    parts.some((part) => !/^[0-9a-f]{1,4}$/i.test(part))
+  ) {
     return null;
   }
   return parts.map((part) => Number.parseInt(part, 16));
@@ -58,9 +72,9 @@ function isLoopbackHostname(hostname) {
 
   // IPv4-mapped IPv6: ::ffff:127.0.0.0/104. WHATWG URL parsing
   // canonicalizes the dotted suffix to the final two hexadecimal groups.
-  const isMapped = parts.slice(0, 5).every((part) => part === 0)
-    && parts[5] === 0xffff;
-  return isMapped && (parts[6] >> 8) === 127;
+  const isMapped =
+    parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff;
+  return isMapped && parts[6] >> 8 === 127;
 }
 
 export function validateBaseUrl(value) {
@@ -97,11 +111,11 @@ export function validateBaseUrl(value) {
   }
 
   if (
-    url.username
-    || url.password
-    || url.pathname !== '/'
-    || url.search
-    || url.hash
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
   ) {
     refusal(
       'non_origin_base_url',
@@ -119,6 +133,12 @@ export function validatedEngineArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--base-url') {
+      if (baseUrlIndex !== -1) {
+        refusal(
+          'duplicate_base_url',
+          '--base-url must be provided exactly once.',
+        );
+      }
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) {
         refusal(
@@ -133,6 +153,12 @@ export function validatedEngineArgs(argv) {
     }
 
     if (arg.startsWith('--base-url=')) {
+      if (baseUrlIndex !== -1) {
+        refusal(
+          'duplicate_base_url',
+          '--base-url must be provided exactly once.',
+        );
+      }
       args.push('--base-url', arg.slice('--base-url='.length));
       baseUrlIndex = args.length - 1;
       continue;
@@ -152,6 +178,125 @@ export function validatedEngineArgs(argv) {
   return args;
 }
 
+function parseEngineOptions(argv, env) {
+  const options = {
+    db: env.RELAYCAST_DB_PATH ?? './relaycast.db',
+    port: env.PORT ? Number(env.PORT) : 8787,
+    baseUrl: undefined,
+    environment: env.RELAYCAST_ENV ?? 'production',
+    help: false,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--db') options.db = argv[++index] ?? options.db;
+    else if (arg === '--port')
+      options.port = Number(argv[++index] ?? options.port);
+    else if (arg === '--base-url') options.baseUrl = argv[++index];
+    else if (arg === '--env')
+      options.environment = argv[++index] ?? options.environment;
+  }
+
+  return options;
+}
+
+function optionalNumber(value) {
+  if (value == null || value.trim() === '') return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+/**
+ * The pinned Node adapter derives c.req.url from the local socket and ignores
+ * X-Forwarded-Proto. A Cloudflare named tunnel terminates TLS before forwarding
+ * HTTP over loopback, so without this marker the public A2A card advertises an
+ * incorrect plaintext RPC URL. The mandatory validated base URL establishes
+ * that every request to this container represents an HTTPS public authority.
+ */
+export function installPublicAuthorityMarker(server, baseUrl) {
+  const publicAuthority = new URL(baseUrl).host;
+  server.prependListener('request', (request) => {
+    request.headers.host = publicAuthority;
+    let replacedHost = false;
+    for (let index = 0; index < request.rawHeaders.length; index += 2) {
+      if (request.rawHeaders[index].toLowerCase() === 'host') {
+        request.rawHeaders[index + 1] = publicAuthority;
+        replacedHost = true;
+      }
+    }
+    if (!replacedHost) request.rawHeaders.push('Host', publicAuthority);
+    request.socket.encrypted = true;
+  });
+}
+
+async function launchPinnedEngine(args) {
+  const options = parseEngineOptions(args, process.env);
+  if (options.help) {
+    process.stdout.write(HELP);
+    return;
+  }
+
+  if (
+    !Number.isInteger(options.port) ||
+    options.port <= 0 ||
+    options.port > 65535
+  ) {
+    throw new Error('Invalid --port');
+  }
+
+  const { startServer } = await import('@relaycast/engine/node');
+
+  const mailboxTtlMs = optionalNumber(process.env.RELAYCAST_MAILBOX_TTL_MS);
+  const mailboxDepthCap = optionalNumber(
+    process.env.RELAYCAST_MAILBOX_DEPTH_CAP,
+  );
+  const mailbox = {
+    ...(mailboxTtlMs !== undefined ? { deliveryTtlMs: mailboxTtlMs } : {}),
+    ...(mailboxDepthCap !== undefined ? { depthCap: mailboxDepthCap } : {}),
+  };
+
+  const messageTtlDays = optionalNumber(process.env.RELAYCAST_MESSAGE_TTL_DAYS);
+  const eventQueue =
+    messageTtlDays !== undefined
+      ? {
+          retention: {
+            defaults: {
+              messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null,
+            },
+          },
+        }
+      : undefined;
+
+  const running = startServer({
+    dbPath: options.db,
+    port: options.port,
+    baseUrl: options.baseUrl,
+    config: {
+      environment: options.environment,
+      ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
+    },
+    ...(eventQueue ? { eventQueue } : {}),
+  });
+
+  installPublicAuthorityMarker(running.server, options.baseUrl);
+  process.stdout.write(
+    `Relaycast self-host listening for ${options.baseUrl} (db: ${options.db})\n`,
+  );
+
+  await new Promise((resolve) => {
+    let stopping = false;
+    const shutdown = () => {
+      if (stopping) return;
+      stopping = true;
+      process.stdout.write('\nShutting down…\n');
+      void running.stop().then(resolve);
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
+}
+
 export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -163,31 +308,13 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  const engineBinary = process.env.RELAYCAST_ENGINE_BIN || DEFAULT_ENGINE_BINARY;
-  const child = spawn(engineBinary, args, { stdio: 'inherit' });
-
-  const forwardSignal = (signal) => {
-    if (!child.killed) child.kill(signal);
-  };
-  process.once('SIGINT', forwardSignal);
-  process.once('SIGTERM', forwardSignal);
-
-  await new Promise((resolve) => {
-    child.once('error', (error) => {
-      process.stderr.write(`relaycast container failed to launch the engine: ${error.message}\n`);
-      process.exitCode = 1;
-      resolve();
-    });
-    child.once('exit', (code, signal) => {
-      if (signal) {
-        process.stderr.write(`relaycast engine exited after signal ${signal}\n`);
-        process.exitCode = 1;
-      } else {
-        process.exitCode = code ?? 1;
-      }
-      resolve();
-    });
-  });
+  try {
+    await launchPinnedEngine(args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`relaycast container failed to start: ${message}\n`);
+    process.exitCode = 1;
+  }
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';

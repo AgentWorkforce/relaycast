@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: relaycast-self-host:7.0.0
+    image: relaycast-self-host:local
     command:
       - --base-url
       - ${RELAYCAST_BASE_URL:?Set RELAYCAST_BASE_URL to the public HTTPS origin, for example https://relay.ratifyprotocol.com}
@@ -25,7 +25,7 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:8787/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:8787/health').then(async(response)=>{const body=await response.json();if(!response.ok||body.ok!==true)process.exit(1)}).catch(()=>process.exit(1))
       interval: 15s
       timeout: 5s
       retries: 5
@@ -34,4 +34,3 @@ services:
 
 volumes:
   relaycast-data:
-    name: relaycast-data

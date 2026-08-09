@@ -199,6 +199,7 @@ WantedBy=multi-user.target
 published):
 
 ```bash
+test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
 printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
 docker compose build --pull
 docker compose up -d
@@ -218,8 +219,11 @@ the required public workspace-creation block, backups, and teardown.
   server stopped, copy `relaycast.db` (and `-wal`/`-shm` if present).
 - **Upgrade**: for a global install, run
   `npm install -g @relaycast/engine@<tested-version>`. For the repository image,
-  update the exact engine version and lockfile only after confirming federation
-  peers use the same version, then rebuild. New migrations apply automatically
+  update the exact dependency and package version in `docker/package.json`, its
+  lockfile, the `RELAYCAST_ENGINE_VERSION` default in `Dockerfile`, and the
+  expected version in `RUNBOOK.md` only after confirming federation peers use
+  the same version. The image build fails if the Docker version and package pin
+  differ. Rebuild after changing all pins. New migrations apply automatically
   on boot; already-applied ones are skipped.
 - Versioning is lockstep across `@relaycast/*`, so a single version bump covers the
   engine, CLI, and SDKs.
