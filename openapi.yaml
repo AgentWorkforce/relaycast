@@ -290,6 +290,7 @@ components:
             $ref: '#/components/schemas/FileAttachment'
         metadata:
           type: object
+          additionalProperties: true
           description: User message metadata. Internal `__relaycast_*` keys are stripped from public responses and caller metadata cannot override `agent_name`.
         has_attachments:
           type: boolean
@@ -350,6 +351,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileAttachment'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Public message metadata, including A2A extension payloads
 
     DmSendResponse:
       type: object
@@ -378,6 +383,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileAttachment'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Public message metadata, including A2A extension payloads
 
     FlatDmMessage:
       type: object
@@ -401,6 +410,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileAttachment'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Public message metadata, including A2A extension payloads
         created_at:
           type: string
           format: date-time
@@ -2698,6 +2711,13 @@ paths:
                   items:
                     type: string
                   description: Optional file ids to attach to this DM
+                data:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+                  description: >-
+                    Public structured message metadata. For Ratify over A2A,
+                    place the versioned envelope at `com.agentrelay.ratify`.
                 mode:
                   type: string
                   enum: [wait, steer]
@@ -4878,6 +4898,28 @@ paths:
     post:
       summary: Register an external A2A agent
       tags: [A2A]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_card_url:
+                  type: string
+                  format: uri
+                agent_card:
+                  type: object
+                auth_scheme:
+                  type: string
+                  enum: [bearer, api_key, none]
+                auth_credential:
+                  type: string
+                target_agent:
+                  type: string
+                  description: >-
+                    Remote card skill that DMs to the local proxy address. It
+                    is inferred when the card advertises exactly one skill.
       responses:
         '201':
           description: Agent registered
@@ -4899,6 +4941,43 @@ paths:
                 type: object
 
   /a2a/agents/{name}:
+    patch:
+      summary: Complete or rotate an A2A connection
+      description: >-
+        Updates the outbound credential or selected remote skill without
+        rotating the inbound relay token. Use this after reciprocal
+        registration to complete authenticated delivery in both directions.
+      tags: [A2A]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                auth_scheme:
+                  type: string
+                  enum: [bearer, api_key, none]
+                auth_credential:
+                  type: string
+                  nullable: true
+                target_agent:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Connection updated
+          content:
+            application/json:
+              schema:
+                type: object
     delete:
       summary: Remove an A2A agent
       tags: [A2A]
@@ -4942,6 +5021,12 @@ paths:
         description: Local development server
     post:
       summary: JSON-RPC gateway for A2A messages
+      description: >-
+        Sends to a registered external A2A agent or, when authenticated with
+        the bearer token issued by A2A registration, delivers to a local agent.
+        Ratify envelopes use
+        `params.message.metadata["com.agentrelay.ratify"]`; see
+        `docs/a2a-ratify-federation.md` for the version 1 shapes.
       tags: [A2A]
       responses:
         '200':

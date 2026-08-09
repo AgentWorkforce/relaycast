@@ -22,6 +22,7 @@ const sendDmSchema = z.object({
   to: z.string().min(1),
   text: z.string().min(1),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
 });
 
@@ -47,8 +48,14 @@ dmRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { to, text, attachments, mode } = parsed.data;
+      const { to, text, attachments, data, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
+      const fingerprintBody = {
+        to,
+        text,
+        ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
+        ...(data !== undefined ? { data } : {}),
+      };
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -69,13 +76,14 @@ dmRoutes.post(
         // Backward compatibility: historical fingerprint excluded mode (equivalent to wait).
         // Only include mode when explicit steer is requested.
         fingerprint: mode === 'steer'
-          ? JSON.stringify({ to, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}), mode })
-          : JSON.stringify({ to, text, ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}) }),
+          ? JSON.stringify({ ...fingerprintBody, mode })
+          : JSON.stringify(fingerprintBody),
         kv: c.get('engine').kv,
         operation: () => dmEngine.sendDm(db, workspace.id, agent!.id, {
           to,
           text,
           attachments: normalizedAttachments,
+          data,
           mode,
         }, { mailbox }),
         afterOperation: async (data) => {

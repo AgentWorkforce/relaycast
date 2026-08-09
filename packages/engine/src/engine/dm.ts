@@ -23,6 +23,7 @@ import {
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
+import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -246,7 +247,12 @@ function buildDmMessageWrites(
   workspaceId: string,
   fromAgentId: string,
   channelId: string,
-  data: { text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  data: {
+    text: string;
+    attachments?: string[];
+    mode?: 'wait' | 'steer';
+    data?: Record<string, unknown> | null;
+  },
   attachments: AttachmentRow[],
   messageId: string,
 ): AtomicWrite[] {
@@ -261,7 +267,12 @@ function buildDmMessageWrites(
         agentId: fromAgentId,
         body: data.text,
         hasAttachments,
-        metadata: { injection_mode: data.mode ?? 'wait' },
+        metadata: {
+          // Keep the server-owned delivery mode after caller metadata so a
+          // federated peer cannot override how the local runtime is injected.
+          ...sanitizeUserMessageMetadata(data.data),
+          injection_mode: data.mode ?? 'wait',
+        },
       })
       .returning(),
   ];
@@ -282,7 +293,13 @@ export async function sendDm(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
-  data: { to: string; text: string; attachments?: string[]; mode?: 'wait' | 'steer' },
+  data: {
+    to: string;
+    text: string;
+    attachments?: string[];
+    mode?: 'wait' | 'steer';
+    data?: Record<string, unknown> | null;
+  },
   options: SendDmOptions = {},
 ) {
   const startedAtMs = Date.now();
@@ -332,11 +349,15 @@ export async function sendDm(
       created_at: new Date().toISOString(),
       thread_id: conv.id,
       attachments,
+      metadata: sanitizeUserMessageMetadata(data.data),
     });
 
     payload.params = {
       ...payload.params,
-      target_agent: toAgent.name,
+      target_agent:
+        typeof a2aTarget.relay_metadata?.a2a_target_agent === 'string'
+          ? a2aTarget.relay_metadata.a2a_target_agent
+          : toAgent.name,
       metadata: {
         target_agent: fromAgent.name,
         relay_conversation_id: conv.id,
@@ -412,6 +433,7 @@ export async function sendDm(
       text: message.body,
       injection_mode: injectionMode,
       attachments,
+      metadata: publicMessageMetadata(message.metadata),
     },
     created_at: message.createdAt.toISOString(),
 
@@ -422,6 +444,7 @@ export async function sendDm(
     text: message.body,
     injection_mode: injectionMode,
     attachments,
+    metadata: publicMessageMetadata(message.metadata),
 
     // Internal: delivery record for the recipient — stripped by route before response
     _delivery: dmDelivery,
@@ -602,6 +625,7 @@ export async function getDmMessages(
     agent_name: r.agentName,
     text: r.body,
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
+    metadata: publicMessageMetadata(r.metadata),
     attachments: attachmentMap.get(r.id) || [],
     created_at: r.createdAt.toISOString(),
   }));

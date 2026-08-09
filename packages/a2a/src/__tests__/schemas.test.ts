@@ -14,6 +14,9 @@ import {
   JsonRpcErrorSchema,
   JsonRpcResponseSchema,
   A2aResponseSchema,
+  MAX_PROOF_BUNDLE_BYTES,
+  RATIFY_A2A_METADATA_KEY,
+  RatifyA2aMetadataSchema,
 } from '../index.js';
 
 // Helper: does any validation issue point at the given (possibly nested) path?
@@ -285,6 +288,69 @@ describe('A2aMessageSchema', () => {
     expect(result.success).toBe(false);
     // The invalid element is the first part, failing on its `kind` discriminator.
     expect(hasIssueAtPath(result, 'parts', 0, 'kind')).toBe(true);
+  });
+});
+
+describe('Ratify A2A metadata', () => {
+  const revocation = {
+    version: 1,
+    kind: 'revocation_list',
+    issuer_id: 'human:northwind:alice',
+    updated_at: 1_786_310_000,
+    revoked_certs: ['cert-1'],
+    issuer_pub_key: { ed25519: 'pub-ed', ml_dsa_65: 'pub-pq' },
+    signature: { ed25519: 'sig-ed', ml_dsa_65: 'sig-pq' },
+  };
+
+  it('accepts the versioned proof and revocation shapes under the exact metadata key', () => {
+    const proofMessage = A2aMessageSchema.safeParse({
+      message_id: 'proof-1',
+      parts: [{ kind: 'text', text: 'proofed task' }],
+      metadata: {
+        [RATIFY_A2A_METADATA_KEY]: {
+          version: 1,
+          kind: 'proof_bundle',
+          correlation_id: 'challenge-1',
+          bundle: '{"agent_id":"northwind"}',
+          operation: { action: 'write' },
+          task: { title: 'Edit', instructions: 'Update docs', path: 'docs/' },
+        },
+      },
+    });
+
+    expect(proofMessage.success).toBe(true);
+    expect(RatifyA2aMetadataSchema.safeParse(revocation).success).toBe(true);
+  });
+
+  it('accepts a proof bundle at the 128 KiB Ratify boundary and rejects one byte more', () => {
+    const atLimit = {
+      version: 1,
+      kind: 'proof_bundle',
+      correlation_id: 'boundary',
+      bundle: 'x'.repeat(MAX_PROOF_BUNDLE_BYTES),
+    };
+
+    expect(RatifyA2aMetadataSchema.safeParse(atLimit).success).toBe(true);
+
+    const overLimit = RatifyA2aMetadataSchema.safeParse({
+      ...atLimit,
+      bundle: `${atLimit.bundle}x`,
+    });
+    expect(overLimit.success).toBe(false);
+    expect(hasIssueAtPath(overLimit, 'bundle')).toBe(true);
+  });
+
+  it('rejects an unknown version and incomplete hybrid signature components', () => {
+    const wrongVersion = RatifyA2aMetadataSchema.safeParse({ ...revocation, version: 2 });
+    expect(wrongVersion.success).toBe(false);
+    expect(hasIssueAtPath(wrongVersion, 'version')).toBe(true);
+
+    const incompleteSignature = RatifyA2aMetadataSchema.safeParse({
+      ...revocation,
+      signature: { ed25519: 'sig-ed' },
+    });
+    expect(incompleteSignature.success).toBe(false);
+    expect(hasIssueAtPath(incompleteSignature, 'signature', 'ml_dsa_65')).toBe(true);
   });
 });
 

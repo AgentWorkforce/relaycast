@@ -1,5 +1,62 @@
 import { z } from 'zod';
 
+/** Cross-deployment A2A message metadata key for Ratify Protocol payloads. */
+export const RATIFY_A2A_METADATA_KEY = 'com.agentrelay.ratify';
+export const RATIFY_A2A_WIRE_VERSION = 1;
+export const MAX_PROOF_BUNDLE_BYTES = 128 * 1024;
+
+const RatifyHybridComponentSchema = z.object({
+  ed25519: z.string().min(1),
+  ml_dsa_65: z.string().min(1),
+}).strict();
+
+const RatifyProofBundleWireSchema = z.string().min(1).superRefine((bundle, ctx) => {
+  const byteLength = new TextEncoder().encode(bundle).byteLength;
+  if (byteLength > MAX_PROOF_BUNDLE_BYTES) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `proof bundle exceeds ${MAX_PROOF_BUNDLE_BYTES} bytes`,
+    });
+  }
+});
+
+export const RatifyProofBundleMetadataSchema = z.object({
+  version: z.literal(RATIFY_A2A_WIRE_VERSION),
+  kind: z.literal('proof_bundle'),
+  correlation_id: z.string().min(1),
+  /** Canonical Ratify ProofBundle wire JSON. */
+  bundle: RatifyProofBundleWireSchema,
+  /** Canonical Ratify DelegationCert wire JSON for a delegated task handoff. */
+  grant: z.string().min(1).optional(),
+  operation: z.record(z.string(), z.unknown()).optional(),
+  task: z.object({
+    title: z.string(),
+    instructions: z.string(),
+    path: z.string(),
+  }).strict().optional(),
+}).strict();
+
+export const RatifyRevocationListMetadataSchema = z.object({
+  version: z.literal(RATIFY_A2A_WIRE_VERSION),
+  kind: z.literal('revocation_list'),
+  issuer_id: z.string().min(1),
+  updated_at: z.number().int().nonnegative(),
+  revoked_certs: z.array(z.string().min(1)),
+  /** Base64-encoded hybrid public key; receivers must bind it to issuer_id. */
+  issuer_pub_key: RatifyHybridComponentSchema,
+  /** Base64-encoded issuer signature over the Ratify RevocationList fields. */
+  signature: RatifyHybridComponentSchema,
+}).strict();
+
+export const RatifyA2aMetadataSchema = z.discriminatedUnion('kind', [
+  RatifyProofBundleMetadataSchema,
+  RatifyRevocationListMetadataSchema,
+]);
+
+export type RatifyProofBundleMetadata = z.infer<typeof RatifyProofBundleMetadataSchema>;
+export type RatifyRevocationListMetadata = z.infer<typeof RatifyRevocationListMetadataSchema>;
+export type RatifyA2aMetadata = z.infer<typeof RatifyA2aMetadataSchema>;
+
 export const A2aSkillSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -51,6 +108,21 @@ export const A2aMessageSchema = z.object({
   role: z.enum(['user', 'agent', 'system']).default('user'),
   context_id: z.string().optional(),
   parts: z.array(A2aPartSchema).min(1),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).superRefine((message, ctx) => {
+  const ratify = message.metadata?.[RATIFY_A2A_METADATA_KEY];
+  if (ratify === undefined) return;
+
+  const parsed = RatifyA2aMetadataSchema.safeParse(ratify);
+  if (parsed.success) return;
+
+  for (const issue of parsed.error.issues) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['metadata', RATIFY_A2A_METADATA_KEY, ...issue.path],
+      message: issue.message,
+    });
+  }
 });
 
 export const A2aArtifactSchema = z.object({

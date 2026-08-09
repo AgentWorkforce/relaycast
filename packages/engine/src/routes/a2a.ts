@@ -9,6 +9,10 @@ import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.j
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
+import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
+import { publishWorkspaceEvent } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import {
   jsonCreated,
   jsonError,
@@ -24,10 +28,20 @@ const registerA2aSchema = z.object({
   agent_card: a2aEngine.A2aAgentCardSchema.optional(),
   auth_scheme: z.enum(['bearer', 'api_key', 'none']).optional(),
   auth_credential: z.string().optional(),
+  target_agent: z.string().min(1).optional(),
 }).refine((value) => value.agent_card_url || value.agent_card, {
   message: 'agent_card_url or agent_card is required',
   path: ['agent_card_url'],
 });
+
+const updateA2aConnectionSchema = z.object({
+  auth_scheme: z.enum(['bearer', 'api_key', 'none']).optional(),
+  auth_credential: z.string().min(1).nullable().optional(),
+  target_agent: z.string().min(1).nullable().optional(),
+}).refine(
+  (value) => Object.values(value).some((field) => field !== undefined),
+  { message: 'At least one connection field is required' },
+);
 
 const rpcRequestSchema = a2aEngine.JsonRpcRequestSchema;
 const rpcWebhookSchema = z.union([a2aEngine.JsonRpcRequestSchema, a2aEngine.JsonRpcResponseSchema]);
@@ -153,6 +167,7 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       agentCard: parsed.data.agent_card,
       authScheme: parsed.data.auth_scheme,
       authCredential: parsed.data.auth_credential,
+      targetAgent: parsed.data.target_agent,
     });
 
     return jsonCreated(c, {
@@ -160,6 +175,39 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       relay_token: result.relayToken,
       webhook_url: buildAbsoluteUrl(c, result.webhookUrl),
       certification: result.certification,
+    });
+  } catch (err: unknown) {
+    return codedJsonError(c, err);
+  }
+});
+
+// PATCH /v1/a2a/agents/:name
+a2aRoutes.patch('/v1/a2a/agents/:name', requireAuth, rateLimit, async (c) => {
+  try {
+    const parsed = await parseJsonBody(c, updateA2aConnectionSchema, 'At least one connection field is required');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+
+    const updated = await a2aEngine.updateA2aAgentConnection(
+      c.get('db'),
+      c.get('workspace').id,
+      c.req.param('name'),
+      {
+        authScheme: parsed.data.auth_scheme,
+        authCredential: parsed.data.auth_credential,
+        targetAgent: parsed.data.target_agent,
+      },
+    );
+    if (!updated) {
+      return a2aAgentNotFound(c);
+    }
+
+    return jsonOk(c, {
+      relay_name: updated.relay_name,
+      auth_scheme: updated.auth_scheme,
+      target_agent: updated.relay_metadata?.a2a_target_agent ?? null,
+      updated: true,
     });
   } catch (err: unknown) {
     return codedJsonError(c, err);
@@ -304,6 +352,95 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
     }
 
     const target = await a2aEngine.getA2aAgentByRelayName(db, workspace.id, targetAgentName);
+
+    // A bearer token issued by A2A registration identifies the remote
+    // deployment's local proxy. Requests from that proxy land on a real local
+    // agent; they must never be used as an authenticated open relay to another
+    // external A2A target.
+    const authenticatedAgent = c.get('agent');
+    const [registeredCaller] = authenticatedAgent
+      ? await db
+        .select({ id: a2aAgents.id })
+        .from(a2aAgents)
+        .where(and(
+          eq(a2aAgents.workspaceId, workspace.id),
+          eq(a2aAgents.relayAgentId, authenticatedAgent.id),
+        ))
+      : [];
+
+    if (registeredCaller) {
+      if (request.method !== 'message/send' && request.method !== 'message/stream') {
+        const response = a2aEngine.jsonRpcError(request.id, -32601, `Unsupported inbound method "${request.method}"`);
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+      if (!request.params?.message) {
+        const response = a2aEngine.jsonRpcError(request.id, -32602, 'message is required');
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+      if (target) {
+        const response = a2aEngine.jsonRpcError(request.id, -32003, 'A registered A2A caller cannot relay to another external agent');
+        return jsonResponse(c, response, 403);
+      }
+
+      const [localTarget] = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, targetAgentName)));
+      if (!localTarget) {
+        const response = a2aEngine.jsonRpcError(request.id, -32004, `Unknown local agent "${targetAgentName}"`);
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+
+      const relayMessage = a2aEngine.translateA2aToRelay(request);
+      const sent = await dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
+        to: targetAgentName,
+        text: relayMessage.text,
+        mode: 'wait',
+        data: relayMessage.metadata,
+      }, {
+        skipA2aIntercept: true,
+      });
+      await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
+
+      const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
+      await sendWebhookEvent(c, {
+        type: 'dm.received',
+        workspaceId: workspace.id,
+        data: eventData,
+      });
+      await publishWorkspaceEvent(c, 'dm.received', eventData);
+      if (sent._delivery) {
+        await routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData);
+      }
+      if (sent._delivery_rejections.length > 0) {
+        await notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections);
+      }
+
+      const response = a2aEngine.jsonRpcSuccess(request.id, {
+        task: {
+          id: sent.message.id,
+          context_id: relayMessage.thread_id ?? sent.conversation_id,
+          status: {
+            state: a2aEngine.mapRelayTaskState('queued'),
+            message: 'Message accepted by Relaycast',
+          },
+          history: [{
+            message_id: sent.message.id,
+            role: 'agent',
+            context_id: relayMessage.thread_id ?? sent.conversation_id,
+            parts: [{ kind: 'text', text: sent.message.text }],
+            metadata: relayMessage.metadata,
+          }],
+          metadata: {
+            conversation_id: sent.conversation_id,
+            relay_agent: authenticatedAgent!.name,
+            target_agent: targetAgentName,
+          },
+        },
+      });
+      return jsonResponse(c, response);
+    }
+
     if (!target) {
       const response = a2aEngine.jsonRpcError(request.id, -32004, `Unknown A2A agent "${targetAgentName}"`);
       return jsonResponse(c, response, jsonRpcHttpStatus(response));
@@ -397,6 +534,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       to: targetAgentName,
       text: relayMessage.text,
       mode: 'wait',
+      data: relayMessage.metadata,
     }, {
       skipA2aIntercept: true,
     });

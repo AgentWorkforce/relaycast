@@ -8,6 +8,10 @@ import {
   A2aTaskStateSchema,
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
+  MAX_PROOF_BUNDLE_BYTES,
+  RATIFY_A2A_METADATA_KEY,
+  RATIFY_A2A_WIRE_VERSION,
+  RatifyA2aMetadataSchema,
   type A2aAgentCard,
   type A2aJsonRpcRequest,
   type A2aJsonRpcResponse,
@@ -48,6 +52,7 @@ const RelayDMSchema = z.object({
   created_at: z.string().optional(),
   thread_id: z.string().nullable().optional(),
   attachments: z.array(RelayFileAttachmentSchema).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export {
@@ -59,6 +64,10 @@ export {
   A2aTaskStateSchema,
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
+  RatifyA2aMetadataSchema,
+  MAX_PROOF_BUNDLE_BYTES,
+  RATIFY_A2A_METADATA_KEY,
+  RATIFY_A2A_WIRE_VERSION,
 };
 
 export type {
@@ -79,6 +88,8 @@ export interface RegisterA2aAgentInput {
   agentCard?: A2aAgentCard;
   authScheme?: 'bearer' | 'api_key' | 'none';
   authCredential?: string;
+  /** Remote skill/agent that DMs to this proxy should address. */
+  targetAgent?: string;
 }
 
 export interface RegisterA2aAgentResult {
@@ -86,6 +97,13 @@ export interface RegisterA2aAgentResult {
   relayToken: string;
   webhookUrl: string;
   certification: 'level_0' | 'level_1';
+}
+
+export interface UpdateA2aAgentConnectionInput {
+  authScheme?: 'bearer' | 'api_key' | 'none';
+  authCredential?: string | null;
+  /** Remote skill/agent that DMs to this proxy should address. */
+  targetAgent?: string | null;
 }
 
 export interface A2aAgentRecord {
@@ -272,6 +290,16 @@ export async function registerA2aAgent(
   const agentCard = A2aAgentCardSchema.parse(resolvedCard);
   const externalUrl = normalizeBaseUrl(agentCard.url);
   const relayName = await deriveRelayName(agentCard);
+  const remoteSkillNames = new Set(agentCard.skills.flatMap((skill) => [skill.id, skill.name].filter(Boolean) as string[]));
+  if (input.targetAgent && !remoteSkillNames.has(input.targetAgent)) {
+    throw codedError(
+      `A2A target agent "${input.targetAgent}" is not advertised by the agent card`,
+      'a2a_target_agent_not_advertised',
+      400,
+    );
+  }
+  const targetAgent = input.targetAgent
+    ?? (agentCard.skills.length === 1 ? (agentCard.skills[0]!.id ?? agentCard.skills[0]!.name) : undefined);
 
   const [existing] = await db
     .select({ id: a2aAgents.id })
@@ -288,6 +316,7 @@ export async function registerA2aAgent(
     a2a_external_url: externalUrl,
     a2a_skills: agentCard.skills,
     a2a_active: true,
+    ...(targetAgent ? { a2a_target_agent: targetAgent } : {}),
   };
 
   // A prior removeA2aAgent soft-removes the A2A agent: it deletes the a2a_agents
@@ -422,6 +451,58 @@ export async function getA2aAgentByRelayName(
   return row ? formatA2aRecord(row) : null;
 }
 
+/**
+ * Complete or rotate the outbound half of an A2A registration.
+ *
+ * Reciprocal registration necessarily yields the second deployment's bearer
+ * token after the first registration row already exists. Updating that row is
+ * what lets both deployments authenticate sends without deleting proxies and
+ * invalidating the token the other side just stored.
+ */
+export async function updateA2aAgentConnection(
+  db: Db,
+  workspaceId: string,
+  relayName: string,
+  input: UpdateA2aAgentConnectionInput,
+): Promise<A2aAgentRecord | null> {
+  const agentRecord = await getA2aAgentByRelayName(db, workspaceId, relayName);
+  if (!agentRecord) return null;
+
+  if (input.targetAgent !== undefined && input.targetAgent !== null) {
+    const advertisedNames = new Set(
+      agentRecord.agent_card.skills.flatMap((skill) => [skill.id, skill.name].filter(Boolean) as string[]),
+    );
+    if (!advertisedNames.has(input.targetAgent)) {
+      throw codedError(
+        `A2A target agent "${input.targetAgent}" is not advertised by the agent card`,
+        'a2a_target_agent_not_advertised',
+        400,
+      );
+    }
+  }
+
+  await db
+    .update(a2aAgents)
+    .set({
+      ...(input.authScheme !== undefined ? { authScheme: input.authScheme } : {}),
+      ...(input.authCredential !== undefined ? { authCredential: input.authCredential } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(a2aAgents.id, agentRecord.id));
+
+  if (input.targetAgent !== undefined) {
+    const metadata = { ...(agentRecord.relay_metadata ?? {}) };
+    if (input.targetAgent === null) {
+      delete metadata.a2a_target_agent;
+    } else {
+      metadata.a2a_target_agent = input.targetAgent;
+    }
+    await updateAgent(db, workspaceId, relayName, { metadata });
+  }
+
+  return getA2aAgentByRelayName(db, workspaceId, relayName);
+}
+
 export async function removeA2aAgent(db: Db, workspaceId: string, relayName: string): Promise<boolean> {
   const agentRecord = await getA2aAgentByRelayName(db, workspaceId, relayName);
   if (!agentRecord) return false;
@@ -468,6 +549,7 @@ export function translateRelayToA2a(message: RelayDM): A2aJsonRpcRequest {
         role: 'user',
         context_id: relay.thread_id ?? undefined,
         parts,
+        metadata: relay.metadata,
       },
     },
   };
@@ -485,6 +567,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
       text: extractTextFromParts(message.parts),
       thread_id: message.context_id ?? null,
       attachments: extractAttachmentsFromParts(message.parts),
+      metadata: message.metadata,
     };
   }
 
@@ -500,6 +583,7 @@ export function translateA2aToRelay(jsonRpc: A2aJsonRpcRequest | A2aJsonRpcRespo
     text: parts.length > 0 ? extractTextFromParts(parts) : task?.status.message ?? '',
     thread_id: responseMessage?.context_id ?? task?.context_id ?? null,
     attachments: extractAttachmentsFromParts(parts),
+    metadata: responseMessage?.metadata,
   };
 }
 
@@ -508,7 +592,11 @@ export async function sendToExternalAgent(
   jsonRpcPayload: A2aJsonRpcRequest,
   auth?: { scheme?: 'bearer' | 'api_key' | 'none' | string | null; credential?: string | null },
 ): Promise<A2aResponse> {
-  const request = JsonRpcRequestSchema.parse(jsonRpcPayload);
+  const parsedRequest = JsonRpcRequestSchema.safeParse(jsonRpcPayload);
+  if (!parsedRequest.success) {
+    throw codedError('Invalid A2A JSON-RPC request or metadata', 'invalid_a2a_request', 400);
+  }
+  const request = parsedRequest.data;
   const targetUrl = normalizeBaseUrl(agentUrl);
 
   if (!isSafeExternalUrl(targetUrl)) {
@@ -684,6 +772,13 @@ export async function getWorkspaceAgentCard(
     },
     capabilities: {
       methods: ['message/send', 'message/stream', 'task/get', 'task/cancel'],
+      extensions: {
+        [RATIFY_A2A_METADATA_KEY]: {
+          versions: [RATIFY_A2A_WIRE_VERSION],
+          kinds: ['proof_bundle', 'revocation_list'],
+          max_proof_bundle_bytes: MAX_PROOF_BUNDLE_BYTES,
+        },
+      },
     },
     default_input_modes: ['text/plain', 'application/json'],
     default_output_modes: ['text/plain', 'application/json'],

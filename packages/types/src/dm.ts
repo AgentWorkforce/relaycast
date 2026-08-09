@@ -29,6 +29,7 @@ export const SendDmRequestSchema = z.object({
   to: z.string(),
   text: z.string(),
   attachments: z.array(z.string()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: DmInjectionModeSchema.default('wait'),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
