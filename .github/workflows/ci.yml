@@ -85,7 +85,11 @@ jobs:
           assert_refused
           assert_refused --base-url http://relay.ratifyprotocol.com
           assert_refused --base-url https://relay
+          assert_refused --base-url https://relay.local
+          assert_refused --base-url https://relay.localhost
           assert_refused --base-url https://127.0.0.1
+          assert_refused --base-url https://203.0.113.5
+          assert_refused --base-url 'https://[2001:db8::1]'
           assert_refused --db --base-url https://relay.ratifyprotocol.com
 
           label_version="$(docker inspect --format '{{ index .Config.Labels "io.relaycast.engine.version" }}' "$IMAGE")"

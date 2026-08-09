@@ -40,7 +40,7 @@ ENV NODE_ENV=production \
     PATH=/opt/relaycast/node_modules/.bin:$PATH
 
 COPY --from=engine-install /opt/relaycast /opt/relaycast
-COPY --chmod=0555 docker/entrypoint.mjs /opt/relaycast/entrypoint.mjs
+COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs /opt/relaycast/
 
 RUN install -d -o node -g node /data /data/relaycast-files
 

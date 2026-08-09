@@ -207,7 +207,8 @@ docker compose up -d
 
 The image pins Node and `@relaycast/engine`, persists the database and uploaded
 files in the `relaycast-data` named volume, and refuses to start unless the
-explicit `--base-url` is an HTTPS, multi-label, non-loopback origin. See
+explicit `--base-url` is an HTTPS, multi-label, public DNS origin. IP literals,
+loopback names, and the special-use `.local` namespace are rejected. See
 [`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
 the required public workspace-creation block, backups, and teardown.
 

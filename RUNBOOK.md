@@ -9,7 +9,8 @@ access and does not operate this deployment.
 The image contains `@relaycast/engine` **7.0.0** on Node 22.23.2 and stores all
 state locally in SQLite plus a files directory. It requires an explicit HTTPS
 public origin and exits before starting the engine if `--base-url` is missing,
-plaintext, single-label, or loopback.
+plaintext, single-label, an IP literal, loopback, or in the special-use `.local`
+namespace. Deployment authorities must be public DNS names.
 
 Self-hosted Relaycast is **single-tenant and single-process**. It is **not
 horizontally scalable as shipped**. Do not run multiple engine replicas against
