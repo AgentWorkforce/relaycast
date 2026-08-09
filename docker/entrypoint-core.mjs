@@ -36,6 +36,13 @@ function unbracket(hostname) {
     : hostname;
 }
 
+function isValidDnsHostname(hostname) {
+  if (hostname.length > 253) return false;
+  return hostname
+    .split('.')
+    .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+}
+
 function expandedIpv6(hostname) {
   const halves = hostname.split('::');
   if (halves.length > 2) return null;
@@ -118,6 +125,13 @@ export function validateBaseUrl(value) {
     refusal(
       'single_label_base_url',
       '--base-url hostname must contain at least two DNS labels (for example, relay.example.com).',
+    );
+  }
+
+  if (!isValidDnsHostname(hostname)) {
+    refusal(
+      'invalid_dns_base_url',
+      '--base-url hostname must contain valid DNS labels (letters, digits, and non-edge hyphens; 63 characters maximum per label).',
     );
   }
 

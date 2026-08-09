@@ -91,6 +91,18 @@ test('refuses IPv4 and IPv6 literal authorities', () => {
   assertAccepted(); // Control: a DNS authority succeeds.
 });
 
+test('refuses malformed DNS labels', () => {
+  for (const baseUrl of [
+    'https://a..example',
+    'https://-relay.example',
+    'https://relay-.example',
+    `https://${'a'.repeat(64)}.example`,
+  ]) {
+    assertRefused(['--base-url', baseUrl], /must contain valid DNS labels/);
+  }
+  assertAccepted(); // Control: valid, bounded DNS labels succeed.
+});
+
 test('refuses an invalid authority when invoked through a symlink', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'relaycast-entrypoint-'));
   const symlink = join(directory, 'entrypoint.mjs');
