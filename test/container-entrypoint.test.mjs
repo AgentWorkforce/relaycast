@@ -4,7 +4,10 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { installPublicAuthorityMarker } from '../docker/entrypoint.mjs';
+import {
+  installPublicAuthorityMarker,
+  validatedEngineArgs,
+} from '../docker/entrypoint.mjs';
 
 const entrypoint = fileURLToPath(
   new URL('../docker/entrypoint.mjs', import.meta.url),
@@ -18,11 +21,8 @@ function run(args) {
 }
 
 function assertAccepted(args = acceptedArgs) {
-  // --help exercises the complete validation/argument boundary and exits
-  // before opening a listening socket.
-  const result = run([...args, '--help']);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Required public HTTPS origin/);
+  const normalized = validatedEngineArgs(args);
+  assert.deepEqual(normalized, acceptedArgs);
 }
 
 function assertRefused(args, message) {
@@ -78,6 +78,23 @@ test('refuses duplicate --base-url options', () => {
     /provided exactly once/,
   );
   assertAccepted(); // Control: the same production origin supplied once succeeds.
+});
+
+test('refuses an authority token consumed by another option', () => {
+  for (const option of ['--db', '--port', '--env']) {
+    assertRefused(
+      [option, '--base-url', 'https://relay.ratifyprotocol.com'],
+      new RegExp(`${option} requires a value`),
+    );
+  }
+  assertAccepted(); // Control: the authority remains valid when it is not consumed.
+});
+
+test('shows help without requiring a deployment authority', () => {
+  const result = run(['--help']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Required public HTTPS origin/);
+  assertRefused([], /--base-url is required/); // Control: an actual start still refuses it.
 });
 
 test('normalizes tunnel requests to the validated public HTTPS authority', () => {

@@ -184,20 +184,40 @@ function parseEngineOptions(argv, env) {
     port: env.PORT ? Number(env.PORT) : 8787,
     baseUrl: undefined,
     environment: env.RELAYCAST_ENV ?? 'production',
-    help: false,
+  };
+
+  const valueAfter = (index, option) => {
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) {
+      refusal('missing_option_value', `${option} requires a value.`);
+    }
+    return value;
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--help' || arg === '-h') options.help = true;
-    else if (arg === '--db') options.db = argv[++index] ?? options.db;
-    else if (arg === '--port')
-      options.port = Number(argv[++index] ?? options.port);
-    else if (arg === '--base-url') options.baseUrl = argv[++index];
-    else if (arg === '--env')
-      options.environment = argv[++index] ?? options.environment;
+    if (arg === '--db') {
+      options.db = valueAfter(index, '--db');
+      index += 1;
+    } else if (arg === '--port') {
+      options.port = Number(valueAfter(index, '--port'));
+      index += 1;
+    } else if (arg === '--base-url') {
+      options.baseUrl = valueAfter(index, '--base-url');
+      index += 1;
+    } else if (arg === '--env') {
+      options.environment = valueAfter(index, '--env');
+      index += 1;
+    }
   }
 
+  if (!options.baseUrl) {
+    refusal(
+      'missing_base_url',
+      '--base-url is required and must not be consumed as another option value.',
+    );
+  }
+  options.baseUrl = validateBaseUrl(options.baseUrl);
   return options;
 }
 
@@ -232,11 +252,6 @@ export function installPublicAuthorityMarker(server, baseUrl) {
 
 async function launchPinnedEngine(args) {
   const options = parseEngineOptions(args, process.env);
-  if (options.help) {
-    process.stdout.write(HELP);
-    return;
-  }
-
   if (
     !Number.isInteger(options.port) ||
     options.port <= 0 ||
@@ -298,6 +313,11 @@ async function launchPinnedEngine(args) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(HELP);
+    return;
+  }
+
   let args;
   try {
     args = validatedEngineArgs(argv);
@@ -312,8 +332,13 @@ export async function main(argv = process.argv.slice(2)) {
     await launchPinnedEngine(args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`relaycast container failed to start: ${message}\n`);
-    process.exitCode = 1;
+    if (error instanceof BaseUrlError) {
+      process.stderr.write(`${message}\n`);
+      process.exitCode = CONFIG_EXIT_CODE;
+    } else {
+      process.stderr.write(`relaycast container failed to start: ${message}\n`);
+      process.exitCode = 1;
+    }
   }
 }
 
