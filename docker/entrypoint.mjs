@@ -178,6 +178,19 @@ export function validatedEngineArgs(argv) {
   return args;
 }
 
+export function isHelpRequest(argv) {
+  const optionsWithValues = new Set(['--db', '--port', '--base-url', '--env']);
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (optionsWithValues.has(arg)) {
+      index += 1;
+    } else if (arg === '--help' || arg === '-h') {
+      return true;
+    }
+  }
+  return false;
+}
+
 function parseEngineOptions(argv, env) {
   const options = {
     db: env.RELAYCAST_DB_PATH ?? './relaycast.db',
@@ -313,7 +326,7 @@ async function launchPinnedEngine(args) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  if (argv.includes('--help') || argv.includes('-h')) {
+  if (isHelpRequest(argv)) {
     process.stdout.write(HELP);
     return;
   }

@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   installPublicAuthorityMarker,
+  isHelpRequest,
   validatedEngineArgs,
 } from '../docker/entrypoint.mjs';
 
@@ -95,6 +96,13 @@ test('shows help without requiring a deployment authority', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Required public HTTPS origin/);
   assertRefused([], /--base-url is required/); // Control: an actual start still refuses it.
+});
+
+test('recognizes help only when it is an option', () => {
+  assert.equal(isHelpRequest(['--help']), true);
+  // Negative control: -h is a legitimate value position, not a help option.
+  assert.equal(isHelpRequest(['--db', '-h']), false);
+  assert.equal(isHelpRequest(['--env', '-h', '--help']), true);
 });
 
 test('normalizes tunnel requests to the validated public HTTPS authority', () => {
