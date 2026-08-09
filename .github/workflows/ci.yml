@@ -22,6 +22,27 @@ jobs:
       - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
+      - run: npm run test:container
+
+  container:
+    name: Container (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
 
   rust-sdk:
     name: Rust SDK

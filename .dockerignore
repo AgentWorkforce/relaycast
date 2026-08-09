@@ -1,0 +1,5 @@
+*
+!docker/
+!docker/entrypoint.mjs
+!docker/package.json
+!docker/package-lock.json

@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Patch]
 
+### Added
+
+- Added a pinned, multi-architecture self-host container and Compose runbook with persistent SQLite/files state, health checks, and mandatory HTTPS deployment-authority validation.
+
 ### Fixed
 
 - A2A counterparties can discover a self-hosted deployment at the standard `GET /.well-known/agent-card.json`, and `/:workspace/.well-known/agent-card.json` now resolves. Deployments holding more than one workspace still require a selector.
