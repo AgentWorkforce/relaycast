@@ -16,11 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
 - Added a pinned, multi-architecture self-host container and Compose runbook with persistent SQLite/files state, health checks, and mandatory HTTPS deployment-authority validation.
+- A2A federation now preserves structured DM metadata end to end, defines a versioned `com.agentrelay.ratify` carrier for proof bundles and signed revocation lists, and supports reciprocal authenticated delivery between registered peers.
 
 ### Fixed
 

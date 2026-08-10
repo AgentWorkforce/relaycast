@@ -604,6 +604,14 @@ public struct CoreMessagePayload: Codable, Equatable, Sendable {
     public let text: String
     public let injectionMode: MessageInjectionMode?
     public let attachments: [FileAttachment]?
+    /// Caller-authored message metadata, passed through verbatim.
+    ///
+    /// Mirrors `metadata` on `CoreMessagePayloadSchema`. Without it a Swift
+    /// consumer decodes the payload successfully and silently loses the field,
+    /// which now carries delegated-authority proofs and signed revocation
+    /// lists on federated deliveries — data that cannot be reconstructed once
+    /// dropped.
+    public let metadata: [String: JSONValue]?
 }
 
 public struct MessageWithMeta: Codable, Equatable, Sendable {

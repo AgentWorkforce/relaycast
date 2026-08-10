@@ -325,6 +325,14 @@ describe('translateRelayToA2a <-> translateA2aToRelay round-trip', () => {
       text: 'round trip',
       thread_id: 'rt-thread',
       attachments: [{ file_id: 'f-1', filename: 'note.md', content_type: 'text/markdown', size_bytes: 11 }],
+      metadata: {
+        'com.agentrelay.ratify': {
+          version: 1,
+          kind: 'proof_bundle',
+          correlation_id: 'rt-1',
+          bundle: '{"agent_id":"alice"}',
+        },
+      },
     };
 
     const back = translateA2aToRelay(translateRelayToA2a(dm));
@@ -334,6 +342,7 @@ describe('translateRelayToA2a <-> translateA2aToRelay round-trip', () => {
     expect(back.attachments).toEqual([
       { file_id: 'f-1', filename: 'note.md', content_type: 'text/markdown', size_bytes: 11 },
     ]);
+    expect(back.metadata).toEqual(dm.metadata);
     // The text gains a [file] marker line for the recovered file part.
     expect(back.text).toBe('round trip\n[file] note.md');
   });
@@ -437,6 +446,13 @@ describe('getWorkspaceAgentCard', () => {
     expect(card.documentation_url).toBe('https://github.com/AgentWorkforce/relaycast');
     expect(card.capabilities).toEqual({
       methods: ['message/send', 'message/stream', 'task/get', 'task/cancel'],
+      extensions: {
+        'com.agentrelay.ratify': {
+          versions: [1],
+          kinds: ['proof_bundle', 'revocation_list'],
+          max_proof_bundle_bytes: 131072,
+        },
+      },
     });
     expect(card.provider).toEqual({
       organization: 'Relaycast',

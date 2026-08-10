@@ -13,7 +13,44 @@ const schema = {
   additionalProperties: false,
 };
 
+// A signed document is the strictest case: it must survive a round trip
+// byte-for-byte or its signature stops verifying. Wire field names here are
+// snake_case by protocol, not by convention, and camelizing them destroys the
+// signable bytes.
+const signedRevocationList = {
+  revoked_certs: ['cert-a', 'cert-b'],
+  issued_at: 1754870400,
+  issuer_pub_key: { ed25519: 'AAA', ml_dsa_65: 'BBB' },
+  signature: { ed25519: 'CCC', ml_dsa_65: 'DDD' },
+};
+
 describe('casing transforms', () => {
+  it('passes message data and metadata through verbatim in both directions', () => {
+    const wire = decamelizeKeys({
+      to: 'agent-b',
+      text: 'work',
+      data: signedRevocationList,
+    }) as Record<string, unknown>;
+    expect(wire.data).toEqual(signedRevocationList);
+
+    const read = camelizeKeys({
+      thread_id: 't1',
+      metadata: signedRevocationList,
+    }) as { threadId: string; metadata: unknown };
+    expect(read.threadId).toBe('t1');
+    expect(read.metadata).toEqual(signedRevocationList);
+  });
+
+  it('a signed payload round-trips byte-identical through both transforms', () => {
+    // The regression this guards: revoked_certs arriving as revokedCerts means
+    // the list cannot be reconstructed, its signature fails, and a
+    // cross-deployment revocation is rejected for the wrong reason.
+    const sent = { data: signedRevocationList };
+    const read = camelizeKeys(decamelizeKeys(sent)) as { data: unknown };
+    expect(JSON.stringify(read.data)).toBe(JSON.stringify(signedRevocationList));
+  });
+
+
   it('decamelizeKeys renames wire fields but passes schema subtrees verbatim', () => {
     const wire = decamelizeKeys({
       name: 'crm.get_person_batch',

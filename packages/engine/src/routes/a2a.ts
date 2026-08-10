@@ -7,8 +7,15 @@ import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
 import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { runIdempotent } from '../middleware/idempotency.js';
+import { runInBackground } from './background.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
+import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
+import { publishWorkspaceEvent } from './fanout.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { sendWebhookEvent } from './webhookOutbox.js';
 import {
   jsonCreated,
   jsonError,
@@ -24,10 +31,20 @@ const registerA2aSchema = z.object({
   agent_card: a2aEngine.A2aAgentCardSchema.optional(),
   auth_scheme: z.enum(['bearer', 'api_key', 'none']).optional(),
   auth_credential: z.string().optional(),
+  target_agent: z.string().min(1).optional(),
 }).refine((value) => value.agent_card_url || value.agent_card, {
   message: 'agent_card_url or agent_card is required',
   path: ['agent_card_url'],
 });
+
+const updateA2aConnectionSchema = z.object({
+  auth_scheme: z.enum(['bearer', 'api_key', 'none']).optional(),
+  auth_credential: z.string().min(1).nullable().optional(),
+  target_agent: z.string().min(1).nullable().optional(),
+}).refine(
+  (value) => Object.values(value).some((field) => field !== undefined),
+  { message: 'At least one connection field is required' },
+);
 
 const rpcRequestSchema = a2aEngine.JsonRpcRequestSchema;
 const rpcWebhookSchema = z.union([a2aEngine.JsonRpcRequestSchema, a2aEngine.JsonRpcResponseSchema]);
@@ -77,7 +94,7 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
     return hostSegments[0]!;
   }
 
-  return null;
+  return c.req.param('workspace') || null;
 }
 
 function extractTargetAgentName(params: Record<string, unknown> | undefined, fallbackContextId?: string): string | null {
@@ -153,6 +170,7 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       agentCard: parsed.data.agent_card,
       authScheme: parsed.data.auth_scheme,
       authCredential: parsed.data.auth_credential,
+      targetAgent: parsed.data.target_agent,
     });
 
     return jsonCreated(c, {
@@ -160,6 +178,39 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       relay_token: result.relayToken,
       webhook_url: buildAbsoluteUrl(c, result.webhookUrl),
       certification: result.certification,
+    });
+  } catch (err: unknown) {
+    return codedJsonError(c, err);
+  }
+});
+
+// PATCH /v1/a2a/agents/:name
+a2aRoutes.patch('/v1/a2a/agents/:name', requireAuth, rateLimit, async (c) => {
+  try {
+    const parsed = await parseJsonBody(c, updateA2aConnectionSchema, 'At least one connection field is required');
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+
+    const updated = await a2aEngine.updateA2aAgentConnection(
+      c.get('db'),
+      c.get('workspace').id,
+      c.req.param('name'),
+      {
+        authScheme: parsed.data.auth_scheme,
+        authCredential: parsed.data.auth_credential,
+        targetAgent: parsed.data.target_agent,
+      },
+    );
+    if (!updated) {
+      return a2aAgentNotFound(c);
+    }
+
+    return jsonOk(c, {
+      relay_name: updated.relay_name,
+      auth_scheme: updated.auth_scheme,
+      target_agent: updated.relay_metadata?.a2a_target_agent ?? null,
+      updated: true,
     });
   } catch (err: unknown) {
     return codedJsonError(c, err);
@@ -304,6 +355,172 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
     }
 
     const target = await a2aEngine.getA2aAgentByRelayName(db, workspace.id, targetAgentName);
+
+    // A bearer token issued by A2A registration identifies the remote
+    // deployment's local proxy. Requests from that proxy land on a real local
+    // agent; they must never be used as an authenticated open relay to another
+    // external A2A target.
+    const authenticatedAgent = c.get('agent');
+    const [registeredCaller] = authenticatedAgent
+      ? await db
+        .select({ id: a2aAgents.id })
+        .from(a2aAgents)
+        .where(and(
+          eq(a2aAgents.workspaceId, workspace.id),
+          eq(a2aAgents.relayAgentId, authenticatedAgent.id),
+        ))
+      : [];
+
+    if (registeredCaller) {
+      if (request.method !== 'message/send') {
+        // `message/stream` is deliberately refused here rather than served.
+        //
+        // This branch performs a single sendDm and returns a task already in a
+        // terminal `queued` state with no stream channel. A client that calls
+        // message/stream expects a `working` task plus somewhere to subscribe
+        // for incremental updates; handing it a completed one-shot is a wrong
+        // answer dressed as a right one, and it would silently truncate a
+        // conversation the caller believes is still open. Refusing lets the
+        // caller fall back to message/send immediately and correctly.
+        const detail = request.method === 'message/stream'
+          ? 'message/stream is not supported on inbound federated delivery; use message/send'
+          : `Unsupported inbound method "${request.method}"`;
+        const response = a2aEngine.jsonRpcError(request.id, -32601, detail);
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+      if (!request.params?.message) {
+        const response = a2aEngine.jsonRpcError(request.id, -32602, 'message is required');
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+      if (target) {
+        const response = a2aEngine.jsonRpcError(request.id, -32003, 'A registered A2A caller cannot relay to another external agent');
+        return jsonResponse(c, response, 403);
+      }
+
+      const [localTarget] = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, targetAgentName)));
+      if (!localTarget) {
+        const response = a2aEngine.jsonRpcError(request.id, -32004, `Unknown local agent "${targetAgentName}"`);
+        return jsonResponse(c, response, jsonRpcHttpStatus(response));
+      }
+
+      const relayMessage = a2aEngine.translateA2aToRelay(request);
+
+      // Inbound deliveries must be idempotent, because the sending side retries.
+      // `sendToExternalAgent` re-sends on 5xx, and everything after the durable
+      // DM write here — the counter, the webhook, the workspace event, delivery
+      // routing — can still fail. Without a key, that retry writes a second DM
+      // and the counterparty's proof or task is delivered twice. The DM route
+      // already runs every send through `runIdempotent`; this path called
+      // `sendDm` directly and skipped it.
+      //
+      // The key is the caller's own message id where it supplies one, falling
+      // back to the JSON-RPC request id, scoped to the registered caller so two
+      // counterparties cannot collide on the same value.
+      const inboundMessageId =
+        typeof request.params?.message?.message_id === 'string'
+          ? request.params.message.message_id
+          : typeof request.id === 'string' || typeof request.id === 'number'
+            ? String(request.id)
+            : null;
+
+      const idempotent = await runIdempotent({
+        workspaceId: workspace.id,
+        actorId: authenticatedAgent!.id,
+        scope: 'a2a:inbound',
+        key: inboundMessageId ? `${registeredCaller.id}:${inboundMessageId}` : undefined,
+        status: 200,
+        fingerprint: JSON.stringify({
+          to: targetAgentName,
+          text: relayMessage.text,
+          data: relayMessage.metadata ?? null,
+        }),
+        kv: c.get('engine').kv,
+        operation: () => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
+          to: targetAgentName,
+          text: relayMessage.text,
+          mode: 'wait',
+          data: relayMessage.metadata,
+        }, {
+          skipA2aIntercept: true,
+          // Without this, sendDm falls back to its fixed one-hour / 1000-message
+          // defaults and a registered peer's deliveries quietly ignore whatever
+          // TTL and depth cap the operator configured — the one delivery path on
+          // the deployment that is exempt from its own backpressure settings.
+          mailbox: resolveMailboxConfig(c.get('engine').config, workspace.id),
+        }),
+      });
+      const sent = idempotent.data;
+
+      // A replay returns the original result and must not repeat the side
+      // effects: re-counting the message, re-firing dm.received to webhooks and
+      // the workspace stream, or re-routing delivery would make a retried
+      // request observably different from a single one, which is the thing
+      // idempotency exists to prevent. The response below is identical either
+      // way, so the caller cannot tell — which is the point.
+      if (!idempotent.replayed) {
+        await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
+
+        // Fanout and delivery routing run in the background, as `/v1/dm` does.
+        // Awaiting them made the counterparty's "message accepted" wait on our
+        // recipient's delivery — including a slow HTTP-push receiver — so a
+        // sluggish or failing local subscriber could delay or fail an A2A call
+        // that had already been durably accepted. The write above is what the
+        // response attests to; everything here is downstream of it.
+        const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
+        runInBackground(
+          c,
+          sendWebhookEvent(c, { type: 'dm.received', workspaceId: workspace.id, data: eventData }),
+          'a2a inbound webhook dm.received',
+        );
+        runInBackground(
+          c,
+          publishWorkspaceEvent(c, 'dm.received', eventData),
+          'a2a inbound publish dm.received',
+        );
+        if (sent._delivery) {
+          runInBackground(
+            c,
+            routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData),
+            'a2a inbound route dm delivery',
+          );
+        }
+        if (sent._delivery_rejections.length > 0) {
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections),
+            'a2a inbound fanout delivery rejected',
+          );
+        }
+      }
+
+      const response = a2aEngine.jsonRpcSuccess(request.id, {
+        task: {
+          id: sent.message.id,
+          context_id: relayMessage.thread_id ?? sent.conversation_id,
+          status: {
+            state: a2aEngine.mapRelayTaskState('queued'),
+            message: 'Message accepted by Relaycast',
+          },
+          history: [{
+            message_id: sent.message.id,
+            role: 'agent',
+            context_id: relayMessage.thread_id ?? sent.conversation_id,
+            parts: [{ kind: 'text', text: sent.message.text }],
+            metadata: relayMessage.metadata,
+          }],
+          metadata: {
+            conversation_id: sent.conversation_id,
+            relay_agent: authenticatedAgent!.name,
+            target_agent: targetAgentName,
+          },
+        },
+      });
+      return jsonResponse(c, response);
+    }
+
     if (!target) {
       const response = a2aEngine.jsonRpcError(request.id, -32004, `Unknown A2A agent "${targetAgentName}"`);
       return jsonResponse(c, response, jsonRpcHttpStatus(response));
@@ -397,6 +614,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
       to: targetAgentName,
       text: relayMessage.text,
       mode: 'wait',
+      data: relayMessage.metadata,
     }, {
       skipA2aIntercept: true,
     });

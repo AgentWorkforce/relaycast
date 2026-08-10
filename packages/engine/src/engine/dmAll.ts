@@ -8,6 +8,7 @@ import {
   agents,
 } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
+import { publicMessageMetadata } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -136,6 +137,7 @@ export async function getDmMessagesForWorkspace(
       agentId: messages.agentId,
       agentName: agents.name,
       body: messages.body,
+      metadata: messages.metadata,
       createdAt: messages.createdAt,
     })
     .from(messages)
@@ -149,6 +151,12 @@ export async function getDmMessagesForWorkspace(
     agent_id: r.agentId,
     agent_name: r.agentName,
     text: r.body,
+    // Workspace/observer history is a public DM read path and must project
+    // metadata like the agent-facing one, or a federated delivery's Ratify
+    // envelope is visible to the recipient and invisible in history — the same
+    // message reading differently depending on which door you came through.
+    // `publicMessageMetadata` strips the internal `__relaycast_*` keys.
+    metadata: publicMessageMetadata(r.metadata as Record<string, unknown> | null),
     created_at: r.createdAt.toISOString(),
   }));
 }

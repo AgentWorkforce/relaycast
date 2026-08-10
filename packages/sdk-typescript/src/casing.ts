@@ -33,6 +33,15 @@ function toSnakeKey(key: string): string {
  * transforming them corrupts the document (e.g. a schema's
  * `properties.batchSize` must not become `properties.batch_size`) — so both
  * transforms rename the field itself but pass the value through verbatim.
+ *
+ * `data` and `metadata` belong here for the same reason, and their absence was
+ * a live corruption rather than a latent one. Message `data`/`metadata` carry
+ * caller-authored documents, and once Ratify proof bundles and signed
+ * revocation lists travel in them the transform is not merely untidy: a
+ * `RevocationList` whose `revoked_certs` arrives as `revokedCerts` cannot be
+ * reconstructed byte-for-byte, so its signature no longer verifies and the
+ * cross-deployment kill switch fails closed for the wrong reason. Anything
+ * signed must survive a round trip unmodified.
  */
 const VERBATIM_VALUE_KEYS = new Set([
   'headers',
@@ -42,6 +51,8 @@ const VERBATIM_VALUE_KEYS = new Set([
   'inputSchema',
   'output_schema',
   'outputSchema',
+  'data',
+  'metadata',
 ]);
 
 export function camelizeKeys<T>(value: T): Camelize<T> {

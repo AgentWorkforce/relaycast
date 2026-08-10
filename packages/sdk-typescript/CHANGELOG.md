@@ -7,7 +7,17 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Major]
+
+### Added
+
+- `AgentClient.dm()` accepts structured `data` and returns public DM metadata, enabling versioned A2A extensions such as Ratify proofs and revocations.
+
+### Changed
+
+- `data` and `metadata` are now passed through verbatim, like `headers`, `input` and `input_schema`, instead of being snake_cased on send and camelCased on read. Their keys are caller-authored data: rewriting them corrupted any document whose field names are meaningful, and made signed payloads unverifiable — a `RevocationList` whose `revoked_certs` arrived as `revokedCerts` cannot be reconstructed, so its signature fails.
+
+  Scope of the change: only **multi-word** keys differ, and only for callers reading or writing these fields through this SDK. A reader who previously saw `nodeId` for a stored `node_id` now sees `node_id`. Callers who wrote camelCase keys and read them back unchanged are unaffected, and callers who deliberately wrote snake_case keys were already getting a different key back — for them this is a fix.
 
 ## [7.0.0] - 2026-08-07
 

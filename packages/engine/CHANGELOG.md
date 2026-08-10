@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- A2A registration accepts a remote `target_agent`; a connection update endpoint completes reciprocal credentials, and registered peer tokens can deliver versioned message metadata to local DMs with normal realtime delivery.
 
 ### Fixed
 

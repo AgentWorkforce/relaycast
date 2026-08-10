@@ -561,12 +561,17 @@ export class AgentClient {
   async dm(
     agent: string,
     text: string,
-    opts?: (IdempotencyOption & { mode?: 'wait' | 'steer'; attachments?: string[] }),
+    opts?: (IdempotencyOption & {
+      mode?: 'wait' | 'steer';
+      attachments?: string[];
+      data?: Record<string, unknown> | null;
+    }),
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       to: agent,
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
