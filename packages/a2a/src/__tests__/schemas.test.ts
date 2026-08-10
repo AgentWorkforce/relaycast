@@ -359,18 +359,28 @@ describe('Ratify A2A metadata', () => {
     // that could never decode, so a malformed key or signature passed A2A
     // validation at the edge and failed later inside the verifier as an opaque
     // error, far from the input that caused it.
-    for (const bad of ['sig-ed', 'not base64', 'AAAA=AAA', 'QUJD']) {
-      const result = RatifyA2aMetadataSchema.safeParse({
+    const parseWithSignature = (ed25519: string) =>
+      RatifyA2aMetadataSchema.safeParse({
         ...revocation,
-        signature: { ...revocation.signature, ed25519: bad },
+        signature: { ...revocation.signature, ed25519 },
       });
-      if (bad === 'QUJD') {
-        // Valid base64, length a multiple of 4 — must still be accepted.
-        expect(result.success).toBe(true);
-        continue;
-      }
+
+    for (const bad of ['sig-ed', 'not base64', 'AAAA=AAA', 'QUJDR']) {
+      const result = parseWithSignature(bad);
       expect(result.success).toBe(false);
       expect(hasIssueAtPath(result, 'signature', 'ed25519')).toBe(true);
+    }
+
+    // Padding is optional, and this matters more than it looks: a peer that
+    // emits unpadded base64 sends a perfectly valid signed revocation list, and
+    // rejecting it would fail the kill switch closed over a formatting
+    // preference. 'QUJDRA' (6 chars, no padding) and 'QUJDRA==' are the same
+    // bytes; both must parse.
+    for (const good of ['QUJD', 'QUJDRA', 'QUJDRA==', 'QUJDRQ=']) {
+      const result = parseWithSignature(good);
+      // 'QUJDRQ=' is 7 chars with padding — not a multiple of four — so it is
+      // the one malformed case in this list.
+      expect(result.success).toBe(good !== 'QUJDRQ=');
     }
   });
 });

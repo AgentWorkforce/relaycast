@@ -13,13 +13,26 @@ export const MAX_PROOF_BUNDLE_BYTES = 128 * 1024;
  * error. Rejecting at the edge keeps the schema's promise honest and puts the
  * error where the malformed input entered.
  */
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64_CHARS = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Padding is optional. Requiring a multiple-of-four length would reject a peer
+ * that emits unpadded base64 — a legal and common encoding — and the value it
+ * would reject is a signed revocation list, so over-strict validation here
+ * fails the kill switch closed for a formatting preference. What is genuinely
+ * invalid is a length ≡ 1 (mod 4), which no base64 quantum can produce, and a
+ * padded value whose total length is not a multiple of four.
+ */
+function isBase64(value: string): boolean {
+  if (!BASE64_CHARS.test(value)) return false;
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return padding > 0 ? value.length % 4 === 0 : value.length % 4 !== 1;
+}
+
 const base64Field = z
   .string()
   .min(1)
-  .refine((v) => BASE64.test(v) && v.length % 4 === 0, {
-    message: 'expected standard base64',
-  });
+  .refine(isBase64, { message: 'expected base64 (padding optional)' });
 
 const RatifyHybridComponentSchema = z.object({
   ed25519: base64Field,
