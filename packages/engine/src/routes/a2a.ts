@@ -62,6 +62,13 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
   const explicit = c.req.query('workspace');
   if (explicit) return explicit;
 
+  // An explicit path selector must beat host inference. Previously the host
+  // branch was consulted first, so on any authority with three or more labels
+  // — which the Relay identifier profile requires — the documented
+  // `/:workspace/.well-known/agent-card.json` route could never take effect.
+  const pathWorkspace = c.req.param('workspace');
+  if (pathWorkspace) return pathWorkspace;
+
   const host = c.req.header('Host') ?? new URL(c.req.url).host;
   const hostname = host.split(':')[0] ?? '';
   const hostSegments = hostname.split('.').filter(Boolean);
@@ -70,7 +77,7 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
     return hostSegments[0]!;
   }
 
-  return c.req.param('workspace') || null;
+  return null;
 }
 
 function extractTargetAgentName(params: Record<string, unknown> | undefined, fallbackContextId?: string): string | null {
@@ -225,6 +232,38 @@ async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
           .from(workspaces)
           .where(eq(workspaces.name, workspaceHint));
         workspace = ws ?? null;
+      }
+    }
+
+    // A self-hosted, single-tenant deployment must answer the standard bare
+    // well-known URL without requiring a Relaycast-specific query parameter.
+    //
+    // Two guards, and the distinction between them is deliberate:
+    //
+    // 1. An *explicit* selector is caller intent, so a misspelled `?workspace=`
+    //    or `/:workspace/` must 404 rather than silently resolving to a
+    //    different tenant. Host-label inference is not caller intent — it is a
+    //    hosted workspace-per-subdomain convention, and on any authority with
+    //    three or more labels it always produces a candidate. Treating it as an
+    //    explicit selector would mean the fallback never fires on exactly the
+    //    deployments it exists for.
+    // 2. The row cap is what makes that safe: with two or more workspaces the
+    //    fallback declines rather than guessing, so there is no tenant boundary
+    //    to cross. It is `limit(2)` rather than a count so a large table is
+    //    never scanned.
+    //
+    // Net effect: on a multi-tenant deployment an unresolved host label 404s;
+    // on a single-tenant one it serves the only workspace there is. The card is
+    // unauthenticated by design (A2A discovery), so this exposes nothing that
+    // the standard well-known path is not already meant to publish.
+    if (
+      !workspace
+      && !c.req.query('workspace')
+      && !c.req.param('workspace')
+    ) {
+      const candidates = await db.select().from(workspaces).limit(2);
+      if (candidates.length === 1) {
+        workspace = candidates[0]!;
       }
     }
 

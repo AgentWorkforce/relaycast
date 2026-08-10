@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A2A counterparties can discover a self-hosted deployment at the standard `GET /.well-known/agent-card.json`, and `/:workspace/.well-known/agent-card.json` now resolves. Deployments holding more than one workspace still require a selector.
 
 ## [7.0.0] - 2026-08-07
 
