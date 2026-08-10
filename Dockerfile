@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RELAYCAST_ENGINE_VERSION=7.0.0
+ARG RELAYCAST_ENGINE_VERSION=8.0.0
 
 # Node 22.23.2, pinned to the multi-platform bookworm-slim index so the same
 # Dockerfile resolves native linux/amd64 and linux/arm64 images.
@@ -16,7 +16,7 @@ RUN apt-get update \
 WORKDIR /opt/relaycast
 COPY docker/package.json docker/package-lock.json ./
 
-# The lockfile pins @relaycast/engine to 7.0.0 and the source-build setting
+# The lockfile pins @relaycast/engine to 8.0.0 and the source-build setting
 # exercises the C/C++ toolchain for better-sqlite3 on every target architecture.
 ENV npm_config_build_from_source=true
 RUN test "$(node -p "require('./package.json').dependencies['@relaycast/engine']")" = "$RELAYCAST_ENGINE_VERSION" \

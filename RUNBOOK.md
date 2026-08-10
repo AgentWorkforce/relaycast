@@ -6,7 +6,7 @@ access and does not operate this deployment.
 
 ## Operating boundary
 
-The image contains `@relaycast/engine` **7.0.0** on Node 22.23.2 and stores all
+The image contains `@relaycast/engine` **8.0.0** on Node 22.23.2 and stores all
 state locally in SQLite plus a files directory. It requires an explicit HTTPS
 public origin and exits before starting the engine if `--base-url` is missing,
 plaintext, single-label, an IP literal, loopback, or in the special-use `.local`
@@ -59,7 +59,7 @@ docker compose ps
 curl --fail --silent --show-error http://127.0.0.1:8787/health
 ```
 
-The version command must print `7.0.0`, and Compose should eventually report
+The version command must print `8.0.0`, and Compose should eventually report
 `healthy`. The health response must contain `"ok":true`; its `version` field is
 the gateway/application version, not reliable evidence of the installed engine
 package version.
@@ -81,25 +81,36 @@ Move it into Ratify's secret manager, then securely remove the bootstrap file.
 Do not repeat this command: workspace names are not unique, so a repeat creates
 another workspace and key.
 
-Engine 7.0.0 has a known agent-card discovery defect: the bare standard path
-`GET /.well-known/agent-card.json` interprets the leftmost hostname label as the
-workspace name. At `relay.ratifyprotocol.com` it therefore looks for `relay`,
-not the meaningful workspace name `ratify-protocol`. Host inference also
-shadows the documented `/:workspace/.well-known/agent-card.json` route on this
-three-label hostname. The only working unauthenticated interim form is:
+Agent-card discovery works on the standard path from engine 8.0.0. A
+single-tenant deployment — one workspace, which is what this runbook sets up —
+answers the bare well-known URL directly, so a counterparty needs no
+Relaycast-specific query parameter:
 
 ```text
+https://relay.ratifyprotocol.com/.well-known/agent-card.json
+```
+
+The explicit forms also resolve, and an explicit selector now takes precedence
+over host-label inference:
+
+```text
+https://relay.ratifyprotocol.com/ratify-protocol/.well-known/agent-card.json
 https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol
 ```
 
-A mismatch returns `workspace_not_found` even while authenticated
-`POST /a2a/rpc` works. The query form is documented only as an interim operator
-check. A standards-following counterparty will try the bare well-known path, so
-do not treat this deployment as federation-ready until the single-tenant
-sole-workspace resolver fix is released, this image is pinned to that exact
-engine version, and `cast.agentrelay.com` is confirmed on the same version.
+Two behaviours worth knowing, because both are deliberate. A deployment holding
+more than one workspace does **not** fall back to guessing: it returns
+`workspace_not_found` unless a selector identifies one. And a selector that
+names a workspace which does not exist also returns `workspace_not_found`
+rather than resolving to some other workspace — a typo fails loudly instead of
+crossing a tenant boundary.
 
-In engine 7.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
+Earlier engines interpreted the leftmost hostname label as the workspace name,
+so `relay.ratifyprotocol.com` looked for a workspace called `relay` and the bare
+path returned `workspace_not_found`. If you see that on the bare path, check the
+image is on 8.0.0 or later before looking anywhere else.
+
+In engine 8.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
 initial bootstrap. The tunnel rule below blocks that exact path before the
 service becomes public; omitting the rule would allow arbitrary public workspace
 creation and unbounded local state growth.

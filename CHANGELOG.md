@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- The self-host container now installs `@relaycast/engine` 8.0.0, matching the hosted deployment, and its runbook documents agent-card discovery as working on the standard well-known path rather than as a known defect.
 
 ## [8.0.0] - 2026-08-10
 
