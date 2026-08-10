@@ -140,6 +140,8 @@ describe('A2A federation between Relaycast deployments', () => {
       worker,
       borealisProxyName: String(borealisProxyOnNorthwind.relay_name),
       northwindProxyName: String(northwindProxyOnBorealis.relay_name),
+      // The bearer Northwind presents when calling Borealis's /a2a/rpc.
+      northwindProxyToken: String(northwindProxyOnBorealis.relay_token),
     };
   }
 
@@ -260,6 +262,54 @@ describe('A2A federation between Relaycast deployments', () => {
       error: { code: -32004 },
     });
     expect(await agentMessages(borealis, federation.worker.token)).toHaveLength(0);
+  });
+
+  it('delivers a retried inbound message once, not twice', async () => {
+    // The sending side retries on 5xx, and everything after the durable DM
+    // write on the receiving side — the counter, the webhook, the workspace
+    // event, delivery routing — can still fail. Without an idempotency key the
+    // retry writes a second DM, and the counterparty's proof or task is
+    // delivered twice. Same message_id must mean one delivery.
+    const federation = await connectDeployments();
+    const request = {
+      jsonrpc: '2.0',
+      id: 'retried-rpc-id',
+      method: 'message/send',
+      params: {
+        target_agent: 'worker',
+        message: {
+          message_id: 'retried-message-id',
+          role: 'user',
+          parts: [{ kind: 'text', text: 'delivered once' }],
+          metadata: {
+            [RATIFY_A2A_METADATA_KEY]: {
+              version: 1,
+              kind: 'proof_bundle',
+              correlation_id: 'retried-proof',
+              bundle: '{"proof":true}',
+            },
+          },
+        },
+      },
+    };
+
+    const send = async () =>
+      borealis.app.request('/a2a/rpc', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${federation.northwindProxyToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      });
+
+    const first = await send();
+    expect(first.status).toBe(200);
+    const second = await send();
+    expect(second.status).toBe(200);
+
+    const received = await agentMessages(borealis, federation.worker.token);
+    expect(received).toHaveLength(1);
   });
 
   it('applies signed revocations in the authenticated reverse direction and reports latency tails', async () => {

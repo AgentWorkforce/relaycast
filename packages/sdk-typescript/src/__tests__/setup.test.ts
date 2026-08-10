@@ -437,8 +437,15 @@ describe('WorkspaceHandle', () => {
       name: 'Alice',
       type: 'human',
       persona: 'planner',
+      // Wire fields are snake_cased; the metadata VALUE is not. Its keys are
+      // caller-authored data, so the transform leaves them exactly as written —
+      // the same rule already applied to `headers`, `input` and `input_schema`.
+      // This assertion previously expected `favorite_color`, which encoded the
+      // corruption rather than the contract: a caller who deliberately wrote
+      // `favoriteColor` got a different key back, and anything signed could not
+      // survive the round trip at all.
       metadata: {
-        favorite_color: 'blue',
+        favoriteColor: 'blue',
       },
     });
   });

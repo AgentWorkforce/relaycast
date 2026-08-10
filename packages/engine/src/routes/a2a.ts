@@ -7,6 +7,7 @@ import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
 import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { runIdempotent } from '../middleware/idempotency.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
@@ -91,7 +92,7 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
     return hostSegments[0]!;
   }
 
-  return null;
+  return c.req.param('workspace') || null;
 }
 
 function extractTargetAgentName(params: Record<string, unknown> | undefined, fallbackContextId?: string): string | null {
@@ -392,28 +393,70 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       }
 
       const relayMessage = a2aEngine.translateA2aToRelay(request);
-      const sent = await dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
-        to: targetAgentName,
-        text: relayMessage.text,
-        mode: 'wait',
-        data: relayMessage.metadata,
-      }, {
-        skipA2aIntercept: true,
-      });
-      await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
 
-      const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
-      await sendWebhookEvent(c, {
-        type: 'dm.received',
+      // Inbound deliveries must be idempotent, because the sending side retries.
+      // `sendToExternalAgent` re-sends on 5xx, and everything after the durable
+      // DM write here — the counter, the webhook, the workspace event, delivery
+      // routing — can still fail. Without a key, that retry writes a second DM
+      // and the counterparty's proof or task is delivered twice. The DM route
+      // already runs every send through `runIdempotent`; this path called
+      // `sendDm` directly and skipped it.
+      //
+      // The key is the caller's own message id where it supplies one, falling
+      // back to the JSON-RPC request id, scoped to the registered caller so two
+      // counterparties cannot collide on the same value.
+      const inboundMessageId =
+        typeof request.params?.message?.message_id === 'string'
+          ? request.params.message.message_id
+          : typeof request.id === 'string' || typeof request.id === 'number'
+            ? String(request.id)
+            : null;
+
+      const idempotent = await runIdempotent({
         workspaceId: workspace.id,
-        data: eventData,
+        actorId: authenticatedAgent!.id,
+        scope: 'a2a:inbound',
+        key: inboundMessageId ? `${registeredCaller.id}:${inboundMessageId}` : undefined,
+        status: 200,
+        fingerprint: JSON.stringify({
+          to: targetAgentName,
+          text: relayMessage.text,
+          data: relayMessage.metadata ?? null,
+        }),
+        kv: c.get('engine').kv,
+        operation: () => dmEngine.sendDm(db, workspace.id, authenticatedAgent!.id, {
+          to: targetAgentName,
+          text: relayMessage.text,
+          mode: 'wait',
+          data: relayMessage.metadata,
+        }, {
+          skipA2aIntercept: true,
+        }),
       });
-      await publishWorkspaceEvent(c, 'dm.received', eventData);
-      if (sent._delivery) {
-        await routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData);
-      }
-      if (sent._delivery_rejections.length > 0) {
-        await notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections);
+      const sent = idempotent.data;
+
+      // A replay returns the original result and must not repeat the side
+      // effects: re-counting the message, re-firing dm.received to webhooks and
+      // the workspace stream, or re-routing delivery would make a retried
+      // request observably different from a single one, which is the thing
+      // idempotency exists to prevent. The response below is identical either
+      // way, so the caller cannot tell — which is the point.
+      if (!idempotent.replayed) {
+        await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
+
+        const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
+        await sendWebhookEvent(c, {
+          type: 'dm.received',
+          workspaceId: workspace.id,
+          data: eventData,
+        });
+        await publishWorkspaceEvent(c, 'dm.received', eventData);
+        if (sent._delivery) {
+          await routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData);
+        }
+        if (sent._delivery_rejections.length > 0) {
+          await notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections);
+        }
       }
 
       const response = a2aEngine.jsonRpcSuccess(request.id, {
