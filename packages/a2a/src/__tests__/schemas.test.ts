@@ -298,8 +298,11 @@ describe('Ratify A2A metadata', () => {
     issuer_id: 'human:northwind:alice',
     updated_at: 1_786_310_000,
     revoked_certs: ['cert-1'],
-    issuer_pub_key: { ed25519: 'pub-ed', ml_dsa_65: 'pub-pq' },
-    signature: { ed25519: 'sig-ed', ml_dsa_65: 'sig-pq' },
+    // Real base64. These fields are documented as base64-encoded keys and
+    // signatures and are now validated as such, so placeholders like 'pub-ed'
+    // (not base64 — the hyphen is outside the alphabet) no longer stand in.
+    issuer_pub_key: { ed25519: 'cHViLWVk', ml_dsa_65: 'cHViLXBx' },
+    signature: { ed25519: 'c2lnLWVk', ml_dsa_65: 'c2lnLXBx' },
   };
 
   it('accepts the versioned proof and revocation shapes under the exact metadata key', () => {
@@ -347,10 +350,28 @@ describe('Ratify A2A metadata', () => {
 
     const incompleteSignature = RatifyA2aMetadataSchema.safeParse({
       ...revocation,
-      signature: { ed25519: 'sig-ed' },
+      signature: { ed25519: 'c2lnLWVk' },
     });
     expect(incompleteSignature.success).toBe(false);
     expect(hasIssueAtPath(incompleteSignature, 'signature', 'ml_dsa_65')).toBe(true);
+
+    // These fields are documented as base64. A non-empty check accepted values
+    // that could never decode, so a malformed key or signature passed A2A
+    // validation at the edge and failed later inside the verifier as an opaque
+    // error, far from the input that caused it.
+    for (const bad of ['sig-ed', 'not base64', 'AAAA=AAA', 'QUJD']) {
+      const result = RatifyA2aMetadataSchema.safeParse({
+        ...revocation,
+        signature: { ...revocation.signature, ed25519: bad },
+      });
+      if (bad === 'QUJD') {
+        // Valid base64, length a multiple of 4 — must still be accepted.
+        expect(result.success).toBe(true);
+        continue;
+      }
+      expect(result.success).toBe(false);
+      expect(hasIssueAtPath(result, 'signature', 'ed25519')).toBe(true);
+    }
   });
 });
 

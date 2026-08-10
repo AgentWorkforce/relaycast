@@ -407,6 +407,14 @@ describe('A2A federation between Relaycast deployments', () => {
       });
       expect(matching).toBeDefined();
       const receivedWire = (matching!.metadata as JsonRecord)[RATIFY_A2A_METADATA_KEY] as WireRevocation;
+
+      // The engine is not the enforcement point — a Ratify verifier is, and
+      // `applyIfValid` models one here. What the engine is responsible for is
+      // that a signed document crosses the boundary unmodified, so assert that
+      // directly rather than leaving it implied by the signature check. A key
+      // rename or a re-encode anywhere in transport fails this line first, with
+      // a readable diff, instead of surfacing as an opaque signature failure.
+      expect(receivedWire).toEqual(wire);
       expect(await applyIfValid(receivedWire)).toBe(true);
       expect(wouldAcceptGrant(certId)).toBe(false);
 

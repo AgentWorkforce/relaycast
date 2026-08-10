@@ -8,6 +8,8 @@ import { requireAuth, hashToken } from '../middleware/auth.js';
 import { asCodedError, errorResponse, type CodedError } from '../lib/httpError.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { runIdempotent } from '../middleware/idempotency.js';
+import { runInBackground } from './background.js';
+import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import * as a2aEngine from '../engine/a2a.js';
 import * as dmEngine from '../engine/dm.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
@@ -370,8 +372,20 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       : [];
 
     if (registeredCaller) {
-      if (request.method !== 'message/send' && request.method !== 'message/stream') {
-        const response = a2aEngine.jsonRpcError(request.id, -32601, `Unsupported inbound method "${request.method}"`);
+      if (request.method !== 'message/send') {
+        // `message/stream` is deliberately refused here rather than served.
+        //
+        // This branch performs a single sendDm and returns a task already in a
+        // terminal `queued` state with no stream channel. A client that calls
+        // message/stream expects a `working` task plus somewhere to subscribe
+        // for incremental updates; handing it a completed one-shot is a wrong
+        // answer dressed as a right one, and it would silently truncate a
+        // conversation the caller believes is still open. Refusing lets the
+        // caller fall back to message/send immediately and correctly.
+        const detail = request.method === 'message/stream'
+          ? 'message/stream is not supported on inbound federated delivery; use message/send'
+          : `Unsupported inbound method "${request.method}"`;
+        const response = a2aEngine.jsonRpcError(request.id, -32601, detail);
         return jsonResponse(c, response, jsonRpcHttpStatus(response));
       }
       if (!request.params?.message) {
@@ -431,6 +445,11 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           data: relayMessage.metadata,
         }, {
           skipA2aIntercept: true,
+          // Without this, sendDm falls back to its fixed one-hour / 1000-message
+          // defaults and a registered peer's deliveries quietly ignore whatever
+          // TTL and depth cap the operator configured — the one delivery path on
+          // the deployment that is exempt from its own backpressure settings.
+          mailbox: resolveMailboxConfig(c.get('engine').config, workspace.id),
         }),
       });
       const sent = idempotent.data;
@@ -444,18 +463,36 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
       if (!idempotent.replayed) {
         await a2aEngine.incrementA2aMessagesReceived(db, registeredCaller.id);
 
+        // Fanout and delivery routing run in the background, as `/v1/dm` does.
+        // Awaiting them made the counterparty's "message accepted" wait on our
+        // recipient's delivery — including a slow HTTP-push receiver — so a
+        // sluggish or failing local subscriber could delay or fail an A2A call
+        // that had already been durably accepted. The write above is what the
+        // response attests to; everything here is downstream of it.
         const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
-        await sendWebhookEvent(c, {
-          type: 'dm.received',
-          workspaceId: workspace.id,
-          data: eventData,
-        });
-        await publishWorkspaceEvent(c, 'dm.received', eventData);
+        runInBackground(
+          c,
+          sendWebhookEvent(c, { type: 'dm.received', workspaceId: workspace.id, data: eventData }),
+          'a2a inbound webhook dm.received',
+        );
+        runInBackground(
+          c,
+          publishWorkspaceEvent(c, 'dm.received', eventData),
+          'a2a inbound publish dm.received',
+        );
         if (sent._delivery) {
-          await routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData);
+          runInBackground(
+            c,
+            routeDeliveryOutcomes(c, [sent._delivery], 'dm.received', eventData),
+            'a2a inbound route dm delivery',
+          );
         }
         if (sent._delivery_rejections.length > 0) {
-          await notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections);
+          runInBackground(
+            c,
+            notifyDeliveryRejections(c, authenticatedAgent!.id, sent._delivery_rejections),
+            'a2a inbound fanout delivery rejected',
+          );
         }
       }
 

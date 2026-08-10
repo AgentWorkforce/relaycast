@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import { requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
+import { sha256Hex } from '../lib/crypto.js';
 import * as dmEngine from '../engine/dm.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { publishWorkspaceEvent } from './fanout.js';
@@ -50,11 +51,18 @@ dmRoutes.post(
       }
       const { to, text, attachments, data, mode } = parsed.data;
       const normalizedAttachments = attachments && attachments.length > 0 ? attachments : undefined;
+      // `data` is digested rather than embedded. It is caller-supplied and can
+      // be large — a Ratify proof bundle runs to MAX_PROOF_BUNDLE_BYTES (128
+      // KiB) — and the fingerprint is serialized into the stored idempotency
+      // record, kept for the TTL, and string-compared on every replay. Inlining
+      // it put ~256 KiB per DM into the KV record and made each replay compare
+      // the whole payload. A digest answers the only question the fingerprint
+      // asks — "is this the same request?" — in constant size.
       const fingerprintBody = {
         to,
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
-        ...(data !== undefined ? { data } : {}),
+        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
       };
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));

@@ -5,12 +5,42 @@ export const RATIFY_A2A_METADATA_KEY = 'com.agentrelay.ratify';
 export const RATIFY_A2A_WIRE_VERSION = 1;
 export const MAX_PROOF_BUNDLE_BYTES = 128 * 1024;
 
+/**
+ * Standard base64, optionally padded. These fields are documented as
+ * base64-encoded keys and signatures, and a non-empty check accepted anything —
+ * so a value with `-`, `_`, spaces or any other stray character passed A2A
+ * validation and only failed later at decode, inside the verifier, as an opaque
+ * error. Rejecting at the edge keeps the schema's promise honest and puts the
+ * error where the malformed input entered.
+ */
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const base64Field = z
+  .string()
+  .min(1)
+  .refine((v) => BASE64.test(v) && v.length % 4 === 0, {
+    message: 'expected standard base64',
+  });
+
 const RatifyHybridComponentSchema = z.object({
-  ed25519: z.string().min(1),
-  ml_dsa_65: z.string().min(1),
+  ed25519: base64Field,
+  ml_dsa_65: base64Field,
 }).strict();
 
 const RatifyProofBundleWireSchema = z.string().min(1).superRefine((bundle, ctx) => {
+  // Reject on string length before encoding. UTF-8 is at most 3 bytes per UTF-16
+  // code unit for anything expressible in a JS string, so `length` over the cap
+  // already guarantees the byte length is over it. Encoding first meant an
+  // attacker could force a full multi-megabyte encode — allocating a second
+  // buffer of the same size — before the payload was rejected for being too
+  // large. The cheap check has to come first, precisely because this schema runs
+  // on unauthenticated inbound federation traffic.
+  if (bundle.length > MAX_PROOF_BUNDLE_BYTES) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `proof bundle exceeds ${MAX_PROOF_BUNDLE_BYTES} bytes`,
+    });
+    return;
+  }
   const byteLength = new TextEncoder().encode(bundle).byteLength;
   if (byteLength > MAX_PROOF_BUNDLE_BYTES) {
     ctx.addIssue({
