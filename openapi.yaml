@@ -4807,9 +4807,11 @@ paths:
         `/:workspace/` path segment, then the first host label (the hosted
         workspace-per-subdomain convention). A deployment holding exactly one
         workspace answers this bare path with that workspace; a deployment
-        holding more than one returns 404 unless a selector identifies it. An
-        explicit query or path selector that does not resolve always returns
-        404 rather than falling back.
+        holding more than one resolves only if one of those mechanisms names a
+        workspace — a valid workspace subdomain is sufficient on its own — and
+        otherwise returns 404. An explicit query or path selector that does not
+        resolve always returns 404 rather than falling back to any other
+        workspace.
       tags: [A2A]
       parameters:
         - in: query
@@ -4817,7 +4819,10 @@ paths:
           required: false
           schema:
             type: string
-          description: Workspace name. Required on a deployment holding more than one workspace.
+          description: >
+            Workspace name. Needed on a deployment holding more than one
+            workspace unless the request host already identifies one — a valid
+            workspace subdomain resolves without it.
       responses:
         '200':
           description: Agent card JSON
