@@ -1,0 +1,101 @@
+name: Publish Container
+
+# Publishes the self-host engine image to GHCR and prints the immutable digest.
+#
+# Manual only. A published image is what another company pins and runs, so it
+# should be a deliberate act rather than a side effect of merging.
+#
+# Authentication is the built-in GITHUB_TOKEN — no registry account to create
+# and no secret to rotate. `packages: write` is what lets it push.
+#
+# NOTE: a package created by Actions starts PRIVATE even from a public repo.
+# After the first successful run, set the package to public once in
+# Settings → Packages → relaycast-self-host → Change visibility. Every later
+# push inherits that setting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (the engine version it contains, e.g. 8.0.0)"
+        required: true
+        type: string
+      latest:
+        description: "Also tag as :latest"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-container
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # The tag must match the engine version the image actually installs.
+      # Version skew between the two ends of a federation is the run-stopper a
+      # dry run exists to catch, so it is checked here rather than trusted.
+      - name: Verify the tag matches the pinned engine version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          pinned="$(node -p "require('./docker/package.json').dependencies['@relaycast/engine']")"
+          if test "$pinned" != "$TAG"; then
+            echo "tag '$TAG' does not match the pinned engine version '$pinned'" >&2
+            exit 1
+          fi
+          echo "tag matches pinned engine version: $pinned"
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: RELAYCAST_ENGINE_VERSION=${{ inputs.tag }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/relaycast-self-host:${{ inputs.tag }}
+            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-self-host:latest', github.repository_owner) || '' }}
+
+      - name: Report the immutable reference
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ inputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Published"
+            echo
+            echo '```'
+            echo "ghcr.io/${OWNER}/relaycast-self-host:${TAG}"
+            echo "ghcr.io/${OWNER}/relaycast-self-host@${DIGEST}"
+            echo '```'
+            echo
+            echo "Pin the digest, not the tag — a tag can be moved, a digest cannot."
+            echo "Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"
