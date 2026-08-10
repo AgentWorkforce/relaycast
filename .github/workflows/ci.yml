@@ -9,12 +9,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: Lint, Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
         with:
           build: 'true'
@@ -22,12 +27,115 @@ jobs:
       - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
+      - run: npm run test:container
+
+  container:
+    name: Container (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: relaycast-ci:${{ matrix.arch }}
+      - name: Smoke the real image
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE: relaycast-ci:${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          refusal_index=0
+          assert_refused() {
+            refusal_index=$((refusal_index + 1))
+            refusal_container="relaycast-refusal-$ARCH-$refusal_index"
+            if timeout --signal=TERM --kill-after=2s 10s \
+              docker run --rm --name "$refusal_container" "$IMAGE" "$@" \
+              >refusal.log 2>&1; then
+              cat refusal.log
+              return 1
+            else
+              refusal_status=$?
+            fi
+            docker rm --force --volumes "$refusal_container" 2>/dev/null || true
+            if test "$refusal_status" -eq 124; then
+              cat refusal.log
+              echo 'container did not refuse startup within 10 seconds' >&2
+              return 1
+            fi
+            grep --fixed-strings 'refused to start' refusal.log
+          }
+
+          assert_refused
+          assert_refused --base-url http://relay.ratifyprotocol.com
+          assert_refused --base-url https://relay
+          assert_refused --base-url https://relay.local
+          assert_refused --base-url https://relay.localhost
+          assert_refused --base-url https://127.0.0.1
+          assert_refused --base-url https://203.0.113.5
+          assert_refused --base-url 'https://[2001:db8::1]'
+          assert_refused --base-url https://a..example
+          assert_refused --db --base-url https://relay.ratifyprotocol.com
+
+          label_version="$(docker inspect --format '{{ index .Config.Labels "io.relaycast.engine.version" }}' "$IMAGE")"
+          package_version="$(docker run --rm --entrypoint node "$IMAGE" -p "require('/opt/relaycast/node_modules/@relaycast/engine/package.json').version")"
+          test "$label_version" = "$package_version"
+
+          container="relaycast-ci-$ARCH"
+          docker run --detach --name "$container" "$IMAGE" \
+            --base-url https://relay.ratifyprotocol.com
+
+          for attempt in $(seq 1 60); do
+            if docker exec "$container" node -e \
+              "fetch('http://127.0.0.1:8787/health').then(async r=>{const b=await r.json();if(!r.ok||b.ok!==true)process.exit(1)}).catch(()=>process.exit(1))"; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 1
+          done
+
+          docker exec "$container" node --input-type=module -e '
+            const origin = "http://127.0.0.1:8787";
+            const expected = "https://relay.ratifyprotocol.com/a2a/rpc";
+            const created = await fetch(origin + "/v1/workspaces", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "ratify-protocol" }),
+            });
+            if (!created.ok) process.exit(1);
+            const response = await fetch(
+              origin + "/.well-known/agent-card.json?workspace=ratify-protocol",
+            );
+            const card = await response.json();
+            if (!response.ok || card.url !== expected) process.exit(1);
+          '
+      - name: Clean up smoke container
+        if: always()
+        run: docker rm --force --volumes relaycast-ci-${{ matrix.arch }} 2>/dev/null || true
 
   rust-sdk:
     name: Rust SDK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

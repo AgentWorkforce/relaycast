@@ -26,6 +26,7 @@ jobs:
       - run: npx turbo test
         env:
           DO_NOT_TRACK: '1'
+      - run: npm run test:container
 
   deploy-observer-pages:
     name: Deploy Observer Dashboard

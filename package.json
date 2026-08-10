@@ -10,6 +10,7 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
+    "test:container": "node --test test/container-entrypoint.test.mjs",
     "lint": "turbo lint",
     "dev": "turbo dev --parallel --filter=@relaycast/observer-dashboard",
     "e2e": "npx tsx scripts/e2e.ts",

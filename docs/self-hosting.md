@@ -195,24 +195,22 @@ WorkingDirectory=/var/lib/relaycast
 WantedBy=multi-user.target
 ```
 
-**Docker** (build your own image — no official image is published yet):
-
-```dockerfile
-FROM node:20-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
- && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @relaycast/engine
-VOLUME /data
-WORKDIR /data
-EXPOSE 8787
-ENV RELAYCAST_DB_PATH=/data/relaycast.db PORT=8787
-ENTRYPOINT ["relaycast-engine"]
-```
+**Docker Compose** (builds the repository image locally; no registry image is
+published):
 
 ```bash
-docker build -t relaycast .
-docker run -p 8787:8787 -v "$PWD/data:/data" relaycast --base-url https://relay.example.com
+test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
+printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
+docker compose build --pull
+docker compose up -d
 ```
+
+The image pins Node and `@relaycast/engine`, persists the database and uploaded
+files in the `relaycast-data` named volume, and refuses to start unless the
+explicit `--base-url` is an HTTPS, multi-label, public DNS origin. IP literals,
+loopback names, and the special-use `.local` namespace are rejected. See
+[`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
+the required public workspace-creation block, backups, and teardown.
 
 ---
 
@@ -220,9 +218,14 @@ docker run -p 8787:8787 -v "$PWD/data:/data" relaycast --base-url https://relay.
 
 - **Back up the SQLite file** (and the files directory) before upgrading. With the
   server stopped, copy `relaycast.db` (and `-wal`/`-shm` if present).
-- **Upgrade**: `npm install -g @relaycast/engine@latest` (or bump the Docker base),
-  then restart. New migrations apply automatically on boot; already-applied ones
-  are skipped.
+- **Upgrade**: for a global install, run
+  `npm install -g @relaycast/engine@<tested-version>`. For the repository image,
+  update the exact dependency and package version in `docker/package.json`, its
+  lockfile, the `RELAYCAST_ENGINE_VERSION` default in `Dockerfile`, and the
+  expected version in `RUNBOOK.md` only after confirming federation peers use
+  the same version. The image build fails if the Docker version and package pin
+  differ. Rebuild after changing all pins. New migrations apply automatically
+  on boot; already-applied ones are skipped.
 - Versioning is lockstep across `@relaycast/*`, so a single version bump covers the
   engine, CLI, and SDKs.
 
