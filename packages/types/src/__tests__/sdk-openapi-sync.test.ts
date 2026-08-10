@@ -30,6 +30,10 @@ const IGNORED_SEGMENTS = new Set([
 const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/health',
   '/v1/.well-known/agent-card.json',
+  // Path-scoped form of the same unauthenticated A2A discovery endpoint. Served
+  // for counterparties that name the workspace explicitly; like the bare form
+  // it is not an agent-SDK surface.
+  '/v1/{param}/.well-known/agent-card.json',
   '/v1/a2a/rpc',
   '/v1/a2a/webhook/{param}/{param}',
   // Provider integration endpoints are provisioned/called by relayfile-cloud,
