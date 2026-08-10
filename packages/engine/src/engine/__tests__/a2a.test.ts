@@ -470,3 +470,101 @@ describe('getWorkspaceAgentCard', () => {
     ]);
   });
 });
+
+describe('workspace agent-card discovery', () => {
+  let stack: TestStack;
+
+  beforeEach(() => {
+    stack = makeNodeStack();
+  });
+
+  afterEach(() => stack.close());
+
+  it('serves the standard bare well-known path for a sole self-hosted workspace', async () => {
+    const ws = await createWorkspace(stack.app, 'borealis');
+    await registerAgent(stack.app, ws.workspaceKey, 'worker');
+
+    const response = await stack.app.request(
+      'https://relay.borealis.example/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: ws.workspaceId,
+      workspace_name: 'borealis',
+    });
+  });
+
+  it('keeps a valid hosted workspace subdomain authoritative', async () => {
+    const selected = await createWorkspace(stack.app, 'northwind');
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://northwind.cast.example/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: selected.workspaceId,
+      workspace_name: 'northwind',
+    });
+  });
+
+  it('makes an explicit path workspace beat host inference on a multi-label authority', async () => {
+    const selected = await createWorkspace(stack.app, 'borealis');
+    await createWorkspace(stack.app, 'cast');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/borealis/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    const card = await response.json() as { provider?: Record<string, unknown> };
+    expect(card.provider).toMatchObject({
+      workspace_id: selected.workspaceId,
+      workspace_name: 'borealis',
+    });
+  });
+
+  it('does not replace an invalid path workspace with a valid host workspace', async () => {
+    await createWorkspace(stack.app, 'cast');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/misspelled/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
+  });
+
+  it('fails closed on a bare multi-tenant deployment instead of selecting a workspace', async () => {
+    await createWorkspace(stack.app, 'northwind');
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://cast.agentrelay.com/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
+  });
+
+  it('does not hide an invalid explicit workspace selector behind the sole-workspace fallback', async () => {
+    await createWorkspace(stack.app, 'borealis');
+
+    const response = await stack.app.request(
+      'https://relay.borealis.example/.well-known/agent-card.json?workspace=misspelled',
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'workspace_not_found' },
+    });
+  });
+});

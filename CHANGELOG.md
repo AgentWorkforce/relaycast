@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A2A agent-card discovery now answers the standard `GET /.well-known/agent-card.json` on a single-tenant deployment, and an explicit `/:workspace/` path selector is honoured instead of being overridden by host inference. Previously a deployment whose workspace was not named after the first label of its hostname returned `workspace_not_found` at the standard discovery URL, and the documented path route could never take effect on any authority with three or more labels. Multi-tenant deployments still fail closed, and an invalid explicit selector is never silently replaced.
 
 ## [7.0.0] - 2026-08-07
 

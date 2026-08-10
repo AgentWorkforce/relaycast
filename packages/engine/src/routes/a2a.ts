@@ -62,6 +62,13 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
   const explicit = c.req.query('workspace');
   if (explicit) return explicit;
 
+  // An explicit path selector must beat host inference. Previously the host
+  // branch was consulted first, so on any authority with three or more labels
+  // — which the Relay identifier profile requires — the documented
+  // `/:workspace/.well-known/agent-card.json` route could never take effect.
+  const pathWorkspace = c.req.param('workspace');
+  if (pathWorkspace) return pathWorkspace;
+
   const host = c.req.header('Host') ?? new URL(c.req.url).host;
   const hostname = host.split(':')[0] ?? '';
   const hostSegments = hostname.split('.').filter(Boolean);
@@ -70,7 +77,7 @@ function extractWorkspaceHint(c: Context<AppEnv>): string | null {
     return hostSegments[0]!;
   }
 
-  return c.req.param('workspace') || null;
+  return null;
 }
 
 function extractTargetAgentName(params: Record<string, unknown> | undefined, fallbackContextId?: string): string | null {
@@ -225,6 +232,23 @@ async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
           .from(workspaces)
           .where(eq(workspaces.name, workspaceHint));
         workspace = ws ?? null;
+      }
+    }
+
+    // A self-hosted, single-tenant deployment must answer the standard bare
+    // well-known URL without requiring a Relaycast-specific query parameter.
+    // Only use this fallback when the caller supplied no explicit workspace:
+    // a misspelled query/path selector must fail rather than silently crossing
+    // a tenant boundary. Limit to two rows so the multi-tenant case fails
+    // closed without scanning the workspace table.
+    if (
+      !workspace
+      && !c.req.query('workspace')
+      && !c.req.param('workspace')
+    ) {
+      const candidates = await db.select().from(workspaces).limit(2);
+      if (candidates.length === 1) {
+        workspace = candidates[0]!;
       }
     }
 
