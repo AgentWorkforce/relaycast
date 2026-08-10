@@ -1,0 +1,53 @@
+{
+  "id": "traj_0h8yn88qklhh",
+  "version": 1,
+  "task": {
+    "title": "Persist and expose unmeasured fleet node load"
+  },
+  "status": "completed",
+  "startedAt": "2026-08-06T09:57:48.460Z",
+  "completedAt": "2026-08-06T09:59:59.888Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-06T09:57:56.833Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_56f45e96iwd5",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-06T09:57:56.833Z",
+      "endedAt": "2026-08-06T09:59:59.888Z",
+      "events": [
+        {
+          "ts": 1786010276834,
+          "type": "decision",
+          "content": "Define load as bounded managed-agent capacity utilization; max_agents=0 remains unlimited and therefore has no load denominator: Define load as bounded managed-agent capacity utilization; max_agents=0 remains unlimited and therefore has no load denominator",
+          "raw": {
+            "question": "Define load as bounded managed-agent capacity utilization; max_agents=0 remains unlimited and therefore has no load denominator",
+            "chosen": "Define load as bounded managed-agent capacity utilization; max_agents=0 remains unlimited and therefore has no load denominator",
+            "alternatives": [],
+            "reasoning": "The broker and Relaycast admission already define 0 as unlimited. CPU, memory, and queue pressure are different metrics; substituting idle for an undefined denominator is the observed defect."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Made fleet load explicitly unreported for unbounded or partially measured nodes, preserved finite [0,1] utilization, corrected max_agents=0 aggregate semantics, and updated official SDKs plus migration/tests.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "45beff3f47aba960137583af0639460cb8c0848f",
+    "endRef": "45beff3f47aba960137583af0639460cb8c0848f"
+  }
+}

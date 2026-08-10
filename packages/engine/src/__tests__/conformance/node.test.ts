@@ -11,7 +11,7 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, deliveries, nodeProviders, nodes } from '../../db/schema.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 
@@ -596,6 +596,105 @@ describe('node adapter conformance', () => {
       });
       finiteBody = await finiteRoster.json() as { data: Array<Record<string, unknown>> };
       expect(finiteBody.data[0]).toMatchObject({ load: 0, max_agents: 4 });
+    });
+
+    it('persists omitted and null heartbeat load as unreported', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-load-shapes-ws');
+      const finite = await enrollAndAttachNode(ws, {
+        id: 'node_load_shapes',
+        name: 'load-shapes',
+        capabilities: [capability('spawn:codex', 'spawn')],
+        maxAgents: 4,
+        load: 0.75,
+      });
+
+      const assertUnreported = async () => {
+        const [storedNode] = await stack.runtime.handle.db
+          .select({ loadReported: nodes.loadReported })
+          .from(nodes)
+          .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_load_shapes')));
+        const [storedProvider] = await stack.runtime.handle.db
+          .select({ loadReported: nodeProviders.loadReported })
+          .from(nodeProviders)
+          .where(and(
+            eq(nodeProviders.workspaceId, ws.workspaceId),
+            eq(nodeProviders.nodeId, 'node_load_shapes'),
+            eq(nodeProviders.name, 'default'),
+          ));
+        expect({ storedNode, storedProvider }).toEqual({
+          storedNode: { loadReported: false },
+          storedProvider: { loadReported: false },
+        });
+
+        const listResponse = await stack.app.request('/v1/nodes?name=load-shapes', {
+          headers: { authorization: `Bearer ${ws.workspaceKey}` },
+        });
+        expect(listResponse.status).toBe(200);
+        const listBody = await listResponse.json() as { data: Array<Record<string, unknown>> };
+        expect(listBody.data[0]).toMatchObject({ load: null });
+
+        const getResponse = await stack.app.request('/v1/nodes/load-shapes', {
+          headers: { authorization: `Bearer ${ws.workspaceKey}` },
+        });
+        expect(getResponse.status).toBe(200);
+        const getBody = await getResponse.json() as { data: Record<string, unknown> };
+        expect(getBody.data).toMatchObject({ load: null });
+      };
+
+      await finite.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        active_agents: 1,
+        handlers_live: true,
+      }));
+      await assertUnreported();
+
+      await finite.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0.5,
+        load_reported: true,
+        active_agents: 1,
+        handlers_live: true,
+      }));
+      await finite.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: null,
+        active_agents: 1,
+        handlers_live: true,
+      }));
+      await assertUnreported();
+    });
+
+    it('does not rank unreported load as measured idle during placement', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-unknown-load-placement-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const unknown = await enrollAndAttachNode(ws, {
+        id: 'node_unknown_load',
+        name: 'unknown-load',
+        capabilities: [capability('spawn:codex', 'spawn')],
+        maxAgents: 4,
+        load: null,
+      });
+      const measured = await enrollAndAttachNode(ws, {
+        id: 'node_measured_load',
+        name: 'measured-load',
+        capabilities: [capability('spawn:codex', 'spawn')],
+        maxAgents: 4,
+        load: 0.75,
+      });
+
+      const response = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: { cli: 'codex', name: 'placement-worker', task: 'verify placement' } }),
+      });
+      expect(response.status).toBe(201);
+      const body = await response.json() as { data: { handler_node_id: string } };
+      expect(body.data.handler_node_id).toBe('node_measured_load');
+      expect(measured.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(1);
+      expect(unknown.sock.ofType('action.invoke').filter((event) => event.action.startsWith('spawn'))).toHaveLength(0);
     });
 
     it('drives node control directly without the websocket route wrapper', async () => {
