@@ -57,6 +57,11 @@ jobs:
       # The tag must match the engine version the image actually installs.
       # Version skew between the two ends of a federation is the run-stopper a
       # dry run exists to catch, so it is checked here rather than trusted.
+      # GHCR repository names must be lowercase, and the org is "AgentWorkforce".
+      # buildx rejects the tag outright rather than normalising it.
+      - name: Lowercase the owner for the image name
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - name: Verify the tag matches the pinned engine version
         env:
           TAG: ${{ inputs.tag }}
@@ -78,12 +83,12 @@ jobs:
           push: true
           build-args: RELAYCAST_ENGINE_VERSION=${{ inputs.tag }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/relaycast-self-host:${{ inputs.tag }}
-            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-self-host:latest', github.repository_owner) || '' }}
+            ghcr.io/${{ env.OWNER_LC }}/relaycast-self-host:${{ inputs.tag }}
+            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-self-host:latest', env.OWNER_LC) || '' }}
 
       - name: Report the immutable reference
         env:
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.OWNER_LC }}
           TAG: ${{ inputs.tag }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
