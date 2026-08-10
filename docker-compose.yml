@@ -15,7 +15,7 @@ services:
     cap_drop:
       - ALL
     ports:
-      - 128.0.0.1:${RELAYCAST_PORT:-8787}:8787
+      - 127.0.0.1:${RELAYCAST_PORT:-8787}:8787
     volumes:
       - relaycast-data:/data
     tmpfs:
@@ -25,7 +25,7 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://128.0.0.1:8787/health').then(async(response)=>{const body=await response.json();if(!response.ok||body.ok!==true)process.exit(1)}).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:8787/health').then(async(response)=>{const body=await response.json();if(!response.ok||body.ok!==true)process.exit(1)}).catch(()=>process.exit(1))
       interval: 15s
       timeout: 5s
       retries: 5
