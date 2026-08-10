@@ -1,6 +1,6 @@
 {
   "name": "relaycast",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@relaycast/mcp": "7.0.0"
+    "@relaycast/mcp": "8.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
