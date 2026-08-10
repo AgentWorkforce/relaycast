@@ -237,10 +237,25 @@ async function handleWorkspaceAgentCard(c: Context<AppEnv>) {
 
     // A self-hosted, single-tenant deployment must answer the standard bare
     // well-known URL without requiring a Relaycast-specific query parameter.
-    // Only use this fallback when the caller supplied no explicit workspace:
-    // a misspelled query/path selector must fail rather than silently crossing
-    // a tenant boundary. Limit to two rows so the multi-tenant case fails
-    // closed without scanning the workspace table.
+    //
+    // Two guards, and the distinction between them is deliberate:
+    //
+    // 1. An *explicit* selector is caller intent, so a misspelled `?workspace=`
+    //    or `/:workspace/` must 404 rather than silently resolving to a
+    //    different tenant. Host-label inference is not caller intent — it is a
+    //    hosted workspace-per-subdomain convention, and on any authority with
+    //    three or more labels it always produces a candidate. Treating it as an
+    //    explicit selector would mean the fallback never fires on exactly the
+    //    deployments it exists for.
+    // 2. The row cap is what makes that safe: with two or more workspaces the
+    //    fallback declines rather than guessing, so there is no tenant boundary
+    //    to cross. It is `limit(2)` rather than a count so a large table is
+    //    never scanned.
+    //
+    // Net effect: on a multi-tenant deployment an unresolved host label 404s;
+    // on a single-tenant one it serves the only workspace there is. The card is
+    // unauthenticated by design (A2A discovery), so this exposes nothing that
+    // the standard well-known path is not already meant to publish.
     if (
       !workspace
       && !c.req.query('workspace')

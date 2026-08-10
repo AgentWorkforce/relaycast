@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `extractWorkspaceHint` consults an explicit `/:workspace/` path parameter before host-label inference, so the documented `/:workspace/.well-known/agent-card.json` route works on authorities with three or more labels instead of being unreachable. `handleWorkspaceAgentCard` falls back to the sole workspace when a deployment has exactly one and the caller supplied no explicit selector, so a single-tenant self-host answers the bare standard well-known URL. The fallback is skipped whenever a query or path selector was supplied — a misspelled selector fails rather than crossing a tenant boundary — and the candidate query is bounded to two rows so a multi-tenant deployment fails closed without scanning the table.
+- Agent-card discovery resolves the workspace from an explicit `/:workspace/` path segment before host-label inference, and serves the sole workspace when a deployment has exactly one and no selector was given. Deployments with more than one workspace, and unresolved explicit selectors, return `workspace_not_found`.
 
 ## [7.0.0] - 2026-08-07
 

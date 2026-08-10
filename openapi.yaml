@@ -4801,10 +4801,69 @@ paths:
         description: Local development server
     get:
       summary: Workspace A2A agent card
+      description: >
+        Unauthenticated A2A discovery. The workspace is resolved in order:
+        Authorization header, `?workspace=` query parameter, an explicit
+        `/:workspace/` path segment, then the first host label (the hosted
+        workspace-per-subdomain convention). A deployment holding exactly one
+        workspace answers this bare path with that workspace; a deployment
+        holding more than one returns 404 unless a selector identifies it. An
+        explicit query or path selector that does not resolve always returns
+        404 rather than falling back.
       tags: [A2A]
+      parameters:
+        - in: query
+          name: workspace
+          required: false
+          schema:
+            type: string
+          description: Workspace name. Required on a deployment holding more than one workspace.
       responses:
         '200':
           description: Agent card JSON
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: >
+            `workspace_not_found` — no selector resolved a workspace, or an
+            explicit selector named one that does not exist.
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /{workspace}/.well-known/agent-card.json:
+    servers:
+      - url: https://cast.agentrelay.com
+        description: Production server (root, no /v1 prefix)
+      - url: http://localhost:8787
+        description: Local development server
+    get:
+      summary: Workspace A2A agent card, path-scoped
+      description: >
+        Path-scoped form of A2A discovery. The path segment takes precedence
+        over host-label inference, so this route resolves on multi-label
+        authorities. A segment naming a workspace that does not exist returns
+        404 rather than falling back to any other workspace.
+      tags: [A2A]
+      parameters:
+        - in: path
+          name: workspace
+          required: true
+          schema:
+            type: string
+          description: Workspace name.
+      responses:
+        '200':
+          description: Agent card JSON
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: '`workspace_not_found` — the named workspace does not exist.'
           content:
             application/json:
               schema:

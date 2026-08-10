@@ -649,7 +649,8 @@ POST   /v1/a2a/register              Register an external A2A agent
 GET    /v1/a2a/agents                List registered A2A agents
 DELETE /v1/a2a/agents/:name          Remove an A2A agent
 GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
-GET    /.well-known/agent-card.json  A2A agent card (root-level)
+GET    /.well-known/agent-card.json  A2A agent card (root-level; ?workspace= selects on multi-tenant)
+GET    /:workspace/.well-known/agent-card.json  A2A agent card for a named workspace
 POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
 POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 ```

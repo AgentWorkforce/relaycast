@@ -555,6 +555,22 @@ describe('workspace agent-card discovery', () => {
     });
   });
 
+  it('serves the sole workspace even when an unresolved host label was inferred', async () => {
+    // Host-label inference is a hosted convention, not caller intent, so a
+    // label that names no workspace does not suppress the single-tenant
+    // fallback — otherwise a self-host could never answer the standard path,
+    // since a conformant authority always yields some first label. The row cap
+    // is the boundary: the multi-tenant case above 404s on this same request.
+    await createWorkspace(stack.app, 'ratify-protocol');
+
+    const response = await stack.app.request(
+      'https://relay.ratifyprotocol.com/.well-known/agent-card.json',
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ name: 'ratify-protocol' });
+  });
+
   it('does not hide an invalid explicit workspace selector behind the sole-workspace fallback', async () => {
     await createWorkspace(stack.app, 'borealis');
 
