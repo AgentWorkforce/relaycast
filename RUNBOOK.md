@@ -6,7 +6,7 @@ access and does not operate this deployment.
 
 ## Operating boundary
 
-The image contains `@relaycast/engine` **7.0.0** on Node 22.23.2 and stores all
+The image contains `@relaycast/engine` **8.0.0** on Node 22.23.2 and stores all
 state locally in SQLite plus a files directory. It requires an explicit HTTPS
 public origin and exits before starting the engine if `--base-url` is missing,
 plaintext, single-label, an IP literal, loopback, or in the special-use `.local`
@@ -31,7 +31,7 @@ claim.
   files, and off-host backups.
 
 No database server, object store, message broker, or inbound firewall opening
-is required. Compose binds the engine only to `127.0.0.1:8787`; the tunnel makes
+is required. Compose binds the engine only to `128.0.0.1:8787`; the tunnel makes
 the public connection.
 
 ## Build and run
@@ -56,10 +56,10 @@ Confirm the installed engine, container state, and local health endpoint:
 docker compose exec relaycast node -p \
   "require('/opt/relaycast/node_modules/@relaycast/engine/package.json').version"
 docker compose ps
-curl --fail --silent --show-error http://127.0.0.1:8787/health
+curl --fail --silent --show-error http://128.0.0.1:8787/health
 ```
 
-The version command must print `7.0.0`, and Compose should eventually report
+The version command must print `8.0.0`, and Compose should eventually report
 `healthy`. The health response must contain `"ok":true`; its `version` field is
 the gateway/application version, not reliable evidence of the installed engine
 package version.
@@ -70,7 +70,7 @@ host loopback interface:
 ```bash
 umask 077
 curl --fail --silent --show-error \
-  --request POST http://127.0.0.1:8787/v1/workspaces \
+  --request POST http://128.0.0.1:8787/v1/workspaces \
   --header 'content-type: application/json' \
   --data '{"name":"ratify-protocol"}' \
   --output ratify-workspace-bootstrap.json
@@ -81,7 +81,7 @@ Move it into Ratify's secret manager, then securely remove the bootstrap file.
 Do not repeat this command: workspace names are not unique, so a repeat creates
 another workspace and key.
 
-Engine 7.0.0 has a known agent-card discovery defect: the bare standard path
+Engine 8.0.0 has a known agent-card discovery defect: the bare standard path
 `GET /.well-known/agent-card.json` interprets the leftmost hostname label as the
 workspace name. At `relay.ratifyprotocol.com` it therefore looks for `relay`,
 not the meaningful workspace name `ratify-protocol`. Host inference also
@@ -99,7 +99,7 @@ do not treat this deployment as federation-ready until the single-tenant
 sole-workspace resolver fix is released, this image is pinned to that exact
 engine version, and `cast.agentrelay.com` is confirmed on the same version.
 
-In engine 7.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
+In engine 8.0.0, `POST /v1/workspaces` is intentionally unauthenticated for
 initial bootstrap. The tunnel rule below blocks that exact path before the
 service becomes public; omitting the rule would allow arbitrary public workspace
 creation and unbounded local state growth.
@@ -135,7 +135,7 @@ ingress:
     path: ^/v1/workspaces/?$
     service: http_status:403
   - hostname: relay.ratifyprotocol.com
-    service: http://127.0.0.1:8787
+    service: http://128.0.0.1:8787
   - service: http_status:404
 ```
 
