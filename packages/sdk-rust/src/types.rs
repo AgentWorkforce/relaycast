@@ -270,14 +270,14 @@ pub struct CreateAgentRequest {
 /// Server-verified authority required by hosted Relaycast before it issues or
 /// rotates an agent credential. Sponsor identity and organization are derived
 /// from `sponsor_proof`; callers cannot supply them independently.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRegistrationAuthority {
     pub sponsor_proof: String,
     pub work_unit_key: String,
 }
 
 /// Sponsor proof used to bind a newly-created workspace to its RelayAuth org.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRegistrationAuthority {
     pub sponsor_proof: String,
 }
