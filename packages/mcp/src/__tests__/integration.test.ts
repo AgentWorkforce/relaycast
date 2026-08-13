@@ -460,10 +460,11 @@ describe('MCP → SDK → HTTP integration', () => {
     expect(req!.body).toMatchObject({ to: 'Alice', text: 'Hi' });
   });
 
-  it('message.dm.list → GET /v1/dm/conversations', async () => {
-    await client.callTool({ name: 'message.dm.list', arguments: {} });
+  it('message.dm.list → GET /v1/dm/conversations with limit', async () => {
+    await client.callTool({ name: 'message.dm.list', arguments: { limit: 25 } });
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
+    expect(req!.url).toContain('limit=25');
   });
 
   it('message.dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {

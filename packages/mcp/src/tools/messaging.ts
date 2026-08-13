@@ -124,7 +124,7 @@ export function registerMessagingTools(
     title: 'List DM Conversations',
     description: 'List all direct message conversations for the current agent. Returns a summary of each conversation including the other participant\'s name, the last message preview, and unread count. Use this to discover ongoing private conversations.',
     inputSchema: {
-      limit: z.number().optional().describe('Maximum number of conversations to return'),
+      limit: z.number().int().positive().optional().describe('Maximum number of conversations to return'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },
@@ -132,9 +132,9 @@ export function registerMessagingTools(
       conversations: z.array(z.object({}).passthrough()).describe('Array of DM conversation summaries'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ workspace_id, workspace_alias, as: asIdentity }) => {
+  }, async ({ limit, workspace_id, workspace_alias, as: asIdentity }) => {
     const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
-    const convos = await client.dms.conversations();
+    const convos = await client.dms.conversations(limit === undefined ? undefined : { limit });
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(convos, null, 2) }],
       structuredContent: { conversations: convos as unknown as Record<string, unknown>[] },

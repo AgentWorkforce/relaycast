@@ -578,8 +578,11 @@ export class AgentClient {
   }
 
   dms = {
-    conversations: (): Promise<DmConversationSummary[]> =>
-      this.client.get('/v1/dm/conversations'),
+    conversations: (opts?: Pick<MessageListQuery, 'limit'>): Promise<DmConversationSummary[]> => {
+      const query: Record<string, string> = {};
+      if (opts?.limit != null) query.limit = String(opts.limit);
+      return this.client.get('/v1/dm/conversations', query);
+    },
 
     messages: (
       conversationId: string,

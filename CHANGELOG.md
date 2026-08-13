@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - The self-host container now installs `@relaycast/engine` 8.0.0, matching the hosted deployment, and its runbook documents agent-card discovery as working on the standard well-known path rather than as a known defect.
 
+### Fixed
+
+- DM conversation and inbox reads remain available beyond 100 conversations, and the advertised DM-list limit now reaches the server instead of being ignored.
+
 ## [8.0.0] - 2026-08-10
 
 ### Added

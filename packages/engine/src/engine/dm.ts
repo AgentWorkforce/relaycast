@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, isNull, inArray } from 'drizzle-orm';
+import { eq, and, sql, lt, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -24,6 +24,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import { codedError } from '../lib/httpError.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -452,8 +453,13 @@ export async function sendDm(
   };
 }
 
-export async function listConversations(db: Db, workspaceId: string, agentId: string) {
-  const conversationRows = await db
+export async function listConversations(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  opts: { limit?: number } = {},
+) {
+  const conversationQuery = db
     .select({
       id: dmConversations.id,
       dmType: dmConversations.dmType,
@@ -469,7 +475,11 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
         eq(dmParticipants.agentId, agentId),
         isNull(dmParticipants.leftAt),
       ),
-    );
+    )
+    .orderBy(desc(dmConversations.createdAt), desc(dmConversations.id));
+  const conversationRows = opts.limit === undefined
+    ? await conversationQuery
+    : await conversationQuery.limit(opts.limit);
 
   if (conversationRows.length === 0) {
     return [];
@@ -478,7 +488,7 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
   const conversationIds = conversationRows.map((row) => row.id);
   const channelIds = conversationRows.map((row) => row.channelId);
 
-  const participantRows = await db
+  const participantRows = await queryInChunks(conversationIds, (ids) => db
     .select({
       conversationId: dmParticipants.conversationId,
       agentId: dmParticipants.agentId,
@@ -486,33 +496,31 @@ export async function listConversations(db: Db, workspaceId: string, agentId: st
     })
     .from(dmParticipants)
     .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
-    .where(inArray(dmParticipants.conversationId, conversationIds));
+    .where(inArray(dmParticipants.conversationId, ids)));
 
-  const counts = await db
+  const counts = await queryInChunks(channelIds, (ids) => db
     .select({ channelId: messages.channelId, count: sql<number>`count(*)` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, ids))
+    .groupBy(messages.channelId));
 
-  const latestMessageIds = await db
+  const latestMessageIds = await queryInChunks(channelIds, (ids) => db
     .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
     .from(messages)
-    .where(inArray(messages.channelId, channelIds))
-    .groupBy(messages.channelId);
+    .where(inArray(messages.channelId, ids))
+    .groupBy(messages.channelId));
 
   const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
-  const lastMessages = lastIds.length > 0
-    ? await db
-      .select({
-        id: messages.id,
-        channelId: messages.channelId,
-        agentId: messages.agentId,
-        body: messages.body,
-        createdAt: messages.createdAt,
-      })
-      .from(messages)
-      .where(inArray(messages.id, lastIds))
-    : [];
+  const lastMessages = await queryInChunks(lastIds, (ids) => db
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      agentId: messages.agentId,
+      body: messages.body,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(inArray(messages.id, ids)));
 
   const participantsByConversation = new Map<string, Array<{ agent_id: string; agent_name: string }>>();
   for (const row of participantRows) {

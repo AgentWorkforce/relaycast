@@ -291,6 +291,16 @@ describe('AgentClient', () => {
       expect(init.method).toBe('GET');
     });
 
+    it('conversations() forwards a result limit', async () => {
+      mockFetch.mockImplementation(() => mockResponse([{ id: 'c_1' }]));
+
+      await me.dms.conversations({ limit: 25 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/dm/conversations?limit=25');
+      expect(init.method).toBe('GET');
+    });
+
     it('messages() gets conversation messages', async () => {
       mockFetch.mockImplementation(() => mockResponse([{
         id: 'm_1',
