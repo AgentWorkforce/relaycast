@@ -332,6 +332,30 @@ impl AgentRegistrationClient {
                 detail: error.to_string(),
             })
     }
+
+    /// Register an agent with a RelayAuth sponsor grant if needed and return
+    /// an [`AgentClient`] using the resulting token.
+    ///
+    /// Hosted callers should use this method rather than
+    /// [`Self::registered_agent_client`] so a token-cache miss cannot silently
+    /// fall back to an authority-less registration request.
+    pub async fn registered_agent_client_with_authority(
+        &self,
+        agent_name: &str,
+        cli_hint: Option<&str>,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> std::result::Result<AgentClient, AgentRegistrationError> {
+        let trimmed_name = agent_name.trim();
+        let token = self
+            .register_agent_token_with_authority(trimmed_name, cli_hint, registration_authority)
+            .await?;
+        self.relay
+            .as_agent(token)
+            .map_err(|error| AgentRegistrationError::Transport {
+                agent_name: trimmed_name.to_string(),
+                detail: error.to_string(),
+            })
+    }
 }
 
 /// Return retry delay seconds for rate-limited registration errors.
@@ -390,6 +414,38 @@ pub async fn retry_agent_registration(
     unreachable!()
 }
 
+/// Attempt authority-bearing registration with bounded retries for transient
+/// errors. The authority is included on every attempt, including the
+/// conflict-triggered token-rotation path.
+pub async fn retry_agent_registration_with_authority(
+    client: &AgentRegistrationClient,
+    agent_name: &str,
+    cli_hint: Option<&str>,
+    registration_authority: AgentRegistrationAuthority,
+) -> std::result::Result<String, AgentRegistrationRetryOutcome> {
+    const MAX_ATTEMPTS: u32 = 3;
+    for attempt in 0..MAX_ATTEMPTS {
+        match client
+            .register_agent_token_with_authority(
+                agent_name,
+                cli_hint,
+                registration_authority.clone(),
+            )
+            .await
+        {
+            Ok(token) => return Ok(token),
+            Err(error) if registration_is_retryable(&error) && attempt < MAX_ATTEMPTS - 1 => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(error) if registration_is_retryable(&error) => {
+                return Err(AgentRegistrationRetryOutcome::RetryableExhausted(error));
+            }
+            Err(error) => return Err(AgentRegistrationRetryOutcome::Fatal(error)),
+        }
+    }
+    unreachable!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -397,9 +453,9 @@ mod tests {
         registration_is_retryable, registration_retry_after_secs, AgentRegistrationClient,
         AgentRegistrationError,
     };
-    use crate::{RelayCast, RelayCastOptions};
+    use crate::{AgentRegistrationAuthority, RelayCast, RelayCastOptions};
     use serde_json::json;
-    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::matchers::{body_json, body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ok(data: serde_json::Value) -> ResponseTemplate {
@@ -457,6 +513,45 @@ mod tests {
 
         assert_eq!(agent.http_client().api_key(), "at_live_cached");
         assert_eq!(agent.http_client().base_url(), server.uri());
+    }
+
+    #[tokio::test]
+    async fn registered_agent_client_with_authority_sends_proof_on_cache_miss() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        let authority = AgentRegistrationAuthority {
+            sponsor_proof: "header.payload.signature".to_string(),
+            work_unit_key: "stable-secret-work-unit-key-0000000000000001".to_string(),
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_json(json!({
+                "name": "worker-authorized",
+                "type": "agent",
+                "metadata": { "cli": "codex" },
+                "registration_authority": authority,
+            })))
+            .respond_with(ok(json!({
+                "id": "a_worker_authorized",
+                "name": "worker-authorized",
+                "token": "at_live_worker_authorized",
+                "status": "online",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let agent = client
+            .registered_agent_client_with_authority("worker-authorized", Some("codex"), authority)
+            .await
+            .expect("authority-bearing registration should succeed");
+
+        assert_eq!(agent.http_client().api_key(), "at_live_worker_authorized");
     }
 
     #[tokio::test]

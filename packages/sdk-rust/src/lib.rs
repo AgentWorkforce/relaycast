@@ -145,8 +145,8 @@ pub use origin_actor::{
 };
 pub use registration::{
     format_registration_error, registration_is_retryable, registration_retry_after_secs,
-    retry_agent_registration, AgentRegistrationClient, AgentRegistrationError,
-    AgentRegistrationRetryOutcome,
+    retry_agent_registration, retry_agent_registration_with_authority, AgentRegistrationClient,
+    AgentRegistrationError, AgentRegistrationRetryOutcome,
 };
 pub use relay::{RelayCast, RelayCastOptions};
 pub use ws::{
