@@ -217,14 +217,6 @@ agentRoutes.post(
         return parsed.response;
       }
       const { name, type, persona, metadata, skills, capabilities } = parsed.data;
-      if (!agentEngine.hasValidRegistrationIdentity(metadata)) {
-        return jsonError(
-          c,
-          'invalid_agent_identity_key',
-          'Agent registration identity_key must be a lowercase SHA-256 verifier',
-          400,
-        );
-      }
       const nextMetadata = {
         ...(metadata || {}),
         ...(skills ? { skills } : {}),

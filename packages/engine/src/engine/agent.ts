@@ -14,7 +14,7 @@ export const AGENT_IDENTITY_METADATA_KEY = 'identity_key';
 export const AGENT_IDENTITY_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const AGENT_IDENTITY_METADATA_JSON_PATH = `$.${AGENT_IDENTITY_METADATA_KEY}`;
 
-export function hasValidRegistrationIdentity(
+function hasValidRegistrationIdentity(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
   if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, AGENT_IDENTITY_METADATA_KEY)) {
@@ -391,6 +391,40 @@ export async function updateAgent(
     capabilities?: Record<string, unknown> | null;
   },
 ) {
+  if (
+    updates.status === undefined
+    && updates.persona === undefined
+    && updates.metadata === undefined
+    && updates.capabilities === undefined
+  ) {
+    return getAgentByName(db, workspaceId, name);
+  }
+
+  const [agent] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
+
+  if (!agent) return null;
+  return updateAgentById(db, workspaceId, agent.id, updates);
+}
+
+/**
+ * Update one exact agent row while preserving its identity verifier at write
+ * time. Callers that already resolved an agent must use the id form so a
+ * delete-and-recreate under the same name cannot redirect their mutation.
+ */
+export async function updateAgentById(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  updates: {
+    status?: string;
+    persona?: string | null;
+    metadata?: Record<string, unknown>;
+    capabilities?: Record<string, unknown> | null;
+  },
+) {
   const setClause: Record<string, unknown> = {};
   if (updates.status !== undefined) setClause.status = updates.status;
   if (updates.persona !== undefined) setClause.persona = updates.persona;
@@ -412,22 +446,15 @@ export async function updateAgent(
   }
   if (updates.capabilities !== undefined) setClause.capabilities = updates.capabilities;
 
-  if (Object.keys(setClause).length === 0) {
-    return getAgentByName(db, workspaceId, name);
-  }
-
-  const [agent] = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
-
-  if (!agent) return null;
+  if (Object.keys(setClause).length === 0) return null;
 
   const [updated] = await db
     .update(agents)
     .set(setClause)
-    .where(eq(agents.id, agent.id))
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)))
     .returning();
+
+  if (!updated) return null;
 
   return {
     id: updated.id,

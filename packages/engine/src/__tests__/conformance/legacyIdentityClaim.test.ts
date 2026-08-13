@@ -225,6 +225,38 @@ describe('legacy agent identity claim', () => {
     });
   });
 
+  it('does not redirect an id-scoped cleanup update to a same-name replacement', async () => {
+    const workspace = await createWorkspace(stack.app, 'legacy-identity-id-scoped-update');
+    const oldProxy = await registerAgent(stack.app, workspace.workspaceKey, 'reused-proxy-name');
+    await agentEngine.deleteAgent(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      'reused-proxy-name',
+    );
+    const replacement = await registerAgent(
+      stack.app,
+      workspace.workspaceKey,
+      'reused-proxy-name',
+    );
+
+    const staleUpdate = await agentEngine.updateAgentById(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      oldProxy.agentId,
+      { status: 'offline', metadata: { a2a: true, a2a_active: false } },
+    );
+
+    expect(staleUpdate).toBeNull();
+    const current = await agentEngine.getAgentByName(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      'reused-proxy-name',
+    );
+    expect(current?.id).toBe(replacement.agentId);
+    expect(current?.status).toBe('active');
+    expect(current?.metadata).not.toHaveProperty('a2a_active');
+  });
+
   it('requires the target agent to be offline at the atomic write', async () => {
     const workspace = await createWorkspace(stack.app, 'legacy-identity-online');
     await registerAgent(stack.app, workspace.workspaceKey, 'online-node');
