@@ -86,6 +86,12 @@ npx tsx quickstart.ts
 
 That is the canonical onboarding loop: create workspace, register agents, connect realtime streams, and watch messages flow live.
 
+Operator recovery for an offline agent registered before identity verifiers
+were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
+only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the
+record is still offline and has no `identity_key` field at write time. Generic
+agent updates cannot write that reserved field.
+
 Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
 
 If you want an explicit SDK helper that tells you whether setup returned an existing workspace or created a new one, use `ensureWorkspace()`:

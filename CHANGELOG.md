@@ -26,6 +26,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - DM conversation and inbox reads remain available beyond 100 conversations, and the advertised DM-list limit now reaches the server instead of being ignored.
 
+### Security
+
+- Legacy agent identity claims are atomic, and generic agent updates cannot write the reserved `identity_key` metadata field.
+
 ## [8.0.0] - 2026-08-10
 
 ### Added

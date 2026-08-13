@@ -1785,7 +1785,10 @@ paths:
 
     patch:
       summary: Update agent
-      description: Update agent properties
+      description: >-
+        Update agent properties. Platform-managed metadata keys such as
+        `identity_key` are rejected; use the dedicated legacy identity claim
+        endpoint for the one supported backfill operation.
       tags:
         - Agents
       security:
@@ -1835,6 +1838,55 @@ paths:
       responses:
         '204':
           description: Agent deleted
+
+  /agents/{name}/legacy-identity:
+    patch:
+      summary: Atomically claim a legacy agent identity
+      description: >-
+        Operator recovery for one offline agent registered before identity
+        verifiers were stored. The update succeeds only when `identity_key`
+        is still absent and the durable agent status is still `offline` in
+        the same atomic database mutation. The request contains a SHA-256
+        verifier, never the raw identity proof.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - identity_key_hash
+              properties:
+                identity_key_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: SHA-256 hex verifier for the caller-held identity proof
+      responses:
+        '200':
+          description: Legacy identity claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+        '404':
+          description: Agent not found
+        '409':
+          description: Agent already has an identity or is not offline
 
   /agents/spawn:
     post:

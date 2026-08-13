@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - DM conversation and unread-inbox enrichment batches large identifier sets below D1's bound-parameter ceiling, so long-lived agents no longer lose both read paths after accumulating more than 100 conversations.
 
+### Security
+
+- Atomically claim an offline legacy agent's identity and reject `identity_key` writes through generic agent updates.
+
 ## [8.0.0] - 2026-08-10
 
 ### Added

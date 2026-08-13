@@ -62,6 +62,12 @@ const updateAgentSchema = z.object({
   capabilities: capabilitiesSchema.nullable().optional(),
 });
 
+const legacyIdentityClaimSchema = z.object({
+  identity_key_hash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+const RESERVED_AGENT_METADATA_KEYS = new Set(['identity_key']);
+
 const sessionEventSchema = z.object({
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).default({}),
@@ -307,6 +313,17 @@ agentRoutes.patch(
       }
 
       const body = parsed.data;
+      const reservedMetadataKey = body.metadata
+        ? Object.keys(body.metadata).find((key) => RESERVED_AGENT_METADATA_KEYS.has(key))
+        : undefined;
+      if (reservedMetadataKey) {
+        return jsonError(
+          c,
+          'reserved_agent_metadata_key',
+          `Agent metadata key "${reservedMetadataKey}" is managed by Relaycast and cannot be updated through the generic agent endpoint`,
+          400,
+        );
+      }
       const nextMetadata = body.metadata !== undefined || body.skills !== undefined
         ? {
           ...(existing.metadata || {}),
@@ -339,6 +356,76 @@ agentRoutes.patch(
         agent_name: name,
         changed_status: typeof body?.status === 'string',
         changed_persona: typeof body?.persona === 'string',
+      });
+      return jsonOk(c, updated);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// PATCH /v1/agents/:name/legacy-identity - atomically claim a pre-gate identity
+agentRoutes.patch(
+  '/agents/:name/legacy-identity',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const parsed = await parseJsonBody(
+        c,
+        legacyIdentityClaimSchema,
+        'invalid legacy identity claim body',
+      );
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+
+      const updated = await agentEngine.claimLegacyAgentIdentity(
+        db,
+        workspace.id,
+        name,
+        parsed.data.identity_key_hash,
+      );
+      if (!updated) {
+        const existing = await agentEngine.getAgentByName(db, workspace.id, name);
+        if (!existing) {
+          return agentNotFound(c, name);
+        }
+        if (Object.prototype.hasOwnProperty.call(existing.metadata ?? {}, 'identity_key')) {
+          return jsonError(
+            c,
+            'agent_identity_already_claimed',
+            `Agent "${name}" already has an identity_key and cannot be reclaimed through the legacy path`,
+            409,
+          );
+        }
+        if (existing.status !== 'offline') {
+          return jsonError(
+            c,
+            'agent_not_offline',
+            `Agent "${name}" is not offline and cannot be reclaimed through the legacy path`,
+            409,
+          );
+        }
+        return jsonError(
+          c,
+          'agent_identity_claim_conflict',
+          `Agent "${name}" changed while its legacy identity was being claimed; retry only after verifying its current state`,
+          409,
+        );
+      }
+
+      await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
+        id: updated.id,
+        name: updated.name,
+        status: updated.status,
+        metadata: updated.metadata ?? {},
+      });
+      emitServerEvent(c, workspace.id, 'relaycast_server_legacy_identity_claimed', {
+        agent_name: name,
       });
       return jsonOk(c, updated);
     } catch (err: unknown) {
