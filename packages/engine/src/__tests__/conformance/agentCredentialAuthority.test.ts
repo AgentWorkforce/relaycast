@@ -4,6 +4,7 @@ import { agents, workspaces } from '../../db/schema.js';
 import { createWorkspace as createWorkspaceRecord } from '../../engine/workspace.js';
 import { registerAgent as registerAgentRecord } from '../../engine/agent.js';
 import { handleNodeControlMessage } from '../../engine/node.js';
+import { authorizeNewNamedAgentCredential } from '../../engine/agentCredentialAuthority.js';
 import {
   FakeSocket,
   createWorkspace,
@@ -188,6 +189,66 @@ describe('agent credential authority', () => {
     });
     expect(ownerRotation.status).toBe(200);
     expect((await ownerRotation.json() as { data: { token: string } }).data.token).toMatch(/^at_live_/u);
+  });
+
+  it('rejects a stale preflight decision after another binding claims the name', async () => {
+    const current = stack();
+    const ownerProof = await mintSponsorProof({ sponsorId: 'user_race_owner' });
+    const attackerProof = await mintSponsorProof({ sponsorId: 'user_race_attacker' });
+    const workspace = await createWorkspace(current.app, 'claim-race', workspaceAuthority(ownerProof));
+    const ownerAuthority = agentAuthority(
+      ownerProof,
+      'race-owner-work-unit-key-0000000000000001',
+    );
+    const attackerAuthority = agentAuthority(
+      attackerProof,
+      'race-attacker-work-unit-key-0000000000001',
+    );
+
+    // Both checks happen before either request writes. The second decision is
+    // therefore stale once the owner transaction establishes the name claim.
+    const ownerDecision = await authorizeNewNamedAgentCredential(
+      current.runtime.deps.db,
+      current.runtime.deps.config ?? {},
+      workspace.workspaceId,
+      'raced-agent',
+      ownerAuthority,
+    );
+    const staleAttackerDecision = await authorizeNewNamedAgentCredential(
+      current.runtime.deps.db,
+      current.runtime.deps.config ?? {},
+      workspace.workspaceId,
+      'raced-agent',
+      attackerAuthority,
+    );
+    await registerAgentRecord(
+      current.runtime.deps.db,
+      workspace.workspaceId,
+      { name: 'raced-agent' },
+      ownerDecision,
+    );
+
+    const ownerDelete = await current.app.request('/v1/agents/raced-agent', {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${workspace.workspaceKey}`,
+      },
+      body: JSON.stringify({ registration_authority: ownerAuthority }),
+    });
+    expect(ownerDelete.status).toBe(204);
+
+    await expect(registerAgentRecord(
+      current.runtime.deps.db,
+      workspace.workspaceId,
+      { name: 'raced-agent' },
+      staleAttackerDecision,
+    )).rejects.toThrow(/agent_credential_claim_mismatch/u);
+    expect(await current.runtime.deps.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspace.workspaceId), eq(agents.name, 'raced-agent'))))
+      .toHaveLength(0);
   });
 
   it('verifies sponsor proof before workspace creation has any side effect', async () => {

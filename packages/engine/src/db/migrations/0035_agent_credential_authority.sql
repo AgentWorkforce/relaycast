@@ -50,6 +50,50 @@ BEGIN
   SELECT RAISE(ABORT, 'agent_sponsor_org_mismatch');
 END;
 
+-- The route checks the durable name claim before it starts the registration
+-- transaction, but another request can claim the same name between that check
+-- and the INSERT on concurrent engine hosts. Make the database re-check the
+-- complete binding at the mutation boundary. The claim INSERT is deliberately
+-- the first statement in each sponsored registration batch.
+CREATE TRIGGER agents_credential_claim_insert_guard
+BEFORE INSERT ON agents
+WHEN NEW.sponsor_org_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_credential_claims
+    WHERE workspace_id = NEW.workspace_id
+      AND agent_name = NEW.name
+      AND sponsor_org_id = NEW.sponsor_org_id
+      AND sponsor_id = NEW.sponsor_id
+      AND sponsor_oidc_issuer = NEW.sponsor_oidc_issuer
+      AND sponsor_oidc_subject = NEW.sponsor_oidc_subject
+      AND work_unit_key_hash = NEW.work_unit_key_hash
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'agent_credential_claim_mismatch');
+END;
+
+-- Legacy migration is the only permitted NULL -> sponsored transition. It too
+-- must match the durable name claim inside the same atomic unit, so a stale
+-- preflight decision cannot bind an incumbent row after a competing claim won.
+CREATE TRIGGER agents_credential_claim_update_guard
+BEFORE UPDATE OF sponsor_org_id, sponsor_id, sponsor_oidc_issuer,
+  sponsor_oidc_subject, work_unit_key_hash
+ON agents
+WHEN OLD.sponsor_org_id IS NULL AND NEW.sponsor_org_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_credential_claims
+    WHERE workspace_id = NEW.workspace_id
+      AND agent_name = NEW.name
+      AND sponsor_org_id = NEW.sponsor_org_id
+      AND sponsor_id = NEW.sponsor_id
+      AND sponsor_oidc_issuer = NEW.sponsor_oidc_issuer
+      AND sponsor_oidc_subject = NEW.sponsor_oidc_subject
+      AND work_unit_key_hash = NEW.work_unit_key_hash
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'agent_credential_claim_mismatch');
+END;
+
 -- Sponsor and work-unit bindings are write-once. Legacy rows may transition
 -- from all-NULL to a verified binding through the agent-token migration route;
 -- after that, neither public metadata writes nor an internal programming error

@@ -422,6 +422,22 @@ export async function bindLegacyAgentCredential(
         eq(workspaces.id, workspaceId),
         or(isNull(workspaces.sponsorOrgId), eq(workspaces.sponsorOrgId, binding.sponsorOrgId)),
       )),
+    // Establish the durable name claim before the agent transition. Migration
+    // 0035's trigger rechecks this exact binding at UPDATE time, closing the
+    // preflight-to-write race on concurrent engine hosts.
+    writeDb
+      .insert(agentCredentialClaims)
+      .values({
+        workspaceId,
+        agentName: current.name,
+        sponsorOrgId: binding.sponsorOrgId,
+        sponsorId: binding.sponsorId,
+        sponsorOidcIssuer: binding.sponsorOidcIssuer,
+        sponsorOidcSubject: binding.sponsorOidcSubject,
+        workUnitKeyHash: binding.workUnitKeyHash,
+        claimedAt: binding.sponsorBoundAt,
+      })
+      .onConflictDoNothing(),
     writeDb
       .update(agents)
       .set(binding)
@@ -436,19 +452,6 @@ export async function bindLegacyAgentCredential(
         isNull(agents.sponsorProofHash),
         isNull(agents.sponsorBoundAt),
       )),
-    writeDb
-      .insert(agentCredentialClaims)
-      .values({
-        workspaceId,
-        agentName: current.name,
-        sponsorOrgId: binding.sponsorOrgId,
-        sponsorId: binding.sponsorId,
-        sponsorOidcIssuer: binding.sponsorOidcIssuer,
-        sponsorOidcSubject: binding.sponsorOidcSubject,
-        workUnitKeyHash: binding.workUnitKeyHash,
-        claimedAt: binding.sponsorBoundAt,
-      })
-      .onConflictDoNothing(),
   ]);
 
   const [bound] = await db
