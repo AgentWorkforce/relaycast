@@ -123,6 +123,24 @@ Relaycast is the messaging backbone:
 
 API errors use `{ ok: false, error: { code, message } }`. Invalid or expired agent tokens return `agent_token_invalid` with HTTP 401; clients should recover by re-registering or rotating the agent identity, then retrying the failed operation.
 
+## Hosted credential authority
+
+The hosted service does not treat a workspace key as sufficient authority to
+mint or rotate an agent credential. Workspace creation and every agent-token
+issuance path—including REST registration, rotation, A2A proxy registration,
+and node-control `agent.register`—require a short-lived RS256 RelayAuth sponsor
+grant. The server verifies its pinned key, issuer, audience, organization,
+expiry, and `identity.create` intent, then stores the sponsor and work-unit
+binding in dedicated immutable columns. Caller-editable agent metadata is never
+used for this decision.
+
+Self-hosted engine deployments can omit `config.agentCredentialAuthority` to
+retain workspace-key-only operation. Hosted adapters must configure it and fail
+closed if their trust root is unavailable. Agents created before this contract
+use `POST /v1/agent/credential-authority` once with their incumbent agent token,
+a fresh sponsor grant, and their stable work-unit key; a workspace key cannot
+perform that migration.
+
 ## Telemetry Attribution
 
 Clients may declare who is driving a request so server-side product telemetry

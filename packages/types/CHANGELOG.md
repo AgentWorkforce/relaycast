@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add canonical sponsor/work-unit authority wire schemas, including
+  `agent.register` support for hosted credential enforcement.
+
 ## [8.0.0] - 2026-08-10
 
 ### Added

@@ -15,3 +15,4 @@ export * from './telemetry.js';
 export * from './emoji.js';
 export * from './event-id.js';
 export * from './fleet-wire.js';
+export * from './registration-authority.js';

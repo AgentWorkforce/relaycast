@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
+import { AgentRegistrationAuthoritySchema, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -27,9 +27,16 @@ import {
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { positiveIntQueryParam } from '../lib/httpQuery.js';
+import {
+  authorizeExistingAgentCredential,
+  authorizeNewNamedAgentCredential,
+  assertNoCredentialAuthorityMetadata,
+  bindLegacyAgentCredential,
+} from '../engine/agentCredentialAuthority.js';
 
 export const agentRoutes = new Hono<AppEnv>();
 
@@ -50,6 +57,11 @@ const registerAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   skills: z.array(skillSchema).optional(),
   capabilities: capabilitiesSchema.optional(),
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
+});
+
+const bindCredentialAuthoritySchema = z.object({
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 });
 
 const AGENT_STATUSES = ['active', 'idle', 'blocked', 'waiting', 'offline', 'online'] as const;
@@ -81,6 +93,11 @@ const releaseAgentSchema = z.object({
   name: z.string().min(1),
   reason: z.string().nullable().optional(),
   delete_agent: z.boolean().optional(),
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
+});
+
+const deleteAgentSchema = z.object({
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 });
 
 const listSessionEventsQuerySchema = z.object({
@@ -154,6 +171,33 @@ agentRoutes.get(
   },
 );
 
+// POST /v1/agent/credential-authority - one-time migration for a legacy row.
+// The incumbent agent bearer token is the non-forgeable continuity proof;
+// workspace keys are intentionally rejected by requireAgentToken.
+agentRoutes.post(
+  '/agent/credential-authority',
+  requireAgentToken,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, bindCredentialAuthoritySchema, 'invalid credential authority body');
+      if (!parsed.ok) return parsed.response;
+      const workspace = c.get('workspace');
+      const authAgent = c.get('agent')!;
+      await bindLegacyAgentCredential(
+        c.get('db'),
+        c.get('engine').config,
+        workspace.id,
+        authAgent.id,
+        parsed.data.registration_authority,
+      );
+      return jsonOk(c, { bound: true });
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
 // POST /v1/agent/node-token - mint the authenticated agent's direct node token
 agentRoutes.post(
   '/agent/node-token',
@@ -210,19 +254,26 @@ agentRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { name, type, persona, metadata, skills, capabilities } = parsed.data;
+      const { name, type, persona, metadata, skills, capabilities, registration_authority: registrationAuthority } = parsed.data;
       const nextMetadata = {
         ...(metadata || {}),
         ...(skills ? { skills } : {}),
       };
-
+      assertNoCredentialAuthorityMetadata(c.get('engine').config, nextMetadata);
+      const credentialAuthority = await authorizeNewNamedAgentCredential(
+        db,
+        c.get('engine').config,
+        workspace.id,
+        name,
+        registrationAuthority,
+      );
       const result = await agentEngine.registerAgent(db, workspace.id, {
         name,
         type,
         persona,
         metadata: nextMetadata,
         capabilities,
-      });
+      }, credentialAuthority);
       if (skills?.length) {
         await directoryEngine.syncSourceAgentDirectoryEntry(db, workspace.id, {
           id: result.id,
@@ -307,6 +358,7 @@ agentRoutes.patch(
       }
 
       const body = parsed.data;
+      assertNoCredentialAuthorityMetadata(c.get('engine').config, body.metadata);
       const nextMetadata = body.metadata !== undefined || body.skills !== undefined
         ? {
           ...(existing.metadata || {}),
@@ -357,6 +409,15 @@ agentRoutes.delete(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const parsed = await parseOptionalJsonBody(c, deleteAgentSchema, 'invalid agent deletion body');
+      if (!parsed.ok) return parsed.response;
+      await authorizeExistingAgentCredential(
+        db,
+        c.get('engine').config,
+        workspace.id,
+        name,
+        parsed.data.registration_authority,
+      );
       const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
       if (!deleted) {
         return agentNotFound(c, name);
@@ -605,7 +666,17 @@ agentRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { name, reason, delete_agent } = parsed.data;
+      const { name, reason, delete_agent, registration_authority: registrationAuthority } = parsed.data;
+
+      if (delete_agent === true) {
+        await authorizeExistingAgentCredential(
+          db,
+          c.get('engine').config,
+          workspace.id,
+          name,
+          registrationAuthority,
+        );
+      }
 
       const input = {
         name,

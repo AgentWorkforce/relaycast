@@ -15,7 +15,7 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
+import { actionInvocations, agentCredentialClaims, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
@@ -44,6 +44,12 @@ import {
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
+import {
+  authorizeNewNamedAgentCredential,
+  bindingColumns,
+  credentialClaimColumns,
+  type AgentCredentialAuthorityDecision,
+} from './agentCredentialAuthority.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -1135,6 +1141,7 @@ export async function registerAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRegisterMessage,
+  credentialAuthority: AgentCredentialAuthorityDecision,
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
@@ -1164,6 +1171,14 @@ export async function registerAgentViaNode(
       'invocation_id', ${message.invocation_id ?? null},
       'registered_at', ${now}
     )`;
+    const credentialClaim = credentialClaimColumns(
+      workspaceId,
+      message.name,
+      credentialAuthority,
+    );
+    if (credentialClaim) {
+      await tx.insert(agentCredentialClaims).values(credentialClaim).onConflictDoNothing();
+    }
     const [result] = await tx
       .insert(agents)
       .values({
@@ -1182,6 +1197,7 @@ export async function registerAgentViaNode(
         originNodeId: nodeId,
         resumable: message.resumable ?? false,
         sessionRef: message.session_ref ?? null,
+        ...bindingColumns(credentialAuthority),
       })
       .onConflictDoUpdate({
         target: [agents.workspaceId, agents.name],
@@ -1227,15 +1243,26 @@ export async function registerAgentViaNode(
         // The second disjunct is unchanged: the agent's own node may always
         // re-register it, so a node restart or reconnect is never blocked by
         // the grace window.
-        setWhere: or(
-          lt(agents.lastSeen, new Date(Date.now() - AGENT_RECLAIM_GRACE_MS)),
-          and(
-            eq(agents.locationType, 'via_node'),
-            or(
-              eq(agents.locationNodeId, nodeId),
-              sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
+        setWhere: and(
+          or(
+            lt(agents.lastSeen, new Date(Date.now() - AGENT_RECLAIM_GRACE_MS)),
+            and(
+              eq(agents.locationType, 'via_node'),
+              or(
+                eq(agents.locationNodeId, nodeId),
+                sql`${agents.locationNodeId} = 'node_direct_' || ${agents.id}`,
+              ),
             ),
           ),
+          credentialAuthority.mode === 'sponsor'
+            ? and(
+              eq(agents.sponsorOrgId, credentialAuthority.binding.sponsorOrgId),
+              eq(agents.sponsorId, credentialAuthority.binding.sponsorId),
+              eq(agents.sponsorOidcIssuer, credentialAuthority.binding.sponsorOidcIssuer),
+              eq(agents.sponsorOidcSubject, credentialAuthority.binding.sponsorOidcSubject),
+              eq(agents.workUnitKeyHash, credentialAuthority.binding.workUnitKeyHash),
+            )
+            : undefined,
         ),
       })
       .returning();
@@ -1766,12 +1793,20 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'agent.register': {
+        const credentialAuthority = await authorizeNewNamedAgentCredential(
+          args.db,
+          args.completionDeps?.config ?? {},
+          args.workspaceId,
+          message.name,
+          message.registration_authority,
+        );
         const registered = await registerAgentViaNode(
           args.db,
           args.workspaceId,
           args.nodeId,
           frameProviderName,
           message,
+          credentialAuthority,
           { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
         );
         // The relay broker's node_control client awaits a `reply` frame keyed by

@@ -47,6 +47,9 @@ export const workspaces = sqliteTable('workspaces', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
   retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
+  // Immutable trust-domain pin derived from a verified RelayAuth grant. This
+  // is deliberately not part of editable workspace metadata.
+  sponsorOrgId: text('sponsor_org_id'),
 });
 
 // ============================================
@@ -80,6 +83,15 @@ export const agents = sqliteTable(
     // Durable allocation high-water. Unlike MAX(deliveries.seq), this survives
     // settled-delivery pruning and message-retention cascades.
     deliverySeq: integer('delivery_seq').notNull().default(0),
+    // Server-controlled credential authority. These fields are never exposed
+    // through public agent metadata and are made write-once by DB triggers.
+    sponsorOrgId: text('sponsor_org_id'),
+    sponsorId: text('sponsor_id'),
+    sponsorOidcIssuer: text('sponsor_oidc_issuer'),
+    sponsorOidcSubject: text('sponsor_oidc_subject'),
+    workUnitKeyHash: text('work_unit_key_hash'),
+    sponsorProofHash: text('sponsor_proof_hash'),
+    sponsorBoundAt: integer('sponsor_bound_at', { mode: 'timestamp' }),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     lastSeen: integer('last_seen', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
@@ -88,6 +100,29 @@ export const agents = sqliteTable(
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
+  ],
+);
+
+// Write-once credential ownership survives destructive agent deletion. This
+// prevents a workspace-key holder from deleting a protected row and then
+// recreating its name under a different sponsor/work-unit binding.
+export const agentCredentialClaims = sqliteTable(
+  'agent_credential_claims',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentName: text('agent_name').notNull(),
+    sponsorOrgId: text('sponsor_org_id').notNull(),
+    sponsorId: text('sponsor_id').notNull(),
+    sponsorOidcIssuer: text('sponsor_oidc_issuer').notNull(),
+    sponsorOidcSubject: text('sponsor_oidc_subject').notNull(),
+    workUnitKeyHash: text('work_unit_key_hash').notNull(),
+    claimedAt: integer('claimed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.agentName] }),
+    index('idx_agent_credential_claims_workspace').on(table.workspaceId),
   ],
 );
 

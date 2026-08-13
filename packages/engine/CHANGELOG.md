@@ -9,6 +9,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add optional server-side RelayAuth credential authority enforcement for
+  workspace creation, agent registration/rotation, A2A, and fleet node-control
+  registration, with immutable database bindings, durable name claims that
+  survive deletion, protected destructive lifecycle paths, and guarded legacy
+  migration.
+
 ## [8.0.0] - 2026-08-10
 
 ### Added

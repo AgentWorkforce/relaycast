@@ -20,6 +20,11 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Changed
 
+- Require hosted agent credential issuance and rotation to verify RelayAuth
+  sponsor grants server-side, bind sponsor/work-unit ownership in immutable
+  storage that survives agent deletion, cover direct REST and fleet
+  node-control paths, protect destructive deletion/release, and provide an
+  incumbent-agent-token migration for legacy rows.
 - The self-host container now installs `@relaycast/engine` 8.0.0, matching the hosted deployment, and its runbook documents agent-card discovery as working on the standard well-known path rather than as a known defect.
 
 ## [8.0.0] - 2026-08-10

@@ -8,6 +8,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Added
+
+- Add workspace and agent registration authority APIs, protected token
+  rotation, and incumbent-agent-token legacy binding support.
+
 ### Changed
 
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.

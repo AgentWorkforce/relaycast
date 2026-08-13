@@ -3,6 +3,7 @@ import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
 import type { EngineConfig, EntitlementsProvider } from '../../ports/index.js';
+import type { AgentRegistrationAuthority, WorkspaceRegistrationAuthority } from '@relaycast/types';
 
 export interface TestStack {
   app: Hono<AppEnv>;
@@ -17,6 +18,7 @@ export function makeNodeStack(options?: {
   environment?: string;
   httpPushProxy?: EngineConfig['httpPushProxy'];
   entitlements?: EntitlementsProvider;
+  agentCredentialAuthority?: EngineConfig['agentCredentialAuthority'];
 }): TestStack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
@@ -26,6 +28,7 @@ export function makeNodeStack(options?: {
       environment: options?.environment ?? 'test',
       mailbox: options?.mailbox,
       httpPushProxy: options?.httpPushProxy,
+      agentCredentialAuthority: options?.agentCredentialAuthority,
     },
     entitlements: options?.entitlements,
     // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
@@ -57,11 +60,15 @@ interface CreatedWorkspace {
 }
 
 /** Create a workspace via the HTTP API and return its key + id. */
-export async function createWorkspace(app: Hono<AppEnv>, name: string): Promise<CreatedWorkspace> {
+export async function createWorkspace(
+  app: Hono<AppEnv>,
+  name: string,
+  registrationAuthority?: WorkspaceRegistrationAuthority,
+): Promise<CreatedWorkspace> {
   const res = await app.request('/v1/workspaces', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, registration_authority: registrationAuthority }),
   });
   if (res.status >= 300) {
     throw new Error(`createWorkspace failed: ${res.status} ${await res.text()}`);
@@ -82,11 +89,16 @@ interface CreatedAgent {
 }
 
 /** Register an agent via the HTTP API and return its token + id. */
-export async function registerAgent(app: Hono<AppEnv>, workspaceKey: string, name: string): Promise<CreatedAgent> {
+export async function registerAgent(
+  app: Hono<AppEnv>,
+  workspaceKey: string,
+  name: string,
+  registrationAuthority?: AgentRegistrationAuthority,
+): Promise<CreatedAgent> {
   const res = await app.request('/v1/agents', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, registration_authority: registrationAuthority }),
   });
   if (res.status >= 300) {
     throw new Error(`registerAgent failed: ${res.status} ${await res.text()}`);

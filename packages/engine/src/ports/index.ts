@@ -95,6 +95,17 @@ export interface EngineConfig {
   appSemver?: string;
   sdkSemver?: string;
   /**
+   * RelayAuth trust root for agent credential issuance. When configured, every
+   * workspace creation, agent registration, token rotation, and node-control
+   * registration must present a valid `identity.create` sponsor grant. Hosted
+   * adapters configure this; self-hosted deployments may omit it.
+   */
+  agentCredentialAuthority?: {
+    publicKeyPem: string;
+    issuer: string;
+    audience?: string;
+  };
+  /**
    * Master secret used to derive relayfile -> relaycast inbound HMAC secrets.
    * Hosted adapters wire this from their internal secret; self-host can omit it
    * to disable the relayfile inbound bridge.

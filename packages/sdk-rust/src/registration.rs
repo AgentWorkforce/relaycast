@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::error::RelayError;
-use crate::{AgentClient, CreateAgentRequest, RelayCast};
+use crate::{AgentClient, AgentRegistrationAuthority, CreateAgentRequest, RelayCast};
 
 const DEFAULT_REGISTRATION_COOLDOWN_SECS: u64 = 60;
 
@@ -166,6 +166,27 @@ impl AgentRegistrationClient {
         agent_name: &str,
         cli_hint: Option<&str>,
     ) -> std::result::Result<String, AgentRegistrationError> {
+        self.register_agent_token_inner(agent_name, cli_hint, None)
+            .await
+    }
+
+    /// Register (or rotate) with a RelayAuth sponsor grant and work-unit key.
+    pub async fn register_agent_token_with_authority(
+        &self,
+        agent_name: &str,
+        cli_hint: Option<&str>,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> std::result::Result<String, AgentRegistrationError> {
+        self.register_agent_token_inner(agent_name, cli_hint, Some(registration_authority))
+            .await
+    }
+
+    async fn register_agent_token_inner(
+        &self,
+        agent_name: &str,
+        cli_hint: Option<&str>,
+        registration_authority: Option<AgentRegistrationAuthority>,
+    ) -> std::result::Result<String, AgentRegistrationError> {
         let trimmed_name = agent_name.trim();
         if trimmed_name.is_empty() {
             return Err(AgentRegistrationError::InvalidAgentName);
@@ -194,7 +215,15 @@ impl AgentRegistrationClient {
             metadata: Some(metadata),
         };
 
-        match self.relay.register_agent(request).await {
+        let registration = match registration_authority.clone() {
+            Some(authority) => {
+                self.relay
+                    .register_agent_with_authority(request, authority)
+                    .await
+            }
+            None => self.relay.register_agent(request).await,
+        };
+        match registration {
             Ok(result) => {
                 if result.token.trim().is_empty() {
                     return Err(AgentRegistrationError::MissingToken {
@@ -207,7 +236,15 @@ impl AgentRegistrationClient {
                 Ok(result.token)
             }
             Err(RelayError::Api { status: 409, .. }) => {
-                match self.relay.rotate_agent_token(trimmed_name).await {
+                let rotation = match registration_authority {
+                    Some(authority) => {
+                        self.relay
+                            .rotate_agent_token_with_authority(trimmed_name, authority)
+                            .await
+                    }
+                    None => self.relay.rotate_agent_token(trimmed_name).await,
+                };
+                match rotation {
                     Ok(result) => {
                         if result.token.trim().is_empty() {
                             return Err(AgentRegistrationError::MissingToken {

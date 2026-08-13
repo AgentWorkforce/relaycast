@@ -170,6 +170,7 @@ pub use types::{
     AgentCommand,
     AgentListQuery,
     AgentPresenceInfo,
+    AgentRegistrationAuthority,
     AgentStatusEvent,
     // Channels
     Channel,
@@ -278,6 +279,7 @@ pub use types::{
     Workspace,
     WorkspaceDmConversation,
     WorkspaceDmMessage,
+    WorkspaceRegistrationAuthority,
     WorkspaceStats,
     // Events
     WsEvent,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentRegistrationAuthoritySchema } from './registration-authority.js';
 
 export type FleetWireJsonValue =
   | string
@@ -208,6 +209,7 @@ export const FleetAgentRegisterMessageSchema = z
     invocation_id: z.string().optional(),
     session_ref: z.string().optional(),
     resumable: z.boolean().optional(),
+    registration_authority: AgentRegistrationAuthoritySchema.optional(),
   })
   .strict();
 export type FleetAgentRegisterMessage = z.infer<typeof FleetAgentRegisterMessageSchema>;

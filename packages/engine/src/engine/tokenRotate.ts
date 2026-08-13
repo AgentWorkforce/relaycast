@@ -3,10 +3,19 @@ import type { getDb } from '../db/index.js';
 import { agents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import {
+  decisionMatchesAgent,
+  type AgentCredentialAuthorityDecision,
+} from './agentCredentialAuthority.js';
 
 type Db = ReturnType<typeof getDb>;
 
-export async function rotateAgentToken(db: Db, workspaceId: string, agentName: string) {
+export async function rotateAgentToken(
+  db: Db,
+  workspaceId: string,
+  agentName: string,
+  credentialAuthority: AgentCredentialAuthorityDecision,
+) {
   const [agent] = await db
     .select()
     .from(agents)
@@ -14,6 +23,13 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
 
   if (!agent) {
     throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
+  }
+  if (!decisionMatchesAgent(credentialAuthority, agent)) {
+    throw codedError(
+      'The sponsor proof and work-unit key do not own this agent credential',
+      'agent_credential_authority_mismatch',
+      409,
+    );
   }
 
   const newToken = `at_live_${randomHex(16)}`;

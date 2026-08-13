@@ -12,6 +12,7 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      sponsorOrgId?: string;
     };
 
 function hashApiKey(apiKey: string): Promise<string> {
@@ -36,6 +37,7 @@ export async function createWorkspace(
 ) {
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
+  const sponsorOrgId = typeof options === 'string' ? undefined : options?.sponsorOrgId;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
   if (providedOwnerApiKeyHash && derivedOwnerApiKeyHash && providedOwnerApiKeyHash !== derivedOwnerApiKeyHash) {
@@ -51,6 +53,15 @@ export async function createWorkspace(
       .from(workspaces)
       .where(and(eq(workspaces.name, name), eq(workspaces.apiKeyHash, ownerApiKeyHash)));
     if (existing) {
+      if (sponsorOrgId !== undefined && existing.sponsorOrgId !== sponsorOrgId) {
+        throw codedError(
+          existing.sponsorOrgId === null
+            ? 'Legacy workspace must be migrated by an incumbent agent before sponsored reuse'
+            : 'Sponsor proof organization does not match this workspace',
+          existing.sponsorOrgId === null ? 'workspace_sponsor_migration_required' : 'workspace_sponsor_org_mismatch',
+          existing.sponsorOrgId === null ? 409 : 403,
+        );
+      }
       const workspace = buildWorkspaceResponse(existing, providedOwnerApiKey);
       return {
         workspace,
@@ -70,6 +81,7 @@ export async function createWorkspace(
       id: workspaceId,
       name,
       apiKeyHash,
+      sponsorOrgId,
     })
     .returning();
 

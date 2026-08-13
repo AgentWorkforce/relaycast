@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { AgentRegistrationAuthoritySchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, agents, messages, workspaces } from '../db/schema.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
@@ -32,6 +33,7 @@ const registerA2aSchema = z.object({
   auth_scheme: z.enum(['bearer', 'api_key', 'none']).optional(),
   auth_credential: z.string().optional(),
   target_agent: z.string().min(1).optional(),
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 }).refine((value) => value.agent_card_url || value.agent_card, {
   message: 'agent_card_url or agent_card is required',
   path: ['agent_card_url'],
@@ -171,6 +173,8 @@ a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
       authScheme: parsed.data.auth_scheme,
       authCredential: parsed.data.auth_credential,
       targetAgent: parsed.data.target_agent,
+      registrationAuthority: parsed.data.registration_authority,
+      engineConfig: c.get('engine').config,
     });
 
     return jsonCreated(c, {

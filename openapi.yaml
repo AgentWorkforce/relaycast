@@ -78,6 +78,32 @@ components:
       description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
 
   schemas:
+    AgentRegistrationAuthority:
+      type: object
+      additionalProperties: false
+      required: [sponsor_proof, work_unit_key]
+      properties:
+        sponsor_proof:
+          type: string
+          maxLength: 16384
+          description: Short-lived RS256 RelayAuth sponsor grant. The server derives sponsor and organization from its verified claims.
+        work_unit_key:
+          type: string
+          minLength: 32
+          maxLength: 4096
+          writeOnly: true
+          description: Stable, secret work-unit capability. Relaycast stores only a workspace-scoped SHA-256 verifier.
+
+    WorkspaceRegistrationAuthority:
+      type: object
+      additionalProperties: false
+      required: [sponsor_proof]
+      properties:
+        sponsor_proof:
+          type: string
+          maxLength: 16384
+          description: Short-lived RS256 RelayAuth sponsor grant used to pin the workspace organization before creation.
+
     Workspace:
       type: object
       properties:
@@ -1219,6 +1245,8 @@ paths:
               properties:
                 name:
                   type: string
+                registration_authority:
+                  $ref: '#/components/schemas/WorkspaceRegistrationAuthority'
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1682,7 +1710,12 @@ paths:
   /agents:
     post:
       summary: Register agent
-      description: Register a new agent in the workspace. Agent names are unique per workspace; registering a duplicate name returns `409 agent_already_exists`.
+      description: >-
+        Register a new agent in the workspace. Hosted deployments require
+        `registration_authority`; a workspace key alone cannot issue an agent
+        credential. Sponsor/work-unit bindings are stored in immutable server
+        columns and are not read from agent metadata. Agent names are unique per
+        workspace; registering a duplicate name returns `409 agent_already_exists`.
       tags:
         - Agents
       security:
@@ -1705,6 +1738,9 @@ paths:
                   type: string
                 metadata:
                   type: object
+                  description: Caller-editable metadata. Credential-authority keys are reserved and rejected by hosted deployments.
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '201':
           description: Agent registered (includes token)
@@ -1821,7 +1857,7 @@ paths:
 
     delete:
       summary: Delete agent
-      description: Delete an agent from the workspace
+      description: Delete an agent from the workspace. Hosted deployments require authority matching the immutable sponsor/work-unit binding.
       tags:
         - Agents
       security:
@@ -1832,6 +1868,15 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '204':
           description: Agent deleted
@@ -1912,7 +1957,9 @@ paths:
         release fails explicitly with `503 agent_host_unavailable`; it never
         creates an ownerless pending invocation. With `delete_agent`, the engine
         can reap the database record directly and returns a completed invocation,
-        deleting the agent and any implicit direct node.
+        deleting the agent and any implicit direct node. On hosted deployments,
+        destructive release additionally requires authority matching the
+        immutable sponsor/work-unit binding.
       tags:
         - Agents
       security:
@@ -1937,6 +1984,8 @@ paths:
                 delete_agent:
                   type: boolean
                   description: If true, permanently delete the agent
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '201':
           description: Release dispatched to a live host or completed locally
@@ -3010,7 +3059,7 @@ paths:
   /agents/{name}/rotate-token:
     post:
       summary: Rotate agent token
-      description: Rotate and return a new token for an existing agent
+      description: Rotate and return a new token for an existing agent. Hosted deployments require authority matching the immutable sponsor/work-unit binding.
       tags:
         - Agents
       security:
@@ -3021,6 +3070,15 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '200':
           description: Token rotated
@@ -3028,6 +3086,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /agent/credential-authority:
+    post:
+      summary: Bind a legacy agent credential authority
+      description: >-
+        One-time migration for an agent created before sponsor enforcement.
+        Requires the incumbent agent token plus a fresh sponsor grant and stable
+        work-unit key. Workspace keys cannot invoke this route. Once written,
+        the server-side binding is immutable.
+      tags:
+        - Agents
+      security:
+        - agentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registration_authority]
+              properties:
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
+      responses:
+        '200':
+          description: Legacy binding established or already matched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '409':
+          description: Existing binding mismatch or incomplete legacy state
 
   /workspace/system-prompt:
     get:

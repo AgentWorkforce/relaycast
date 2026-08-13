@@ -22,7 +22,7 @@ import {
   type A2aTaskState,
 } from '@relaycast/a2a';
 import { z } from 'zod';
-import type { FileAttachment } from '@relaycast/types';
+import type { AgentRegistrationAuthority, FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/schema.js';
 import { registerAgent, getAgentByName, updateAgent } from './agent.js';
@@ -31,6 +31,11 @@ import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { randomUuid, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import type { EngineConfig } from '../ports/index.js';
+import {
+  authorizeExistingAgentCredential,
+  authorizeNewNamedAgentCredential,
+} from './agentCredentialAuthority.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -90,6 +95,8 @@ export interface RegisterA2aAgentInput {
   authCredential?: string;
   /** Remote skill/agent that DMs to this proxy should address. */
   targetAgent?: string;
+  registrationAuthority?: AgentRegistrationAuthority;
+  engineConfig: EngineConfig;
 }
 
 export interface RegisterA2aAgentResult {
@@ -335,17 +342,31 @@ export async function registerA2aAgent(
     if (!isA2aProxy) {
       throw codedError(`Agent "${relayName}" already exists in this workspace`, 'agent_already_exists', 409);
     }
+    const credentialAuthority = await authorizeExistingAgentCredential(
+      db,
+      input.engineConfig,
+      workspaceId,
+      relayName,
+      input.registrationAuthority,
+    );
     await updateAgent(db, workspaceId, relayName, { status: 'active', metadata: proxyMetadata });
-    const rotated = await rotateAgentToken(db, workspaceId, relayName);
+    const rotated = await rotateAgentToken(db, workspaceId, relayName, credentialAuthority);
     relayAgentId = existingProxy.id;
     relayToken = rotated.token;
   } else {
+    const credentialAuthority = await authorizeNewNamedAgentCredential(
+      db,
+      input.engineConfig,
+      workspaceId,
+      relayName,
+      input.registrationAuthority,
+    );
     const provisioned = await registerAgent(db, workspaceId, {
       name: relayName,
       type: 'external',
       persona: `External A2A agent proxy for ${agentCard.name}`,
       metadata: proxyMetadata,
-    });
+    }, credentialAuthority);
     relayAgentId = provisioned.id;
     relayToken = provisioned.token;
   }

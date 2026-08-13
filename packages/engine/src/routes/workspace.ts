@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
+import { AgentRegistrationAuthoritySchema, WorkspaceRegistrationAuthoritySchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -28,12 +29,17 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import {
+  authorizeExistingAgentCredential,
+  authorizeWorkspaceCreation,
+} from '../engine/agentCredentialAuthority.js';
+import {
   jsonCreated,
   jsonError,
   jsonNoContent,
   jsonNotFound,
   jsonOk,
   parseJsonBody,
+  parseOptionalJsonBody,
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -42,6 +48,11 @@ export const workspaceRoutes = new Hono<AppEnv>();
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1),
+  registration_authority: WorkspaceRegistrationAuthoritySchema.optional(),
+});
+
+const rotateAgentTokenSchema = z.object({
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 });
 
 const updateWorkspaceSchema = z.object({
@@ -156,13 +167,19 @@ workspaceRoutes.post('/workspaces', async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const { name } = parsed.data;
+    const { name, registration_authority: registrationAuthority } = parsed.data;
     const db = c.get('db');
+    // Verification deliberately precedes createWorkspace: an invalid/expired
+    // proof cannot leak an orphan workspace or workspace key.
+    const sponsorOrgId = await authorizeWorkspaceCreation(
+      c.get('engine').config,
+      registrationAuthority,
+    );
     const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
     const result = await workspaceEngine.createWorkspace(
       db,
       name,
-      ownerApiKey ? { ownerApiKey } : undefined,
+      ownerApiKey || sponsorOrgId ? { ownerApiKey, sponsorOrgId } : undefined,
     );
     if (result.created) {
       emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
@@ -416,10 +433,20 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireWorkspaceKey, rateLimi
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');
+    const parsed = await parseOptionalJsonBody(c, rotateAgentTokenSchema, 'invalid token rotation body');
+    if (!parsed.ok) return parsed.response;
+    const decision = await authorizeExistingAgentCredential(
+      db,
+      c.get('engine').config,
+      workspace.id,
+      c.req.param('name'),
+      parsed.data.registration_authority,
+    );
     const result = await tokenRotateEngine.rotateAgentToken(
       db,
       workspace.id,
       c.req.param('name'),
+      decision,
     );
     emitServerEvent(c, workspace.id, 'relaycast_server_agent_token_rotated', {
       agent_name: c.req.param('name'),

@@ -100,16 +100,35 @@ impl RelayCast {
         name: &str,
         base_url: Option<&str>,
     ) -> Result<CreateWorkspaceResponse> {
+        Self::create_workspace_with_authority(name, base_url, None).await
+    }
+
+    /// Create a new workspace with a RelayAuth sponsor grant.
+    pub async fn create_workspace_with_authority(
+        name: &str,
+        base_url: Option<&str>,
+        registration_authority: Option<WorkspaceRegistrationAuthority>,
+    ) -> Result<CreateWorkspaceResponse> {
         let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
 
         let client = reqwest::Client::new();
+        let mut body = serde_json::json!({ "name": name });
+        if let Some(authority) = registration_authority {
+            body.as_object_mut()
+                .expect("workspace request is an object")
+                .insert(
+                    "registration_authority".to_string(),
+                    serde_json::to_value(authority)?,
+                );
+        }
+
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name }))
+            .json(&body)
             .send()
             .await?;
 
@@ -372,6 +391,26 @@ impl RelayCast {
         self.client.post("/v1/agents", Some(request), None).await
     }
 
+    /// Register an agent with server-verified sponsor/work-unit authority.
+    pub async fn register_agent_with_authority(
+        &self,
+        request: CreateAgentRequest,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<CreateAgentResponse> {
+        let mut body = serde_json::to_value(request)?;
+        body.as_object_mut()
+            .ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "agent request did not serialize to an object".to_string(),
+                )
+            })?
+            .insert(
+                "registration_authority".to_string(),
+                serde_json::to_value(registration_authority)?,
+            );
+        self.client.post("/v1/agents", Some(body), None).await
+    }
+
     /// Resolve an agent token to its authenticated agent identity.
     pub async fn get_current_agent(&self, agent_token: impl Into<String>) -> Result<Agent> {
         self.client
@@ -424,6 +463,38 @@ impl RelayCast {
             .await
     }
 
+    /// Rotate an agent token with server-verified sponsor/work-unit authority.
+    pub async fn rotate_agent_token_with_authority(
+        &self,
+        name: &str,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<TokenRotateResponse> {
+        self.client
+            .post(
+                &format!("/v1/agents/{}/rotate-token", urlencoding::encode(name)),
+                Some(serde_json::json!({ "registration_authority": registration_authority })),
+                None,
+            )
+            .await
+    }
+
+    /// One-time legacy migration, authenticated by the incumbent agent token.
+    pub async fn bind_agent_credential_authority(
+        &self,
+        agent_token: impl Into<String>,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<()> {
+        let client = self.client.with_api_key(agent_token)?;
+        let _: serde_json::Value = client
+            .post(
+                "/v1/agent/credential-authority",
+                Some(serde_json::json!({ "registration_authority": registration_authority })),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Update an agent.
     pub async fn update_agent(&self, name: &str, request: UpdateAgentRequest) -> Result<Agent> {
         self.client
@@ -459,6 +530,38 @@ impl RelayCast {
             {
                 let agent = self.get_agent(&request.name).await?;
                 let token_response = self.rotate_agent_token(&agent.name).await?;
+                let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
+                Ok(CreateAgentResponse {
+                    id: agent.id,
+                    workspace_id: agent.workspace_id,
+                    name: agent.name,
+                    token: token_response.token,
+                    status: agent.status,
+                    created_at,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Register or rotate using the same verified authority on both paths.
+    pub async fn register_or_get_agent_with_authority(
+        &self,
+        request: CreateAgentRequest,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<CreateAgentResponse> {
+        match self
+            .register_agent_with_authority(request.clone(), registration_authority.clone())
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(RelayError::Api { code, status, .. })
+                if code == "agent_already_exists" || status == 409 =>
+            {
+                let agent = self.get_agent(&request.name).await?;
+                let token_response = self
+                    .rotate_agent_token_with_authority(&agent.name, registration_authority)
+                    .await?;
                 let created_at = agent.created_at.or(agent.last_seen).unwrap_or_default();
                 Ok(CreateAgentResponse {
                     id: agent.id,
@@ -1329,9 +1432,9 @@ impl RelayCast {
 
 #[cfg(test)]
 mod tests {
-    use crate::{CreateAgentRequest, RelayCast, RelayCastOptions};
+    use crate::{AgentRegistrationAuthority, CreateAgentRequest, RelayCast, RelayCastOptions};
     use serde_json::json;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ok(data: serde_json::Value) -> ResponseTemplate {
@@ -1393,5 +1496,64 @@ mod tests {
 
         let response = relay.register_agent(request()).await.expect("register");
         assert_eq!(response.workspace_id, None);
+    }
+
+    #[tokio::test]
+    async fn authority_methods_send_proof_and_work_unit_to_server() {
+        let server = MockServer::start().await;
+        let relay = RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+            .expect("relay init");
+        let authority = AgentRegistrationAuthority {
+            sponsor_proof: "header.payload.signature".to_string(),
+            work_unit_key: "stable-secret-work-unit-key-0000000000000001".to_string(),
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_json(json!({
+                "name": "scout",
+                "type": "agent",
+                "registration_authority": authority,
+            })))
+            .respond_with(ok(json!({
+                "id": "a1",
+                "workspace_id": "ws_123",
+                "name": "scout",
+                "token": "at_live_1",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        relay
+            .register_agent_with_authority(request(), authority.clone())
+            .await
+            .expect("sponsored registration");
+
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/agents/{}/rotate-token", "scout")))
+            .and(body_json(json!({ "registration_authority": authority })))
+            .respond_with(ok(json!({ "name": "scout", "token": "at_live_2" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        relay
+            .rotate_agent_token_with_authority("scout", authority.clone())
+            .await
+            .expect("sponsored rotation");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/credential-authority"))
+            .and(header("authorization", "Bearer at_live_2"))
+            .and(body_json(json!({ "registration_authority": authority })))
+            .respond_with(ok(json!({ "bound": true })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        relay
+            .bind_agent_credential_authority("at_live_2", authority)
+            .await
+            .expect("legacy binding");
     }
 }

@@ -1,0 +1,112 @@
+{
+  "id": "traj_rze7rfpioe09",
+  "version": 1,
+  "task": {
+    "title": "Enforce sponsor grants at Relaycast agent-registration authority",
+    "source": {
+      "system": "plain",
+      "id": "relay#1497"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-13T13:06:59.209Z",
+  "completedAt": "2026-08-13T18:49:11.380Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-13T13:19:12.684Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_5cqu9oj067zk",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-13T13:19:12.684Z",
+      "endedAt": "2026-08-13T18:49:11.380Z",
+      "events": [
+        {
+          "ts": 1786627152687,
+          "type": "decision",
+          "content": "Enforce sponsor/work-unit authority in the portable engine at every external agent-token issuance path: Enforce sponsor/work-unit authority in the portable engine at every external agent-token issuance path",
+          "raw": {
+            "question": "Enforce sponsor/work-unit authority in the portable engine at every external agent-token issuance path",
+            "chosen": "Enforce sponsor/work-unit authority in the portable engine at every external agent-token issuance path",
+            "alternatives": [
+              {
+                "option": "Keep relay AuthClient checks only",
+                "reason": ""
+              },
+              {
+                "option": "Enforce only REST routes",
+                "reason": ""
+              },
+              {
+                "option": "Trust sponsor fields in agent metadata",
+                "reason": ""
+              },
+              {
+                "option": "Automatically accept null legacy bindings",
+                "reason": ""
+              }
+            ],
+            "reasoning": "Cloudflare is only an adapter; @relaycast/engine owns REST registration/rotation and node-control agent.register. Verified RelayAuth claims are persisted in dedicated immutable columns. Legacy rows bind once only via the incumbent agent token plus fresh proof, never by workspace key or editable metadata."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1786646935311,
+          "type": "decision",
+          "content": "Persist credential ownership beyond live agent rows: Persist credential ownership beyond live agent rows",
+          "raw": {
+            "question": "Persist credential ownership beyond live agent rows",
+            "chosen": "Persist credential ownership beyond live agent rows",
+            "alternatives": [
+              {
+                "option": "Protect rotation only",
+                "reason": ""
+              }
+            ],
+            "reasoning": "Immutable columns alone are erased by DELETE, allowing a workspace-key holder to delete and recreate a protected name under a different sponsor. A server-controlled (workspace,name) claim survives deletion; destructive lifecycle calls require matching proof/work-unit authority, and recreation must match the durable claim."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1786646951091,
+          "type": "reflection",
+          "content": "Server authority now covers every identified credential issuance path and the deletion/recreation bypass found during manual threat review. Serialized full engine suite is green (570 tests); focused Cloudflare configuration/migration tests and Rust authority wire test are green. Highly parallel all-package runs showed worker startup/test isolation timeouts, so security assertions were rerun serialized.",
+          "raw": {
+            "focalPoints": [
+              "authority-boundary",
+              "deletion-recreation",
+              "verification"
+            ],
+            "adjustments": "Added durable name claims and authority checks to destructive lifecycle paths; run memory-heavy suites with one worker.",
+            "confidence": 0.91
+          },
+          "significance": "high",
+          "tags": [
+            "focal:authority-boundary",
+            "focal:deletion-recreation",
+            "focal:verification",
+            "confidence:0.91"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added server-verified RelayAuth sponsor authority for hosted workspace and agent credential issuance, immutable and deletion-resistant sponsor/work-unit ownership, protected REST/node/A2A/destructive paths, guarded incumbent-token legacy binding, Rust authority APIs, OpenAPI/docs, and security regression tests.",
+    "approach": "Mapped every token issuance path at the portable engine boundary, verified grants against the canonical RelayAuth contract, persisted server-only claims, and threat-modeled rotation, metadata rewrite, legacy migration, and deletion/recreation.",
+    "confidence": 0.91
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "c69f8e687f730347e7f0358f8b21173cfbe4fa71",
+    "endRef": "c69f8e687f730347e7f0358f8b21173cfbe4fa71"
+  }
+}

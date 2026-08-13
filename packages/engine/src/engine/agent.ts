@@ -1,11 +1,16 @@
 import { eq, and, gt, lt, ne, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
+import { agentCredentialClaims, agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { directNodeIdForAgent } from './node.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import {
+  bindingColumns,
+  credentialClaimColumns,
+  type AgentCredentialAuthorityDecision,
+} from './agentCredentialAuthority.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -132,6 +137,7 @@ export async function registerAgent(
     metadata?: Record<string, unknown>;
     capabilities?: Record<string, unknown>;
   },
+  credentialAuthority: AgentCredentialAuthorityDecision,
 ) {
   assertRegistrableAgentName(data.name);
   const agentId = generateId();
@@ -152,7 +158,16 @@ export async function registerAgent(
   let agent;
   try {
     const results = await runAtomicWrites(db, (writeDb) => {
-      const writes: AtomicWrite[] = [writeDb.insert(nodes).values({
+      const writes: AtomicWrite[] = [];
+      const credentialClaim = credentialClaimColumns(
+        workspaceId,
+        data.name,
+        credentialAuthority,
+      );
+      if (credentialClaim) {
+        writes.push(writeDb.insert(agentCredentialClaims).values(credentialClaim).onConflictDoNothing());
+      }
+      writes.push(writeDb.insert(nodes).values({
         id: directNodeId,
         workspaceId,
         name: `direct-${agentId}`,
@@ -188,8 +203,9 @@ export async function registerAgent(
           capabilities: data.capabilities ?? null,
           locationType: 'via_node',
           locationNodeId: directNodeId,
+          ...bindingColumns(credentialAuthority),
         })
-        .returning()];
+        .returning());
 
       if (generalChannel) {
         writes.push(writeDb.insert(channelMembers).values({
@@ -212,7 +228,10 @@ export async function registerAgent(
       }));
       return writes;
     });
-    [agent] = results[1] as (typeof agents.$inferSelect)[];
+    const agentResultIndex = credentialClaimColumns(workspaceId, data.name, credentialAuthority)
+      ? 2
+      : 1;
+    [agent] = results[agentResultIndex] as (typeof agents.$inferSelect)[];
   } catch (insertErr: unknown) {
     // Unique constraint violation on (workspace_id, name) → agent already exists
     // D1 uses .code = 'SQLITE_CONSTRAINT_UNIQUE', drizzle may wrap in its own error,
