@@ -404,6 +404,11 @@ export async function bindLegacyAgentCredential(
     throw codedError('Legacy agent has an incomplete credential binding', 'agent_credential_authority_corrupt', 409);
   }
 
+  // A durable name claim survives deletion. Refuse to bind a subsequently
+  // recreated legacy row to different authority, even when its incumbent
+  // token is valid for that row.
+  await assertDurableClaimMatches(db, workspaceId, current.name, binding);
+
   await runAtomicWrites(db, (writeDb) => [
     writeDb
       .update(workspaces)

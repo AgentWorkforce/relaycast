@@ -79,6 +79,24 @@ async function main(): Promise<void> {
       ? { retention: { defaults: { messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null } } }
       : undefined;
 
+  const authorityPublicKey = process.env.RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_PUBLIC_KEY_PEM?.trim();
+  const authorityIssuer = process.env.RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_ISSUER?.trim();
+  const authorityAudience = process.env.RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_AUDIENCE?.trim();
+  if ((authorityPublicKey && !authorityIssuer) || (!authorityPublicKey && authorityIssuer)) {
+    process.stderr.write(
+      'RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_PUBLIC_KEY_PEM and RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_ISSUER must be set together\n',
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const agentCredentialAuthority = authorityPublicKey && authorityIssuer
+    ? {
+        publicKeyPem: authorityPublicKey,
+        issuer: authorityIssuer,
+        ...(authorityAudience ? { audience: authorityAudience } : {}),
+      }
+    : undefined;
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
@@ -86,6 +104,7 @@ async function main(): Promise<void> {
     config: {
       environment: opts.environment,
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
+      ...(agentCredentialAuthority ? { agentCredentialAuthority } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),
   });
