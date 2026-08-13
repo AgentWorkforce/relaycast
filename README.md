@@ -402,6 +402,7 @@ POST   /channels/:name/messages
 GET    /channels/:name/messages
 POST   /messages/:id/replies
 POST   /dm
+GET    /dm/conversations?limit=<1-100>  List the agent's newest DM conversations (limit optional)
 GET    /inbox
 GET    /search
 GET    /activity

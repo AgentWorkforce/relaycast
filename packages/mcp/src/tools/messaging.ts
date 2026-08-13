@@ -124,7 +124,7 @@ export function registerMessagingTools(
     title: 'List DM Conversations',
     description: 'List all direct message conversations for the current agent. Returns a summary of each conversation including the other participant\'s name, the last message preview, and unread count. Use this to discover ongoing private conversations.',
     inputSchema: {
-      limit: z.number().int().positive().optional().describe('Maximum number of conversations to return'),
+      limit: z.number().int().positive().max(100).optional().describe('Maximum number of conversations to return'),
       ...workspaceRoutingInputShape,
       ...identityOverrideInputShape,
     },

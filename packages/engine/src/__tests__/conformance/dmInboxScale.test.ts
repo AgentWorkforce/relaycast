@@ -20,8 +20,8 @@ function seedDmConversations(
     VALUES (?, ?, ?, 1, ?)
   `);
   const insertConversation = sqlite.prepare(`
-    INSERT INTO dm_conversations (id, workspace_id, channel_id, dm_type)
-    VALUES (?, ?, ?, '1:1')
+    INSERT INTO dm_conversations (id, workspace_id, channel_id, dm_type, created_at)
+    VALUES (?, ?, ?, '1:1', ?)
   `);
   const insertParticipant = sqlite.prepare(`
     INSERT INTO dm_participants (conversation_id, agent_id)
@@ -39,13 +39,14 @@ function seedDmConversations(
   sqlite.transaction(() => {
     for (let index = 0; index < count; index += 1) {
       const suffix = String(index).padStart(3, '0');
+      const reverseSuffix = String(count - index).padStart(3, '0');
       const peerId = `agent_peer_${suffix}`;
       const channelId = `channel_dm_${suffix}`;
-      const conversationId = `dm_conversation_${suffix}`;
+      const conversationId = `dm_conversation_${reverseSuffix}`;
 
       insertAgent.run(peerId, workspaceId, `peer-${suffix}`, `token-hash-${suffix}`);
       insertChannel.run(channelId, workspaceId, `dm-${suffix}`, agentId);
-      insertConversation.run(conversationId, workspaceId, channelId);
+      insertConversation.run(conversationId, workspaceId, channelId, 1_700_000_000);
       insertParticipant.run(conversationId, agentId);
       insertParticipant.run(conversationId, peerId);
       insertMember.run(channelId, agentId);
@@ -122,6 +123,27 @@ describe('DM inbox scaling', () => {
     } finally {
       guard.restore();
     }
+  });
+
+  it('rejects a DM conversation limit above 100', async () => {
+    const response = await stack.app.request('/v1/dm/conversations?limit=101', {
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('lists same-second conversations in newest-first insertion order', async () => {
+    const response = await stack.app.request('/v1/dm/conversations?limit=25', {
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: Array<{ id: string }> };
+    expect(body.data.map((conversation) => conversation.id)).toEqual(
+      Array.from(
+        { length: 25 },
+        (_, index) => `dm_conversation_${String(index + 1).padStart(3, '0')}`,
+      ),
+    );
   });
 
   it('checks an inbox with more than 150 unread DMs without exceeding D1 parameter limits', async () => {

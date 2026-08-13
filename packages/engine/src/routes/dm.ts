@@ -15,7 +15,7 @@ import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
-import { LimitQuerySchema, parsePaginationQuery } from '../lib/httpQuery.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -25,6 +25,10 @@ const sendDmSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
+});
+
+const listDmConversationsQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: 100 }),
 });
 
 // POST /v1/dm - send a DM
@@ -152,7 +156,7 @@ dmRoutes.get(
   rateLimit,
   async (c) => {
     try {
-      const query = parseQueryParams(c, LimitQuerySchema, 'Invalid DM conversation query');
+      const query = parseQueryParams(c, listDmConversationsQuerySchema, 'Invalid DM conversation query');
       if (!query.ok) {
         return query.response;
       }

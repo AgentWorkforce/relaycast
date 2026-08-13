@@ -459,6 +459,10 @@ export async function listConversations(
   agentId: string,
   opts: { limit?: number } = {},
 ) {
+  // Conversation ids are deterministic hashes, while created_at only has
+  // second precision. SQLite's insertion rowid supplies the chronological
+  // tiebreaker for conversations created within the same second.
+  const insertionOrder = sql<number>`${dmConversations}.rowid`;
   const conversationQuery = db
     .select({
       id: dmConversations.id,
@@ -476,7 +480,10 @@ export async function listConversations(
         isNull(dmParticipants.leftAt),
       ),
     )
-    .orderBy(desc(dmConversations.createdAt), desc(dmConversations.id));
+    .orderBy(
+      desc(dmConversations.createdAt),
+      desc(insertionOrder),
+    );
   const conversationRows = opts.limit === undefined
     ? await conversationQuery
     : await conversationQuery.limit(opts.limit);
