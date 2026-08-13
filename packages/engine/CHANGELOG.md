@@ -7,7 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
 ### Fixed
 
@@ -15,7 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
-- Atomically claim an offline legacy agent's identity and reject `identity_key` writes through generic agent updates.
+- `PATCH /v1/agents/:name/legacy-identity` atomically claims an offline legacy agent's identity, while generic agent updates cannot overwrite the verifier.
 
 ## [8.0.0] - 2026-08-10
 

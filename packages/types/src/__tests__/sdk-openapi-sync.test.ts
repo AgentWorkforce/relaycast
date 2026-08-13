@@ -48,6 +48,9 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // node-providers work; the engine surface ships first.
   '/v1/nodes/{param}/actions/{param}/invoke',
   '/v1/nodes/{param}/providers/{param}',
+  // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
+  // not expose it because normal registration establishes the verifier.
+  '/v1/agents/{param}/legacy-identity',
 ]);
 
 const CORE_SDK_PATHS = new Set([

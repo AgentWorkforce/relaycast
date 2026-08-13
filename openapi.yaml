@@ -1682,7 +1682,11 @@ paths:
   /agents:
     post:
       summary: Register agent
-      description: Register a new agent in the workspace. Agent names are unique per workspace; registering a duplicate name returns `409 agent_already_exists`.
+      description: >-
+        Register a new agent in the workspace. Agent names are unique per
+        workspace; registering a duplicate name returns 409
+        agent_already_exists. Initial registration may include identity_key in
+        metadata only as a 64-character lowercase SHA-256 verifier.
       tags:
         - Agents
       security:
@@ -1717,6 +1721,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '400':
+          description: Malformed registration identity_key (invalid_agent_identity_key)
         '409':
           description: Agent name already exists in this workspace
 
@@ -1821,6 +1827,10 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '400':
+          description: >-
+            Invalid update, including reserved_agent_metadata_key when
+            metadata contains the platform-managed identity_key field
 
     delete:
       summary: Delete agent
@@ -1883,10 +1893,15 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '400':
+          description: Malformed identity_key_hash (invalid_request)
         '404':
           description: Agent not found
         '409':
-          description: Agent already has an identity or is not offline
+          description: >-
+            Agent already has an identity (agent_identity_already_claimed), is
+            not offline (agent_not_offline), or changed during the claim
+            (agent_identity_claim_conflict)
 
   /agents/spawn:
     post:

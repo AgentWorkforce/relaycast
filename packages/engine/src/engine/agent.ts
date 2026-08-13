@@ -9,6 +9,21 @@ import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
+/** Metadata verifier used by brokers to reclaim their own registration. */
+export const AGENT_IDENTITY_METADATA_KEY = 'identity_key';
+export const AGENT_IDENTITY_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const AGENT_IDENTITY_METADATA_JSON_PATH = `$.${AGENT_IDENTITY_METADATA_KEY}`;
+
+export function hasValidRegistrationIdentity(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, AGENT_IDENTITY_METADATA_KEY)) {
+    return true;
+  }
+  const verifier = metadata[AGENT_IDENTITY_METADATA_KEY];
+  return typeof verifier === 'string' && AGENT_IDENTITY_HASH_PATTERN.test(verifier);
+}
+
 /** How long an authenticated agent can be silent before it is no longer present. */
 export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
 
@@ -134,6 +149,13 @@ export async function registerAgent(
   },
 ) {
   assertRegistrableAgentName(data.name);
+  if (!hasValidRegistrationIdentity(data.metadata)) {
+    throw codedError(
+      'Agent registration identity_key must be a lowercase SHA-256 verifier',
+      'invalid_agent_identity_key',
+      400,
+    );
+  }
   const agentId = generateId();
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
@@ -379,12 +401,12 @@ export async function updateAgent(
     // otherwise an overlapping generic metadata PATCH could erase a winning
     // legacy claim immediately after its atomic UPDATE.
     setClause.metadata = sql`CASE
-      WHEN json_type(COALESCE(${agents.metadata}, '{}'), '$.identity_key') IS NULL
+      WHEN json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL
         THEN json(${nextMetadata})
       ELSE json_set(
         json(${nextMetadata}),
-        '$.identity_key',
-        json_extract(COALESCE(${agents.metadata}, '{}'), '$.identity_key')
+        ${AGENT_IDENTITY_METADATA_JSON_PATH},
+        json_extract(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH})
       )
     END`;
   }
@@ -444,13 +466,13 @@ export async function claimLegacyAgentIdentity(
   const [updated] = await db
     .update(agents)
     .set({
-      metadata: sql`json_set(COALESCE(${agents.metadata}, '{}'), '$.identity_key', ${identityKeyHash})`,
+      metadata: sql`json_set(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}, ${identityKeyHash})`,
     })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.name, name),
       eq(agents.status, 'offline'),
-      sql`json_type(COALESCE(${agents.metadata}, '{}'), '$.identity_key') IS NULL`,
+      sql`json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL`,
     ))
     .returning();
 

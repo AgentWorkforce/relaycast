@@ -90,7 +90,10 @@ Operator recovery for an offline agent registered before identity verifiers
 were stored uses `PATCH /v1/agents/:name/legacy-identity`. The endpoint accepts
 only a SHA-256 verifier (`identity_key_hash`) and atomically succeeds when the
 record is still offline and has no `identity_key` field at write time. Generic
-agent updates cannot write that reserved field.
+agent updates cannot write that reserved field. Initial registration may set a
+valid lowercase SHA-256 verifier, but malformed registration values and claims
+return 400; already-claimed, non-offline, or concurrently changed records return
+409.
 
 Workspace names are not globally unique. Workspace creation is idempotent for the same workspace name and API key: repeating that combination returns the existing workspace instead of creating another one.
 

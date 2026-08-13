@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import * as a2aEngine from '../../engine/a2a.js';
 import * as agentEngine from '../../engine/agent.js';
+import { a2aAgents, agents } from '../../db/schema.js';
 
 describe('legacy agent identity claim', () => {
   let stack: TestStack;
@@ -68,19 +71,19 @@ describe('legacy agent identity claim', () => {
 
   it('fails closed when identity_key is present with a non-string value', async () => {
     const workspace = await createWorkspace(stack.app, 'legacy-identity-null');
-    const registered = await stack.app.request('/v1/agents', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${workspace.workspaceKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: 'malformed-identity-node',
-        metadata: { identity_key: null },
-      }),
-    });
-    expect(registered.status).toBe(201);
+    await registerAgent(stack.app, workspace.workspaceKey, 'malformed-identity-node');
     await markOffline(workspace.workspaceKey, 'malformed-identity-node');
+    // Seed a malformed historical row below the API boundary. Registration
+    // must continue accepting a valid string verifier because that is how new
+    // brokers establish ownership; this fixture specifically models old or
+    // corrupted data that the claim must reject by key presence.
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ metadata: { identity_key: null } })
+      .where(and(
+        eq(agents.workspaceId, workspace.workspaceId),
+        eq(agents.name, 'malformed-identity-node'),
+      ));
 
     const response = await claim(
       workspace.workspaceKey,
@@ -92,6 +95,45 @@ describe('legacy agent identity claim', () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'agent_identity_already_claimed' },
     });
+  });
+
+  it('rejects malformed registration verifiers while retaining valid ownership bootstrap', async () => {
+    const workspace = await createWorkspace(stack.app, 'registration-identity-verifier');
+    const invalid = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'malformed-verifier',
+        metadata: { identity_key: null },
+      }),
+    });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({
+      error: { code: 'invalid_agent_identity_key' },
+    });
+
+    const validHash = 'f'.repeat(64);
+    const valid = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${workspace.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'valid-verifier',
+        metadata: { identity_key: validHash },
+      }),
+    });
+    expect(valid.status).toBe(201);
+    const registered = await agentEngine.getAgentByName(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      'valid-verifier',
+    );
+    expect(registered?.metadata).toMatchObject({ identity_key: validHash });
   });
 
   it('rejects identity_key writes through the generic agent update endpoint', async () => {
@@ -141,6 +183,44 @@ describe('legacy agent identity claim', () => {
 
     expect(staleWrite?.metadata).toEqual({
       ...staleMetadata,
+      identity_key: claimedHash,
+    });
+  });
+
+  it('preserves a winning claim when an A2A proxy is removed', async () => {
+    const workspace = await createWorkspace(stack.app, 'legacy-identity-a2a-remove');
+    const proxy = await registerAgent(stack.app, workspace.workspaceKey, 'legacy-a2a-proxy');
+    await stack.runtime.deps.db.insert(a2aAgents).values({
+      id: 'a2a_legacy_identity_test',
+      workspaceId: workspace.workspaceId,
+      relayAgentId: proxy.agentId,
+      agentCard: {
+        name: 'legacy-a2a-proxy',
+        url: 'https://example.com/a2a/rpc',
+        version: '1.0.0',
+        skills: [{ id: 'echo', name: 'echo' }],
+      },
+      externalUrl: 'https://example.com/a2a/rpc',
+    });
+    await markOffline(workspace.workspaceKey, 'legacy-a2a-proxy');
+
+    const claimedHash = '9'.repeat(64);
+    const winner = await claim(workspace.workspaceKey, 'legacy-a2a-proxy', claimedHash);
+    expect(winner.status).toBe(200);
+
+    await expect(a2aEngine.removeA2aAgent(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      'legacy-a2a-proxy',
+    )).resolves.toBe(true);
+    const current = await agentEngine.getAgentByName(
+      stack.runtime.deps.db,
+      workspace.workspaceId,
+      'legacy-a2a-proxy',
+    );
+    expect(current?.metadata).toMatchObject({
+      a2a: true,
+      a2a_active: false,
       identity_key: claimedHash,
     });
   });

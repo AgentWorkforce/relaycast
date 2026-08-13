@@ -63,10 +63,10 @@ const updateAgentSchema = z.object({
 });
 
 const legacyIdentityClaimSchema = z.object({
-  identity_key_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  identity_key_hash: z.string().regex(agentEngine.AGENT_IDENTITY_HASH_PATTERN),
 });
 
-const RESERVED_AGENT_METADATA_KEYS = new Set(['identity_key']);
+const RESERVED_AGENT_METADATA_KEYS = new Set([agentEngine.AGENT_IDENTITY_METADATA_KEY]);
 
 const sessionEventSchema = z.object({
   type: z.string().min(1),
@@ -217,6 +217,14 @@ agentRoutes.post(
         return parsed.response;
       }
       const { name, type, persona, metadata, skills, capabilities } = parsed.data;
+      if (!agentEngine.hasValidRegistrationIdentity(metadata)) {
+        return jsonError(
+          c,
+          'invalid_agent_identity_key',
+          'Agent registration identity_key must be a lowercase SHA-256 verifier',
+          400,
+        );
+      }
       const nextMetadata = {
         ...(metadata || {}),
         ...(skills ? { skills } : {}),
@@ -394,7 +402,10 @@ agentRoutes.patch(
         if (!existing) {
           return agentNotFound(c, name);
         }
-        if (Object.prototype.hasOwnProperty.call(existing.metadata ?? {}, 'identity_key')) {
+        if (Object.prototype.hasOwnProperty.call(
+          existing.metadata ?? {},
+          agentEngine.AGENT_IDENTITY_METADATA_KEY,
+        )) {
           return jsonError(
             c,
             'agent_identity_already_claimed',
