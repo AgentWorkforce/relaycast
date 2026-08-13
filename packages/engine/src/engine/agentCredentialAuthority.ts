@@ -92,7 +92,12 @@ async function loadVerificationKey(publicKeyPem: string): Promise<CachedVerifica
   let pending = verificationKeyCache.get(publicKeyPem);
   if (!pending) {
     pending = (async () => {
-      const key = await importSPKI(publicKeyPem, 'RS256');
+      // jose defaults WebCrypto imports to non-extractable. We need the public
+      // JWK once to calculate the RFC 7638 thumbprint pinned in the JWT `kid`;
+      // Cloudflare correctly refuses to export a non-extractable key. Public
+      // verification keys carry no confidentiality requirement, so importing
+      // this one as extractable is safe and portable across Node and workerd.
+      const key = await importSPKI(publicKeyPem, 'RS256', { extractable: true });
       const jwk = await exportJWK(key);
       return { key, kid: await calculateJwkThumbprint(jwk, 'sha256') };
     })();
