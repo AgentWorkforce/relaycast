@@ -343,12 +343,22 @@ impl AgentRegistrationClient {
         &self,
         agent_name: &str,
         cli_hint: Option<&str>,
-        registration_authority: AgentRegistrationAuthority,
+        registration_authority: impl FnOnce() -> std::result::Result<AgentRegistrationAuthority, String>,
     ) -> std::result::Result<AgentClient, AgentRegistrationError> {
         let trimmed_name = agent_name.trim();
-        let token = self
-            .register_agent_token_with_authority(trimmed_name, cli_hint, registration_authority)
-            .await?;
+        let token = match self.cached_agent_token(trimmed_name) {
+            Some(token) => token,
+            None => {
+                let authority = registration_authority().map_err(|detail| {
+                    AgentRegistrationError::Transport {
+                        agent_name: trimmed_name.to_string(),
+                        detail,
+                    }
+                })?;
+                self.register_agent_token_with_authority(trimmed_name, cli_hint, authority)
+                    .await?
+            }
+        };
         self.relay
             .as_agent(token)
             .map_err(|error| AgentRegistrationError::Transport {
@@ -547,11 +557,32 @@ mod tests {
             .await;
 
         let agent = client
-            .registered_agent_client_with_authority("worker-authorized", Some("codex"), authority)
+            .registered_agent_client_with_authority("worker-authorized", Some("codex"), || {
+                Ok(authority)
+            })
             .await
             .expect("authority-bearing registration should succeed");
 
         assert_eq!(agent.http_client().api_key(), "at_live_worker_authorized");
+    }
+
+    #[tokio::test]
+    async fn registered_agent_client_with_authority_is_lazy_on_cache_hit() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let client = AgentRegistrationClient::new(relay, "claude");
+        client.seed_agent_token("worker-cached", "at_live_worker_cached");
+
+        let agent = client
+            .registered_agent_client_with_authority("worker-cached", Some("codex"), || {
+                Err("authority must not be evaluated for an incumbent token".to_string())
+            })
+            .await
+            .expect("cached agent token should not need fresh registration authority");
+
+        assert_eq!(agent.http_client().api_key(), "at_live_worker_cached");
     }
 
     #[tokio::test]
