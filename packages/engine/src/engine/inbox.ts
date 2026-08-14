@@ -6,6 +6,7 @@ import {
   agents,
   dmParticipants,
 } from '../db/schema.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -94,7 +95,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
     const conversationIds = unreadDmRows.map((row) => row.conversation_id);
     const channelIds = unreadDmRows.map((row) => row.channel_id);
 
-    const otherParticipants = await db
+    const otherParticipants = await queryInChunks(conversationIds, (ids) => db
       .select({
         conversationId: dmParticipants.conversationId,
         name: agents.name,
@@ -103,30 +104,28 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
       .where(
         and(
-          inArray(dmParticipants.conversationId, conversationIds),
+          inArray(dmParticipants.conversationId, ids),
           ne(dmParticipants.agentId, agentId),
           isNull(dmParticipants.leftAt),
         ),
-      );
+      ));
 
-    const latestMessageIds = await db
+    const latestMessageIds = await queryInChunks(channelIds, (ids) => db
       .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
       .from(messages)
-      .where(inArray(messages.channelId, channelIds))
-      .groupBy(messages.channelId);
+      .where(inArray(messages.channelId, ids))
+      .groupBy(messages.channelId));
 
     const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
-    const lastMessages = lastIds.length > 0
-      ? await db
-        .select({
-          id: messages.id,
-          channelId: messages.channelId,
-          body: messages.body,
-          createdAt: messages.createdAt,
-        })
-        .from(messages)
-        .where(inArray(messages.id, lastIds))
-      : [];
+    const lastMessages = await queryInChunks(lastIds, (ids) => db
+      .select({
+        id: messages.id,
+        channelId: messages.channelId,
+        body: messages.body,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(inArray(messages.id, ids)));
 
     const otherParticipantByConversation = new Map<string, string>();
     for (const participant of otherParticipants) {

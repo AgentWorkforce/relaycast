@@ -2758,6 +2758,14 @@ paths:
         - Direct Messages
       security:
         - agentToken: []
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of conversations to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
       responses:
         '200':
           description: List of conversations

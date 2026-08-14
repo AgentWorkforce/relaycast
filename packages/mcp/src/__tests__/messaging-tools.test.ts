@@ -76,6 +76,22 @@ describe('messaging tools', () => {
     expect(mockAgentClient.dms.conversations).toHaveBeenCalled();
   });
 
+  it('get_dms forwards the requested conversation limit', async () => {
+    mockAgentClient.dms.conversations.mockResolvedValue([]);
+    await client.callTool({ name: 'message.dm.list', arguments: { limit: 25 } });
+    expect(mockAgentClient.dms.conversations).toHaveBeenCalledWith({ limit: 25 });
+  });
+
+  it('get_dms rejects conversation limits above the server maximum', async () => {
+    mockAgentClient.dms.conversations.mockResolvedValue([]);
+    const result = await client.callTool({
+      name: 'message.dm.list',
+      arguments: { limit: 101 },
+    });
+    expect(result.isError).toBe(true);
+    expect(mockAgentClient.dms.conversations).not.toHaveBeenCalled();
+  });
+
   it('send_group_dm calls dms.createGroup()', async () => {
     mockAgentClient.dms.createGroup.mockResolvedValue({ id: 'conv1' });
     mockAgentClient.dms.sendMessage.mockResolvedValue({ id: 'msg1' });

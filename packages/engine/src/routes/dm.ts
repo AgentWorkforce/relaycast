@@ -14,8 +14,8 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
-import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
-import { parsePaginationQuery } from '../lib/httpQuery.js';
+import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
+import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -25,6 +25,10 @@ const sendDmSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
+});
+
+const listDmConversationsQuerySchema = z.object({
+  limit: positiveIntQueryParam({ max: 100 }),
 });
 
 // POST /v1/dm - send a DM
@@ -152,6 +156,10 @@ dmRoutes.get(
   rateLimit,
   async (c) => {
     try {
+      const query = parseQueryParams(c, listDmConversationsQuerySchema, 'Invalid DM conversation query');
+      if (!query.ok) {
+        return query.response;
+      }
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
@@ -159,6 +167,7 @@ dmRoutes.get(
         db,
         workspace.id,
         agent!.id,
+        { limit: query.data.limit },
       );
       return jsonOk(c, conversations);
     } catch (err: unknown) {

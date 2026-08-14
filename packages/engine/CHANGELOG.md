@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- DM conversation and unread-inbox enrichment batches large identifier sets below D1's bound-parameter ceiling, so long-lived agents no longer lose both read paths after accumulating more than 100 conversations.
 
 ## [8.0.0] - 2026-08-10
 
