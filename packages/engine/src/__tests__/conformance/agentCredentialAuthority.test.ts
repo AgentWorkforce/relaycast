@@ -236,6 +236,26 @@ describe('agent credential authority', () => {
     });
     expect(hijack.status).toBe(409);
 
+    const nodeEnroll = await current.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${workspace.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: 'release-node', role: 'broker', max_agents: 1 }),
+    });
+    expect(nodeEnroll.status).toBe(201);
+    const nodeAliasBypass = await current.app.request('/v1/nodes/release-node/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { name: 'release-target', delete_agent: true } }),
+    });
+    expect(nodeAliasBypass.status).toBe(403);
+    expect((await nodeAliasBypass.json() as ErrorEnvelope).error?.code).toBe('invalid_sponsor_proof');
+
     const stillProtected = await current.runtime.deps.db
       .select({ id: agents.id })
       .from(agents)

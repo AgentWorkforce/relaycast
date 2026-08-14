@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { AgentRegistrationAuthoritySchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -22,6 +23,7 @@ import { fanoutToWorkspace } from './fanout.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { authorizeExistingAgentCredential } from '../engine/agentCredentialAuthority.js';
 import {
   getObserverTokenFromContext,
   normalizeObserverFilters,
@@ -81,6 +83,7 @@ const bindAgentSchema = z.object({
 
 const invokeNodeActionSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 });
 
 function normalizeDelivery(kind: z.infer<typeof nodeKindSchema>, delivery: Record<string, unknown> | null | undefined) {
@@ -275,6 +278,20 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
 
     const { nodeConnections } = c.get('engine');
     const actionName = c.req.param('name');
+    const actionInput = parsed.data.input;
+    if (actionName === 'release' && actionInput?.delete_agent === true) {
+      const targetName = actionInput.name;
+      if (typeof targetName !== 'string' || targetName.length === 0) {
+        return jsonError(c, 'invalid_release_request', 'release action input.name is required', 400);
+      }
+      await authorizeExistingAgentCredential(
+        db,
+        c.get('engine').config,
+        workspace.id,
+        targetName,
+        parsed.data.registration_authority,
+      );
+    }
     const result = await actionEngine.invokeNodeAction(
       db,
       workspace.id,

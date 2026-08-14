@@ -3845,6 +3845,8 @@ paths:
                   type: object
                 registration_authority:
                   $ref: '#/components/schemas/AgentRegistrationAuthority'
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '201':
           description: Action invocation created; response `data` includes `invocation_id`
@@ -4185,6 +4187,8 @@ paths:
         socket. A `spawn:<harness>` name with no shadow action falls through to
         the node's native capacity. Fails fast with `handler_unavailable` when
         the owning provider is offline unless the capability opted into queueing.
+        The built-in `release` action with `input.delete_agent=true` requires
+        `registration_authority` for the target agent.
       tags:
         - Nodes
       security:
