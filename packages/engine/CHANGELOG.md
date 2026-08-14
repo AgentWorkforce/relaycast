@@ -16,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   registration, with immutable database bindings, durable name claims that
   survive deletion, protected destructive lifecycle paths, and guarded legacy
   migration.
+- Require the same authority when generic action invocation reaches built-in
+  `release` with `delete_agent=true`, closing a bypass around the dedicated
+  destructive release route.
 
 ## [8.0.0] - 2026-08-10
 

@@ -3815,7 +3815,15 @@ paths:
   /actions/{name}/invoke:
     post:
       summary: Invoke action
-      description: Invoke a registered action. The caller must be an agent allowed by `available_to`; the request returns an async ack containing `invocation_id`, dispatches an `action.invoke` frame to the handler's node, and delivers `action.denied` to the caller's node on denied calls.
+      description: >-
+        Invoke a registered action. The caller must be an agent allowed by
+        `available_to`; the request returns an async ack containing
+        `invocation_id`, dispatches an `action.invoke` frame to the handler's
+        node, and delivers `action.denied` to the caller's node on denied
+        calls. Invoking the built-in `release` action with
+        `input.delete_agent=true` also requires `registration_authority` for
+        the target agent; this field is consumed by Relaycast and is not stored
+        in or forwarded with the invocation input.
       tags:
         - Actions
       security:
@@ -3835,6 +3843,8 @@ paths:
               properties:
                 input:
                   type: object
+                registration_authority:
+                  $ref: '#/components/schemas/AgentRegistrationAuthority'
       responses:
         '201':
           description: Action invocation created; response `data` includes `invocation_id`
