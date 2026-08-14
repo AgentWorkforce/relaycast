@@ -48,6 +48,7 @@ import {
   authorizeNewNamedAgentCredential,
   bindingColumns,
   credentialClaimColumns,
+  decisionMatchesAgent,
   type AgentCredentialAuthorityDecision,
 } from './agentCredentialAuthority.js';
 
@@ -1176,7 +1177,19 @@ export async function registerAgentViaNode(
       message.name,
       credentialAuthority,
     );
-    if (credentialClaim) {
+    const [credentialIncumbent] = credentialClaim
+      ? await tx
+        .select()
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)))
+      : [];
+    // D1 cannot provide the interactive transaction used by runAtomic. Do not
+    // establish a durable name claim before an upsert that is guaranteed to
+    // reject a legacy or mismatched incumbent: otherwise the failed request's
+    // claim would survive and block the incumbent-token migration. New names
+    // still claim before INSERT, and sponsored incumbents must already match.
+    if (credentialClaim && (!credentialIncumbent
+      || decisionMatchesAgent(credentialAuthority, credentialIncumbent))) {
       await tx.insert(agentCredentialClaims).values(credentialClaim).onConflictDoNothing();
     }
     const [result] = await tx

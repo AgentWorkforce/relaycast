@@ -19,6 +19,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Require the same authority when generic or node-addressed action invocation
   reaches built-in `release` with `delete_agent=true`, closing bypasses around
   the dedicated destructive release route.
+- Reject node-control registration against an unbound legacy name before it can
+  establish a durable claim, preserving the incumbent-token migration path on
+  adapters without interactive transactions such as Cloudflare D1.
 
 ## [8.0.0] - 2026-08-10
 

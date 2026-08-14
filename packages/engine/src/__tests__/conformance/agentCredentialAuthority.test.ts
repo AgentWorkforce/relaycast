@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { agents, workspaces } from '../../db/schema.js';
+import { agentCredentialClaims, agents, workspaces } from '../../db/schema.js';
 import { createWorkspace as createWorkspaceRecord } from '../../engine/workspace.js';
 import { registerAgent as registerAgentRecord } from '../../engine/agent.js';
 import { handleNodeControlMessage } from '../../engine/node.js';
@@ -430,6 +430,121 @@ describe('agent credential authority', () => {
     });
     expect(secondBinding.status).toBe(409);
     expect((await secondBinding.json() as ErrorEnvelope).error?.code).toBe('agent_credential_authority_mismatch');
+  });
+
+  it('does not let failed node admission poison a remaining legacy name claim', async () => {
+    const current = stack();
+    const legacyWorkspace = await createWorkspaceRecord(current.runtime.deps.db, 'legacy-node-claim');
+    const migratedAgent = await registerAgentRecord(
+      current.runtime.deps.db,
+      legacyWorkspace.workspace_id,
+      { name: 'already-migrated' },
+      { mode: 'unenforced' },
+    );
+    const legacyVictim = await registerAgentRecord(
+      current.runtime.deps.db,
+      legacyWorkspace.workspace_id,
+      { name: 'legacy-node-victim' },
+      { mode: 'unenforced' },
+    );
+    const ownerProof = await mintSponsorProof({ sponsorId: 'user_legacy_node_owner' });
+    const ownerAuthority = agentAuthority(
+      ownerProof,
+      'legacy-node-owner-work-unit-key-0000000000001',
+    );
+
+    // Pin the workspace org through a legitimate first incumbent migration,
+    // while leaving a second legacy row awaiting its own incumbent token.
+    const firstMigration = await current.app.request('/v1/agent/credential-authority', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${migratedAgent.token}`,
+      },
+      body: JSON.stringify({ registration_authority: ownerAuthority }),
+    });
+    expect(firstMigration.status).toBe(200);
+
+    const enroll = await current.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${legacyWorkspace.api_key}`,
+      },
+      body: JSON.stringify({
+        node_id: 'node_legacy_claim',
+        name: 'legacy-claim-node',
+        role: 'broker',
+        capabilities: [],
+        max_agents: 4,
+      }),
+    });
+    expect(enroll.status).toBe(201);
+
+    // Exercise Cloudflare D1 semantics: runAtomic has no interactive
+    // transaction capability there, so a pre-upsert write would survive a
+    // later admission failure unless this path deliberately avoids it.
+    const dbWithoutInteractiveTransaction = current.runtime.deps.db as typeof current.runtime.deps.db & {
+      withTransaction?: unknown;
+    };
+    dbWithoutInteractiveTransaction.withTransaction = undefined;
+
+    const socket = new FakeSocket();
+    const send = (frame: Record<string, unknown>) => handleNodeControlMessage({
+      db: current.runtime.deps.db,
+      registry: current.runtime.realtime,
+      completionDeps: current.runtime.deps,
+      workspaceId: legacyWorkspace.workspace_id,
+      nodeId: 'node_legacy_claim',
+      socket,
+      raw: JSON.stringify(frame),
+    });
+    await send({
+      v: 1,
+      id: 'node-register-legacy-claim',
+      type: 'node.register',
+      node_id: 'node_legacy_claim',
+      name: 'legacy-claim-node',
+      capabilities: [],
+      max_agents: 4,
+      tags: [],
+      version: 'test',
+      resume_cursor: null,
+    });
+
+    const attackerProof = await mintSponsorProof({ sponsorId: 'user_legacy_node_attacker' });
+    await send({
+      v: 1,
+      id: 'poison-attempt',
+      type: 'agent.register',
+      name: 'legacy-node-victim',
+      registration_authority: agentAuthority(
+        attackerProof,
+        'legacy-node-attacker-work-unit-key-000000001',
+      ),
+    });
+    expect(socket.ofType('error').at(-1)).toMatchObject({
+      id: 'poison-attempt',
+      code: 'agent_sponsor_migration_required',
+    });
+    expect(await current.runtime.deps.db
+      .select()
+      .from(agentCredentialClaims)
+      .where(and(
+        eq(agentCredentialClaims.workspaceId, legacyWorkspace.workspace_id),
+        eq(agentCredentialClaims.agentName, 'legacy-node-victim'),
+      )))
+      .toHaveLength(0);
+
+    const victimMigration = await current.app.request('/v1/agent/credential-authority', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${legacyVictim.token}`,
+      },
+      body: JSON.stringify({ registration_authority: ownerAuthority }),
+    });
+    expect(victimMigration.status).toBe(200);
   });
 
   it('rejects the node-control registration bypass without a sponsor grant', async () => {

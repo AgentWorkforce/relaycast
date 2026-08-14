@@ -336,6 +336,11 @@ export async function authorizeNewNamedAgentCredential(
 ): Promise<AgentCredentialAuthorityDecision> {
   const decision = await authorizeNewAgentCredential(db, config, workspaceId, input);
   if (decision.mode === 'sponsor') {
+    const [incumbent] = await db
+      .select({ sponsorOrgId: agents.sponsorOrgId })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
+    if (incumbent && incumbent.sponsorOrgId === null) throw migrationRequired();
     await assertDurableClaimMatches(db, workspaceId, agentName, decision.binding);
   }
   return decision;
