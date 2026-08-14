@@ -1682,7 +1682,11 @@ paths:
   /agents:
     post:
       summary: Register agent
-      description: Register a new agent in the workspace. Agent names are unique per workspace; registering a duplicate name returns `409 agent_already_exists`.
+      description: >-
+        Register a new agent in the workspace. Agent names are unique per
+        workspace; registering a duplicate name returns 409
+        agent_already_exists. Initial registration may include identity_key in
+        metadata only as a 64-character lowercase SHA-256 verifier.
       tags:
         - Agents
       security:
@@ -1717,6 +1721,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '400':
+          description: Malformed registration identity_key (invalid_agent_identity_key)
         '409':
           description: Agent name already exists in this workspace
 
@@ -1785,7 +1791,10 @@ paths:
 
     patch:
       summary: Update agent
-      description: Update agent properties
+      description: >-
+        Update agent properties. Platform-managed metadata keys such as
+        `identity_key` are rejected; use the dedicated legacy identity claim
+        endpoint for the one supported backfill operation.
       tags:
         - Agents
       security:
@@ -1818,6 +1827,10 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/Agent'
+        '400':
+          description: >-
+            Invalid update, including reserved_agent_metadata_key when
+            metadata contains the platform-managed identity_key field
 
     delete:
       summary: Delete agent
@@ -1835,6 +1848,60 @@ paths:
       responses:
         '204':
           description: Agent deleted
+
+  /agents/{name}/legacy-identity:
+    patch:
+      summary: Atomically claim a legacy agent identity
+      description: >-
+        Operator recovery for one offline agent registered before identity
+        verifiers were stored. The update succeeds only when `identity_key`
+        is still absent and the durable agent status is still `offline` in
+        the same atomic database mutation. The request contains a SHA-256
+        verifier, never the raw identity proof.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - identity_key_hash
+              properties:
+                identity_key_hash:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: SHA-256 hex verifier for the caller-held identity proof
+      responses:
+        '200':
+          description: Legacy identity claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+        '400':
+          description: Malformed identity_key_hash (invalid_request)
+        '404':
+          description: Agent not found
+        '409':
+          description: >-
+            Agent already has an identity (agent_identity_already_claimed), is
+            not offline (agent_not_offline), or changed during the claim
+            (agent_identity_claim_conflict)
 
   /agents/spawn:
     post:

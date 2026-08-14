@@ -25,7 +25,7 @@ import { z } from 'zod';
 import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/schema.js';
-import { registerAgent, getAgentByName, updateAgent } from './agent.js';
+import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
@@ -508,19 +508,16 @@ export async function removeA2aAgent(db: Db, workspaceId: string, relayName: str
   if (!agentRecord) return false;
 
   await db.delete(a2aAgents).where(eq(a2aAgents.id, agentRecord.id));
-  await db
-    .update(agents)
-    .set({
-      status: 'offline',
-      metadata: {
-        ...(agentRecord.relay_metadata ?? {}),
-        a2a: true,
-        a2a_active: false,
-      },
-    })
-    .where(eq(agents.id, agentRecord.relay_agent_id));
+  const updated = await updateAgentById(db, workspaceId, agentRecord.relay_agent_id, {
+    status: 'offline',
+    metadata: {
+      ...(agentRecord.relay_metadata ?? {}),
+      a2a: true,
+      a2a_active: false,
+    },
+  });
 
-  return true;
+  return updated !== null;
 }
 
 export function translateRelayToA2a(message: RelayDM): A2aJsonRpcRequest {

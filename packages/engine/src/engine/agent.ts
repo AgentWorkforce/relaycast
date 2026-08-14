@@ -1,4 +1,4 @@
-import { eq, and, gt, lt, ne, inArray } from 'drizzle-orm';
+import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -8,6 +8,21 @@ import { directNodeIdForAgent } from './node.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
+
+/** Metadata verifier used by brokers to reclaim their own registration. */
+export const AGENT_IDENTITY_METADATA_KEY = 'identity_key';
+export const AGENT_IDENTITY_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const AGENT_IDENTITY_METADATA_JSON_PATH = `$.${AGENT_IDENTITY_METADATA_KEY}`;
+
+function hasValidRegistrationIdentity(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, AGENT_IDENTITY_METADATA_KEY)) {
+    return true;
+  }
+  const verifier = metadata[AGENT_IDENTITY_METADATA_KEY];
+  return typeof verifier === 'string' && AGENT_IDENTITY_HASH_PATTERN.test(verifier);
+}
 
 /** How long an authenticated agent can be silent before it is no longer present. */
 export const AGENT_LIVENESS_TTL_MS = 5 * 60 * 1000;
@@ -134,6 +149,13 @@ export async function registerAgent(
   },
 ) {
   assertRegistrableAgentName(data.name);
+  if (!hasValidRegistrationIdentity(data.metadata)) {
+    throw codedError(
+      'Agent registration identity_key must be a lowercase SHA-256 verifier',
+      'invalid_agent_identity_key',
+      400,
+    );
+  }
   const agentId = generateId();
   const token = `at_live_${randomHex(16)}`;
   const tokenHash = await sha256Hex(token);
@@ -369,28 +391,70 @@ export async function updateAgent(
     capabilities?: Record<string, unknown> | null;
   },
 ) {
-  const setClause: Record<string, unknown> = {};
-  if (updates.status !== undefined) setClause.status = updates.status;
-  if (updates.persona !== undefined) setClause.persona = updates.persona;
-  if (updates.metadata !== undefined) setClause.metadata = updates.metadata;
-  if (updates.capabilities !== undefined) setClause.capabilities = updates.capabilities;
-
-  if (Object.keys(setClause).length === 0) {
+  if (
+    updates.status === undefined
+    && updates.persona === undefined
+    && updates.metadata === undefined
+    && updates.capabilities === undefined
+  ) {
     return getAgentByName(db, workspaceId, name);
   }
 
   const [agent] = await db
-    .select()
+    .select({ id: agents.id })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
 
   if (!agent) return null;
+  return updateAgentById(db, workspaceId, agent.id, updates);
+}
+
+/**
+ * Update one exact agent row while preserving its identity verifier at write
+ * time. Callers that already resolved an agent must use the id form so a
+ * delete-and-recreate under the same name cannot redirect their mutation.
+ */
+export async function updateAgentById(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  updates: {
+    status?: string;
+    persona?: string | null;
+    metadata?: Record<string, unknown>;
+    capabilities?: Record<string, unknown> | null;
+  },
+) {
+  const setClause: Record<string, unknown> = {};
+  if (updates.status !== undefined) setClause.status = updates.status;
+  if (updates.persona !== undefined) setClause.persona = updates.persona;
+  if (updates.metadata !== undefined) {
+    const nextMetadata = JSON.stringify(updates.metadata);
+    // `identity_key` is platform-managed. Preserve whatever value exists at
+    // write time, even when this update was built from a stale pre-claim read;
+    // otherwise an overlapping generic metadata PATCH could erase a winning
+    // legacy claim immediately after its atomic UPDATE.
+    setClause.metadata = sql`CASE
+      WHEN json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL
+        THEN json(${nextMetadata})
+      ELSE json_set(
+        json(${nextMetadata}),
+        ${AGENT_IDENTITY_METADATA_JSON_PATH},
+        json_extract(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH})
+      )
+    END`;
+  }
+  if (updates.capabilities !== undefined) setClause.capabilities = updates.capabilities;
+
+  if (Object.keys(setClause).length === 0) return null;
 
   const [updated] = await db
     .update(agents)
     .set(setClause)
-    .where(eq(agents.id, agent.id))
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)))
     .returning();
+
+  if (!updated) return null;
 
   return {
     id: updated.id,
@@ -398,6 +462,55 @@ export async function updateAgent(
     handle: `@${updated.name}`,
     type: updated.type,
     status: effectiveAgentStatus(updated),
+    persona: updated.persona,
+    capabilities: updated.capabilities ?? null,
+    created_at: updated.createdAt.toISOString(),
+    last_seen: updated.lastSeen.toISOString(),
+    metadata: updated.metadata,
+  };
+}
+
+/**
+ * Atomically stamp the one-time identity verifier for a pre-gate agent.
+ *
+ * `json_type(..., '$.identity_key') IS NULL` matches an absent key only;
+ * explicit JSON null returns the string `null` and therefore fails closed.
+ * Keeping the metadata mutation and both preconditions in one UPDATE prevents
+ * two operators from both observing an eligible row and overwriting each
+ * other's claim.
+ */
+export async function claimLegacyAgentIdentity(
+  db: Db,
+  workspaceId: string,
+  name: string,
+  identityKeyHash: string,
+) {
+  // Bring a genuinely stale lease to `offline` before the atomic claim. A
+  // concurrent heartbeat that wins after this sweep changes status first and
+  // makes the UPDATE predicate fail.
+  await sweepStaleAgents(db, workspaceId);
+
+  const [updated] = await db
+    .update(agents)
+    .set({
+      metadata: sql`json_set(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}, ${identityKeyHash})`,
+    })
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, name),
+      eq(agents.status, 'offline'),
+      sql`json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL`,
+    ))
+    .returning();
+
+  if (!updated) return null;
+
+  return {
+    id: updated.id,
+    name: updated.name,
+    handle: `@${updated.name}`,
+    type: updated.type,
+    status: updated.status,
     persona: updated.persona,
     capabilities: updated.capabilities ?? null,
     created_at: updated.createdAt.toISOString(),
