@@ -273,6 +273,18 @@ describe('agent credential authority', () => {
     });
     expect(expiredResponse.status).toBe(403);
     expect(await current.runtime.deps.db.select().from(workspaces)).toHaveLength(0);
+
+    const overlong = await mintSponsorProof({ expiresInSeconds: 15 * 60 + 1 });
+    const overlongResponse = await current.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'overlong-must-not-leak',
+        registration_authority: workspaceAuthority(overlong),
+      }),
+    });
+    expect(overlongResponse.status).toBe(403);
+    expect(await current.runtime.deps.db.select().from(workspaces)).toHaveLength(0);
   });
 
   it('migrates a legacy agent only with its incumbent agent token', async () => {

@@ -24,6 +24,10 @@ type Db = ReturnType<typeof getDb>;
 const DEFAULT_AUDIENCE = 'relayauth:sponsor-binding';
 const REQUIRED_INTENT = 'identity.create';
 const REQUIRED_TOKEN_TYPE = 'sponsor_grant';
+// Keep the verifier aligned with RelayAuth's issuance contract. A valid
+// signature must not turn a misconfigured multi-hour token into a long-lived
+// credential-minting capability.
+const MAX_GRANT_TTL_SECONDS = 15 * 60;
 const CLOCK_SKEW_SECONDS = 60;
 const SPONSOR_ID_PATTERN = /^user_[A-Za-z0-9_-]+$/u;
 const RESERVED_METADATA_KEYS = new Set([
@@ -152,6 +156,8 @@ function parseVerifiedGrant(
     || expiresAt === null
     || !grantId
     || issuedAt > now + CLOCK_SKEW_SECONDS
+    || expiresAt <= issuedAt
+    || expiresAt - issuedAt > MAX_GRANT_TTL_SECONDS
     || expiresAt <= now
     || !oidc
     || typeof oidc !== 'object'
