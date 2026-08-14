@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { FleetWireJsonValueSchema } from '@relaycast/types';
+import { AgentRegistrationAuthoritySchema, FleetWireJsonValueSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { errorResponse } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -13,6 +13,7 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError } from '../lib/httpError.js';
+import { authorizeExistingAgentCredential } from '../engine/agentCredentialAuthority.js';
 import {
   jsonCreated,
   jsonError,
@@ -43,6 +44,9 @@ const registerActionSchema = z.object({
 
 const invokeActionSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
+  // Kept outside `input`: authority material must be consumed by Relaycast and
+  // never persisted in the invocation record or forwarded to an action host.
+  registration_authority: AgentRegistrationAuthoritySchema.optional(),
 });
 
 const completeInvocationSchema = z.object({
@@ -166,11 +170,30 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
       return parsed.response;
     }
 
+    // `release` is a built-in action, so the generic action endpoint reaches
+    // the same destructive lifecycle as POST /v1/agents/release. Do not let an
+    // agent token bypass that route's sponsor/work-unit ownership check.
+    const actionName = c.req.param('name');
+    const actionInput = parsed.data.input;
+    if (actionName === 'release' && actionInput?.delete_agent === true) {
+      const targetName = actionInput.name;
+      if (typeof targetName !== 'string' || targetName.length === 0) {
+        return jsonError(c, 'invalid_release_request', 'release action input.name is required', 400);
+      }
+      await authorizeExistingAgentCredential(
+        db,
+        c.get('engine').config,
+        workspace.id,
+        targetName,
+        parsed.data.registration_authority,
+      );
+    }
+
     const { nodeConnections } = c.get('engine');
     const result = await actionEngine.invokeAction(
       db,
       workspace.id,
-      c.req.param('name'),
+      actionName,
       {
         input: parsed.data.input,
         caller_id: agent.id,

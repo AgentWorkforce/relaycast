@@ -191,6 +191,58 @@ describe('agent credential authority', () => {
     expect((await ownerRotation.json() as { data: { token: string } }).data.token).toMatch(/^at_live_/u);
   });
 
+  it('does not bypass destructive authority through generic release invocation', async () => {
+    const current = stack();
+    const ownerProof = await mintSponsorProof({ sponsorId: 'user_release_owner' });
+    const workspace = await createWorkspace(current.app, 'release-action-authority', workspaceAuthority(ownerProof));
+    await registerAgent(
+      current.app,
+      workspace.workspaceKey,
+      'release-target',
+      agentAuthority(ownerProof, 'release-owner-work-unit-key-00000000000000001'),
+    );
+    const caller = await registerAgent(
+      current.app,
+      workspace.workspaceKey,
+      'release-caller',
+      agentAuthority(ownerProof, 'release-caller-work-unit-key-0000000000000001'),
+    );
+
+    const bypass = await current.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({ input: { name: 'release-target', delete_agent: true } }),
+    });
+    expect(bypass.status).toBe(403);
+    expect((await bypass.json() as ErrorEnvelope).error?.code).toBe('invalid_sponsor_proof');
+
+    const attackerProof = await mintSponsorProof({ sponsorId: 'user_release_attacker' });
+    const hijack = await current.app.request('/v1/actions/release/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+      },
+      body: JSON.stringify({
+        input: { name: 'release-target', delete_agent: true },
+        registration_authority: agentAuthority(
+          attackerProof,
+          'release-attacker-work-unit-key-0000000000000001',
+        ),
+      }),
+    });
+    expect(hijack.status).toBe(409);
+
+    const stillProtected = await current.runtime.deps.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, workspace.workspaceId), eq(agents.name, 'release-target')));
+    expect(stillProtected).toHaveLength(1);
+  });
+
   it('rejects a stale preflight decision after another binding claims the name', async () => {
     const current = stack();
     const ownerProof = await mintSponsorProof({ sponsorId: 'user_race_owner' });
