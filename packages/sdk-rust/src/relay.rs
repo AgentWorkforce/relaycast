@@ -1609,7 +1609,7 @@ mod tests {
         };
 
         Mock::given(method("DELETE"))
-            .and(path("/v1/agents/scout"))
+            .and(path(format!("/v1/agents/{}", "scout")))
             .and(body_json(json!({ "registration_authority": authority })))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
