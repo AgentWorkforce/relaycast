@@ -314,4 +314,15 @@ impl HttpClient {
         self.request::<()>(Method::DELETE, path, None::<()>, None, options)
             .await
     }
+
+    /// Make a DELETE request with a JSON body.
+    pub async fn delete_with_body(
+        &self,
+        path: &str,
+        body: impl Serialize,
+        options: Option<RequestOptions>,
+    ) -> Result<()> {
+        self.request::<()>(Method::DELETE, path, Some(body), None, options)
+            .await
+    }
 }

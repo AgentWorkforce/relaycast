@@ -513,6 +513,21 @@ impl RelayCast {
             .await
     }
 
+    /// Delete an agent with server-verified sponsor/work-unit authority.
+    pub async fn delete_agent_with_authority(
+        &self,
+        name: &str,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<()> {
+        self.client
+            .delete_with_body(
+                &format!("/v1/agents/{}", urlencoding::encode(name)),
+                serde_json::json!({ "registration_authority": registration_authority }),
+                None,
+            )
+            .await
+    }
+
     /// Get agent presence information.
     pub async fn agent_presence(&self) -> Result<Vec<AgentPresenceInfo>> {
         self.client.get("/v1/agents/presence", None, None).await
@@ -590,6 +605,28 @@ impl RelayCast {
     ) -> Result<ReleaseAgentResponse> {
         self.client
             .post("/v1/agents/release", Some(request), None)
+            .await
+    }
+
+    /// Release an agent with server-verified authority for destructive deletion.
+    pub async fn release_agent_with_authority(
+        &self,
+        request: ReleaseAgentRequest,
+        registration_authority: AgentRegistrationAuthority,
+    ) -> Result<ReleaseAgentResponse> {
+        let mut body = serde_json::to_value(request)?;
+        body.as_object_mut()
+            .ok_or_else(|| {
+                RelayError::InvalidResponse(
+                    "release request did not serialize to an object".to_string(),
+                )
+            })?
+            .insert(
+                "registration_authority".to_string(),
+                serde_json::to_value(registration_authority)?,
+            );
+        self.client
+            .post("/v1/agents/release", Some(body), None)
             .await
     }
 
@@ -1432,7 +1469,10 @@ impl RelayCast {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AgentRegistrationAuthority, CreateAgentRequest, RelayCast, RelayCastOptions};
+    use crate::{
+        AgentRegistrationAuthority, CreateAgentRequest, RelayCast, RelayCastOptions,
+        ReleaseAgentRequest,
+    };
     use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1555,5 +1595,61 @@ mod tests {
             .bind_agent_credential_authority("at_live_2", authority)
             .await
             .expect("legacy binding");
+    }
+
+    #[tokio::test]
+    async fn destructive_authority_methods_send_proof_and_work_unit_to_server() {
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        let authority = AgentRegistrationAuthority {
+            sponsor_proof: "header.payload.signature".to_string(),
+            work_unit_key: "stable-secret-work-unit-key-0000000000000001".to_string(),
+        };
+
+        Mock::given(method("DELETE"))
+            .and(path("/v1/agents/scout"))
+            .and(body_json(json!({ "registration_authority": authority })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        relay
+            .delete_agent_with_authority("scout", authority.clone())
+            .await
+            .expect("sponsored deletion");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agents/release"))
+            .and(body_json(json!({
+                "name": "scout",
+                "delete_agent": true,
+                "registration_authority": authority,
+            })))
+            .respond_with(ok(json!({
+                "invocation_id": "inv_release",
+                "action_name": "release",
+                "handler_agent_id": null,
+                "handler_node_id": null,
+                "dispatched_node_id": null,
+                "input": { "name": "scout", "delete_agent": true },
+                "status": "completed",
+                "created_at": "2026-01-01T00:00:00.000Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        relay
+            .release_agent_with_authority(
+                ReleaseAgentRequest {
+                    name: "scout".to_string(),
+                    reason: None,
+                    delete_agent: Some(true),
+                },
+                authority,
+            )
+            .await
+            .expect("sponsored destructive release");
     }
 }

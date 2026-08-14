@@ -12,6 +12,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Add workspace and agent registration authority APIs, protected token
   rotation, and incumbent-agent-token legacy binding support.
+- Add authority-bearing agent deletion and destructive release helpers for
+  deployments that enforce immutable sponsor/work-unit ownership.
 
 ### Changed
 
