@@ -9,6 +9,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Removing an agent that has authored messages now succeeds. The agent row is
+  retained so its messages keep their author, while the name is freed for reuse
+  and the old credential stops authenticating.
+- A removed or released agent is no longer a delivery target: its channel and
+  direct-message memberships are cleared with it.
+- A released agent can no longer be revived to `active` by a late heartbeat, and
+  id-scoped updates no longer resolve to a released row.
+
+
 ## [8.0.1] - 2026-08-14
 
 ### Fixed

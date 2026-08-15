@@ -1,6 +1,6 @@
 import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
@@ -451,7 +451,15 @@ export async function updateAgentById(
   const [updated] = await db
     .update(agents)
     .set(setClause)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)))
+    // A released row is a tombstone kept only so history stays attributable —
+    // it is not a live agent and must not be updatable, matching the roster and
+    // presence reads that already exclude it. Without this, an id-scoped write
+    // against a released agent silently succeeds against the tombstone.
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.id, agentId),
+      ne(agents.status, RELEASED_AGENT_STATUS),
+    ))
     .returning();
 
   if (!updated) return null;
@@ -527,8 +535,55 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
 
   if (!agent) return false;
 
-  await db.delete(agents).where(eq(agents.id, agent.id));
-  await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
+  // Tombstone rather than DELETE, matching both release paths
+  // (`dispatchRelease` -> `completeLocally`, and `applyReleaseCompletionEffect`).
+  // Four FKs reference `agents.id` with no ON DELETE action —
+  // `messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
+  // `webhooks.created_by` — so a bare DELETE is refused for any agent that has
+  // ever spoken, and the caller sees the raw SQL failure with the row id in it.
+  // Renaming frees the unique `(workspace_id, name)` immediately while every FK
+  // target stays valid and every message keeps its sender.
+  const releasedName = releasedAgentName(agent.name, agent.id);
+  // The row survives, so its credential must not. `token_hash` is NOT NULL
+  // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
+  const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
+  const releasedAt = new Date();
+  // One atomic unit: a partial apply would leave the agent renamed and
+  // credential-rotated while still a channel member — reachable by delivery
+  // under a name its owner no longer knows.
+  await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [];
+    writes.push(writeDb
+      .update(agents)
+      .set({
+        name: releasedName,
+        handle: `@${releasedName}`,
+        status: RELEASED_AGENT_STATUS,
+        tokenHash: releasedTokenHash,
+        locationType: 'self_connected',
+        locationNodeId: null,
+        lastSeen: releasedAt,
+        // Same `release` shape both release paths write, so an audit does not
+        // have to know which path released the agent.
+        metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          release: {
+            reason: 'agent removed',
+            released_at: releasedAt.toISOString(),
+            previous_name: agent.name,
+          },
+        })})`,
+      })
+      .where(eq(agents.id, agent.id)));
+    // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
+    // not fire that cascade, so a released agent would stay a delivery target.
+    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)));
+    writes.push(writeDb.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id)));
+    // Release the node binding so the host's active-agent count is not held by
+    // a tombstone, matching the release paths.
+    writes.push(writeDb.delete(agentNodeBindings).where(eq(agentNodeBindings.agentId, agent.id)));
+    writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
+    return writes;
+  });
   return true;
 }
 
@@ -536,7 +591,10 @@ export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
   await db
     .update(agents)
     .set({ lastSeen: new Date(), status: 'active' })
-    .where(eq(agents.id, agentId));
+    // Auth schedules this without awaiting it, so a heartbeat racing a release
+    // can land after the tombstone and flip the row back to `active` — reviving
+    // a released agent as a live roster member. A tombstone is terminal.
+    .where(and(eq(agents.id, agentId), ne(agents.status, RELEASED_AGENT_STATUS)));
 }
 
 export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<number> {
