@@ -1358,7 +1358,31 @@ async function applyReleaseCompletionEffect(
   }
 
   if (input.delete_agent === true) {
-    await db.delete(agents).where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+    // Tombstone rather than DELETE, matching `dispatchRelease`'s
+    // `completeLocally`. Four FKs reference `agents.id` without an ON DELETE
+    // action (`messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
+    // `webhooks.created_by`), so a bare delete is refused for any agent that
+    // has ever spoken — and this runs inside the completion's atomic unit, so
+    // that refusal aborts the invocation completion too. The seat and the name
+    // then stay claimed forever and the caller only ever sees `dispatched`.
+    // Renaming frees the unique `(workspace_id, name)` immediately while every
+    // FK target stays valid and every message keeps its sender.
+    const releasedName = releasedAgentName(agent.name, agent.id);
+    // The row survives, so its credential must not. `token_hash` is NOT NULL
+    // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
+    const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
+    await db
+      .update(agents)
+      .set({
+        name: releasedName,
+        handle: `@${releasedName}`,
+        status: RELEASED_AGENT_STATUS,
+        tokenHash: releasedTokenHash,
+        locationType: 'self_connected',
+        locationNodeId: null,
+        lastSeen: new Date(),
+      })
+      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
     const implicitNodeId = `node_direct_${agent.id}`;
     await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
   } else {
