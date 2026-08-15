@@ -451,7 +451,15 @@ export async function updateAgentById(
   const [updated] = await db
     .update(agents)
     .set(setClause)
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)))
+    // A released row is a tombstone kept only so history stays attributable —
+    // it is not a live agent and must not be updatable, matching the roster and
+    // presence reads that already exclude it. Without this, an id-scoped write
+    // against a released agent silently succeeds against the tombstone.
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.id, agentId),
+      ne(agents.status, RELEASED_AGENT_STATUS),
+    ))
     .returning();
 
   if (!updated) return null;
@@ -527,7 +535,30 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
 
   if (!agent) return false;
 
-  await db.delete(agents).where(eq(agents.id, agent.id));
+  // Tombstone rather than DELETE, matching both release paths
+  // (`dispatchRelease` -> `completeLocally`, and `applyReleaseCompletionEffect`).
+  // Four FKs reference `agents.id` with no ON DELETE action —
+  // `messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
+  // `webhooks.created_by` — so a bare DELETE is refused for any agent that has
+  // ever spoken, and the caller sees the raw SQL failure with the row id in it.
+  // Renaming frees the unique `(workspace_id, name)` immediately while every FK
+  // target stays valid and every message keeps its sender.
+  const releasedName = releasedAgentName(agent.name, agent.id);
+  // The row survives, so its credential must not. `token_hash` is NOT NULL
+  // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
+  const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
+  await db
+    .update(agents)
+    .set({
+      name: releasedName,
+      handle: `@${releasedName}`,
+      status: RELEASED_AGENT_STATUS,
+      tokenHash: releasedTokenHash,
+      locationType: 'self_connected',
+      locationNodeId: null,
+      lastSeen: new Date(),
+    })
+    .where(eq(agents.id, agent.id));
   await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
   return true;
 }
