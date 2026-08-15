@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [8.0.2] - 2026-08-15
+
+### Fixed
+
+- Tombstone on node-completed release instead of deleting
+
 ## [8.0.1] - 2026-08-14
 
 ### Changed
