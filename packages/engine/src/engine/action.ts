@@ -779,6 +779,15 @@ async function dispatchRelease(args: {
           eq(agents.id, agent.id),
           invocationIsOpen,
         )));
+      // `channel_members` and `dm_participants` cascade on DELETE; the
+      // tombstone's UPDATE does not fire that cascade, so drop the memberships
+      // in the SAME atomic unit or the released agent stays a delivery target.
+      writes.push(writeDb
+        .delete(channelMembers)
+        .where(eq(channelMembers.agentId, agent.id)));
+      writes.push(writeDb
+        .delete(dmParticipants)
+        .where(eq(dmParticipants.agentId, agent.id)));
       writes.push(writeDb
         .delete(nodes)
         .where(and(

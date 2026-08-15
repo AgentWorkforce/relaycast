@@ -11,19 +11,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `DELETE /v1/agents/:name` now tombstones an agent instead of issuing a bare
-  `DELETE`. Four foreign keys reference `agents.id` with no `ON DELETE` action
-  (`messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
-  `webhooks.created_by`), so removing an agent that had ever spoken failed and
-  surfaced the raw SQL to the caller. The name is freed, the credential is
-  rotated, and message attribution is preserved. Completes the set alongside
-  the local (#309) and node-completed (#330) release paths.
-- Releasing an agent now clears its `channel_members` and `dm_participants`
-  rows. Those cascade on `DELETE`, and the tombstone's `UPDATE` does not fire
-  the cascade, so a released agent could remain a delivery target.
-- A late `touchLastSeen` can no longer revive a released tombstone back to
-  `active`, and id-scoped `updateAgentById` writes no longer resolve to a
-  released row.
+- Removing an agent that has authored messages now succeeds. The agent row is
+  retained so its messages keep their author, while the name is freed for reuse
+  and the old credential stops authenticating.
+- A removed or released agent is no longer a delivery target: its channel and
+  direct-message memberships are cleared with it.
+- A released agent can no longer be revived to `active` by a late heartbeat, and
+  id-scoped updates no longer resolve to a released row.
 
 
 ## [8.0.1] - 2026-08-14

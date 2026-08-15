@@ -547,27 +547,43 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
   // The row survives, so its credential must not. `token_hash` is NOT NULL
   // UNIQUE and cannot be cleared, so rotate it to a value nobody holds.
   const releasedTokenHash = await sha256Hex(`released:${agent.id}:${randomHex(16)}`);
-  await db
-    .update(agents)
-    .set({
-      name: releasedName,
-      handle: `@${releasedName}`,
-      status: RELEASED_AGENT_STATUS,
-      tokenHash: releasedTokenHash,
-      locationType: 'self_connected',
-      locationNodeId: null,
-      lastSeen: new Date(),
-    })
-    .where(eq(agents.id, agent.id));
-  // `channel_members` and `dm_participants` reference `agents.id` ON DELETE
-  // CASCADE, so the bare DELETE used to clear them implicitly. An UPDATE does
-  // not fire that cascade, which would leave a released agent subscribed and
-  // therefore still selected as a delivery target (`delivery.ts` fans out over
-  // channel members). Drop the memberships explicitly to keep the tombstone
-  // equivalent to the delete it replaces.
-  await db.delete(channelMembers).where(eq(channelMembers.agentId, agent.id));
-  await db.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id));
-  await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
+  const releasedAt = new Date();
+  // One atomic unit: a partial apply would leave the agent renamed and
+  // credential-rotated while still a channel member — reachable by delivery
+  // under a name its owner no longer knows.
+  await runAtomicWrites(db, (writeDb) => {
+    const writes: AtomicWrite[] = [];
+    writes.push(writeDb
+      .update(agents)
+      .set({
+        name: releasedName,
+        handle: `@${releasedName}`,
+        status: RELEASED_AGENT_STATUS,
+        tokenHash: releasedTokenHash,
+        locationType: 'self_connected',
+        locationNodeId: null,
+        lastSeen: releasedAt,
+        // Same `release` shape both release paths write, so an audit does not
+        // have to know which path released the agent.
+        metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          release: {
+            reason: 'agent removed',
+            released_at: releasedAt.toISOString(),
+            previous_name: agent.name,
+          },
+        })})`,
+      })
+      .where(eq(agents.id, agent.id)));
+    // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
+    // not fire that cascade, so a released agent would stay a delivery target.
+    writes.push(writeDb.delete(channelMembers).where(eq(channelMembers.agentId, agent.id)));
+    writes.push(writeDb.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id)));
+    // Release the node binding so the host's active-agent count is not held by
+    // a tombstone, matching the release paths.
+    writes.push(writeDb.delete(agentNodeBindings).where(eq(agentNodeBindings.agentId, agent.id)));
+    writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
+    return writes;
+  });
   return true;
 }
 
