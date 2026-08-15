@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [8.0.3] - 2026-08-15
+
 ### Fixed
 
 - Removing an agent that has authored messages now succeeds. The agent row is
@@ -18,7 +20,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   direct-message memberships are cleared with it.
 - A released agent can no longer be revived to `active` by a late heartbeat, and
   id-scoped updates no longer resolve to a released row.
-
 
 ## [8.0.1] - 2026-08-14
 

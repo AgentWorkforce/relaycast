@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [8.0.3] - 2026-08-15
+
 ### Fixed
 
 - Removing an agent that has authored messages now succeeds. The agent row is
