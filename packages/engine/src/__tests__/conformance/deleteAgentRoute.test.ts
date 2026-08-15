@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { agents, messages } from '../../db/schema.js';
+import { agents, channelMembers, messages } from '../../db/schema.js';
 
 /**
  * `DELETE /v1/agents/:name` -> `agentEngine.deleteAgent` was the last release
@@ -70,6 +70,16 @@ describe('DELETE /v1/agents/:name preserves attributed history', () => {
       name: `${target.name}#released-${target.agentId}`,
       status: 'released',
     });
+
+    // The tombstone must not stay subscribed: `channel_members` cascades on
+    // DELETE, and an UPDATE does not fire that cascade, so a released agent
+    // would otherwise remain a delivery target.
+    expect(
+      await stack.runtime.deps.db
+        .select()
+        .from(channelMembers)
+        .where(eq(channelMembers.agentId, target.agentId)),
+    ).toHaveLength(0);
 
     // Attribution intact; the old credential is dead; the name is reusable.
     expect(

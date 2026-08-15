@@ -1,6 +1,6 @@
 import { eq, and, gt, lt, ne, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, channels, channelMembers, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
@@ -559,6 +559,14 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
       lastSeen: new Date(),
     })
     .where(eq(agents.id, agent.id));
+  // `channel_members` and `dm_participants` reference `agents.id` ON DELETE
+  // CASCADE, so the bare DELETE used to clear them implicitly. An UPDATE does
+  // not fire that cascade, which would leave a released agent subscribed and
+  // therefore still selected as a delivery target (`delivery.ts` fans out over
+  // channel members). Drop the memberships explicitly to keep the tombstone
+  // equivalent to the delete it replaces.
+  await db.delete(channelMembers).where(eq(channelMembers.agentId, agent.id));
+  await db.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id));
   await db.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id)));
   return true;
 }
@@ -567,7 +575,10 @@ export async function touchLastSeen(db: Db, agentId: string): Promise<void> {
   await db
     .update(agents)
     .set({ lastSeen: new Date(), status: 'active' })
-    .where(eq(agents.id, agentId));
+    // Auth schedules this without awaiting it, so a heartbeat racing a release
+    // can land after the tombstone and flip the row back to `active` — reviving
+    // a released agent as a live roster member. A tombstone is terminal.
+    .where(and(eq(agents.id, agentId), ne(agents.status, RELEASED_AGENT_STATUS)));
 }
 
 export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<number> {

@@ -18,6 +18,23 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- `DELETE /v1/agents/:name` now tombstones an agent instead of issuing a bare
+  `DELETE`. Four foreign keys reference `agents.id` with no `ON DELETE` action
+  (`messages.agent_id`, `channels.created_by`, `files.uploaded_by`,
+  `webhooks.created_by`), so removing an agent that had ever spoken failed and
+  surfaced the raw SQL to the caller. The name is freed, the credential is
+  rotated, and message attribution is preserved. Completes the set alongside
+  the local (#309) and node-completed (#330) release paths.
+- Releasing an agent now clears its `channel_members` and `dm_participants`
+  rows. Those cascade on `DELETE`, and the tombstone's `UPDATE` does not fire
+  the cascade, so a released agent could remain a delivery target.
+- A late `touchLastSeen` can no longer revive a released tombstone back to
+  `active`, and id-scoped `updateAgentById` writes no longer resolve to a
+  released row.
+
+
 ## [8.0.1] - 2026-08-14
 
 ### Changed

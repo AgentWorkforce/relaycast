@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { actions, actionInvocations, agents, agentNodeBindings, nodes } from '../db/schema.js';
+import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { RELEASED_AGENT_STATUS, releasedAgentName } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -1383,6 +1383,11 @@ async function applyReleaseCompletionEffect(
         lastSeen: new Date(),
       })
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agent.id)));
+    // `channel_members` and `dm_participants` reference `agents.id` ON DELETE
+    // CASCADE; an UPDATE does not fire that cascade, so drop the memberships
+    // explicitly or the released agent stays a delivery target.
+    await db.delete(channelMembers).where(eq(channelMembers.agentId, agent.id));
+    await db.delete(dmParticipants).where(eq(dmParticipants.agentId, agent.id));
     const implicitNodeId = `node_direct_${agent.id}`;
     await db.delete(nodes).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, implicitNodeId)));
   } else {
