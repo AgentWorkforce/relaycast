@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { workspaces, agents, nodes } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
@@ -49,7 +49,19 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     }
 
     if (parsedToken.kind === 'agent') {
-      const [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
+      // Current slot first — the common case is a token that has not been
+      // rotated out from under this caller.
+      let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
+      if (!agent) {
+        // Fall back to the previous slot inside its grace window. This is the
+        // credential a caller that lost a `registerOrRotate` race was handed
+        // (relay#1542); it must remain live long enough for that caller to
+        // upgrade to a persistent session.
+        [agent] = await db
+          .select()
+          .from(agents)
+          .where(and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, new Date())));
+      }
       if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
       if (!workspace) return unauthorized('Workspace not found');

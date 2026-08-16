@@ -62,6 +62,10 @@ export const agents = sqliteTable(
     name: text('name').notNull(),
     type: text('type').notNull().default('agent'),
     tokenHash: text('token_hash').notNull().unique(),
+    // Superseded credential retained during the rotation grace window. See
+    // migration 0035 for the concurrency defect this closes (relay#1542).
+    previousTokenHash: text('previous_token_hash'),
+    previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
     status: text('status').notNull().default('active'),
     handle: text('handle'),
     persona: text('persona'),
@@ -88,6 +92,7 @@ export const agents = sqliteTable(
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_token').on(table.tokenHash),
+    index('idx_agents_previous_token').on(table.previousTokenHash),
   ],
 );
 

@@ -560,6 +560,12 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
         handle: `@${releasedName}`,
         status: RELEASED_AGENT_STATUS,
         tokenHash: releasedTokenHash,
+        // Clear the rotation grace slot too. `token_hash` alone is not the
+        // whole credential surface since 0035_agent_token_grace; a bare rotate
+        // of the current slot would leave a released agent still reachable via
+        // whatever token was in the previous slot until its grace expired.
+        previousTokenHash: null,
+        previousTokenExpiresAt: null,
         locationType: 'self_connected',
         locationNodeId: null,
         lastSeen: releasedAt,
