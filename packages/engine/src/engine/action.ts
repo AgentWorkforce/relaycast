@@ -764,6 +764,11 @@ async function dispatchRelease(args: {
           // NOT NULL UNIQUE and cannot be cleared, so rotate it to a value
           // nobody holds; the released agent's old token stops authenticating.
           tokenHash: releasedTokenHash,
+          // Clear the rotation grace slot too, otherwise any token issued by
+          // the last live rotation would keep authenticating for its grace
+          // window on an agent that is supposed to be gone. See 0035_agent_token_grace.
+          previousTokenHash: null,
+          previousTokenExpiresAt: null,
           // Same `release` shape the dispatched path writes, so an audit does
           // not have to know which path released the agent.
           metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
@@ -1387,6 +1392,10 @@ async function applyReleaseCompletionEffect(
         handle: `@${releasedName}`,
         status: RELEASED_AGENT_STATUS,
         tokenHash: releasedTokenHash,
+        // Same reason as the other release paths — the grace slot survives
+        // `token_hash` rewrites unless we clear it. See 0035_agent_token_grace.
+        previousTokenHash: null,
+        previousTokenExpiresAt: null,
         locationType: 'self_connected',
         locationNodeId: null,
         lastSeen: new Date(),
