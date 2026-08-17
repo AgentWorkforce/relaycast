@@ -18,6 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+## [8.0.4] - 2026-08-17
+
+### Fixed
+
+- Keep prior agent token authenticatable during rotate-token grace
+
 ## [8.0.3] - 2026-08-15
 
 ### Fixed

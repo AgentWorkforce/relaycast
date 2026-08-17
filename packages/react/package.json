@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/react",
-  "version": "8.0.3",
+  "version": "8.0.4",
   "description": "Headless React hooks for Relaycast real-time agent messaging",
   "keywords": [
     "relaycast",
@@ -33,8 +33,8 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@relaycast/sdk": "8.0.3",
-    "@relaycast/types": "8.0.3",
+    "@relaycast/sdk": "8.0.4",
+    "@relaycast/types": "8.0.4",
     "prism-react-renderer": "^2.4.1",
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
