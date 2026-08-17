@@ -26,7 +26,8 @@ import {
 import { channels } from '../db/schema.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
-import { errorResponse } from '../lib/httpError.js';
+import { asCodedError, errorResponse, safeErrorDiagnostics } from '../lib/httpError.js';
+import { getRequestLogger } from '../lib/logger.js';
 import {
   jsonCreated,
   jsonError,
@@ -171,6 +172,26 @@ workspaceRoutes.post('/workspaces', async (c) => {
     }
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
+    const error = asCodedError(err);
+    if ((error.status ?? 500) >= 500) {
+      const diagnostics = safeErrorDiagnostics(error);
+      getRequestLogger(c, 'workspace.create').error('Workspace creation failed', {
+        error_code: error.code ?? 'internal_error',
+        error_status: error.status ?? 500,
+        ...diagnostics,
+      });
+      c.get('engine').telemetry.captureException(
+        new Error(error.code ?? 'internal_error'),
+        {
+          path: c.req.path,
+          method: c.req.method,
+          status_code: error.status ?? 500,
+          error_code: error.code ?? 'internal_error',
+          request_id: c.get('requestId'),
+          ...diagnostics,
+        },
+      );
+    }
     return errorResponse(c, err);
   }
 });

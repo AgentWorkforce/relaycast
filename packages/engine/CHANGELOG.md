@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Workspace creation batches the workspace and default channel atomically and
+  retries documented transient D1 write failures with bounded backoff. Internal
+  database errors no longer expose SQL statements or bound parameters in API
+  responses; server diagnostics use an explicit safe-field allowlist.
+
 ## [8.0.3] - 2026-08-15
 
 ### Fixed

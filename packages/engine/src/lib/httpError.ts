@@ -11,6 +11,8 @@ import { jsonError, jsonMalformedBody } from './httpResponse.js';
 export interface CodedError extends Error {
   code?: string;
   status?: number;
+  diagnostics?: Record<string, unknown>;
+  clientSafe?: true;
 }
 
 /**
@@ -32,15 +34,33 @@ export function asCodedError(err: unknown): CodedError {
 
 /** Build an `Error` carrying a stable `code` and HTTP `status` (no cast at the call site). */
 export function codedError(message: string, code: string, status: number): CodedError {
-  return Object.assign(new Error(message), { code, status });
+  return Object.assign(new Error(message), { code, status, clientSafe: true as const });
 }
 
-interface ErrorResponseOptions {
-  includeCause?: boolean;
+const SAFE_DIAGNOSTIC_FIELDS = new Set([
+  'attempts',
+  'operation',
+  'storage_error',
+]);
+
+/** Select primitive, explicitly allowlisted fields for logs and telemetry. */
+export function safeErrorDiagnostics(error: CodedError): Record<string, string | number | boolean> {
+  const safe: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(error.diagnostics ?? {})) {
+    if (
+      SAFE_DIAGNOSTIC_FIELDS.has(key) &&
+      (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+    ) {
+      safe[key] = value;
+    }
+  }
+  return safe;
 }
 
-function messageWithCause(error: CodedError) {
-  return error.message;
+export function safeClientErrorMessage(error: CodedError): string {
+  return (error.status ?? 500) >= 500 && error.clientSafe !== true
+    ? 'Internal server error'
+    : error.message;
 }
 
 /**
@@ -50,7 +70,7 @@ function messageWithCause(error: CodedError) {
  * real `instanceof` narrowing instead of the unchecked `err as Error & {...}`
  * assertion that was duplicated across every route handler.
  */
-export function errorResponse(c: Context, err: unknown, options: ErrorResponseOptions = {}) {
+export function errorResponse(c: Context, err: unknown) {
   const error = asCodedError(err);
   if (err instanceof SyntaxError) {
     return jsonMalformedBody(c);
@@ -58,7 +78,7 @@ export function errorResponse(c: Context, err: unknown, options: ErrorResponseOp
   return jsonError(
     c,
     error.code || 'internal_error',
-    options.includeCause ? messageWithCause(error) : error.message,
+    safeClientErrorMessage(error),
     (error.status || 500) as ContentfulStatusCode,
   );
 }

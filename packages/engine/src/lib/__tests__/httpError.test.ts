@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 
-import { codedError, errorResponse } from '../httpError.js';
+import { codedError, errorResponse, safeErrorDiagnostics } from '../httpError.js';
 
 function testContext(): Context {
   return {
@@ -45,7 +45,7 @@ describe('errorResponse', () => {
     const error = codedError('Directory write failed', 'internal_error', 500);
     error.cause = new Error('SQLITE_CONSTRAINT');
 
-    const response = errorResponse(testContext(), error, { includeCause: true });
+    const response = errorResponse(testContext(), error);
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
@@ -54,6 +54,40 @@ describe('errorResponse', () => {
         code: 'internal_error',
         message: 'Directory write failed',
       },
+    });
+  });
+
+  it('does not expose SQL or bound parameters from uncoded server errors', async () => {
+    const response = errorResponse(
+      testContext(),
+      new Error('Failed query: insert into "workspaces" params: rk_live_secret_hash'),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Internal server error',
+      },
+    });
+  });
+
+  it('keeps only allowlisted primitive diagnostic fields', () => {
+    const error = codedError('Storage unavailable', 'storage_unavailable', 503);
+    error.diagnostics = {
+      attempts: 4,
+      operation: 'workspace.create',
+      storage_error: 'queue_full',
+      api_key_hash: 'must-not-leak',
+      query: 'insert into workspaces',
+      nested: { params: 'must-not-leak' },
+    };
+
+    expect(safeErrorDiagnostics(error)).toEqual({
+      attempts: 4,
+      operation: 'workspace.create',
+      storage_error: 'queue_full',
     });
   });
 });

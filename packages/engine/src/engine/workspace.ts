@@ -4,6 +4,8 @@ import { workspaces, channels } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
+import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
+import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -64,23 +66,60 @@ export async function createWorkspace(
   const apiKey = `rk_live_${randomHex(16)}`;
   const apiKeyHash = await hashApiKey(apiKey);
 
-  const [createdWorkspace] = await db
-    .insert(workspaces)
-    .values({
-      id: workspaceId,
-      name,
-      apiKeyHash,
-    })
-    .returning();
-
-  // Auto-create #general channel
   const channelId = generateId();
-  await db.insert(channels).values({
-    id: channelId,
-    workspaceId,
-    name: 'general',
-    topic: 'General discussion',
-  });
+  let writeResult: unknown[];
+  try {
+    writeResult = await retryD1Write(() => runAtomicWrites(db, (writeDb) => [
+      writeDb
+        .insert(workspaces)
+        .values({ id: workspaceId, name, apiKeyHash })
+        // A fixed id/key across attempts makes a lost D1 response safe to retry.
+        .onConflictDoUpdate({ target: workspaces.id, set: { id: workspaceId } })
+        .returning(),
+      writeDb
+        .insert(channels)
+        .values({
+          id: channelId,
+          workspaceId,
+          name: 'general',
+          topic: 'General discussion',
+        })
+        .onConflictDoUpdate({ target: channels.id, set: { id: channelId } })
+        .returning(),
+    ]));
+  } catch (cause) {
+    if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
+    const error = codedError(
+      'Workspace storage temporarily unavailable',
+      'workspace_storage_unavailable',
+      503,
+    );
+    error.diagnostics = {
+      attempts: cause.attempts,
+      operation: 'workspace.create',
+      storage_error: cause.storageError,
+    };
+    throw error;
+  }
+
+  const [workspaceRows, channelRows] = writeResult as [
+    Array<typeof workspaces.$inferSelect>,
+    Array<typeof channels.$inferSelect>,
+  ];
+  const createdWorkspace = workspaceRows[0];
+  const createdChannel = channelRows[0];
+
+  // A conflict can only be an idempotent replay of this exact generated pair.
+  if (
+    !createdWorkspace ||
+    createdWorkspace.name !== name ||
+    createdWorkspace.apiKeyHash !== apiKeyHash ||
+    !createdChannel ||
+    createdChannel.workspaceId !== workspaceId ||
+    createdChannel.name !== 'general'
+  ) {
+    throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
+  }
 
   const workspace = buildWorkspaceResponse(createdWorkspace, apiKey);
   return {
