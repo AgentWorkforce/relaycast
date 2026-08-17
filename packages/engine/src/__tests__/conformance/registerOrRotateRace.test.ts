@@ -73,15 +73,29 @@ describe('registerOrRotate concurrency', () => {
     const initial = await registerAgent(stack.app, workspace.workspaceKey, 'ephemeral');
     expect((await authenticate(initial.token)).status).toBe(200);
 
+    // Rotate once first so the grace slot (`previous_token_hash`) is actually
+    // populated. Without this, the delete path is trivially satisfied by a
+    // null slot and the test would pass even if release never cleared grace.
+    const rotateRes = await rotate(workspace.workspaceKey, 'ephemeral');
+    expect(rotateRes.status).toBe(200);
+    const currentToken = await tokenFrom(rotateRes);
+    // Both slots hold a live credential before the delete: the initial token
+    // is now in the grace slot; `currentToken` is in the current slot.
+    expect((await authenticate(initial.token)).status).toBe(200);
+    expect((await authenticate(currentToken)).status).toBe(200);
+
     const del = await stack.app.request('/v1/agents/ephemeral', {
       method: 'DELETE',
       headers: { authorization: `Bearer ${workspace.workspaceKey}` },
     });
     expect(del.status).toBe(204);
 
-    // MUST-NOT-FIRE: a genuinely revoked identity is not rescued by any grace slot.
-    const auth = await authenticate(initial.token);
-    expect(auth.status).toBe(401);
+    // MUST-NOT-FIRE: a revoked identity is not rescued by either slot — the
+    // current token AND the token still inside its grace window are both
+    // rejected. If release stops clearing grace, this second assertion goes
+    // red immediately.
+    expect((await authenticate(currentToken)).status).toBe(401);
+    expect((await authenticate(initial.token)).status).toBe(401);
   });
 
   it('only the two most recent tokens stay valid under chained rotations', async () => {
