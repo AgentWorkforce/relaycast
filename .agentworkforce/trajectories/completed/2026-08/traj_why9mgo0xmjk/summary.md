@@ -14,7 +14,7 @@ Added bounded indexed session_ref replay lookup, payload-free aged-out evidence,
 
 **Approach:** Standard approach
 
-**Evidence:** commits `412fff7`, `09a4fc0`, and `5dcc88b` (42 files), spanning `4e62ef4..5dcc88b`.
+**Evidence:** commits `412fff7`, `09a4fc0`, `5dcc88b`, and `80c8447` (43 files), spanning `4e62ef4..80c8447`.
 
 ---
 

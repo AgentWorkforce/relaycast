@@ -82,7 +82,8 @@
   "commits": [
     "412fff7",
     "09a4fc0",
-    "5dcc88b"
+    "5dcc88b",
+    "80c8447"
   ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/summary.md",
@@ -125,6 +126,7 @@
     "packages/sdk-typescript/src/relay.ts",
     "packages/sdk-typescript/src/types.ts",
     "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
     "packages/types/src/message.ts",
     "packages/types/src/workspace.ts"
   ],
@@ -132,6 +134,6 @@
   "tags": [],
   "_trace": {
     "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
-    "endRef": "5dcc88b186833c975b5525d8f19f8510004b1394"
+    "endRef": "80c8447ab2f42ad9c49d1ccc20f36361738d9d23"
   }
 }
