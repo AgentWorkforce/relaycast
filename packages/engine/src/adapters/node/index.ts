@@ -169,7 +169,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     void sweepStaleAgents(db).catch(() => {});
     void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime, { completionDeps: deps }).catch(() => {});
-    void reapExpiredWorkspaces(db).catch(() => {});
+    void reapExpiredWorkspaces(db, fileStorage).catch(() => {});
     void runDeliveryMaintenance();
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();

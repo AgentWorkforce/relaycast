@@ -845,20 +845,19 @@ describe('RelayCast', () => {
   });
 
   describe('workspace.delete', () => {
-    it('delete() calls the id-scoped workspace endpoint', async () => {
+    it('delete() keeps using the legacy workspace endpoint', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch
-        .mockImplementationOnce(() => mockResponse({ id: 'ws_1' }))
-        .mockImplementationOnce(() =>
-          Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
-        );
+      mockFetch.mockImplementationOnce(() =>
+        Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
+      );
       await relay.workspace.delete();
 
-      const [url, init] = mockFetch.mock.calls[1]!;
-      expect(url).toBe('https://cast.agentrelay.com/v1/workspaces/ws_1');
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspace');
       expect(init.method).toBe('DELETE');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('delete(id) skips workspace lookup', async () => {

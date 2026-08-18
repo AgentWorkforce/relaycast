@@ -83,7 +83,7 @@ async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: str
     if (expectedId !== undefined && expectedId !== workspace.id) {
       return workspaceNotFound(c);
     }
-    await workspaceEngine.deleteWorkspace(db, workspace.id);
+    await workspaceEngine.deleteWorkspace(db, c.get('engine').files, workspace.id);
     emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
       deleted_via: 'api',
     });
@@ -194,11 +194,13 @@ workspaceRoutes.post('/workspaces', async (c) => {
         created_via: 'api',
       });
     }
-    runInBackground(
-      c,
-      workspaceEngine.reapExpiredWorkspaces(db),
-      'workspace expiry reap',
-    );
+    if (result.created) {
+      runInBackground(
+        c,
+        workspaceEngine.reapExpiredWorkspaces(db, c.get('engine').files),
+        'workspace expiry reap',
+      );
+    }
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     const error = asCodedError(err);

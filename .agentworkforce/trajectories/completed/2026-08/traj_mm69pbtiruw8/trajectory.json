@@ -37,7 +37,7 @@
         {
           "ts": 1787046464092,
           "type": "reflection",
-          "content": "Implemented authenticated id-scoped deletion, explicit workspace expiry, bounded automatic reaping, SDK support, E2E adoption, docs, and cascade safety tests; full test/build/lint gates are green.",
+          "content": "The resulting implementation scope includes authenticated id-scoped deletion, explicit workspace expiry, bounded automatic reaping, SDK support, E2E adoption, documentation, and lifecycle tests. This trajectory does not contain trace events proving test, build, or lint execution.",
           "raw": {
             "focalPoints": [
               "deletion-safety",
@@ -45,7 +45,7 @@
               "expiry-predicate",
               "verification"
             ],
-            "confidence": 0.9
+            "confidence": 0.75
           },
           "significance": "high",
           "tags": [
@@ -53,7 +53,7 @@
             "focal:D1-cascades",
             "focal:expiry-predicate",
             "focal:verification",
-            "confidence:0.9"
+            "confidence:0.75"
           ]
         }
       ]
@@ -62,14 +62,42 @@
   "retrospective": {
     "summary": "Added authenticated id-scoped workspace deletion, explicit TTL creation and bounded reaping, SDK/types support, E2E TTL adoption, migration, documentation, and lifecycle/cascade tests.",
     "approach": "Standard approach",
-    "confidence": 0.92
+    "confidence": 0.75
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": [
+    "c1bb456b7de57b9dbe1c9c12759a93fa977a9edf"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0036_workspace_expiry.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup-types.ts",
+    "packages/sdk-typescript/src/setup.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/workspace.ts",
+    "scripts/e2e-actions.ts",
+    "scripts/e2e-sdk-setup-client.ts",
+    "scripts/e2e.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "3374966534c408d3656c0a8701dd98d82216576b",
-    "endRef": "3374966534c408d3656c0a8701dd98d82216576b"
+    "endRef": "c1bb456b7de57b9dbe1c9c12759a93fa977a9edf"
   }
 }

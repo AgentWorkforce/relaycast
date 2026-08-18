@@ -1,8 +1,59 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agents, channels, messages, workspaces } from '../../db/schema.js';
+import {
+  agents,
+  channels,
+  files,
+  messages,
+  workspaceEvents,
+  workspaces,
+} from '../../db/schema.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import {
+  createWorkspace,
+  makeNodeStack,
+  registerAgent,
+  type TestStack,
+} from './harness.js';
+
+async function uploadBlob(stack: TestStack, agentToken: string) {
+  const uploadResponse = await stack.app.request('/v1/files/upload', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${agentToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      filename: 'delete-me.txt',
+      content_type: 'text/plain',
+      size_bytes: 9,
+    }),
+  });
+  expect(uploadResponse.status).toBe(201);
+  const uploadBody = await uploadResponse.json() as {
+    data: { id: string; upload_url: string };
+  };
+  const putResponse = await stack.runtime.fileHandler(new Request(uploadBody.data.upload_url, {
+    method: 'PUT',
+    headers: { 'content-type': 'text/plain' },
+    body: 'delete me',
+  }));
+  expect(putResponse.status).toBe(200);
+
+  const completeResponse = await stack.app.request(`/v1/files/${uploadBody.data.id}/complete`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${agentToken}` },
+  });
+  expect(completeResponse.status).toBe(200);
+  const completeBody = await completeResponse.json() as {
+    data: { download_url: string };
+  };
+
+  return {
+    fileId: uploadBody.data.id,
+    downloadUrl: completeBody.data.download_url,
+  };
+}
 
 describe('workspace lifecycle', () => {
   let stack: TestStack;
@@ -78,6 +129,12 @@ describe('workspace lifecycle', () => {
       agentId: 'agent_delete_me',
       body: 'cascade me',
     });
+    await stack.runtime.handle.db.insert(workspaceEvents).values({
+      workspaceId: workspace.workspaceId,
+      seq: 1,
+      type: 'message.created',
+      payload: JSON.stringify({ text: 'delete this event payload' }),
+    });
 
     const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
       method: 'DELETE',
@@ -89,6 +146,78 @@ describe('workspace lifecycle', () => {
     expect(await stack.runtime.handle.db.select().from(channels)).toHaveLength(0);
     expect(await stack.runtime.handle.db.select().from(agents)).toHaveLength(0);
     expect(await stack.runtime.handle.db.select().from(messages)).toHaveLength(0);
+    expect(await stack.runtime.handle.db.select().from(workspaceEvents)).toHaveLength(0);
+  });
+
+  it('removes stored bytes so an issued download URL stops working', async () => {
+    const workspace = await createWorkspace(stack.app, 'delete-file-bytes');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
+    const blob = await uploadBlob(stack, agent.token);
+
+    const beforeDelete = await stack.runtime.fileHandler(new Request(blob.downloadUrl));
+    expect(beforeDelete.status).toBe(200);
+    expect(await beforeDelete.text()).toBe('delete me');
+
+    const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+
+    expect(response.status).toBe(204);
+    expect(await stack.runtime.handle.db.select().from(files)).toHaveLength(0);
+    expect((await stack.runtime.fileHandler(new Request(blob.downloadUrl))).status).toBe(404);
+  });
+
+  it('does not claim deletion when blob removal fails', async () => {
+    const workspace = await createWorkspace(stack.app, 'storage-failure');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
+    await stack.runtime.handle.db.insert(files).values({
+      id: 'file_storage_failure',
+      workspaceId: workspace.workspaceId,
+      uploadedBy: agent.agentId,
+      filename: 'failure.txt',
+      contentType: 'text/plain',
+      sizeBytes: 1,
+      storageKey: `${workspace.workspaceId}/file_storage_failure/failure.txt`,
+      status: 'complete',
+    });
+    vi.spyOn(stack.runtime.deps.files, 'deleteObjects')
+      .mockRejectedValueOnce(new Error('storage unavailable'));
+
+    const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+
+    expect(response.status).toBe(500);
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(1);
+    expect(await stack.runtime.handle.db.select().from(files)).toHaveLength(1);
+  });
+
+  it('atomically preserves durable events when workspace-row deletion fails', async () => {
+    const workspace = await createWorkspace(stack.app, 'database-failure');
+    await stack.runtime.handle.db.insert(workspaceEvents).values({
+      workspaceId: workspace.workspaceId,
+      seq: 1,
+      type: 'workspace.test',
+      payload: JSON.stringify({ retain: true }),
+    });
+    stack.runtime.handle.sqlite.exec(`
+      CREATE TRIGGER reject_workspace_delete
+      BEFORE DELETE ON workspaces
+      BEGIN
+        SELECT RAISE(ABORT, 'workspace delete rejected');
+      END;
+    `);
+
+    const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+
+    expect(response.status).toBe(500);
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(1);
+    expect(await stack.runtime.handle.db.select().from(workspaceEvents)).toHaveLength(1);
   });
 
   it('does not let one workspace key delete another workspace id', async () => {
@@ -138,7 +267,11 @@ describe('workspace lifecycle', () => {
       .set({ expiresAt: new Date(now.getTime() + 60_000) })
       .where(eq(workspaces.id, future.workspaceId));
 
-    const deleted = await reapExpiredWorkspaces(stack.runtime.handle.db, { now });
+    const deleted = await reapExpiredWorkspaces(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now },
+    );
     const remaining = await stack.runtime.handle.db
       .select({ id: workspaces.id })
       .from(workspaces);
@@ -149,16 +282,133 @@ describe('workspace lifecycle', () => {
     );
   });
 
-  it('keeps every direct workspace foreign key on delete cascade', () => {
-    const foreignKeys = stack.runtime.handle.sqlite.prepare(`
-      SELECT schema_table.name AS table_name, foreign_key.on_delete AS on_delete
-      FROM sqlite_schema AS schema_table,
-           pragma_foreign_key_list(schema_table.name) AS foreign_key
-      WHERE schema_table.type = 'table'
-        AND foreign_key."table" = 'workspaces'
-    `).all() as Array<{ table_name: string; on_delete: string }>;
+  it('reaping removes durable events and stored bytes', async () => {
+    const workspace = await createWorkspace(stack.app, 'reap-file-bytes');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
+    const blob = await uploadBlob(stack, agent.token);
+    const now = new Date();
+    await stack.runtime.handle.db
+      .update(workspaces)
+      .set({ expiresAt: new Date(now.getTime() - 1_000) })
+      .where(eq(workspaces.id, workspace.workspaceId));
+    await stack.runtime.handle.db.insert(workspaceEvents).values({
+      workspaceId: workspace.workspaceId,
+      seq: 999,
+      type: 'file.uploaded',
+      payload: JSON.stringify({ file_id: blob.fileId }),
+    });
 
-    expect(foreignKeys.length).toBeGreaterThan(0);
-    expect(foreignKeys.every((foreignKey) => foreignKey.on_delete === 'CASCADE')).toBe(true);
+    const deleted = await reapExpiredWorkspaces(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now },
+    );
+
+    expect(deleted).toEqual([workspace.workspaceId]);
+    expect(await stack.runtime.handle.db.select().from(workspaceEvents)).toHaveLength(0);
+    expect((await stack.runtime.fileHandler(new Request(blob.downloadUrl))).status).toBe(404);
+  });
+
+  it('normalizes non-finite and fractional reap limits before querying', async () => {
+    const first = await createWorkspace(stack.app, 'limit-first');
+    const second = await createWorkspace(stack.app, 'limit-second');
+    const now = new Date();
+    await stack.runtime.handle.db
+      .update(workspaces)
+      .set({ expiresAt: new Date(now.getTime() - 1_000) });
+
+    await expect(reapExpiredWorkspaces(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now, limit: Number.NaN },
+    )).resolves.toEqual(expect.arrayContaining([first.workspaceId, second.workspaceId]));
+
+    const third = await createWorkspace(stack.app, 'limit-third');
+    const fourth = await createWorkspace(stack.app, 'limit-fourth');
+    await stack.runtime.handle.db
+      .update(workspaces)
+      .set({ expiresAt: new Date(now.getTime() - 1_000) });
+    const fractionallyLimited = await reapExpiredWorkspaces(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now, limit: 1.8 },
+    );
+
+    expect(fractionallyLimited).toHaveLength(1);
+    expect([third.workspaceId, fourth.workspaceId]).toContain(fractionallyLimited[0]);
+  });
+
+  it('does not reuse an expired workspace during an authenticated retry', async () => {
+    const expired = await createWorkspace(stack.app, 'expired-retry');
+    await stack.runtime.handle.db
+      .update(workspaces)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(workspaces.id, expired.workspaceId));
+
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${expired.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'expired-retry' }),
+    });
+    const body = await response.json() as { data: { workspace_id: string } };
+
+    expect(response.status).toBe(201);
+    expect(body.data.workspace_id).not.toBe(expired.workspaceId);
+    expect(await stack.runtime.handle.db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, body.data.workspace_id))).toHaveLength(1);
+  });
+
+  it('does not schedule a reap for an idempotent create hit', async () => {
+    const persistent = await createWorkspace(stack.app, 'dedupe-hit');
+    const expired = await createWorkspace(stack.app, 'expired-bystander');
+    await stack.runtime.handle.db
+      .update(workspaces)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(workspaces.id, expired.workspaceId));
+
+    const response = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${persistent.workspaceKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'dedupe-hit' }),
+    });
+
+    expect(response.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await stack.runtime.handle.db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, expired.workspaceId))).toHaveLength(1);
+  });
+
+  it('accounts for every workspace_id table and enables foreign-key enforcement', () => {
+    const coverage = stack.runtime.handle.sqlite.prepare(`
+      SELECT schema_table.name AS table_name,
+             (
+               SELECT foreign_key.on_delete
+               FROM pragma_foreign_key_list(schema_table.name) AS foreign_key
+               WHERE foreign_key."table" = 'workspaces'
+                 AND foreign_key."from" = 'workspace_id'
+             ) AS on_delete
+      FROM sqlite_schema AS schema_table
+      JOIN pragma_table_info(schema_table.name) AS column
+        ON column.name = 'workspace_id'
+      WHERE schema_table.type = 'table'
+      ORDER BY schema_table.name
+    `).all() as Array<{ table_name: string; on_delete: string | null }>;
+    const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
+
+    expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(coverage).toHaveLength(28);
+    expect(withoutDirectCascade).toEqual([
+      { table_name: 'workspace_events', on_delete: null },
+    ]);
   });
 });

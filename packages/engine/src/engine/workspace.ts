@@ -1,11 +1,12 @@
-import { and, asc, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { workspaces, channels } from '../db/schema.js';
+import { workspaces, channels, files, workspaceEvents } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
+import type { FileStorage } from '../ports/files.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -154,7 +155,11 @@ export async function createWorkspace(
     const [existing] = await db
       .select()
       .from(workspaces)
-      .where(and(eq(workspaces.name, name), eq(workspaces.apiKeyHash, ownerApiKeyHash)));
+      .where(and(
+        eq(workspaces.name, name),
+        eq(workspaces.apiKeyHash, ownerApiKeyHash),
+        or(isNull(workspaces.expiresAt), gt(workspaces.expiresAt, new Date())),
+      ));
     if (existing) {
       const workspace = buildWorkspaceResponse(existing, providedOwnerApiKey);
       return {
@@ -321,8 +326,49 @@ export async function updateWorkspace(
   };
 }
 
-export async function deleteWorkspace(db: Db, workspaceId: string) {
-  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+async function deleteWorkspaceBatch(
+  db: Db,
+  storage: FileStorage,
+  workspaceIds: string[],
+): Promise<string[]> {
+  if (workspaceIds.length === 0) return [];
+
+  const storedFiles = await db
+    .select({ storageKey: files.storageKey })
+    .from(files)
+    .where(inArray(files.workspaceId, workspaceIds));
+  const storageKeys = [...new Set(storedFiles.map((file) => file.storageKey))];
+
+  if (storageKeys.length > 0) {
+    if (typeof storage.deleteObjects !== 'function') {
+      throw codedError(
+        'The configured file storage cannot delete workspace objects',
+        'file_storage_delete_unsupported',
+        503,
+      );
+    }
+    await storage.deleteObjects({ storageKeys });
+  }
+
+  const results = await runAtomicWrites(db, (writeDb) => [
+    writeDb
+      .delete(workspaceEvents)
+      .where(inArray(workspaceEvents.workspaceId, workspaceIds)),
+    writeDb
+      .delete(workspaces)
+      .where(inArray(workspaces.id, workspaceIds))
+      .returning({ id: workspaces.id }),
+  ]);
+  const deleted = results[1] as Array<{ id: string }>;
+  return deleted.map((workspace) => workspace.id);
+}
+
+export async function deleteWorkspace(
+  db: Db,
+  storage: FileStorage,
+  workspaceId: string,
+) {
+  await deleteWorkspaceBatch(db, storage, [workspaceId]);
 }
 
 /**
@@ -332,10 +378,14 @@ export async function deleteWorkspace(db: Db, workspaceId: string) {
  */
 export async function reapExpiredWorkspaces(
   db: Db,
+  storage: FileStorage,
   options: { now?: Date; limit?: number } = {},
 ): Promise<string[]> {
   const now = options.now ?? new Date();
-  const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_WORKSPACE_REAP_LIMIT, 90));
+  const requestedLimit = options.limit ?? DEFAULT_WORKSPACE_REAP_LIMIT;
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(Math.trunc(requestedLimit), 90))
+    : DEFAULT_WORKSPACE_REAP_LIMIT;
   const expired = await db
     .select({ id: workspaces.id })
     .from(workspaces)
@@ -346,9 +396,5 @@ export async function reapExpiredWorkspaces(
   if (expired.length === 0) return [];
 
   const ids = expired.map((workspace) => workspace.id);
-  const deleted = await db
-    .delete(workspaces)
-    .where(inArray(workspaces.id, ids))
-    .returning({ id: workspaces.id });
-  return deleted.map((workspace) => workspace.id);
+  return deleteWorkspaceBatch(db, storage, ids);
 }

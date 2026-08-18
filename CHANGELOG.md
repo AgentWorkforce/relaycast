@@ -16,11 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased - Major]
 
 ### Added
 
-- Workspaces can opt into an explicit expiry at creation or be deleted immediately with their own key.
+- Workspaces can opt into an explicit expiry at creation or be deleted immediately with their own key, including durable event rows and stored file bytes.
 
 ## [8.0.5] - 2026-08-18
 

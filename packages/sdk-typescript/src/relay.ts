@@ -622,10 +622,9 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
-    delete: async (workspaceId?: string): Promise<void> => {
-      const resolvedId = workspaceId ?? await this.resolveWorkspaceId();
-      return this.client.delete(`/v1/workspaces/${encodeURIComponent(resolvedId)}`);
-    },
+    delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
+      ? this.client.delete('/v1/workspace')
+      : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
   };
 
   observerTokens = {

@@ -1039,7 +1039,7 @@ export const pendingEvents = sqliteTable(
  * the exact `transformForClient(event)` JSON published to the stream (without
  * `seq` — the cursor lives in the column and is stamped onto the published
  * frame). No FK to `workspaces` by design: appends are best-effort and rows
- * are pruned by retention, not cascades.
+ * are pruned by retention or explicitly removed with their workspace.
  */
 export const workspaceEvents = sqliteTable(
   'workspace_events',
