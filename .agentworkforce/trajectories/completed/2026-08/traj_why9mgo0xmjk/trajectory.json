@@ -80,7 +80,9 @@
     "confidence": 0.93
   },
   "commits": [
-    "412fff7"
+    "412fff7",
+    "09a4fc0",
+    "5dcc88b"
   ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/summary.md",
@@ -93,19 +95,23 @@
     "packages/engine/src/__tests__/conformance/sessionMessages.test.ts",
     "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
     "packages/engine/src/adapters/node/__tests__/database.test.ts",
+    "packages/engine/src/adapters/node/__tests__/event-queue.test.ts",
     "packages/engine/src/adapters/node/index.ts",
     "packages/engine/src/db/migrations/0038_session_ref_lookup.sql",
     "packages/engine/src/db/schema.ts",
     "packages/engine/src/engine/delivery.ts",
     "packages/engine/src/engine/dm.ts",
     "packages/engine/src/engine/groupDm.ts",
+    "packages/engine/src/engine/__tests__/inboundWebhook.test.ts",
     "packages/engine/src/engine/inboundWebhook.ts",
     "packages/engine/src/engine/message.ts",
+    "packages/engine/src/engine/messageMetadata.ts",
     "packages/engine/src/engine/retention.ts",
     "packages/engine/src/engine/sessionMessages.ts",
     "packages/engine/src/engine/thread.ts",
     "packages/engine/src/engine/workspace.ts",
     "packages/engine/src/index.ts",
+    "packages/engine/src/middleware/idempotency.ts",
     "packages/engine/src/ports/index.ts",
     "packages/engine/src/routes/groupDm.ts",
     "packages/engine/src/routes/message.ts",
@@ -126,6 +132,6 @@
   "tags": [],
   "_trace": {
     "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
-    "endRef": "412fff7dc34cd898a2a7f099cb34d6923460d76f"
+    "endRef": "5dcc88b186833c975b5525d8f19f8510004b1394"
   }
 }
