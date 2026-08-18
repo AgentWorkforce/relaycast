@@ -127,6 +127,33 @@ describe('RelaycastSetup', () => {
     expect(lookupInit.headers.Authorization).toBe('Bearer rk_live_setup_2');
   });
 
+  it('createWorkspace() forwards an explicit expiry and exposes the deadline', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: {
+          workspace_id: 'ws_ephemeral',
+          api_key: 'rk_live_ephemeral',
+          created_at: '2026-04-30T12:00:00.000Z',
+          expires_at: '2026-04-30T13:00:00.000Z',
+        },
+      }, 201),
+    );
+
+    const workspace = await new RelaycastSetup().createWorkspace({
+      name: 'CI Run',
+      expiresInSeconds: 3_600,
+    });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'CI Run',
+      expires_in_seconds: 3_600,
+    });
+    expect(workspace.info.expiresAt).toBe('2026-04-30T13:00:00.000Z');
+  });
+
   it('createWorkspace() surfaces API errors with status and body', async () => {
     const { RelaycastSetup } = await import('../setup.js');
     const { RelaycastApiError } = await import('../setup-errors.js');

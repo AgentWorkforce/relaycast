@@ -38,16 +38,23 @@ export interface ObserverTokenFilters {
   created_after?: string;
 }
 
-export const workspaces = sqliteTable('workspaces', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  apiKeyHash: text('api_key_hash').notNull().unique(),
-  systemPrompt: text('system_prompt'),
-  plan: text('plan').notNull().default('free'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
-  retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
-});
+export const workspaces = sqliteTable(
+  'workspaces',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    apiKeyHash: text('api_key_hash').notNull().unique(),
+    systemPrompt: text('system_prompt'),
+    plan: text('plan').notNull().default('free'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+    retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
+    // A non-null deadline is an explicit, immutable opt-in to whole-workspace
+    // deletion. Persistent workspaces always leave this null.
+    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+  },
+  (table) => [index('idx_workspaces_expires_at').on(table.expiresAt)],
+);
 
 // ============================================
 // Agents

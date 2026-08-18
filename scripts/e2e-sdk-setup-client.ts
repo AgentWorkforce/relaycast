@@ -150,7 +150,10 @@ async function main(): Promise<void> {
   const setup = new RelaycastSetup({ baseUrl });
   let workspace: WorkspaceHandle | null = null;
   await runStep('createWorkspace', async () => {
-    const created = await setup.createWorkspace({ name: workspaceName });
+    const created = await setup.createWorkspace({
+      name: workspaceName,
+      expiresInSeconds: 24 * 60 * 60,
+    });
     assert(created.workspaceId, 'createWorkspace', 'workspaceId was empty');
     assert(created.apiKey, 'createWorkspace', 'apiKey was empty');
     assert(created.info.name === workspaceName, 'createWorkspace', 'workspace name did not round-trip');

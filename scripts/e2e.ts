@@ -361,7 +361,10 @@ ${B}${CYAN}╔══════════════════════
   step('Create workspace');
   await run('Create workspace', async () => {
     const wsName = `e2e-${Date.now()}`;
-    const res = await RelayCast.createWorkspace(wsName, BASE_URL);
+    const res = await RelayCast.createWorkspace(wsName, {
+      baseUrl: BASE_URL,
+      expiresInSeconds: 24 * 60 * 60,
+    });
     workspaceKey = res.apiKey;
     relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });
     log('🔑', `Workspace ${B}${wsName}${R} — key: ${DIM}${workspaceKey.slice(0, 16)}…${R}`);

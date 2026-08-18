@@ -93,6 +93,14 @@ export {
 export type { PruneOptions, PruneResult, RetentionDefaults } from './engine/retention.js';
 export type { WorkspaceRetentionSettings } from './db/schema.js';
 
+// Whole-workspace expiry is opt-in at creation and uses only the stored,
+// non-null deadline as its deletion predicate. Hosts may call this from cron;
+// the Node adapter also runs it on its local maintenance interval.
+export {
+  reapExpiredWorkspaces,
+  DEFAULT_WORKSPACE_REAP_LIMIT,
+} from './engine/workspace.js';
+
 // Durable workspace event log (observer plane): append + cursor reads over
 // `workspace_events`, and the shared append+stamp+publish helper used by every
 // workspace stream call site.

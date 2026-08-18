@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Workspace creation accepts `expiresInSeconds` and returns the resulting expiry timestamp.
+- `workspace.delete()` uses the id-scoped deletion endpoint and accepts an optional known workspace id.
 
 ## [8.0.1] - 2026-08-14
 

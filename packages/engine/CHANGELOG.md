@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Migration `0036` adds indexed workspace expiry, bounded automatic reaping, and authenticated `DELETE /v1/workspaces/:id` with cascade coverage.
 
 ## [8.0.5] - 2026-08-18
 

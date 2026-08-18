@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, lte } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -24,7 +24,10 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      expiresAt?: Date;
     };
+
+export const DEFAULT_WORKSPACE_REAP_LIMIT = 25;
 
 function hashApiKey(apiKey: string): Promise<string> {
   return sha256Hex(apiKey);
@@ -38,6 +41,7 @@ function buildWorkspaceResponse(
     workspace_id: workspace.id,
     ...(apiKey ? { api_key: apiKey } : {}),
     created_at: workspace.createdAt.toISOString(),
+    expires_at: workspace.expiresAt?.toISOString() ?? null,
   };
 }
 
@@ -136,6 +140,7 @@ export async function createWorkspace(
 ) {
   const providedOwnerApiKeyHash = typeof options === 'string' ? undefined : options?.ownerApiKeyHash;
   const providedOwnerApiKey = typeof options === 'string' ? options : options?.ownerApiKey;
+  const expiresAt = typeof options === 'string' ? undefined : options?.expiresAt;
   const derivedOwnerApiKeyHash = providedOwnerApiKey ? await hashApiKey(providedOwnerApiKey) : undefined;
 
   if (providedOwnerApiKeyHash && derivedOwnerApiKeyHash && providedOwnerApiKeyHash !== derivedOwnerApiKeyHash) {
@@ -175,7 +180,7 @@ export async function createWorkspace(
           (writeDb) => [
             writeDb
               .insert(workspaces)
-              .values({ id: workspaceId, name, apiKeyHash })
+              .values({ id: workspaceId, name, apiKeyHash, expiresAt })
               .returning(),
             writeDb
               .insert(channels)
@@ -279,6 +284,7 @@ export async function getWorkspace(db: Db, workspaceId: string) {
     system_prompt: workspace.systemPrompt,
     created_at: workspace.createdAt.toISOString(),
     metadata: workspace.metadata,
+    expires_at: workspace.expiresAt?.toISOString() ?? null,
   };
 }
 
@@ -311,9 +317,38 @@ export async function updateWorkspace(
     system_prompt: updated.systemPrompt,
     created_at: updated.createdAt.toISOString(),
     metadata: updated.metadata,
+    expires_at: updated.expiresAt?.toISOString() ?? null,
   };
 }
 
 export async function deleteWorkspace(db: Db, workspaceId: string) {
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+}
+
+/**
+ * Delete a bounded batch of workspaces whose callers explicitly opted into an
+ * expiry deadline at creation. No inferred signal (name, age, agents, or
+ * messages) participates in this predicate.
+ */
+export async function reapExpiredWorkspaces(
+  db: Db,
+  options: { now?: Date; limit?: number } = {},
+): Promise<string[]> {
+  const now = options.now ?? new Date();
+  const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_WORKSPACE_REAP_LIMIT, 90));
+  const expired = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(lte(workspaces.expiresAt, now))
+    .orderBy(asc(workspaces.expiresAt), asc(workspaces.id))
+    .limit(limit);
+
+  if (expired.length === 0) return [];
+
+  const ids = expired.map((workspace) => workspace.id);
+  const deleted = await db
+    .delete(workspaces)
+    .where(inArray(workspaces.id, ids))
+    .returning({ id: workspaces.id });
+  return deleted.map((workspace) => workspace.id);
 }

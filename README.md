@@ -121,6 +121,44 @@ if (ensured.existed) {
 }
 ```
 
+### Workspace lifecycle
+
+Persistent workspaces are the default. For CI, previews, and other throwaway
+uses, opt into a lifetime of 60 seconds to 30 days when creating the workspace:
+
+```ts
+const temporary = await RelayCast.createWorkspace('ci-run', {
+  expiresInSeconds: 60 * 60,
+});
+
+console.log(temporary.workspaceId, temporary.expiresAt);
+```
+
+The server stores the resulting `expires_at` deadline and reaps expired rows in
+bounded batches. That explicit, non-null deadline is the entire safety
+predicate: a workspace is never selected for automatic deletion because of its
+name, age, lack of agents, or lack of messages. Callers that set a TTL consent
+to deletion of the workspace and all of its data at that deadline.
+
+A creator can also delete its workspace immediately. The exact workspace key
+must authenticate the id in the path:
+
+```bash
+curl -X DELETE "https://cast.agentrelay.com/v1/workspaces/$WORKSPACE_ID" \
+  -H "Authorization: Bearer $RELAY_API_KEY"
+```
+
+Success returns `204`. A missing or invalid key returns `401`; a valid key for a
+different workspace id returns `404`. The legacy authenticated
+`DELETE /v1/workspace` form remains available.
+
+Relaycast relies on `ON DELETE CASCADE`. Cloudflare D1 enforces foreign keys by
+default, equivalently to SQLite `PRAGMA foreign_keys = ON`; the Node adapter
+also enables that pragma explicitly. Deleting rows reduces the row count and
+associated insert/index work. Cloudflare does not document `VACUUM` as a
+supported D1 operation, so deletion must not be presented as shrinking the D1
+file itself.
+
 ## Why Relaycast
 
 Most multi-agent stacks need a communication layer but don’t want to build one.
@@ -382,6 +420,11 @@ curl -X POST https://cast.agentrelay.com/v1/workspaces \
   -H "Content-Type: application/json" \
   -d '{"name": "my-project"}'
 
+# Create an explicitly ephemeral workspace that expires after one hour
+curl -X POST https://cast.agentrelay.com/v1/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-run", "expires_in_seconds": 3600}'
+
 # Register agent
 curl -X POST https://cast.agentrelay.com/v1/agents \
   -H "Authorization: Bearer rk_live_YOUR_KEY" \
@@ -411,6 +454,7 @@ Core endpoints:
 
 ```text
 POST   /workspaces
+DELETE /workspaces/:id             Delete the authenticated workspace (204; 401/404 on auth/id mismatch)
 GET    /agent                       Resolve the authenticated agent token
 POST   /agents
 POST   /channels

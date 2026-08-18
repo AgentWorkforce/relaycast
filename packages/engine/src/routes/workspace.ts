@@ -38,11 +38,13 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { runInBackground } from './background.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1),
+  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
 });
 
 const updateWorkspaceSchema = z.object({
@@ -72,6 +74,23 @@ const workspaceEventsQuerySchema = z.object({
 
 function workspaceNotFound(c: Context<AppEnv>) {
   return jsonNotFound(c, 'workspace_not_found', 'Workspace not found');
+}
+
+async function deleteAuthenticatedWorkspace(c: Context<AppEnv>, expectedId?: string) {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    if (expectedId !== undefined && expectedId !== workspace.id) {
+      return workspaceNotFound(c);
+    }
+    await workspaceEngine.deleteWorkspace(db, workspace.id);
+    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
+      deleted_via: 'api',
+    });
+    return jsonNoContent(c);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
 }
 
 const PUBLIC_WORKSPACE_LOOKUP_LIMIT = 30;
@@ -157,19 +176,29 @@ workspaceRoutes.post('/workspaces', async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const { name } = parsed.data;
+    const { name, expires_in_seconds: expiresInSeconds } = parsed.data;
     const db = c.get('db');
     const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
     const result = await workspaceEngine.createWorkspace(
       db,
       name,
-      ownerApiKey ? { ownerApiKey } : undefined,
+      {
+        ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(expiresInSeconds
+          ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
+          : {}),
+      },
     );
     if (result.created) {
       emitServerEvent(c, result.workspace.workspace_id, 'relaycast_server_workspace_created', {
         created_via: 'api',
       });
     }
+    runInBackground(
+      c,
+      workspaceEngine.reapExpiredWorkspaces(db),
+      'workspace expiry reap',
+    );
     return result.created ? jsonCreated(c, result.workspace) : jsonOk(c, result.workspace);
   } catch (err: unknown) {
     const error = asCodedError(err);
@@ -194,6 +223,11 @@ workspaceRoutes.post('/workspaces', async (c) => {
     }
     return errorResponse(c, err);
   }
+});
+
+// DELETE /workspaces/:id - delete the authenticated workspace by explicit id
+workspaceRoutes.delete('/workspaces/:id', requireWorkspaceKey, rateLimit, async (c) => {
+  return deleteAuthenticatedWorkspace(c, c.req.param('id'));
 });
 
 // GET /workspaces/by-name/:name - lookup public workspace metadata by name
@@ -349,17 +383,7 @@ workspaceRoutes.patch('/workspace', requireWorkspaceKey, rateLimit, async (c) =>
 
 // DELETE /workspace - delete workspace
 workspaceRoutes.delete('/workspace', requireWorkspaceKey, rateLimit, async (c) => {
-  try {
-    const db = c.get('db');
-    const workspace = c.get('workspace');
-    await workspaceEngine.deleteWorkspace(db, workspace.id);
-    emitServerEvent(c, workspace.id, 'relaycast_server_workspace_deleted', {
-      deleted_via: 'api',
-    });
-    return jsonNoContent(c);
-  } catch (err: unknown) {
-    return errorResponse(c, err);
-  }
+  return deleteAuthenticatedWorkspace(c);
 });
 
 // GET /activity — recent activity feed

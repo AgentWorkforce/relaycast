@@ -73,11 +73,13 @@ describe('Type definitions', () => {
 
   it('CreateWorkspaceRequest has name', () => {
     expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('name');
+    expectTypeOf<CreateWorkspaceRequest>().toHaveProperty('expires_in_seconds');
   });
 
   it('CreateWorkspaceResponse has api_key', () => {
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('api_key');
     expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('workspace_id');
+    expectTypeOf<CreateWorkspaceResponse>().toHaveProperty('expires_at');
   });
 
   it('WorkspaceLookup exposes public lookup fields', () => {

@@ -58,6 +58,7 @@ interface CreateWorkspaceResult {
   workspaceId: string;
   apiKey: string;
   createdAt: string;
+  expiresAt?: string | null;
 }
 
 interface RequestConfig {
@@ -263,7 +264,12 @@ export class RelaycastSetup {
       method: 'POST',
       path: '/v1/workspaces',
       schema: CreateWorkspaceResponseSchema,
-      body: { name: options.name },
+      body: {
+        name: options.name,
+        ...(options.expiresInSeconds !== undefined
+          ? { expires_in_seconds: options.expiresInSeconds }
+          : {}),
+      },
       requireApiKey: true,
     });
 
@@ -277,6 +283,7 @@ export class RelaycastSetup {
         apiKey: workspace.apiKey,
         baseUrl: this.config.baseUrl,
         createdAt: workspace.createdAt,
+        ...(workspace.expiresAt !== undefined ? { expiresAt: workspace.expiresAt } : {}),
         name: options.name,
       },
       { retryPolicyInput: this.config.retryPolicyInput },

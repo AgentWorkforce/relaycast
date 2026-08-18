@@ -102,7 +102,9 @@ async function main(): Promise<void> {
 
   // ── Bootstrap: workspace + handler agent + caller agent ──
   const wsName = `actions-e2e-${Date.now()}`;
-  const wsRes = await req('POST', '/v1/workspaces', { body: { name: wsName } });
+  const wsRes = await req('POST', '/v1/workspaces', {
+    body: { name: wsName, expires_in_seconds: 24 * 60 * 60 },
+  });
   if (wsRes.status >= 300) throw new Error(`create workspace failed: ${wsRes.status}`);
   const workspaceKey: string = wsRes.json.data.api_key;
 
