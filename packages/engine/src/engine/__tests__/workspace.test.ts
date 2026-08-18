@@ -179,7 +179,7 @@ describe('workspace creation durability', () => {
   });
 
   it('recovers a committed workspace when retries after a lost response exhaust', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const batchCalls = attachD1Batch({
       loseFirstResponse: true,
       failAfterLostResponse: true,
