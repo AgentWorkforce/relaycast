@@ -13,7 +13,7 @@ import {
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
-import { buildMessageSessionWrite, sessionRefFromMetadata } from './sessionMessages.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -46,7 +46,7 @@ export async function postReply(
 
   const replyId = generateId();
   const metadata = sanitizeUserMessageMetadata(data.data);
-  const sessionRef = sessionRefFromMetadata(metadata);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
   const mentionPattern = /(?:^|\s)@(\w+)/g;
   const mentionedHandles = new Set<string>();

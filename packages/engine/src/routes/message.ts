@@ -35,7 +35,7 @@ import {
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import {
   getMessagesBySessionRef,
-  MAX_SESSION_REF_LENGTH,
+  SessionRefSchema,
   SESSION_MESSAGE_MAX_LIMIT,
 } from '../engine/sessionMessages.js';
 
@@ -55,7 +55,7 @@ const postMessageSchema = z.object({
 
 const sessionMessagesQuerySchema = z.object({
   limit: positiveIntQueryParam({ max: SESSION_MESSAGE_MAX_LIMIT }),
-  after: z.string().min(1).optional(),
+  after: z.string().regex(/^(0|[1-9]\d*)$/, 'after must be a message id').optional(),
 });
 
 type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
@@ -237,15 +237,16 @@ messageRoutes.get(
   requireWorkspaceKey,
   rateLimit,
   async (c) => {
-    const sessionRef = c.req.param('session_ref');
-    if (sessionRef.length === 0 || sessionRef.length > MAX_SESSION_REF_LENGTH) {
+    const parsedSessionRef = SessionRefSchema.safeParse(c.req.param('session_ref'));
+    if (!parsedSessionRef.success) {
       return jsonError(
         c,
         'invalid_session_ref',
-        `session_ref must contain between 1 and ${MAX_SESSION_REF_LENGTH} characters`,
+        parsedSessionRef.error.issues[0]?.message ?? 'invalid session_ref',
         400,
       );
     }
+    const sessionRef = parsedSessionRef.data;
     const query = parseQueryParams(c, sessionMessagesQuerySchema, 'Invalid session message query');
     if (!query.ok) return query.response;
 

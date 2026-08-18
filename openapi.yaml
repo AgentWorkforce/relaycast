@@ -458,11 +458,12 @@ components:
           type: string
           enum: [retained, partial, aged_out, unknown]
           description: >-
-            `partial` means only the retained tail is returned; `unknown` is
-            fail-closed and must not be presented as replayable.
+            `partial` means only the retained tail is returned or the true
+            session start cannot be proven; `unknown` is fail-closed and must
+            not be presented as replayable.
         reason:
           type: string
-          enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed]
+          enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed, pre_migration_history_unknown]
         retention:
           $ref: '#/components/schemas/EffectiveMessageRetention'
         session_started_at:
@@ -2754,8 +2755,9 @@ paths:
         aged-out session from an unknown or never-observed reference. Results
         with `availability: unknown` must never be presented as replayable.
         `partial` means the session began before the current boundary and only
-        its retained tail is returned. A workspace key is required because a
-        session may span channels and direct-message conversations.
+        its retained tail is returned, or that pre-migration provenance cannot
+        prove the true start. A workspace key is required because a session may
+        span channels and direct-message conversations.
       tags:
         - Messages
       security:
@@ -2780,6 +2782,7 @@ paths:
           in: query
           schema:
             type: string
+            pattern: '^(0|[1-9][0-9]*)$'
           description: Message ID cursor from `page.next_cursor`.
       responses:
         '200':

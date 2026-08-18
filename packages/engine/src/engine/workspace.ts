@@ -284,11 +284,25 @@ export async function getWorkspace(
   workspaceId: string,
   deploymentMessageTtlDays?: number | null,
 ) {
-  const [[workspace], effectiveMessageRetention] = await Promise.all([
-    db.select().from(workspaces).where(eq(workspaces.id, workspaceId)),
-    resolveEffectiveMessageRetention(db, workspaceId, deploymentMessageTtlDays),
-  ]);
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!workspace) return null;
+
+  let effectiveMessageRetention;
+  try {
+    effectiveMessageRetention = await resolveEffectiveMessageRetention(
+      db,
+      workspaceId,
+      deploymentMessageTtlDays,
+    );
+  } catch {
+    effectiveMessageRetention = {
+      policy: 'unknown' as const,
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown' as const,
+      reason: 'boundary_unavailable' as const,
+    };
+  }
 
   return {
     id: workspace.id,

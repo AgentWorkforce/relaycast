@@ -79,12 +79,53 @@
     "approach": "Standard approach",
     "confidence": 0.93
   },
-  "commits": [],
-  "filesChanged": [],
+  "commits": [
+    "412fff7"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_why9mgo0xmjk/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/delivery.test.ts",
+    "packages/engine/src/__tests__/conformance/sessionMessages.test.ts",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/__tests__/database.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0038_session_ref_lookup.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/delivery.ts",
+    "packages/engine/src/engine/dm.ts",
+    "packages/engine/src/engine/groupDm.ts",
+    "packages/engine/src/engine/inboundWebhook.ts",
+    "packages/engine/src/engine/message.ts",
+    "packages/engine/src/engine/retention.ts",
+    "packages/engine/src/engine/sessionMessages.ts",
+    "packages/engine/src/engine/thread.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/ports/index.ts",
+    "packages/engine/src/routes/groupDm.ts",
+    "packages/engine/src/routes/message.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/mcp/src/__tests__/messaging-tools.test.ts",
+    "packages/mcp/src/tools/messaging.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/agent-messaging.test.ts",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/agent.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/types.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/message.ts",
+    "packages/types/src/workspace.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706",
-    "endRef": "4e62ef43fbc38c25553d08a425abc4dde47ae706"
+    "endRef": "412fff7dc34cd898a2a7f099cb34d6923460d76f"
   }
 }

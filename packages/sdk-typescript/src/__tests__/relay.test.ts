@@ -86,6 +86,22 @@ describe('RelayCast', () => {
     expect(result.messages).toEqual([]);
   });
 
+  it('must-fire: treats a malformed retained success payload as unknown', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      messages: [],
+    }));
+
+    const result = await relay.messages.bySessionRef('session-1');
+
+    expect(result.availability).toBe('unknown');
+    expect(result.availability).not.toBe('retained');
+    expect(result.reason).toBe('query_failed');
+  });
+
   it('must-not-fire: resolves a retained session with bounded cursor options', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });

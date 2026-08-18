@@ -117,6 +117,16 @@ export async function resolveEffectiveMessageRetention(
     };
   }
 
+  if (ttlDays !== null && (!Number.isFinite(ttlDays) || !Number.isFinite(now.getTime()))) {
+    return {
+      policy: 'unknown',
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown',
+      reason: 'boundary_unavailable',
+    };
+  }
+
   if (ttlDays === null || ttlDays <= 0) {
     return {
       policy: 'never_prune',
@@ -146,6 +156,17 @@ export async function resolveEffectiveMessageRetention(
 function olderThanSnowflake(column: SQLiteColumn, cutoffMs: number): SQL {
   const bound = snowflakeIdLowerBound(cutoffMs);
   return sql`(length(${column}) < ${bound.length} OR (length(${column}) = ${bound.length} AND ${column} < ${bound}))`;
+}
+
+/** Numeric `column >= snowflakeIdLowerBound(cutoff)` for decimal TEXT ids. */
+export function atOrAfterSnowflake(column: SQLiteColumn, cutoffMs: number): SQL {
+  const bound = snowflakeIdLowerBound(cutoffMs);
+  return sql`(length(${column}), ${column}) >= (${bound.length}, ${bound})`;
+}
+
+/** Numeric `column > cursor` for decimal TEXT snowflake ids. */
+export function afterSnowflake(column: SQLiteColumn, cursor: string): SQL {
+  return sql`(length(${column}), ${column}) > (${cursor.length}, ${cursor})`;
 }
 
 interface PrunePass {

@@ -12,7 +12,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig }
 import { codedError } from '../lib/httpError.js';
 import { resolveSendAttachments } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
-import { buildMessageSessionWrite, sessionRefFromMetadata } from './sessionMessages.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -140,7 +140,7 @@ export async function postGroupMessage(
     ...sanitizeUserMessageMetadata(data.data),
     injection_mode: data.mode ?? 'wait',
   };
-  const sessionRef = sessionRefFromMetadata(metadata);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
   const mailbox = options.mailbox ?? {
     ttlMs: DEFAULT_MAILBOX_TTL_MS,

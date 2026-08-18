@@ -22,7 +22,7 @@ import {
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { codedError } from '../lib/httpError.js';
-import { buildMessageSessionWrite, sessionRefFromMetadata } from './sessionMessages.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
@@ -265,7 +265,7 @@ function buildDmMessageWrites(
     ...sanitizeUserMessageMetadata(data.data),
     injection_mode: data.mode ?? 'wait',
   };
-  const sessionRef = sessionRefFromMetadata(metadata);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
   const writes: AtomicWrite[] = [
     db

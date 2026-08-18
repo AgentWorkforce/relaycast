@@ -534,7 +534,12 @@ export const messages = sqliteTable(
     index('idx_messages_channel_time').on(table.channelId, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
-    index('idx_messages_workspace_session').on(table.workspaceId, table.sessionRef, table.id),
+    index('idx_messages_workspace_session').on(
+      table.workspaceId,
+      table.sessionRef,
+      sql`length(${table.id})`,
+      table.id,
+    ),
   ],
 );
 
@@ -551,6 +556,7 @@ export const messageSessions = sqliteTable(
     sessionRef: text('session_ref').notNull(),
     firstMessageAt: integer('first_message_at', { mode: 'timestamp' }).notNull(),
     lastMessageAt: integer('last_message_at', { mode: 'timestamp' }).notNull(),
+    startIsKnown: integer('start_is_known', { mode: 'boolean' }).notNull().default(true),
   },
   (table) => [
     primaryKey({ columns: [table.workspaceId, table.sessionRef] }),

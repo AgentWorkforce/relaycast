@@ -10,7 +10,7 @@ export const WorkspaceSchema = z.object({
   metadata: z.record(z.string(), z.unknown()),
   effective_retention: z.object({
     messages: EffectiveMessageRetentionSchema,
-  }),
+  }).optional(),
   expires_at: z.string().nullable().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;

@@ -273,6 +273,21 @@ describe('DurableEventQueue', () => {
     }
   });
 
+  it('preserves an explicit engine retention boundary over the local pruner default', () => {
+    const runtime = createNodeRuntime({
+      dbPath: ':memory:',
+      baseUrl: 'http://localhost:0',
+      config: { retention: { messageTtlDays: 45 } },
+      presence: { sweepIntervalMs: 0 },
+      eventQueue: { pollIntervalMs: 0 },
+    });
+    try {
+      expect(runtime.deps.config?.retention).toEqual({ messageTtlDays: 45 });
+    } finally {
+      runtime.close();
+    }
+  });
+
   it('prunes settled rows older than 24h on the poll cadence', async () => {
     const { db } = track(openDb());
     const ws = await seedWorkspace(db);

@@ -14,6 +14,7 @@ import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { sha256Hex } from '../lib/crypto.js';
+import { canonicalUserMessageMetadata } from '../engine/messageMetadata.js';
 import {
   jsonCreated,
   jsonError,
@@ -115,11 +116,18 @@ groupDmRoutes.post(
 
       const conversationId = c.req.param('conversation_id');
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
+      const canonicalMetadata = canonicalUserMessageMetadata({
+        ...(data ?? {}),
+        injection_mode: mode,
+      });
+      const defaultMetadata = canonicalUserMessageMetadata({ injection_mode: mode });
       const fingerprintBody = {
         conversationId,
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
-        ...(data !== undefined ? { data_sha256: await sha256Hex(JSON.stringify(data)) } : {}),
+        ...(canonicalMetadata !== defaultMetadata
+          ? { data_sha256: await sha256Hex(canonicalMetadata) }
+          : {}),
       };
       const toGroupDmReceivedEventData = (data: Awaited<ReturnType<typeof groupDmEngine.postGroupMessage>>) => buildGroupDmReceivedEventData(data, {
         fromName: agent!.name,

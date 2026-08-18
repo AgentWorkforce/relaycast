@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { getMessagesBySessionRef } from '../../engine/sessionMessages.js';
+import { getMessagesBySessionRef, sessionRefFromMetadata } from '../../engine/sessionMessages.js';
 import { triggerIntegrationMessage } from '../../engine/inboundWebhook.js';
+import { snowflakeIdLowerBound } from '../../engine/snowflake.js';
+import { getWorkspace } from '../../engine/workspace.js';
 import type { EngineDb } from '../../ports/database.js';
 
 const SESSION_REF = '1c4cb581-7ce7-4fbe-9fd4-39f61f8a6b6d';
@@ -142,6 +144,23 @@ describe('session_ref message lookup and effective retention', () => {
     ]);
   });
 
+  it('reports migrated session history as partial when the true start is unknowable', async () => {
+    const { workspaceId, workspaceKey } = await seedSessionMessage(30, 'surviving history');
+    stack.runtime.handle.sqlite.prepare(
+      'UPDATE message_sessions SET start_is_known = 0 WHERE workspace_id = ? AND session_ref = ?',
+    ).run(workspaceId, SESSION_REF);
+
+    const { body } = await query(workspaceKey);
+
+    expect(body.data.availability).toBe('partial');
+    expect(body.data.availability).not.toBe('retained');
+    expect(body.data.reason).toBe('pre_migration_history_unknown');
+    expect((body.data as { session_started_at?: string | null }).session_started_at).toBeNull();
+    expect(body.data.messages).toEqual([
+      expect.objectContaining({ text: 'surviving history' }),
+    ]);
+  });
+
   it('reports an unavailable boundary as unknown, never retained', async () => {
     const { workspaceKey } = await seedSessionMessage(undefined);
     stack.runtime.deps.config!.retention = {};
@@ -153,6 +172,49 @@ describe('session_ref message lookup and effective retention', () => {
     expect(body.data.reason).toBe('boundary_unavailable');
     expect(body.data.retention.policy).toBe('unknown');
     expect(body.data.messages).toEqual([]);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+    'reports a non-finite deployment boundary (%s) as unknown',
+    async (messageTtlDays) => {
+      const { workspaceKey } = await seedSessionMessage(undefined);
+      stack.runtime.deps.config!.retention = { messageTtlDays };
+
+      const { body } = await query(workspaceKey);
+
+      expect(body.data.availability).toBe('unknown');
+      expect(body.data.availability).not.toBe('retained');
+      expect(body.data.reason).toBe('boundary_unavailable');
+    },
+  );
+
+  it('keeps a workspace readable when its boundary query fails', async () => {
+    const { workspaceId } = await createWorkspace(stack.app, 'workspace-retention-failure');
+    let selects = 0;
+    const failingRetentionDb = new Proxy(stack.runtime.handle.db as unknown as EngineDb, {
+      get(target, property) {
+        if (property === 'select') {
+          return (...args: unknown[]) => {
+            selects += 1;
+            if (selects === 2) throw new Error('injected retention failure');
+            return Reflect.apply(target.select, target, args);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const workspace = await getWorkspace(failingRetentionDb, workspaceId, 30);
+
+    expect(workspace).not.toBeNull();
+    expect(workspace!.effective_retention.messages).toEqual({
+      policy: 'unknown',
+      message_ttl_days: null,
+      retained_since: null,
+      source: 'unknown',
+      reason: 'boundary_unavailable',
+    });
   });
 
   it('must-fire: reports a query failure as unknown, never retained', async () => {
@@ -219,15 +281,56 @@ describe('session_ref message lookup and effective retention', () => {
     });
     expect(createGroup.status).toBe(201);
     const group = await createGroup.json() as { data: { id: string } };
-    const groupMessage = await stack.app.request(`/v1/dm/${group.data.id}/messages`, {
+    const groupMessageUrl = `/v1/dm/${group.data.id}/messages`;
+    const groupMessage = await stack.app.request(groupMessageUrl, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${agent.token}`,
         'content-type': 'application/json',
+        'idempotency-key': 'session-group-metadata',
       },
-      body: JSON.stringify({ text: 'group dm', data: { session_ref: SESSION_REF } }),
+      body: JSON.stringify({
+        text: 'group dm',
+        data: { session_ref: SESSION_REF, nested: { z: 2, a: 1 } },
+      }),
     });
     expect(groupMessage.status).toBe(201);
+    const replayedGroupMessage = await stack.app.request(groupMessageUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'session-group-metadata',
+      },
+      body: JSON.stringify({
+        text: 'group dm',
+        data: { nested: { a: 1, z: 2 }, session_ref: SESSION_REF },
+      }),
+    });
+    expect(replayedGroupMessage.status).toBe(201);
+    expect(replayedGroupMessage.headers.get('idempotency-replayed')).toBe('true');
+
+    const noMetadata = await stack.app.request(groupMessageUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'session-group-null-metadata',
+      },
+      body: JSON.stringify({ text: 'no replay marker' }),
+    });
+    expect(noMetadata.status).toBe(201);
+    const nullMetadataReplay = await stack.app.request(groupMessageUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'session-group-null-metadata',
+      },
+      body: JSON.stringify({ text: 'no replay marker', data: null }),
+    });
+    expect(nullMetadataReplay.status).toBe(201);
+    expect(nullMetadataReplay.headers.get('idempotency-replayed')).toBe('true');
 
     const channel = stack.runtime.handle.sqlite.prepare(
       'SELECT id FROM channels WHERE workspace_id = ? AND name = ?',
@@ -261,8 +364,11 @@ describe('session_ref message lookup and effective retention', () => {
   it('uses the composite session index and does not fall back to JSON history scans', async () => {
     const { workspaceId } = await seedSessionMessage(30);
     const indexedPlan = stack.runtime.handle.sqlite.prepare(
-      'EXPLAIN QUERY PLAN SELECT id FROM messages WHERE workspace_id = ? AND session_ref = ? ORDER BY id LIMIT 10',
+      'EXPLAIN QUERY PLAN SELECT id FROM messages WHERE workspace_id = ? AND session_ref = ? ORDER BY length(id), id LIMIT 10',
     ).all(workspaceId, SESSION_REF) as Array<{ detail: string }>;
+    const indexedRangePlan = stack.runtime.handle.sqlite.prepare(
+      'EXPLAIN QUERY PLAN SELECT id FROM messages WHERE workspace_id = ? AND session_ref = ? AND (length(id), id) >= (?, ?) ORDER BY length(id), id LIMIT 10',
+    ).all(workspaceId, SESSION_REF, 1, '0') as Array<{ detail: string }>;
     const negativeControl = stack.runtime.handle.sqlite.prepare(
       "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE workspace_id = ? AND json_extract(metadata, '$.session_ref') = ? ORDER BY id LIMIT 10",
     ).all(workspaceId, SESSION_REF) as Array<{ detail: string }>;
@@ -270,9 +376,40 @@ describe('session_ref message lookup and effective retention', () => {
     expect(indexedPlan.map((row) => row.detail).join('\n')).toContain(
       'idx_messages_workspace_session',
     );
+    expect(indexedRangePlan.map((row) => row.detail).join('\n')).toContain(
+      'idx_messages_workspace_session',
+    );
+    expect(indexedRangePlan.map((row) => row.detail).join('\n')).not.toContain(
+      'USE TEMP B-TREE',
+    );
     expect(negativeControl.map((row) => row.detail).join('\n')).not.toContain(
       'idx_messages_workspace_session',
     );
+  });
+
+  it('does not silently drop retained messages with missing relational display rows', async () => {
+    const { workspaceId, agent } = await seedSessionMessage(30, 'orphaned display rows');
+    stack.runtime.handle.sqlite.exec('PRAGMA foreign_keys = OFF');
+    stack.runtime.handle.sqlite.prepare('DELETE FROM agents WHERE id = ?').run(agent.agentId);
+    stack.runtime.handle.sqlite.prepare(
+      'DELETE FROM channels WHERE workspace_id = ? AND name = ?',
+    ).run(workspaceId, 'general');
+
+    const result = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { deploymentMessageTtlDays: null },
+    );
+
+    expect(result.availability).toBe('retained');
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        text: 'orphaned display rows',
+        agent_name: 'unknown',
+        channel_name: 'unknown',
+      }),
+    ]);
   });
 
   it('rejects page sizes above the bounded maximum', async () => {
@@ -284,5 +421,139 @@ describe('session_ref message lookup and effective retention', () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it('normalizes a non-finite direct-call limit to a bounded default', async () => {
+    const { workspaceId } = await seedSessionMessage(30);
+
+    const result = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { deploymentMessageTtlDays: 30, limit: Number.NaN },
+    );
+
+    expect(result.availability).toBe('retained');
+    expect(result.messages).toHaveLength(1);
+  });
+
+  it('rejects an invalid session_ref on trusted message writers', async () => {
+    const { workspaceKey } = await createWorkspace(stack.app, 'invalid-session-ref');
+    const sender = await registerAgent(stack.app, workspaceKey, 'invalid-ref-sender');
+    const recipient = await registerAgent(stack.app, workspaceKey, 'invalid-ref-recipient');
+    const invalidRef = '😀'.repeat(256);
+    const headers = {
+      authorization: `Bearer ${sender.token}`,
+      'content-type': 'application/json',
+    };
+
+    const channel = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text: 'invalid channel ref', data: { session_ref: invalidRef } }),
+    });
+    const dm = await stack.app.request('/v1/dm', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        to: recipient.name,
+        text: 'invalid dm ref',
+        data: { session_ref: invalidRef },
+      }),
+    });
+
+    expect(channel.status).toBe(400);
+    expect(await channel.json()).toMatchObject({ error: { code: 'invalid_session_ref' } });
+    expect(dm.status).toBe(400);
+    expect(await dm.json()).toMatchObject({ error: { code: 'invalid_session_ref' } });
+  });
+
+  it('orders, filters, and paginates snowflakes numerically across a digit transition', async () => {
+    const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'numeric-session-order');
+    const agent = await registerAgent(stack.app, workspaceKey, 'numeric-writer');
+    stack.runtime.handle.sqlite.prepare(
+      'UPDATE workspaces SET retention = ? WHERE id = ?',
+    ).run(JSON.stringify({ message_ttl_days: 30 }), workspaceId);
+    const channel = stack.runtime.handle.sqlite.prepare(
+      'SELECT id FROM channels WHERE workspace_id = ? AND name = ?',
+    ).get(workspaceId, 'general') as { id: string };
+
+    const firstEighteenDigitId = 100_000_000_000_000_000n;
+    const snowflakeTick = 1n << 22n;
+    const boundaryDeltaMs = (firstEighteenDigitId + snowflakeTick - 1n) / snowflakeTick;
+    const boundaryMs = Date.UTC(2025, 0, 1) + Number(boundaryDeltaMs);
+    const oldId = (firstEighteenDigitId - 1n).toString();
+    const newId = snowflakeIdLowerBound(boundaryMs);
+    expect(oldId).toHaveLength(17);
+    expect(newId).toHaveLength(18);
+
+    const oldSeconds = Math.floor(boundaryMs / 1_000) - 1;
+    const newSeconds = Math.ceil(boundaryMs / 1_000);
+    const insertMessage = stack.runtime.handle.sqlite.prepare(`
+      INSERT INTO messages (
+        id, workspace_id, channel_id, agent_id, body, metadata, session_ref, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMessage.run(
+      oldId,
+      workspaceId,
+      channel.id,
+      agent.agentId,
+      'before transition',
+      JSON.stringify({ session_ref: SESSION_REF }),
+      SESSION_REF,
+      oldSeconds,
+    );
+    insertMessage.run(
+      newId,
+      workspaceId,
+      channel.id,
+      agent.agentId,
+      'after transition',
+      JSON.stringify({ session_ref: SESSION_REF }),
+      SESSION_REF,
+      newSeconds,
+    );
+    stack.runtime.handle.sqlite.prepare(`
+      INSERT INTO message_sessions (
+        workspace_id, session_ref, first_message_at, last_message_at, start_is_known
+      ) VALUES (?, ?, ?, ?, 1)
+    `).run(workspaceId, SESSION_REF, oldSeconds, newSeconds);
+
+    const windowed = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { now: new Date(boundaryMs + 30 * 24 * 60 * 60 * 1_000) },
+    );
+    expect(windowed.availability).toBe('partial');
+    expect(windowed.messages.map((message) => message.id)).toEqual([newId]);
+
+    stack.runtime.handle.sqlite.prepare(
+      'UPDATE workspaces SET retention = ? WHERE id = ?',
+    ).run(JSON.stringify({ message_ttl_days: null }), workspaceId);
+    const firstPage = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { limit: 1 },
+    );
+    expect(firstPage.messages.map((message) => message.id)).toEqual([oldId]);
+    expect(firstPage.page).toEqual({ next_cursor: oldId, has_more: true });
+
+    const secondPage = await getMessagesBySessionRef(
+      stack.runtime.handle.db,
+      workspaceId,
+      SESSION_REF,
+      { limit: 1, after: oldId },
+    );
+    expect(secondPage.messages.map((message) => message.id)).toEqual([newId]);
+    expect(secondPage.page.has_more).toBe(false);
+  });
+
+  it('counts Unicode code points consistently at the session_ref length boundary', () => {
+    const accepted = '😀'.repeat(255);
+    expect(sessionRefFromMetadata({ session_ref: accepted })).toBe(accepted);
+    expect(sessionRefFromMetadata({ session_ref: `${accepted}😀` })).toBeNull();
   });
 });

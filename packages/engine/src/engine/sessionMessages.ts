@@ -1,24 +1,51 @@
-import { and, asc, eq, gt, gte, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import type { EffectiveMessageRetention, SessionMessagesResult } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { agents, channels, dmConversations, messageSessions, messages } from '../db/schema.js';
 import type { AtomicWrite } from '../ports/database.js';
+import { codedError } from '../lib/httpError.js';
 import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
-import { resolveEffectiveMessageRetention } from './retention.js';
-import { snowflakeIdLowerBound } from './snowflake.js';
+import {
+  afterSnowflake,
+  atOrAfterSnowflake,
+  resolveEffectiveMessageRetention,
+} from './retention.js';
 
 type Db = ReturnType<typeof getDb>;
 
 export const MAX_SESSION_REF_LENGTH = 255;
 export const SESSION_MESSAGE_DEFAULT_LIMIT = 100;
 export const SESSION_MESSAGE_MAX_LIMIT = 500;
+export const SessionRefSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => Array.from(value).length <= MAX_SESSION_REF_LENGTH,
+    `session_ref must contain at most ${MAX_SESSION_REF_LENGTH} characters`,
+  );
 
 export function sessionRefFromMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): string | null {
-  const value = metadata?.session_ref;
-  if (typeof value !== 'string') return null;
-  return value.length > 0 && value.length <= MAX_SESSION_REF_LENGTH ? value : null;
+  const parsed = SessionRefSchema.safeParse(metadata?.session_ref);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Resolve a trusted writer's replay key, rejecting a present invalid value. */
+export function requireSessionRefFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): string | null {
+  if (metadata?.session_ref === undefined) return null;
+  const parsed = SessionRefSchema.safeParse(metadata.session_ref);
+  if (!parsed.success) {
+    throw codedError(
+      parsed.error.issues[0]?.message ?? 'invalid session_ref',
+      'invalid_session_ref',
+      400,
+    );
+  }
+  return parsed.data;
 }
 
 /** Build the payload-free durable ledger upsert for a stamped message. */
@@ -112,6 +139,7 @@ export async function getMessagesBySessionRef(
       .select({
         firstMessageAt: messageSessions.firstMessageAt,
         lastMessageAt: messageSessions.lastMessageAt,
+        startIsKnown: messageSessions.startIsKnown,
       })
       .from(messageSessions)
       .where(and(
@@ -133,9 +161,12 @@ export async function getMessagesBySessionRef(
         availability = 'partial';
       }
     }
+    if (availability !== 'aged_out' && !session.startIsKnown) {
+      availability = 'partial';
+    }
 
     const sessionTimes = {
-      session_started_at: session.firstMessageAt.toISOString(),
+      session_started_at: session.startIsKnown ? session.firstMessageAt.toISOString() : null,
       session_last_message_at: session.lastMessageAt.toISOString(),
     };
     if (availability === 'aged_out') {
@@ -150,18 +181,19 @@ export async function getMessagesBySessionRef(
       };
     }
 
+    const requestedLimit = Number.isFinite(options.limit)
+      ? Math.trunc(options.limit!)
+      : SESSION_MESSAGE_DEFAULT_LIMIT;
     const limit = Math.min(
-      Math.max(options.limit ?? SESSION_MESSAGE_DEFAULT_LIMIT, 1),
+      Math.max(requestedLimit, 1),
       SESSION_MESSAGE_MAX_LIMIT,
     );
     const conditions = [
       eq(messages.workspaceId, workspaceId),
       eq(messages.sessionRef, sessionRef),
     ];
-    if (options.after) conditions.push(gt(messages.id, options.after));
-    if (retainedSince) {
-      conditions.push(gte(messages.id, snowflakeIdLowerBound(retainedSince.getTime())));
-    }
+    if (options.after) conditions.push(afterSnowflake(messages.id, options.after));
+    if (retainedSince) conditions.push(atOrAfterSnowflake(messages.id, retainedSince.getTime()));
 
     const rows = await db
       .select({
@@ -179,11 +211,11 @@ export async function getMessagesBySessionRef(
         createdAt: messages.createdAt,
       })
       .from(messages)
-      .innerJoin(channels, eq(messages.channelId, channels.id))
-      .innerJoin(agents, eq(messages.agentId, agents.id))
+      .leftJoin(channels, eq(messages.channelId, channels.id))
+      .leftJoin(agents, eq(messages.agentId, agents.id))
       .leftJoin(dmConversations, eq(messages.channelId, dmConversations.channelId))
       .where(and(...conditions))
-      .orderBy(asc(messages.id))
+      .orderBy(asc(sql`length(${messages.id})`), asc(messages.id))
       .limit(limit + 1);
 
     const hasMore = rows.length > limit;
@@ -191,12 +223,15 @@ export async function getMessagesBySessionRef(
     return {
       session_ref: sessionRef,
       availability,
+      ...(availability === 'partial' && !session.startIsKnown
+        ? { reason: 'pre_migration_history_unknown' as const }
+        : {}),
       retention,
       ...sessionTimes,
       messages: pageRows.map((row) => ({
         id: row.id,
         channel_id: row.channelId,
-        channel_name: row.channelName,
+        channel_name: row.channelName ?? 'unknown',
         conversation_id: row.conversationId ?? null,
         agent_id: row.agentId,
         agent_name: displayAgentName(row.metadata, row.agentName),

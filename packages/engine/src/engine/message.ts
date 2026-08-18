@@ -12,7 +12,7 @@ import {
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
-import { buildMessageSessionWrite, sessionRefFromMetadata } from './sessionMessages.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -42,7 +42,7 @@ export async function postMessage(
   }
 
   const metadata = sanitizeUserMessageMetadata(data.data);
-  const sessionRef = sessionRefFromMetadata(metadata);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {

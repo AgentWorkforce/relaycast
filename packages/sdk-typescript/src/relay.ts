@@ -113,7 +113,12 @@ import type {
   WsPermanentlyDisconnectedEvent,
   WsResyncedEvent,
 } from './types.js';
-import { ApiResponseSchema, CreateWorkspaceResponseSchema, WorkspaceLookupSchema } from '@relaycast/types';
+import {
+  ApiResponseSchema,
+  CreateWorkspaceResponseSchema,
+  SessionMessagesResultSchema,
+  WorkspaceLookupSchema,
+} from '@relaycast/types';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
 import { WsClient, type WsClientOptions, withInternalWsOrigin } from './ws.js';
@@ -687,9 +692,10 @@ export class RelayCast {
       if (opts?.limit != null) query.limit = String(opts.limit);
       if (opts?.after) query.after = opts.after;
       try {
-        return await this.client.get(
+        return await this.client.get<SessionMessagesResult>(
           `/v1/sessions/${encodeURIComponent(sessionRef)}/messages`,
           query,
+          { schema: SessionMessagesResultSchema },
         );
       } catch {
         // Replay availability is fail-closed: transport/auth/server failures

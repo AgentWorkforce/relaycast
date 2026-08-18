@@ -8,7 +8,7 @@ import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata } from './me
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, type MailboxConfig } from './mailboxConfig.js';
-import { buildMessageSessionWrite, sessionRefFromMetadata } from './sessionMessages.js';
+import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
 const WEBHOOK_AGENT_NAME = '__relay_webhook__';
@@ -201,7 +201,10 @@ export async function triggerWebhook(
     }),
     ...sanitizeUserMessageMetadata(data.payload),
   };
-  const sessionRef = sessionRefFromMetadata(metadata);
+  // Legacy tokenless hooks accept arbitrary public payloads. Preserve their
+  // metadata, but do not let an unauthenticated session_ref allocate a durable
+  // replay-ledger row. Token-protected hooks may opt into replay correlation.
+  const sessionRef = webhook.tokenHash ? requireSessionRefFromMetadata(metadata) : null;
   const createdAt = new Date();
   const results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
@@ -279,7 +282,7 @@ export async function triggerIntegrationMessage(
     }),
     ...sanitizeUserMessageMetadata(data.payload),
   };
-  const sessionRef = sessionRefFromMetadata(metadata);
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
