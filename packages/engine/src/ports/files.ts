@@ -23,8 +23,9 @@ export interface FileStorage {
 
   /**
    * Permanently remove the supplied objects. Implementations must be
-   * idempotent and resolve only after previously issued download URLs can no
-   * longer read the bytes.
+   * idempotent and resolve only after the currently stored bytes are gone.
+   * The engine retains a durable tombstone through every issued PUT URL's
+   * expiry and calls this again afterward to remove any late upload.
    */
   deleteObjects(args: { storageKeys: string[] }): Promise<void>;
 }

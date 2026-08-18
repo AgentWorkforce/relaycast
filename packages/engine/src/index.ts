@@ -95,10 +95,13 @@ export type { WorkspaceRetentionSettings } from './db/schema.js';
 
 // Whole-workspace expiry is opt-in at creation and uses only the stored,
 // non-null deadline as its deletion predicate. Hosts may call this from cron;
-// the Node adapter also runs it on its local maintenance interval.
+// the Node adapter also runs it on its local maintenance interval. Blob cleanup
+// is a durable post-commit outbox: hosts must drain it from the same schedule.
 export {
   reapExpiredWorkspaces,
+  drainFileCleanup,
   DEFAULT_WORKSPACE_REAP_LIMIT,
+  DEFAULT_FILE_CLEANUP_LIMIT,
 } from './engine/workspace.js';
 
 // Durable workspace event log (observer plane): append + cursor reads over

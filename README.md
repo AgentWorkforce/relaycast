@@ -607,6 +607,10 @@ remains exported as a deprecated alias for the old, http-push-only name.)
 They must also call `sweepExpiredDeliveries` to transition expired mailbox rows in
 bounded D1-safe batches and emit sender failure notices. Inbox and delivery reads do
 not run maintenance; they remain available if a scheduled cleanup attempt fails.
+Workspace-lifecycle hosts should schedule `reapExpiredWorkspaces`; every call also
+drains the durable post-commit file-cleanup outbox. Hosts that do not run workspace
+expiry can schedule the exported `drainFileCleanup` helper directly. The Node
+self-host adapter runs this maintenance on its local timer.
 Adapters that terminate `/v1/node/ws` outside the engine request handler should delegate
 node control frames to `handleNodeControlMessage` from `@relaycast/engine/node-control`:
 the handler only needs `{ db, registry, workspaceId, nodeId, socket, raw }`, where

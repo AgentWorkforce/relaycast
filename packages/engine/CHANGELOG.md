@@ -12,10 +12,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Migration `0036` adds indexed workspace expiry. The engine adds bounded automatic reaping and authenticated `DELETE /v1/workspaces/:id`, with complete database and blob-storage deletion.
+- Migration `0037` adds upload-capability expiry metadata and a durable file-cleanup outbox. Workspace deletion commits its cleanup tombstones atomically with the database cascade, retries storage failures after commit, and retains each tombstone long enough to remove a late presigned upload.
 
 ### Changed
 
-- `FileStorage` adapters must implement idempotent batch object deletion so whole-workspace deletion can fail closed before removing database rows.
+- `FileStorage` adapters must implement idempotent batch object deletion. Queue/cron-backed hosts can use the exported `drainFileCleanup` helper directly; `reapExpiredWorkspaces` and the Node adapter also drain it automatically.
 
 ## [8.0.5] - 2026-08-18
 

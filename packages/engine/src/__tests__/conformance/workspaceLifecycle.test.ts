@@ -3,12 +3,13 @@ import { eq } from 'drizzle-orm';
 import {
   agents,
   channels,
+  fileCleanupQueue,
   files,
   messages,
   workspaceEvents,
   workspaces,
 } from '../../db/schema.js';
-import { reapExpiredWorkspaces } from '../../engine/workspace.js';
+import { drainFileCleanup, reapExpiredWorkspaces } from '../../engine/workspace.js';
 import {
   createWorkspace,
   makeNodeStack,
@@ -168,7 +169,7 @@ describe('workspace lifecycle', () => {
     expect((await stack.runtime.fileHandler(new Request(blob.downloadUrl))).status).toBe(404);
   });
 
-  it('does not claim deletion when blob removal fails', async () => {
+  it('commits workspace deletion before blob removal and durably retries a storage failure', async () => {
     const workspace = await createWorkspace(stack.app, 'storage-failure');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
     await stack.runtime.handle.db.insert(files).values({
@@ -179,6 +180,7 @@ describe('workspace lifecycle', () => {
       contentType: 'text/plain',
       sizeBytes: 1,
       storageKey: `${workspace.workspaceId}/file_storage_failure/failure.txt`,
+      uploadExpiresAt: new Date(Date.now() - 1_000),
       status: 'complete',
     });
     vi.spyOn(stack.runtime.deps.files, 'deleteObjects')
@@ -189,13 +191,35 @@ describe('workspace lifecycle', () => {
       headers: { authorization: `Bearer ${workspace.workspaceKey}` },
     });
 
-    expect(response.status).toBe(500);
-    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(1);
-    expect(await stack.runtime.handle.db.select().from(files)).toHaveLength(1);
+    expect(response.status).toBe(204);
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(0);
+    expect(await stack.runtime.handle.db.select().from(files)).toHaveLength(0);
+    expect(await stack.runtime.handle.db.select().from(fileCleanupQueue)).toMatchObject([
+      { attempts: 1, lastError: 'storage unavailable' },
+    ]);
+
+    await expect(drainFileCleanup(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now: new Date(Date.now() + 31_000) },
+    )).resolves.toBe(1);
+    expect(await stack.runtime.handle.db.select().from(fileCleanupQueue)).toHaveLength(0);
   });
 
-  it('atomically preserves durable events when workspace-row deletion fails', async () => {
+  it('rolls back events and cleanup tombstones without touching storage when database deletion fails', async () => {
     const workspace = await createWorkspace(stack.app, 'database-failure');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'database-failure-uploader');
+    await stack.runtime.handle.db.insert(files).values({
+      id: 'file_database_failure',
+      workspaceId: workspace.workspaceId,
+      uploadedBy: agent.agentId,
+      filename: 'retained.txt',
+      contentType: 'text/plain',
+      sizeBytes: 1,
+      storageKey: `${workspace.workspaceId}/file_database_failure/retained.txt`,
+      uploadExpiresAt: new Date(Date.now() - 1_000),
+      status: 'complete',
+    });
     await stack.runtime.handle.db.insert(workspaceEvents).values({
       workspaceId: workspace.workspaceId,
       seq: 1,
@@ -209,6 +233,7 @@ describe('workspace lifecycle', () => {
         SELECT RAISE(ABORT, 'workspace delete rejected');
       END;
     `);
+    const deleteObjects = vi.spyOn(stack.runtime.deps.files, 'deleteObjects');
 
     const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
       method: 'DELETE',
@@ -217,7 +242,62 @@ describe('workspace lifecycle', () => {
 
     expect(response.status).toBe(500);
     expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(1);
+    expect(await stack.runtime.handle.db.select().from(files)).toHaveLength(1);
     expect(await stack.runtime.handle.db.select().from(workspaceEvents)).toHaveLength(1);
+    expect(await stack.runtime.handle.db.select().from(fileCleanupQueue)).toHaveLength(0);
+    expect(deleteObjects).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cleanup tombstone until a late upload capability expires', async () => {
+    const workspace = await createWorkspace(stack.app, 'late-upload');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'late-uploader');
+    const uploadResponse = await stack.app.request('/v1/files/upload', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        filename: 'late.txt',
+        content_type: 'text/plain',
+        size_bytes: 4,
+      }),
+    });
+    const upload = await uploadResponse.json() as {
+      data: { id: string; upload_url: string; expires_at: string };
+    };
+    const completeResponse = await stack.app.request(`/v1/files/${upload.data.id}/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    const complete = await completeResponse.json() as { data: { download_url: string } };
+
+    const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+
+    expect(response.status).toBe(204);
+    expect(await stack.runtime.handle.db.select().from(fileCleanupQueue)).toHaveLength(1);
+
+    // A presigned PUT already handed to the client can race after the database
+    // commit. The durable tombstone survives this first successful delete.
+    const latePut = await stack.runtime.fileHandler(new Request(upload.data.upload_url, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'late',
+    }));
+    expect(latePut.status).toBe(200);
+    expect((await stack.runtime.fileHandler(new Request(complete.data.download_url))).status).toBe(200);
+
+    const afterUploadExpiry = new Date(new Date(upload.data.expires_at).getTime() + 1);
+    await expect(drainFileCleanup(
+      stack.runtime.handle.db,
+      stack.runtime.deps.files,
+      { now: afterUploadExpiry },
+    )).resolves.toBe(1);
+    expect((await stack.runtime.fileHandler(new Request(complete.data.download_url))).status).toBe(404);
+    expect(await stack.runtime.handle.db.select().from(fileCleanupQueue)).toHaveLength(0);
   });
 
   it('does not let one workspace key delete another workspace id', async () => {

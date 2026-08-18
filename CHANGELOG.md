@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Workspaces can opt into an explicit expiry at creation or be deleted immediately with their own key, including durable event rows and stored file bytes.
+- Workspaces can opt into an explicit expiry at creation or be deleted immediately with their own key, including durable event rows and retryable post-commit cleanup of stored file bytes.
 
 ## [8.0.5] - 2026-08-18
 
