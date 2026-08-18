@@ -9,7 +9,7 @@ import type {
   EngineDb,
   TransactionCapability,
 } from '../../ports/database.js';
-import { generateId } from '../snowflake.js';
+import * as snowflake from '../snowflake.js';
 import { createWorkspace } from '../workspace.js';
 
 describe('workspace creation durability', () => {
@@ -24,6 +24,7 @@ describe('workspace creation durability', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     stack?.close();
   });
 
@@ -83,14 +84,15 @@ describe('workspace creation durability', () => {
     expect(channelRows[0]?.name).toBe('general');
   }
 
-  function nextGeneratedPair(): { workspaceId: string; channelId: string } {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
-    const previousId = BigInt(generateId());
-    return {
-      workspaceId: (previousId + 1n).toString(),
-      channelId: (previousId + 2n).toString(),
+  function useGeneratedPair(): { workspaceId: string; channelId: string } {
+    const pair = {
+      workspaceId: 'generated-workspace-id',
+      channelId: 'generated-channel-id',
     };
+    vi.spyOn(snowflake, 'generateId')
+      .mockReturnValueOnce(pair.workspaceId)
+      .mockReturnValueOnce(pair.channelId);
+    return pair;
   }
 
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
@@ -126,7 +128,7 @@ describe('workspace creation durability', () => {
 
   it('rolls back the channel when the generated workspace id collides', async () => {
     attachD1Batch({});
-    const { workspaceId, channelId } = nextGeneratedPair();
+    const { workspaceId, channelId } = useGeneratedPair();
     await db.insert(workspaces).values({
       id: workspaceId,
       name: 'unrelated-workspace',
@@ -145,7 +147,7 @@ describe('workspace creation durability', () => {
 
   it('rolls back the workspace when the generated channel id collides', async () => {
     attachD1Batch({});
-    const { workspaceId, channelId } = nextGeneratedPair();
+    const { workspaceId, channelId } = useGeneratedPair();
     const existingWorkspaceId = 'existing-channel-owner';
     await db.insert(workspaces).values({
       id: existingWorkspaceId,
@@ -176,6 +178,33 @@ describe('workspace creation durability', () => {
 
     expect(batchCalls()).toBe(2);
     await expectOneCompleteWorkspace(created.workspace_id);
+  });
+
+  it('returns storage unavailable when committed-pair readback fails', async () => {
+    const batchCalls = attachD1Batch({ loseFirstResponse: true });
+    const failingReadbackDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'select') {
+          return () => {
+            throw new Error('D1_ERROR: D1 DB is overloaded. Too many requests queued.');
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(createWorkspace(failingReadbackDb, 'lost-response-readback-failure')).rejects.toMatchObject({
+      code: 'workspace_storage_unavailable',
+      status: 503,
+    });
+
+    expect(batchCalls()).toBe(2);
+    const workspaceRows = await db.select().from(workspaces);
+    const channelRows = await db.select().from(channels);
+    expect(workspaceRows).toHaveLength(1);
+    expect(channelRows).toHaveLength(1);
+    expect(channelRows[0]?.workspaceId).toBe(workspaceRows[0]?.id);
   });
 
   it('recovers a committed workspace when retries after a lost response exhaust', async () => {

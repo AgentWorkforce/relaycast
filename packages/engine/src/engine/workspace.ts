@@ -14,6 +14,11 @@ type WorkspaceWriteResult = [
   Array<typeof channels.$inferSelect>,
 ];
 
+type CommittedWorkspacePairRead =
+  | { status: 'match'; value: WorkspaceWriteResult }
+  | { status: 'mismatch' }
+  | { status: 'unavailable' };
+
 type CreateWorkspaceOptions =
   | string
   | {
@@ -68,16 +73,18 @@ async function readCommittedWorkspacePair(
     apiKeyHash: string;
     channelId: string;
   },
-): Promise<WorkspaceWriteResult | undefined> {
+): Promise<CommittedWorkspacePairRead> {
   try {
     const [workspaceRows, channelRows] = await Promise.all([
       db.select().from(workspaces).where(eq(workspaces.id, expected.workspaceId)),
       db.select().from(channels).where(eq(channels.id, expected.channelId)),
     ]);
     const result: WorkspaceWriteResult = [workspaceRows, channelRows];
-    return isExpectedWorkspacePair(result, expected) ? result : undefined;
+    return isExpectedWorkspacePair(result, expected)
+      ? { status: 'match', value: result }
+      : { status: 'mismatch' };
   } catch {
-    return undefined;
+    return { status: 'unavailable' };
   }
 }
 
@@ -188,15 +195,27 @@ export async function createWorkspace(
         // A prior attempt may have committed before its response was lost.
         // Accept only that exact generated pair; mismatched IDs fail closed.
         const committed = await readCommittedWorkspacePair(db, expected);
-        if (committed) return committed;
+        if (committed.status === 'match') return committed.value;
+        if (committed.status === 'unavailable') {
+          const error = codedError(
+            'Workspace storage temporarily unavailable',
+            'workspace_storage_unavailable',
+            503,
+          );
+          error.diagnostics = {
+            operation: 'workspace.create',
+            storage_error: 'readback_unavailable',
+          };
+          throw error;
+        }
         throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
       }
     });
   } catch (cause) {
     if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
     const committed = await readCommittedWorkspacePair(db, expected);
-    if (committed) {
-      writeResult = committed;
+    if (committed.status === 'match') {
+      writeResult = committed.value;
     } else {
       const error = codedError(
         'Workspace storage temporarily unavailable',
