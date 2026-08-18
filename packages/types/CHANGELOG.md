@@ -20,6 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Workspace creation and response schemas expose explicit expiry fields.
+- Workspace schemas define creation provenance and internal/external/unknown usage classification.
 
 ## [8.0.1] - 2026-08-14
 

@@ -269,6 +269,7 @@ export class RelaycastSetup {
         ...(options.expiresInSeconds !== undefined
           ? { expires_in_seconds: options.expiresInSeconds }
           : {}),
+        provenance: options.provenance ?? { source: 'sdk' },
       },
       requireApiKey: true,
     });

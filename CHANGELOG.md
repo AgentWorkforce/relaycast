@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Workspace creation records provenance and explicit internal/external/unknown classification for hosted per-workspace usage reporting without adding message-path writes.
 
 ## [8.0.7] - 2026-08-19
 

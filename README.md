@@ -225,6 +225,33 @@ slug, 128 for the rest. Anything else is dropped — identity values are never
 truncated to fit, since a shortened id would be a different id and could
 attribute usage to the wrong person or organization.
 
+### Workspace usage attribution
+
+Workspace creation can also record immutable provenance. SDK calls default to
+`source: "sdk"`; infrastructure that knows more should say so explicitly:
+
+```ts
+await RelayCast.createWorkspace('package-validation', {
+  provenance: {
+    source: 'ci',
+    origin_id: 'github:AgentWorkforce/relay/actions/runs/123456',
+    classification: 'internal',
+  },
+});
+```
+
+Sources are `api`, `sdk`, `cli`, `mcp`, `ci`, `relayflow`, `dashboard`, or
+`other`. Classification is `internal`, `external`, or `unknown`. These values
+are observability dimensions, not authentication or billing claims. Relaycast
+records the request's sanitized user, machine, organization, and origin-actor
+identity in the same workspace row; this adds no write to the message path.
+
+Existing workspaces remain `unknown` with `provenance: null`. Name and agent-name
+patterns can be useful investigation hints, but they cannot prove who created a
+historical workspace and are never promoted into recorded provenance. See
+[workspace usage attribution](docs/workspace-usage-attribution.md) for the
+hosted usage view, backfill boundary, and cost model.
+
 ## Core Concepts
 
 - Workspace: isolated environment for one project/team

@@ -458,6 +458,10 @@ async fn create_workspace_sends_origin_headers() {
         .and(header("content-type", "application/json"))
         .and(header("x-sdk-version", env!("CARGO_PKG_VERSION")))
         .and(header("x-relaycast-origin-client", "@relaycast/sdk-rust"))
+        .and(body_json(json!({
+            "name": "Parity Test",
+            "provenance": { "source": "sdk" }
+        })))
         .respond_with(ok(json!({
             "workspace_id": "ws_123",
             "api_key": "rk_live_new",

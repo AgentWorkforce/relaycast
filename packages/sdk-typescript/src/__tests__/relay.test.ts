@@ -1070,7 +1070,7 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/workspaces');
       expect(init.method).toBe('POST');
-      expect(init.body).toBe(JSON.stringify({ name: 'My Workspace' }));
+      expect(init.body).toBe(JSON.stringify({ name: 'My Workspace', provenance: { source: 'sdk' } }));
       expect(init.headers.Authorization).toBeUndefined();
       expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
       expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
@@ -1124,8 +1124,33 @@ describe('RelayCast', () => {
       expect(init.body).toBe(JSON.stringify({
         name: 'CI Run',
         expires_in_seconds: 3_600,
+        provenance: { source: 'sdk' },
       }));
       expect(result.expiresAt).toBe('2024-01-01T01:00:00.000Z');
+    });
+
+    it('forwards explicit creation provenance', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: { workspace_id: 'ws_ci', api_key: 'rk_live_ci', created_at: '2024-01-01' },
+          }),
+        }),
+      );
+
+      await RelayCast.createWorkspace('CI', {
+        provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body)).toEqual({
+        name: 'CI',
+        provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+      });
     });
 
     it('sends Agent Relay distinct id when supplied', async () => {

@@ -12,6 +12,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - `NodeRosterEntry.load` is now `Option<f64>`, matching the API's explicit unreported state; direct-agent heartbeats no longer label a constant utilization as measured.
 
+### Added
+
+- Workspace creation sends `source: "sdk"` provenance by default, with `create_workspace_with_provenance` for explicit CI, CLI, relayflow, dashboard, and other creation contexts.
+
 ## [4.2.0] - 2026-06-24
 
 ### Added

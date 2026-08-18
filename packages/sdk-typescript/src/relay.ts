@@ -119,6 +119,7 @@ import {
   SessionMessagesResultSchema,
   WorkspaceLookupSchema,
 } from '@relaycast/types';
+import type { WorkspaceProvenanceInput } from '@relaycast/types';
 import { ZodError } from 'zod';
 import { AgentClient, type AgentClientOptions } from './agent.js';
 import { HttpClient, type RetryPolicyInput } from './client.js';
@@ -190,6 +191,8 @@ export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   baseUrl?: string;
   /** Explicit lifetime for a throwaway workspace; omit for persistence. */
   expiresInSeconds?: number;
+  /** Creation context recorded once for hosted usage attribution. */
+  provenance?: WorkspaceProvenanceInput;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -341,6 +344,7 @@ export class RelayCast {
         ...(resolved.expiresInSeconds !== undefined
           ? { expires_in_seconds: resolved.expiresInSeconds }
           : {}),
+        provenance: resolved.provenance ?? { source: 'sdk' },
       }),
     });
 

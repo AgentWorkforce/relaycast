@@ -74,7 +74,29 @@ describe('RelaycastSetup', () => {
     expect(init.headers['X-Relaycast-Origin-Client']).toBe('@relaycast/sdk');
     expect(init.headers['X-Relaycast-Origin-Version']).toBeDefined();
     expect(init.headers.Authorization).toBeUndefined();
-    expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops' });
+    expect(JSON.parse(init.body)).toEqual({ name: 'Acme Ops', provenance: { source: 'sdk' } });
+  });
+
+  it('createWorkspace() forwards explicit provenance', async () => {
+    const { RelaycastSetup } = await import('../setup.js');
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        ok: true,
+        data: { workspace_id: 'ws_ci', api_key: 'rk_live_ci', created_at: '2026-04-30T12:00:00.000Z' },
+      }, 201),
+    );
+
+    const setup = new RelaycastSetup();
+    await setup.createWorkspace({
+      name: 'CI',
+      provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+    });
+
+    const [, init] = mockFetch.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'CI',
+      provenance: { source: 'ci', origin_id: 'github:AgentWorkforce/relay/actions/runs/123', classification: 'internal' },
+    });
   });
 
   it('createWorkspace() uses a custom baseUrl and resolves apiKey functions per request', async () => {
@@ -150,6 +172,7 @@ describe('RelaycastSetup', () => {
     expect(JSON.parse(init.body)).toEqual({
       name: 'CI Run',
       expires_in_seconds: 3_600,
+      provenance: { source: 'sdk' },
     });
     expect(workspace.info.expiresAt).toBe('2026-04-30T13:00:00.000Z');
   });

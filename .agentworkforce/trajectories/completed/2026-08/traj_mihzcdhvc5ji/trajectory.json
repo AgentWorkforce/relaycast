@@ -1,0 +1,181 @@
+{
+  "id": "traj_mihzcdhvc5ji",
+  "version": 1,
+  "task": {
+    "title": "Add Relaycast workspace usage attribution and hosted usage reporting",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#337"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-08-18T10:05:13.298Z",
+  "completedAt": "2026-08-18T10:16:30.740Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-08-18T10:05:22.406Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_ohfjw2im7h6j",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-08-18T10:05:22.406Z",
+      "endedAt": "2026-08-18T10:16:30.740Z",
+      "events": [
+        {
+          "ts": 1787047522407,
+          "type": "decision",
+          "content": "Store provenance and classification in the existing workspace insert: Store provenance and classification in the existing workspace insert",
+          "raw": {
+            "question": "Store provenance and classification in the existing workspace insert",
+            "chosen": "Store provenance and classification in the existing workspace insert",
+            "alternatives": [],
+            "reasoning": "Captures creator context without an extra creation write or any per-message write."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047522672,
+          "type": "decision",
+          "content": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference: Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+          "raw": {
+            "question": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+            "chosen": "Keep historical rows unknown and expose legacy name matches only as low-confidence inference",
+            "alternatives": [],
+            "reasoning": "The 41,320 existing rows cannot be attributed reliably; heuristics must not become facts."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047522973,
+          "type": "decision",
+          "content": "Host the usage view in relaycast-cloud behind the existing internal bearer: Host the usage view in relaycast-cloud behind the existing internal bearer",
+          "raw": {
+            "question": "Host the usage view in relaycast-cloud behind the existing internal bearer",
+            "chosen": "Host the usage view in relaycast-cloud behind the existing internal bearer",
+            "alternatives": [],
+            "reasoning": "The portable engine owns the creation contract; the hosted gateway owns operator-only cross-workspace aggregation and classification."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787047523250,
+          "type": "decision",
+          "content": "Default usage rankings to external classification: Default usage rankings to external classification",
+          "raw": {
+            "question": "Default usage rankings to external classification",
+            "chosen": "Default usage rankings to external classification",
+            "alternatives": [],
+            "reasoning": "An implicit all-workspace view would be dominated by internal and unknown fleet traffic and actively mislead operators."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048182770,
+          "type": "decision",
+          "content": "Stack attribution migration 0037 after workspace lifecycle migration 0036: Stack attribution migration 0037 after workspace lifecycle migration 0036",
+          "raw": {
+            "question": "Stack attribution migration 0037 after workspace lifecycle migration 0036",
+            "chosen": "Stack attribution migration 0037 after workspace lifecycle migration 0036",
+            "alternatives": [],
+            "reasoning": "Lifecycle PR #338 claimed 0036 first; preserving filename order prevents a D1 migration collision and keeps the hosted copies byte-identical."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048183034,
+          "type": "decision",
+          "content": "Ship creator contract and hosted view now; track broker and relayflow population separately: Ship creator contract and hosted view now; track broker and relayflow population separately",
+          "raw": {
+            "question": "Ship creator contract and hosted view now; track broker and relayflow population separately",
+            "chosen": "Ship creator contract and hosted view now; track broker and relayflow population separately",
+            "alternatives": [],
+            "reasoning": "Relaycast owns the API/SDK/MCP contract and first-party E2E population. Relay and Cloud need context-specific internal/external decisions, tracked in relay#1569 and cloud#3076 rather than hard-coded guesses."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1787048183299,
+          "type": "reflection",
+          "content": "Portable creation attribution, first-party E2E population, hosted usage aggregation, and operator classification are verified. Historical rows remain unknown; cross-repo high-volume creator coverage is explicitly tracked.",
+          "raw": {
+            "focalPoints": [
+              "coverage",
+              "cost",
+              "backfill",
+              "rollout"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:coverage",
+            "focal:cost",
+            "focal:backfill",
+            "focal:rollout",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added workspace creation provenance, explicit usage classification, first-party CI population, and a hosted internal per-workspace usage view with honest legacy handling and no message-path writes.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "db5fac7",
+    "c1bb456"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_mihzcdhvc5ji/trajectory.json",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/summary.md",
+    ".agentworkforce/trajectories/completed/2026-08/traj_mm69pbtiruw8/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/workspace-usage-attribution.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/workspaceAttribution.test.ts",
+    "packages/engine/src/__tests__/conformance/workspaceLifecycle.test.ts",
+    "packages/engine/src/adapters/node/index.ts",
+    "packages/engine/src/db/migrations/0036_workspace_expiry.sql",
+    "packages/engine/src/db/migrations/0037_workspace_usage_attribution.sql",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/workspace.ts",
+    "packages/engine/src/index.ts",
+    "packages/engine/src/lib/workspaceProvenance.ts",
+    "packages/engine/src/routes/workspace.ts",
+    "packages/mcp/src/__tests__/integration.test.ts",
+    "packages/mcp/src/tools/registration.ts",
+    "packages/sdk-rust/CHANGELOG.md",
+    "packages/sdk-rust/src/lib.rs",
+    "packages/sdk-rust/src/relay.rs",
+    "packages/sdk-rust/src/types.rs",
+    "packages/sdk-rust/tests/parity.rs",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/relay.test.ts",
+    "packages/sdk-typescript/src/__tests__/setup.test.ts",
+    "packages/sdk-typescript/src/relay.ts",
+    "packages/sdk-typescript/src/setup-types.ts",
+    "packages/sdk-typescript/src/setup.ts",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/types.test.ts",
+    "packages/types/src/workspace.ts",
+    "scripts/e2e-actions.ts",
+    "scripts/e2e-sdk-setup-client.ts",
+    "scripts/e2e.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "3374966534c408d3656c0a8701dd98d82216576b",
+    "endRef": "db5fac70cddcb5be4c2ca461ab8de9747ae67211",
+    "traceId": "5caa3a45-c2dc-44d5-80c9-e8eb251650be"
+  }
+}

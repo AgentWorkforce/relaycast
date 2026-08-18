@@ -100,6 +100,20 @@ impl RelayCast {
         name: &str,
         base_url: Option<&str>,
     ) -> Result<CreateWorkspaceResponse> {
+        Self::create_workspace_with_provenance(
+            name,
+            base_url,
+            WorkspaceProvenance::sdk(),
+        )
+        .await
+    }
+
+    /// Create a workspace with an explicit, analytics-only provenance record.
+    pub async fn create_workspace_with_provenance(
+        name: &str,
+        base_url: Option<&str>,
+        provenance: WorkspaceProvenance,
+    ) -> Result<CreateWorkspaceResponse> {
         let url = format!("{}/v1/workspaces", base_url.unwrap_or(DEFAULT_BASE_URL));
 
         let client = reqwest::Client::new();
@@ -109,7 +123,7 @@ impl RelayCast {
             .header("X-SDK-Version", SDK_VERSION)
             .header("X-Relaycast-Origin-Client", DEFAULT_ORIGIN_CLIENT)
             .header("X-Relaycast-Origin-Version", SDK_VERSION)
-            .json(&serde_json::json!({ "name": name }))
+            .json(&serde_json::json!({ "name": name, "provenance": provenance }))
             .send()
             .await?;
 

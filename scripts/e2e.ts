@@ -364,6 +364,13 @@ ${B}${CYAN}╔══════════════════════
     const res = await RelayCast.createWorkspace(wsName, {
       baseUrl: BASE_URL,
       expiresInSeconds: 24 * 60 * 60,
+      provenance: {
+        source: 'ci',
+        origin_id: process.env.GITHUB_RUN_ID
+          ? `github:AgentWorkforce/relaycast/actions/runs/${process.env.GITHUB_RUN_ID}`
+          : 'relaycast:e2e:local',
+        classification: 'internal',
+      },
     });
     workspaceKey = res.apiKey;
     relay = new RelayCast({ apiKey: workspaceKey, baseUrl: BASE_URL });

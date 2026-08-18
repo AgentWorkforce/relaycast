@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
+import { WorkspaceProvenanceInputSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -28,6 +29,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError, errorResponse, safeErrorDiagnostics } from '../lib/httpError.js';
 import { getRequestLogger } from '../lib/logger.js';
+import { buildWorkspaceProvenance } from '../lib/workspaceProvenance.js';
 import {
   jsonCreated,
   jsonError,
@@ -45,6 +47,7 @@ export const workspaceRoutes = new Hono<AppEnv>();
 const createWorkspaceSchema = z.object({
   name: z.string().min(1),
   expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
+  provenance: WorkspaceProvenanceInputSchema.optional(),
 });
 
 const updateWorkspaceSchema = z.object({
@@ -176,9 +179,14 @@ workspaceRoutes.post('/workspaces', async (c) => {
     if (!parsed.ok) {
       return parsed.response;
     }
-    const { name, expires_in_seconds: expiresInSeconds } = parsed.data;
+    const {
+      name,
+      expires_in_seconds: expiresInSeconds,
+      provenance: declaredProvenance,
+    } = parsed.data;
     const db = c.get('db');
     const ownerApiKey = extractOwnerApiKey(c.req.header('Authorization'));
+    const attribution = buildWorkspaceProvenance(c.req.raw, declaredProvenance);
     const result = await workspaceEngine.createWorkspace(
       db,
       name,
@@ -187,6 +195,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
         ...(expiresInSeconds
           ? { expiresAt: new Date(Date.now() + expiresInSeconds * 1_000) }
           : {}),
+        ...attribution,
       },
     );
     if (result.created) {

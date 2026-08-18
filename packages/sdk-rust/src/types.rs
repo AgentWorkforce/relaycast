@@ -44,6 +44,47 @@ pub struct CreateWorkspaceResponse {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCreationSource {
+    Api,
+    Sdk,
+    Cli,
+    Mcp,
+    Ci,
+    Relayflow,
+    Dashboard,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUsageClassification {
+    Internal,
+    External,
+    Unknown,
+}
+
+/// Creation context recorded once for hosted usage attribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceProvenance {
+    pub source: WorkspaceCreationSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<WorkspaceUsageClassification>,
+}
+
+impl WorkspaceProvenance {
+    pub fn sdk() -> Self {
+        Self {
+            source: WorkspaceCreationSource::Sdk,
+            origin_id: None,
+            classification: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdateWorkspaceRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
