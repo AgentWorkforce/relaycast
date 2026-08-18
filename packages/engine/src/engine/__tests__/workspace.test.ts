@@ -9,6 +9,7 @@ import type {
   EngineDb,
   TransactionCapability,
 } from '../../ports/database.js';
+import { generateId } from '../snowflake.js';
 import { createWorkspace } from '../workspace.js';
 
 describe('workspace creation durability', () => {
@@ -82,6 +83,16 @@ describe('workspace creation durability', () => {
     expect(channelRows[0]?.name).toBe('general');
   }
 
+  function nextGeneratedPair(): { workspaceId: string; channelId: string } {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+    const previousId = BigInt(generateId());
+    return {
+      workspaceId: (previousId + 1n).toString(),
+      channelId: (previousId + 2n).toString(),
+    };
+  }
+
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
     const batchCalls = attachD1Batch({ failBeforeFirst: true });
 
@@ -111,6 +122,51 @@ describe('workspace creation durability', () => {
 
     expect(await db.select().from(workspaces)).toHaveLength(0);
     expect(await db.select().from(channels)).toHaveLength(0);
+  });
+
+  it('rolls back the channel when the generated workspace id collides', async () => {
+    attachD1Batch({});
+    const { workspaceId, channelId } = nextGeneratedPair();
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      name: 'unrelated-workspace',
+      apiKeyHash: 'unrelated-workspace-hash',
+    });
+
+    await expect(createWorkspace(db, 'workspace-id-collision')).rejects.toMatchObject({
+      code: 'workspace_id_collision',
+    });
+
+    await expect(db.select().from(workspaces).where(eq(workspaces.id, workspaceId))).resolves.toMatchObject([
+      { name: 'unrelated-workspace', apiKeyHash: 'unrelated-workspace-hash' },
+    ]);
+    expect(await db.select().from(channels).where(eq(channels.id, channelId))).toHaveLength(0);
+  });
+
+  it('rolls back the workspace when the generated channel id collides', async () => {
+    attachD1Batch({});
+    const { workspaceId, channelId } = nextGeneratedPair();
+    const existingWorkspaceId = 'existing-channel-owner';
+    await db.insert(workspaces).values({
+      id: existingWorkspaceId,
+      name: 'channel-owner',
+      apiKeyHash: 'channel-owner-hash',
+    });
+    await db.insert(channels).values({
+      id: channelId,
+      workspaceId: existingWorkspaceId,
+      name: 'unrelated-channel',
+      topic: 'Existing channel',
+    });
+
+    await expect(createWorkspace(db, 'channel-id-collision')).rejects.toMatchObject({
+      code: 'workspace_id_collision',
+    });
+
+    expect(await db.select().from(workspaces).where(eq(workspaces.id, workspaceId))).toHaveLength(0);
+    await expect(db.select().from(channels).where(eq(channels.id, channelId))).resolves.toMatchObject([
+      { workspaceId: existingWorkspaceId, name: 'unrelated-channel' },
+    ]);
   });
 
   it('replays idempotently when D1 commits but its response is lost', async () => {

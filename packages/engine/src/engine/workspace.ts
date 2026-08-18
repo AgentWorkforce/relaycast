@@ -81,6 +81,47 @@ async function readCommittedWorkspacePair(
   }
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+
+  for (let depth = 0; current !== undefined && depth < 6 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (typeof current === 'string') {
+      const message = current.toLowerCase();
+      if (
+        message.startsWith('d1_error:') &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      ) {
+        return true;
+      }
+      break;
+    }
+    if (!current || typeof current !== 'object') break;
+
+    const candidate = current as { code?: unknown; message?: unknown; cause?: unknown };
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+    const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+    if (
+      code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      (
+        code === 'SQLITE_CONSTRAINT' &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      ) ||
+      (
+        message.startsWith('d1_error:') &&
+        (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))
+      )
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
 export async function createWorkspace(
   db: Db,
   name: string,
@@ -120,28 +161,37 @@ export async function createWorkspace(
   const expected = { workspaceId, name, apiKeyHash, channelId };
   let writeResult: WorkspaceWriteResult;
   try {
-    writeResult = await retryD1Write(() => runAtomicWrites(
-      db,
-      (writeDb) => [
-        writeDb
-          .insert(workspaces)
-          .values({ id: workspaceId, name, apiKeyHash })
-          // A fixed id/key across attempts makes a lost D1 response safe to retry.
-          .onConflictDoUpdate({ target: workspaces.id, set: { id: workspaceId } })
-          .returning(),
-        writeDb
-          .insert(channels)
-          .values({
-            id: channelId,
-            workspaceId,
-            name: 'general',
-            topic: 'General discussion',
-          })
-          .onConflictDoUpdate({ target: channels.id, set: { id: channelId } })
-          .returning(),
-      ],
-      { requireAtomic: true },
-    )) as WorkspaceWriteResult;
+    writeResult = await retryD1Write(async () => {
+      try {
+        return await runAtomicWrites(
+          db,
+          (writeDb) => [
+            writeDb
+              .insert(workspaces)
+              .values({ id: workspaceId, name, apiKeyHash })
+              .returning(),
+            writeDb
+              .insert(channels)
+              .values({
+                id: channelId,
+                workspaceId,
+                name: 'general',
+                topic: 'General discussion',
+              })
+              .returning(),
+          ],
+          { requireAtomic: true },
+        ) as WorkspaceWriteResult;
+      } catch (cause) {
+        if (!isUniqueConstraintError(cause)) throw cause;
+
+        // A prior attempt may have committed before its response was lost.
+        // Accept only that exact generated pair; mismatched IDs fail closed.
+        const committed = await readCommittedWorkspacePair(db, expected);
+        if (committed) return committed;
+        throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
+      }
+    });
   } catch (cause) {
     if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
     const committed = await readCommittedWorkspacePair(db, expected);
