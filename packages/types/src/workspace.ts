@@ -7,11 +7,13 @@ export const WorkspaceSchema = z.object({
   plan: z.enum(['free', 'pro', 'enterprise']),
   created_at: z.string(),
   metadata: z.record(z.string(), z.unknown()),
+  expires_at: z.string().nullable().optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
 export const CreateWorkspaceRequestSchema = z.object({
   name: z.string(),
+  expires_in_seconds: z.number().int().min(60).max(30 * 24 * 60 * 60).optional(),
 });
 export type CreateWorkspaceRequest = z.infer<typeof CreateWorkspaceRequestSchema>;
 
@@ -19,6 +21,7 @@ export const CreateWorkspaceResponseSchema = z.object({
   workspace_id: z.string(),
   api_key: z.string().optional(),
   created_at: z.string(),
+  expires_at: z.string().nullable().optional(),
 });
 export type CreateWorkspaceResponse = z.infer<typeof CreateWorkspaceResponseSchema>;
 

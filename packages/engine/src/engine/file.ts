@@ -23,6 +23,10 @@ export async function createUpload(
     contentType: data.content_type,
     sizeBytes: data.size_bytes,
   });
+  const uploadExpiresAt = new Date(expiresAt);
+  if (!Number.isFinite(uploadExpiresAt.getTime())) {
+    throw new Error('File storage returned an invalid upload expiry');
+  }
 
   await db.insert(files).values({
     id,
@@ -32,6 +36,7 @@ export async function createUpload(
     contentType: data.content_type,
     sizeBytes: data.size_bytes,
     storageKey,
+    uploadExpiresAt,
     status: 'pending',
   });
 

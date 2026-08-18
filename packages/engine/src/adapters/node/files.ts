@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
 import { z } from 'zod';
 import type { FileStorage } from '../../ports/files.js';
@@ -50,6 +50,16 @@ export class LocalFileStorage implements FileStorage {
   async createDownloadUrl(args: { storageKey: string }): Promise<string> {
     const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
     return this.url({ key: args.storageKey, op: 'get', exp });
+  }
+
+  async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
+    for (const storageKey of args.storageKeys) {
+      const path = this.resolvePath(storageKey);
+      await Promise.all([
+        rm(path, { force: true }),
+        rm(`${path}.ct`, { force: true }),
+      ]);
+    }
   }
 
   /** Resolve a storage key to an absolute path under `dir`, rejecting traversal. */

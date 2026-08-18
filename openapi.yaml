@@ -92,6 +92,11 @@ components:
         created_at:
           type: string
           format: date-time
+        expires_at:
+          type: string
+          nullable: true
+          format: date-time
+          description: Explicit workspace expiry; null means the workspace is persistent
 
     CreateWorkspaceResponse:
       type: object
@@ -108,6 +113,11 @@ components:
         created_at:
           type: string
           format: date-time
+        expires_at:
+          type: string
+          nullable: true
+          format: date-time
+          description: Explicit workspace expiry; null means the workspace is persistent
 
     WorkspaceLookup:
       type: object
@@ -1221,6 +1231,14 @@ paths:
               properties:
                 name:
                   type: string
+                expires_in_seconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 2592000
+                  description: >-
+                    Explicit lifetime for a throwaway workspace. Omit for a
+                    persistent workspace. Once stored, the resulting expiry is
+                    the sole automatic whole-workspace deletion predicate.
       responses:
         '200':
           description: Existing workspace returned (idempotent)
@@ -1256,6 +1274,38 @@ paths:
             exhausted and the committed workspace/channel pair could not be
             confirmed. The response does not expose database statements or
             bound parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{id}:
+    delete:
+      summary: Delete workspace by id
+      description: >-
+        Delete the authenticated workspace and all associated data. The bearer
+        workspace key must belong to the exact id in the path.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Workspace deleted
+        '401':
+          description: Missing or invalid workspace key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The authenticated key does not belong to the requested workspace id
           content:
             application/json:
               schema:

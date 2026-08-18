@@ -181,6 +181,8 @@ export interface WorkspaceIdentityOptions {
 export interface WorkspaceBootstrapOptions extends WorkspaceIdentityOptions {
   apiKey?: string;
   baseUrl?: string;
+  /** Explicit lifetime for a throwaway workspace; omit for persistence. */
+  expiresInSeconds?: number;
 }
 
 export interface WorkspaceLookupOptions extends WorkspaceIdentityOptions {
@@ -327,7 +329,12 @@ export class RelayCast {
         'X-Relaycast-Origin-Version': SDK_ORIGIN.version,
         ...agentRelayIdentityHeaders(identity),
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({
+        name,
+        ...(resolved.expiresInSeconds !== undefined
+          ? { expires_in_seconds: resolved.expiresInSeconds }
+          : {}),
+      }),
     });
 
     let parsed: unknown;
@@ -615,7 +622,9 @@ export class RelayCast {
       this.reconnect(data, options),
     update: (data: UpdateWorkspaceRequest): Promise<Workspace> =>
       this.client.patch('/v1/workspace', data),
-    delete: (): Promise<void> => this.client.delete('/v1/workspace'),
+    delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
+      ? this.client.delete('/v1/workspace')
+      : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
   };
 
   observerTokens = {

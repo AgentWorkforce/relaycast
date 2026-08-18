@@ -10,9 +10,9 @@ import type {
   TransactionCapability,
 } from '../../ports/database.js';
 import * as snowflake from '../snowflake.js';
-import { createWorkspace } from '../workspace.js';
+import { createWorkspace, deleteWorkspace } from '../workspace.js';
 
-describe('workspace creation durability', () => {
+describe('workspace write durability', () => {
   let stack: TestStack;
   let db: EngineDb;
 
@@ -93,6 +93,14 @@ describe('workspace creation durability', () => {
       .mockReturnValueOnce(pair.workspaceId)
       .mockReturnValueOnce(pair.channelId);
     return pair;
+  }
+
+  async function seedDeletionWorkspace(id: string): Promise<void> {
+    await db.insert(workspaces).values({
+      id,
+      name: id,
+      apiKeyHash: `${id}-hash`,
+    });
   }
 
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
@@ -238,5 +246,66 @@ describe('workspace creation durability', () => {
 
     await expect(createWorkspace(db, 'invalid-write')).rejects.toThrow('D1_TYPE_ERROR');
     expect(calls).toBe(1);
+  });
+
+  it('retries a transient D1 workspace deletion and requires an atomic handle', async () => {
+    await seedDeletionWorkspace('delete-transient');
+    const batchCalls = attachD1Batch({ failBeforeFirst: true });
+
+    await deleteWorkspace(db, stack.runtime.deps.files, 'delete-transient');
+
+    expect(batchCalls()).toBe(2);
+    expect(await db.select().from(workspaces)).toHaveLength(0);
+
+    await seedDeletionWorkspace('delete-without-atomicity');
+    delete (db as Partial<BatchCapability>).batch;
+    await expect(deleteWorkspace(
+      db,
+      stack.runtime.deps.files,
+      'delete-without-atomicity',
+    )).rejects.toThrow('Atomic write capability required');
+    expect(await db.select().from(workspaces)).toHaveLength(1);
+  });
+
+  it('recognizes a committed deletion after transient retries exhaust', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await seedDeletionWorkspace('delete-lost-response');
+    const batchCalls = attachD1Batch({
+      loseFirstResponse: true,
+      failAfterLostResponse: true,
+    });
+
+    const deletion = deleteWorkspace(
+      db,
+      stack.runtime.deps.files,
+      'delete-lost-response',
+    );
+    const outcome = deletion.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await vi.runAllTimersAsync();
+    const settled = await outcome;
+    if (!settled.ok) throw settled.error;
+
+    expect(batchCalls()).toBe(5);
+    expect(await db.select().from(workspaces)).toHaveLength(0);
+  });
+
+  it('does not retry a non-transient workspace deletion error', async () => {
+    await seedDeletionWorkspace('delete-type-error');
+    let calls = 0;
+    (db as EngineDb & Partial<BatchCapability>).batch = async () => {
+      calls += 1;
+      throw new Error('D1_TYPE_ERROR: Type mismatch');
+    };
+
+    await expect(deleteWorkspace(
+      db,
+      stack.runtime.deps.files,
+      'delete-type-error',
+    )).rejects.toThrow('D1_TYPE_ERROR');
+    expect(calls).toBe(1);
+    expect(await db.select().from(workspaces)).toHaveLength(1);
   });
 });

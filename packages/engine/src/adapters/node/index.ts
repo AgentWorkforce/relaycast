@@ -18,6 +18,7 @@ import { sweepStaleAgents } from '../../engine/agent.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
 import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
+import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 
 export {
   InProcessRealtime,
@@ -168,6 +169,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     void sweepStaleAgents(db).catch(() => {});
     void sweepOfflineNodes(db, realtime, deps).catch(() => {});
     void sweepTimedOutInvocations(db, realtime, { completionDeps: deps }).catch(() => {});
+    void reapExpiredWorkspaces(db, fileStorage).catch(() => {});
     void runDeliveryMaintenance();
   }, 15_000);
   (sweepTimer as { unref?: () => void }).unref?.();

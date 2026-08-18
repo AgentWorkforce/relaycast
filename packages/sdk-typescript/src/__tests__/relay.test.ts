@@ -845,11 +845,11 @@ describe('RelayCast', () => {
   });
 
   describe('workspace.delete', () => {
-    it('delete() calls DELETE /v1/workspace', async () => {
+    it('delete() keeps using the legacy workspace endpoint', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
 
-      mockFetch.mockImplementation(() =>
+      mockFetch.mockImplementationOnce(() =>
         Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
       );
       await relay.workspace.delete();
@@ -857,6 +857,22 @@ describe('RelayCast', () => {
       const [url, init] = mockFetch.mock.calls[0]!;
       expect(url).toBe('https://cast.agentrelay.com/v1/workspace');
       expect(init.method).toBe('DELETE');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete(id) skips workspace lookup', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(undefined) }),
+      );
+
+      await relay.workspace.delete('ws/explicit');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspaces/ws%2Fexplicit');
+      expect(init.method).toBe('DELETE');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -986,6 +1002,36 @@ describe('RelayCast', () => {
 
       const [url] = mockFetch.mock.calls[0]!;
       expect(url).toBe('http://localhost:3000/v1/workspaces');
+    });
+
+    it('forwards an explicit expiry and returns the deadline', async () => {
+      const { RelayCast } = await import('../relay.js');
+      mockFetch.mockImplementation(() =>
+        Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({
+            ok: true,
+            data: {
+              workspace_id: 'ws_ephemeral',
+              api_key: 'rk_live_ephemeral',
+              created_at: '2024-01-01',
+              expires_at: '2024-01-01T01:00:00.000Z',
+            },
+          }),
+        }),
+      );
+
+      const result = await RelayCast.createWorkspace('CI Run', {
+        expiresInSeconds: 3_600,
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.body).toBe(JSON.stringify({
+        name: 'CI Run',
+        expires_in_seconds: 3_600,
+      }));
+      expect(result.expiresAt).toBe('2024-01-01T01:00:00.000Z');
     });
 
     it('sends Agent Relay distinct id when supplied', async () => {

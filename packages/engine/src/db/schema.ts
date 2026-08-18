@@ -38,16 +38,23 @@ export interface ObserverTokenFilters {
   created_after?: string;
 }
 
-export const workspaces = sqliteTable('workspaces', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  apiKeyHash: text('api_key_hash').notNull().unique(),
-  systemPrompt: text('system_prompt'),
-  plan: text('plan').notNull().default('free'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
-  retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
-});
+export const workspaces = sqliteTable(
+  'workspaces',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    apiKeyHash: text('api_key_hash').notNull().unique(),
+    systemPrompt: text('system_prompt'),
+    plan: text('plan').notNull().default('free'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+    retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
+    // A non-null deadline is an explicit, immutable opt-in to whole-workspace
+    // deletion. Persistent workspaces always leave this null.
+    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+  },
+  (table) => [index('idx_workspaces_expires_at').on(table.expiresAt)],
+);
 
 // ============================================
 // Agents
@@ -677,6 +684,10 @@ export const files = sqliteTable(
     contentType: text('content_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     storageKey: text('storage_key').notNull(),
+    // Persist the exact lifetime of the issued PUT capability. Workspace
+    // deletion keeps a cleanup tombstone through this deadline so a late PUT
+    // cannot permanently recreate an object after the first delete attempt.
+    uploadExpiresAt: integer('upload_expires_at', { mode: 'timestamp' }),
     status: text('status').notNull().default('pending'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
@@ -684,6 +695,28 @@ export const files = sqliteTable(
     index('idx_files_workspace').on(table.workspaceId, table.createdAt),
     index('idx_files_uploader').on(table.uploadedBy),
   ],
+);
+
+// ============================================
+// File Cleanup Outbox
+// ============================================
+/**
+ * Durable object-deletion tombstones created by a trigger whenever a file row
+ * is physically removed. There is deliberately no workspace foreign key: the
+ * row must survive the workspace cascade until external storage confirms the
+ * object is gone after every issued upload capability has expired.
+ */
+export const fileCleanupQueue = sqliteTable(
+  'file_cleanup_queue',
+  {
+    storageKey: text('storage_key').primaryKey(),
+    deleteAfter: integer('delete_after', { mode: 'timestamp' }).notNull(),
+    processAfter: integer('process_after', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [index('idx_file_cleanup_due').on(table.processAfter, table.storageKey)],
 );
 
 // ============================================
@@ -1032,7 +1065,7 @@ export const pendingEvents = sqliteTable(
  * the exact `transformForClient(event)` JSON published to the stream (without
  * `seq` — the cursor lives in the column and is stamped onto the published
  * frame). No FK to `workspaces` by design: appends are best-effort and rows
- * are pruned by retention, not cascades.
+ * are pruned by retention or explicitly removed with their workspace.
  */
 export const workspaceEvents = sqliteTable(
   'workspace_events',
