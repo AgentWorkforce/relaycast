@@ -350,17 +350,48 @@ async function deleteWorkspaceBatch(
   // blobs were already removed. SQLite/D1 write serialization also means a
   // concurrent file insert either commits before this delete and is queued by
   // the cascade, or observes the deleted workspace and fails its FK check.
-  const results = await runAtomicWrites(db, (writeDb) => [
-    writeDb
-      .delete(workspaceEvents)
-      .where(inArray(workspaceEvents.workspaceId, workspaceIds)),
-    writeDb
-      .delete(workspaces)
-      .where(inArray(workspaces.id, workspaceIds))
-      .returning({ id: workspaces.id }),
-  ]);
-  const deleted = results[1] as Array<{ id: string }>;
-  const deletedIds = deleted.map((workspace) => workspace.id);
+  try {
+    await retryD1Write(() => runAtomicWrites(
+      db,
+      (writeDb) => [
+        writeDb
+          .delete(workspaceEvents)
+          .where(inArray(workspaceEvents.workspaceId, workspaceIds)),
+        writeDb
+          .delete(workspaces)
+          .where(inArray(workspaces.id, workspaceIds)),
+      ],
+      { requireAtomic: true },
+    ));
+  } catch (cause) {
+    if (!(cause instanceof D1WriteRetryExhaustedError)) throw cause;
+
+    let committed = false;
+    let storageError: string = cause.storageError;
+    try {
+      const remaining = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(inArray(workspaces.id, workspaceIds));
+      committed = remaining.length === 0;
+    } catch {
+      storageError = 'readback_unavailable';
+    }
+    if (!committed) {
+      const error = codedError(
+        'Workspace storage temporarily unavailable',
+        'workspace_storage_unavailable',
+        503,
+      );
+      error.diagnostics = {
+        attempts: cause.attempts,
+        operation: 'workspace.delete',
+        storage_error: storageError,
+      };
+      throw error;
+    }
+  }
+  const deletedIds = workspaceIds;
 
   // Best-effort immediate revocation keeps old GET URLs from reading existing
   // bytes. The outbox row intentionally remains through the PUT URL's expiry,
@@ -415,6 +446,17 @@ async function deleteCleanupRows(
 ): Promise<{ settled: number; progressed: boolean }> {
   if (rows.length === 0) return { settled: 0, progressed: true };
   const storageKeys = rows.map((row) => row.storageKey);
+  if (typeof storage.deleteObjects !== 'function') {
+    const error = codedError(
+      'The configured file storage cannot delete workspace objects',
+      'file_storage_delete_unsupported',
+      503,
+    );
+    return {
+      settled: 0,
+      progressed: await markCleanupFailure(db, storageKeys, error, now),
+    };
+  }
   try {
     await storage.deleteObjects({ storageKeys });
   } catch (err) {

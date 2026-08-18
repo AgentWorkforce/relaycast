@@ -27,5 +27,5 @@ export interface FileStorage {
    * The engine retains a durable tombstone through every issued PUT URL's
    * expiry and calls this again afterward to remove any late upload.
    */
-  deleteObjects(args: { storageKeys: string[] }): Promise<void>;
+  deleteObjects?(args: { storageKeys: string[] }): Promise<void>;
 }

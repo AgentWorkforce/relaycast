@@ -169,6 +169,29 @@ describe('workspace lifecycle', () => {
     expect((await stack.runtime.fileHandler(new Request(blob.downloadUrl))).status).toBe(404);
   });
 
+  it('returns a stable 503 before database changes when storage cannot delete objects', async () => {
+    const workspace = await createWorkspace(stack.app, 'unsupported-file-cleanup');
+    Object.defineProperty(stack.runtime.deps.files, 'deleteObjects', {
+      configurable: true,
+      value: undefined,
+    });
+
+    const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'file_storage_delete_unsupported',
+        message: 'The configured file storage cannot delete workspace objects',
+      },
+    });
+    expect(await stack.runtime.handle.db.select().from(workspaces)).toHaveLength(1);
+  });
+
   it('commits workspace deletion before blob removal and durably retries a storage failure', async () => {
     const workspace = await createWorkspace(stack.app, 'storage-failure');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');

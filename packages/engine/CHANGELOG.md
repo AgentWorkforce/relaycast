@@ -7,7 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Major]
+## [Unreleased - Minor]
 
 ### Added
 
@@ -16,7 +16,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- `FileStorage` adapters must implement idempotent batch object deletion. Queue/cron-backed hosts can use the exported `drainFileCleanup` helper directly; `reapExpiredWorkspaces` and the Node adapter also drain it automatically.
+- `FileStorage` has an optional idempotent batch object-deletion capability; lifecycle deletion returns 503 before database changes when an adapter does not provide it. Queue/cron-backed hosts can use the exported `drainFileCleanup` helper directly; `reapExpiredWorkspaces` and the Node adapter also drain it automatically.
 
 ## [8.0.5] - 2026-08-18
 
