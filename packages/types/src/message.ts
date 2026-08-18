@@ -196,5 +196,13 @@ export const SessionMessagesResultSchema = z.object({
     next_cursor: z.string().nullable(),
     has_more: z.boolean(),
   }),
+}).superRefine((result, ctx) => {
+  if (result.availability !== 'unknown' && result.retention.policy === 'unknown') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['availability'],
+      message: 'unknown retention cannot be presented as replayable',
+    });
+  }
 });
 export type SessionMessagesResult = z.infer<typeof SessionMessagesResultSchema>;

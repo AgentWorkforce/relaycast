@@ -1,5 +1,10 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { DeliverySchema, DeliveryItemSchema, ServerEventSchema } from '../index.js';
+import {
+  DeliverySchema,
+  DeliveryItemSchema,
+  ServerEventSchema,
+  SessionMessagesResultSchema,
+} from '../index.js';
 import type {
   Workspace,
   CreateWorkspaceRequest,
@@ -160,6 +165,26 @@ describe('Type definitions', () => {
     expectTypeOf<MessageWithMeta>().toHaveProperty('reactions');
     expectTypeOf<MessageWithMeta>().toHaveProperty('read_by_count');
     expectTypeOf<MessageWithMeta>().toHaveProperty('attachments');
+  });
+
+  it('rejects replayable availability when the retention boundary is unknown', () => {
+    const parsed = SessionMessagesResultSchema.safeParse({
+      session_ref: 'session-1',
+      availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
+      messages: [],
+      page: { next_cursor: null, has_more: false },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   // ============================================

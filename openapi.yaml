@@ -460,7 +460,8 @@ components:
           description: >-
             `partial` means only the retained tail is returned or the true
             session start cannot be proven; `unknown` is fail-closed and must
-            not be presented as replayable.
+            not be presented as replayable. A non-`unknown` availability is
+            invalid when `retention.policy` is `unknown`.
         reason:
           type: string
           enum: [outside_retention_window, boundary_unavailable, workspace_unknown, session_not_found, query_failed, response_invalid, pre_migration_history_unknown]

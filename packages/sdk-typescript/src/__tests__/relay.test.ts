@@ -86,13 +86,23 @@ describe('RelayCast', () => {
     expect(result.messages).toEqual([]);
   });
 
-  it('must-fire: treats a malformed retained success payload as unknown', async () => {
+  it('must-fire: treats retained availability with an unknown boundary as unknown', async () => {
     const { RelayCast } = await import('../relay.js');
     const relay = new RelayCast({ apiKey: 'rk_live_test123' });
     mockFetch.mockImplementation(() => mockResponse({
       session_ref: 'session-1',
       availability: 'retained',
+      retention: {
+        policy: 'unknown',
+        message_ttl_days: null,
+        retained_since: null,
+        source: 'unknown',
+        reason: 'boundary_unavailable',
+      },
+      session_started_at: '2026-08-18T00:00:00.000Z',
+      session_last_message_at: '2026-08-18T00:01:00.000Z',
       messages: [],
+      page: { next_cursor: null, has_more: false },
     }));
 
     const result = await relay.messages.bySessionRef('session-1');
